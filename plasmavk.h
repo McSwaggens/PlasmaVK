@@ -34273,6 +34273,7 @@ struct pvk_image_view {
     VkImageAspectFlags aspects;
     uint32_t base_level, levels, base_layer, layers;
     uint32_t depth_plane; /* 2D views of 3D images: first slice */
+    bool resident; /* mtl_texture is in the device residency set */
 };
 
 struct pvk_buffer_view {
@@ -34280,6 +34281,7 @@ struct pvk_buffer_view {
     /* section 11: */
     VkFormat format;
     VkDeviceSize offset, elements;
+    bool resident; /* mtl_texture is in the device residency set */
 };
 
 struct pvk_sampler {
@@ -34840,6 +34842,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
         pvk_free(alloc, view);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
+    /* Descriptors name the view's texture by its resource ID. The heap
+     * covers its memory, but Metal's shader validation also wants the view
+     * object itself resident. Memoryless textures can't join a set. */
+    if (!image->memoryless) {
+        pvk_device_make_resident(device, view->mtl_texture);
+        view->resident = true;
+    }
     *pView = (VkImageView)view;
     return VK_SUCCESS;
 }
@@ -34849,6 +34858,8 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyImageView(VkDevice device, VkImageView image
     struct pvk_image_view *view = (struct pvk_image_view *)imageView;
     if (!view)
         return;
+    if (view->resident)
+        pvk_device_evict((struct pvk_device *)device, view->mtl_texture);
     pvk_release(view->mtl_texture);
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), view);
 }
@@ -34904,6 +34915,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateBufferView(VkDevice _device, const VkBuff
         pvk_free(alloc, view);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
+    pvk_device_make_resident(device, view->mtl_texture); /* as for image views */
+    view->resident = true;
     *pView = (VkBufferView)view;
     return VK_SUCCESS;
 }
@@ -34913,6 +34926,8 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyBufferView(VkDevice device, VkBufferView buf
     struct pvk_buffer_view *view = (struct pvk_buffer_view *)bufferView;
     if (!view)
         return;
+    if (view->resident)
+        pvk_device_evict((struct pvk_device *)device, view->mtl_texture);
     pvk_release(view->mtl_texture);
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), view);
 }
