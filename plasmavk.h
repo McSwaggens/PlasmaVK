@@ -44244,9 +44244,12 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
  *   Apple GPUs drop stray writes instead of failing the command buffer.
  *
  * UPLOAD RING
- *   vkCmdUpdateBuffer data, push constants and internal kernel arguments go
- *   into per-queue chunks of shared, write-combined memory in the device's
- *   residency set, written while encoding and bound by GPU address.
+ *   vkCmdUpdateBuffer data, push constants, push descriptor sets, copies of
+ *   descriptor sets bound with dynamic offsets (section 12) and internal
+ *   kernel arguments go into per-queue chunks of shared, write-combined
+ *   memory in the device's residency set, written while encoding and bound
+ *   by GPU address. An upload larger than a chunk gets a chunk of its own,
+ *   freed once its submission is done.
  *
  * BARRIERS
  *   Metal 4 does not track resources: commands in an encoder and across
