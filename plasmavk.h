@@ -35,8 +35,10 @@
  *    7. Physical device
  *    8. Instance
  *    9. Device and queues
- *   10. Unimplemented commands
- *   11. Entry points
+ *   10. Memory and buffers
+ *   11. Shader translator (SPIR-V -> MSL)
+ *   12. Unimplemented commands
+ *   13. Entry points
  *   Licenses
  *
  * LICENSE
@@ -31372,7 +31374,7 @@ static void pvk_log(enum pvk_log_level level, const char *fmt, ...)
     fputc('\n', stderr);
 }
 
-/* Body of every stub in section 10. */
+/* Body of every stub in section 12. */
 #ifdef PLASMAVK_ABORT_ON_UNIMPLEMENTED
 #define PVK_UNIMPLEMENTED() (pvk_log(PVK_LOG_ERROR, "%s is not implemented", __func__), abort())
 #else
@@ -31440,8 +31442,8 @@ static VkResult pvk_enumerate(const void *items, size_t item_size, uint32_t coun
 /* ==========================================================================
  * 6. Extensions
  *
- * Advertised extensions. Their commands get stubs in section 10 and entries
- * in section 11 until implemented.
+ * Advertised extensions. Their commands get stubs in section 12 and entries
+ * in section 13 until implemented.
  * ========================================================================== */
 
 enum pvk_instance_extension {
@@ -31912,11 +31914,23 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceQueue(VkDevice device, uint32_t queueFamil
 }
 
 /* ==========================================================================
- * 10. Unimplemented commands
+ * 10. Memory and buffers
+ *
+ * VkDeviceMemory, VkBuffer and buffer device addresses.
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 11. Shader translator (SPIR-V -> MSL)
+ *
+ * Translates SPIR-V modules to Metal Shading Language source.
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 12. Unimplemented commands
  *
  * Every other Vulkan 1.4 command, plus the commands of the extensions in
  * section 6. To implement one, delete its line here and write it in its
- * subsystem's section. Its entry in section 11 stays as is.
+ * subsystem's section. Its entry in section 13 stays as is.
  * ========================================================================== */
 
 #if defined(__clang__)
@@ -32157,7 +32171,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkWaitSemaphores(VkDevice device, const VkSemapho
 #endif
 
 /* ==========================================================================
- * 11. Entry points
+ * 13. Entry points
  *
  * Every command vkGetInstanceProcAddr / vkGetDeviceProcAddr can return,
  * with its scope. Keep it alphabetical (for readers; lookup is linear).

@@ -30,7 +30,6 @@ conformance suite.
 | `plasmavk.h` | The library. It is the only source file and is edited directly; its header comment lists its sections. |
 | `tests/smoke/` | Fast C99 tests. Each one includes the header with no link flags. |
 | `tests/compile/` | Compile and link checks: C dialects, C++, ObjC (with and without `<Metal/Metal.h>`), iOS, two translation units. |
-| `tests/cts/` | Khronos conformance suite (VK-GL-CTS) integration (planned). |
 | `bench/` | Realistic-workload benchmarks, comparable against MoltenVK and KosmicKrisp. |
 
 ## Testing
