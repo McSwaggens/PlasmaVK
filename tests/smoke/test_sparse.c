@@ -462,6 +462,97 @@ static const uint32_t spv_residency2[] = {
     0x00000002, 0x00000010, 0x000100fd, 0x00010038,
 };
 
+/*
+ * #version 450
+ * #extension GL_ARB_sparse_texture2 : require
+ * #extension GL_EXT_buffer_reference : require
+ * layout(local_size_x = 8, local_size_y = 8) in;
+ * layout(set = 0, binding = 0, rgba8ui) uniform readonly uimage2D img;
+ * layout(buffer_reference, std430, buffer_reference_align = 16) buffer Out { uvec4 o[]; };
+ * layout(push_constant) uniform Push { Out dst; uint w; uint h; } pc;
+ * void main()
+ * {
+ *     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+ *     if (p.x >= int(pc.w) || p.y >= int(pc.h))
+ *         return;
+ *     uvec4 t;
+ *     int code = sparseImageLoadARB(img, p, t);
+ *     pc.dst.o[p.y * int(pc.w) + p.x] = uvec4(sparseTexelsResidentARB(code) ? 1u : 0u, t.x, t.y, 7u);
+ * }
+ */
+static const uint32_t spv_storage_tail[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x0000005a, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000029, 0x00020011, 0x000014e3, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e,
+    0x00000000, 0x0003000e, 0x000014e4, 0x00000001, 0x0008000f, 0x00000005, 0x00000004, 0x6e69616d,
+    0x00000000, 0x0000000d, 0x0000001d, 0x00000036, 0x00060010, 0x00000004, 0x00000011, 0x00000008,
+    0x00000008, 0x00000001, 0x00030003, 0x00000002, 0x000001c2, 0x00070004, 0x415f4c47, 0x735f4252,
+    0x73726170, 0x65745f65, 0x72757478, 0x00003265, 0x00070004, 0x455f4c47, 0x625f5458, 0x65666675,
+    0x65725f72, 0x65726566, 0x0065636e, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005,
+    0x00000009, 0x00000070, 0x00080005, 0x0000000d, 0x475f6c67, 0x61626f6c, 0x766e496c, 0x7461636f,
+    0x496e6f69, 0x00000044, 0x00040005, 0x00000018, 0x68737550, 0x00000000, 0x00040006, 0x00000018,
+    0x00000000, 0x00747364, 0x00040006, 0x00000018, 0x00000001, 0x00000077, 0x00040006, 0x00000018,
+    0x00000002, 0x00000068, 0x00030005, 0x0000001b, 0x0074754f, 0x00040006, 0x0000001b, 0x00000000,
+    0x0000006f, 0x00030005, 0x0000001d, 0x00006370, 0x00040005, 0x00000033, 0x65646f63, 0x00000000,
+    0x00030005, 0x00000036, 0x00676d69, 0x00030005, 0x0000003a, 0x00000074, 0x00040005, 0x0000003b,
+    0x54736552, 0x00657079, 0x00040047, 0x0000000d, 0x0000000b, 0x0000001c, 0x00030047, 0x00000018,
+    0x00000002, 0x00050048, 0x00000018, 0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x00000018,
+    0x00000001, 0x00000023, 0x00000008, 0x00050048, 0x00000018, 0x00000002, 0x00000023, 0x0000000c,
+    0x00040047, 0x0000001a, 0x00000006, 0x00000010, 0x00030047, 0x0000001b, 0x00000002, 0x00050048,
+    0x0000001b, 0x00000000, 0x00000023, 0x00000000, 0x00030047, 0x00000036, 0x00000018, 0x00040047,
+    0x00000036, 0x00000021, 0x00000000, 0x00040047, 0x00000036, 0x00000022, 0x00000000, 0x00020013,
+    0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000001,
+    0x00040017, 0x00000007, 0x00000006, 0x00000002, 0x00040020, 0x00000008, 0x00000007, 0x00000007,
+    0x00040015, 0x0000000a, 0x00000020, 0x00000000, 0x00040017, 0x0000000b, 0x0000000a, 0x00000003,
+    0x00040020, 0x0000000c, 0x00000001, 0x0000000b, 0x0004003b, 0x0000000c, 0x0000000d, 0x00000001,
+    0x00040017, 0x0000000e, 0x0000000a, 0x00000002, 0x00020014, 0x00000012, 0x0004002b, 0x0000000a,
+    0x00000013, 0x00000000, 0x00040020, 0x00000014, 0x00000007, 0x00000006, 0x00030027, 0x00000017,
+    0x000014e5, 0x0005001e, 0x00000018, 0x00000017, 0x0000000a, 0x0000000a, 0x00040017, 0x00000019,
+    0x0000000a, 0x00000004, 0x0003001d, 0x0000001a, 0x00000019, 0x0003001e, 0x0000001b, 0x0000001a,
+    0x00040020, 0x00000017, 0x000014e5, 0x0000001b, 0x00040020, 0x0000001c, 0x00000009, 0x00000018,
+    0x0004003b, 0x0000001c, 0x0000001d, 0x00000009, 0x0004002b, 0x00000006, 0x0000001e, 0x00000001,
+    0x00040020, 0x0000001f, 0x00000009, 0x0000000a, 0x0004002b, 0x0000000a, 0x00000027, 0x00000001,
+    0x0004002b, 0x00000006, 0x0000002a, 0x00000002, 0x00090019, 0x00000034, 0x0000000a, 0x00000001,
+    0x00000000, 0x00000000, 0x00000000, 0x00000002, 0x00000020, 0x00040020, 0x00000035, 0x00000000,
+    0x00000034, 0x0004003b, 0x00000035, 0x00000036, 0x00000000, 0x00040020, 0x00000039, 0x00000007,
+    0x00000019, 0x0004001e, 0x0000003b, 0x00000006, 0x00000019, 0x0004002b, 0x00000006, 0x0000003f,
+    0x00000000, 0x00040020, 0x00000040, 0x00000009, 0x00000017, 0x00040020, 0x0000004f, 0x00000007,
+    0x0000000a, 0x0004002b, 0x0000000a, 0x00000054, 0x00000007, 0x00040020, 0x00000056, 0x000014e5,
+    0x00000019, 0x0004002b, 0x0000000a, 0x00000058, 0x00000008, 0x0006002c, 0x0000000b, 0x00000059,
+    0x00000058, 0x00000058, 0x00000027, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
+    0x000200f8, 0x00000005, 0x0004003b, 0x00000008, 0x00000009, 0x00000007, 0x0004003b, 0x00000014,
+    0x00000033, 0x00000007, 0x0004003b, 0x00000039, 0x0000003a, 0x00000007, 0x0004003d, 0x0000000b,
+    0x0000000f, 0x0000000d, 0x0007004f, 0x0000000e, 0x00000010, 0x0000000f, 0x0000000f, 0x00000000,
+    0x00000001, 0x0004007c, 0x00000007, 0x00000011, 0x00000010, 0x0003003e, 0x00000009, 0x00000011,
+    0x00050041, 0x00000014, 0x00000015, 0x00000009, 0x00000013, 0x0004003d, 0x00000006, 0x00000016,
+    0x00000015, 0x00050041, 0x0000001f, 0x00000020, 0x0000001d, 0x0000001e, 0x0004003d, 0x0000000a,
+    0x00000021, 0x00000020, 0x0004007c, 0x00000006, 0x00000022, 0x00000021, 0x000500af, 0x00000012,
+    0x00000023, 0x00000016, 0x00000022, 0x000400a8, 0x00000012, 0x00000024, 0x00000023, 0x000300f7,
+    0x00000026, 0x00000000, 0x000400fa, 0x00000024, 0x00000025, 0x00000026, 0x000200f8, 0x00000025,
+    0x00050041, 0x00000014, 0x00000028, 0x00000009, 0x00000027, 0x0004003d, 0x00000006, 0x00000029,
+    0x00000028, 0x00050041, 0x0000001f, 0x0000002b, 0x0000001d, 0x0000002a, 0x0004003d, 0x0000000a,
+    0x0000002c, 0x0000002b, 0x0004007c, 0x00000006, 0x0000002d, 0x0000002c, 0x000500af, 0x00000012,
+    0x0000002e, 0x00000029, 0x0000002d, 0x000200f9, 0x00000026, 0x000200f8, 0x00000026, 0x000700f5,
+    0x00000012, 0x0000002f, 0x00000023, 0x00000005, 0x0000002e, 0x00000025, 0x000300f7, 0x00000031,
+    0x00000000, 0x000400fa, 0x0000002f, 0x00000030, 0x00000031, 0x000200f8, 0x00000030, 0x000100fd,
+    0x000200f8, 0x00000031, 0x0004003d, 0x00000034, 0x00000037, 0x00000036, 0x0004003d, 0x00000007,
+    0x00000038, 0x00000009, 0x00060140, 0x0000003b, 0x0000003c, 0x00000037, 0x00000038, 0x00002000,
+    0x00050051, 0x00000019, 0x0000003d, 0x0000003c, 0x00000001, 0x0003003e, 0x0000003a, 0x0000003d,
+    0x00050051, 0x00000006, 0x0000003e, 0x0000003c, 0x00000000, 0x0003003e, 0x00000033, 0x0000003e,
+    0x00050041, 0x00000040, 0x00000041, 0x0000001d, 0x0000003f, 0x0004003d, 0x00000017, 0x00000042,
+    0x00000041, 0x00050041, 0x00000014, 0x00000043, 0x00000009, 0x00000027, 0x0004003d, 0x00000006,
+    0x00000044, 0x00000043, 0x00050041, 0x0000001f, 0x00000045, 0x0000001d, 0x0000001e, 0x0004003d,
+    0x0000000a, 0x00000046, 0x00000045, 0x0004007c, 0x00000006, 0x00000047, 0x00000046, 0x00050084,
+    0x00000006, 0x00000048, 0x00000044, 0x00000047, 0x00050041, 0x00000014, 0x00000049, 0x00000009,
+    0x00000013, 0x0004003d, 0x00000006, 0x0000004a, 0x00000049, 0x00050080, 0x00000006, 0x0000004b,
+    0x00000048, 0x0000004a, 0x0004003d, 0x00000006, 0x0000004c, 0x00000033, 0x0004013c, 0x00000012,
+    0x0000004d, 0x0000004c, 0x000600a9, 0x0000000a, 0x0000004e, 0x0000004d, 0x00000027, 0x00000013,
+    0x00050041, 0x0000004f, 0x00000050, 0x0000003a, 0x00000013, 0x0004003d, 0x0000000a, 0x00000051,
+    0x00000050, 0x00050041, 0x0000004f, 0x00000052, 0x0000003a, 0x00000027, 0x0004003d, 0x0000000a,
+    0x00000053, 0x00000052, 0x00070050, 0x00000019, 0x00000055, 0x0000004e, 0x00000051, 0x00000053,
+    0x00000054, 0x00060041, 0x00000056, 0x00000057, 0x00000042, 0x0000003f, 0x0000004b, 0x0005003e,
+    0x00000057, 0x00000055, 0x00000002, 0x00000010, 0x000100fd, 0x00010038,
+};
+
 #define BLOCK 65536u
 
 static VkInstance instance;
@@ -1645,16 +1736,19 @@ static VkImageView make_view(VkImage image, VkFormat format, VkImageAspectFlags 
     return view;
 }
 
-/* spv_residency2 on a 256x256 RGBA8 image (storage and sampled) and a
- * D32_SFLOAT image, each with block (1, 0) bound: red (gathers of its red:
- * 1), and depth 0.25 compared with 0.5 (GREATER: 1). Outside the color
- * image, the robust storage read is resident and zero. */
+/* spv_residency2 on a 256x256 RGBA8 image and a D32_SFLOAT image, sampled,
+ * each with block (1, 0) bound: red (gathers of its red: 1), and depth 0.25
+ * compared with 0.5 (GREATER: 1). The storage image is a red sparse image
+ * without residency (residency is not offered with storage usage), bound
+ * whole: always resident, and outside it the robust read is zero. */
 static void test_sparse_shader_residency2(void)
 {
     VkImageCreateInfo cinfo = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 256, 256, 1, 1, 1,
-                                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                                             VK_IMAGE_USAGE_STORAGE_BIT,
+                                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                          VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT);
+    VkImageCreateInfo sinfo = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 256, 256, 1, 1, 1,
+                                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+                                         VK_IMAGE_CREATE_SPARSE_BINDING_BIT);
     VkImageCreateInfo dinfo = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_D32_SFLOAT, 256, 256, 1, 1, 1,
                                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                          VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT);
@@ -1676,9 +1770,10 @@ static void test_sparse_shader_residency2(void)
     VkPipelineLayout layout;
     VkPipeline pipeline;
     VkSampler sampler, shadow_sampler;
-    VkImageView cview, dview;
-    VkImage color, depth_image;
-    VkDeviceMemory memory;
+    VkImageView cview, dview, sview;
+    VkImage color, depth_image, simg;
+    VkMemoryRequirements sreq;
+    VkDeviceMemory memory, smem;
     VkCommandBuffer cb;
     VkBufferImageCopy copy;
     VkDeviceAddress dst;
@@ -1690,9 +1785,13 @@ static void test_sparse_shader_residency2(void)
         return;
     REQUIRE_VK(vkCreateImage(device, &cinfo, NULL, &color));
     REQUIRE_VK(vkCreateImage(device, &dinfo, NULL, &depth_image));
+    REQUIRE_VK(vkCreateImage(device, &sinfo, NULL, &simg));
+    vkGetImageMemoryRequirements(device, simg, &sreq);
     memory = allocate(private_type, 2 * BLOCK);
+    smem = allocate(private_type, sreq.size);
     host = host_buf(264 * 264 * 16);
-    REQUIRE(memory && host.data);
+    REQUIRE(memory && smem && host.data);
+    bind_opaque(simg, 0, sreq.size, smem, 0);
     words = (uint32_t *)host.data;
     bind_region(color, VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 128, 0, 0, 128, 128, 1, memory, 0);
     bind_region(depth_image, VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 128, 0, 0, 128, 128, 1, memory, BLOCK);
@@ -1700,9 +1799,11 @@ static void test_sparse_shader_residency2(void)
         words[i] = red;
     cb = begin();
     to_general(cb, color, VK_IMAGE_ASPECT_COLOR_BIT);
+    to_general(cb, simg, VK_IMAGE_ASPECT_COLOR_BIT);
     to_general(cb, depth_image, VK_IMAGE_ASPECT_DEPTH_BIT);
     copy_region(&copy, 0, 0, 0, 0, 0, 0, 256, 256, 1);
     vkCmdCopyBufferToImage(cb, host.buffer, color, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
+    vkCmdCopyBufferToImage(cb, host.buffer, simg, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
     depth.depth = 0.25f;
     depth.stencil = 0;
     memset(&sub, 0, sizeof(sub));
@@ -1725,6 +1826,7 @@ static void test_sparse_shader_residency2(void)
     REQUIRE_VK(vkCreateSampler(device, &sampler_info, NULL, &shadow_sampler));
     cview = make_view(color, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
     dview = make_view(depth_image, VK_FORMAT_D32_SFLOAT, VK_IMAGE_ASPECT_DEPTH_BIT);
+    sview = make_view(simg, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
     memset(bindings, 0, sizeof(bindings));
     for (i = 0; i < 3; i++) {
         bindings[i].binding = i;
@@ -1754,7 +1856,7 @@ static void test_sparse_shader_residency2(void)
     set_info.pSetLayouts = &set_layout;
     REQUIRE_VK(vkAllocateDescriptorSets(device, &set_info, &set));
     descs[0].sampler = VK_NULL_HANDLE;
-    descs[0].imageView = cview;
+    descs[0].imageView = sview;
     descs[1].sampler = sampler;
     descs[1].imageView = cview;
     descs[2].sampler = shadow_sampler;
@@ -1797,18 +1899,15 @@ static void test_sparse_shader_residency2(void)
             const uint32_t *o = &words[(gy * 264 + gx) * 4];
             int x = (int)gx - 4, y = (int)gy - 4;
             int outside = x < 0 || y < 0 || x >= 256 || y >= 256;
-            int in = x >= 128 && x < 256 && y >= 0 && y < 128;
             int interior = x >= 130 && x < 250 && y >= 2 && y < 120;
             int unbound = x >= 2 && x < 120 && y >= 2 && y < 250;
-            uint32_t want = 0, mask = 1;
-            if (outside || in)
-                want |= 1;
+            uint32_t want = 1, mask = 1; /* the storage image: always resident */
             if (interior || unbound) {
                 mask |= 2 | 4 | 8;
                 if (interior)
                     want |= 2 | 4 | 8;
             }
-            if ((o[0] & mask) != want || o[1] != (in ? red : 0u) ||
+            if ((o[0] & mask) != want || o[1] != (outside ? 0u : red) ||
                 (interior && (o[2] != 0xFFFFFFFFu || o[3] != 0xFFFFu))) {
                 if (bad++ < 4)
                     PVK_TEST_FAIL("(%d, %d): residency 0x%x (want 0x%x of 0x%x), load %08x, gather %08x, depth %08x", x,
@@ -1823,11 +1922,14 @@ static void test_sparse_shader_residency2(void)
     vkDestroyDescriptorSetLayout(device, set_layout, NULL);
     vkDestroyImageView(device, cview, NULL);
     vkDestroyImageView(device, dview, NULL);
+    vkDestroyImageView(device, sview, NULL);
     vkDestroySampler(device, sampler, NULL);
     vkDestroySampler(device, shadow_sampler, NULL);
     vkDestroyImage(device, color, NULL);
+    vkDestroyImage(device, simg, NULL);
     vkDestroyImage(device, depth_image, NULL);
     vkFreeMemory(device, memory, NULL);
+    vkFreeMemory(device, smem, NULL);
     free_buf(&host);
 }
 
@@ -2198,7 +2300,7 @@ static void test_sparse_device_requirements(void)
     infos[1] = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_BC1_RGBA_UNORM_BLOCK, 2048, 2048, 1, 12, 3,
                           VK_IMAGE_USAGE_SAMPLED_BIT,
                           VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT);
-    infos[2] = image_info(VK_IMAGE_TYPE_3D, VK_FORMAT_R16_SFLOAT, 256, 256, 64, 9, 1, VK_IMAGE_USAGE_STORAGE_BIT,
+    infos[2] = image_info(VK_IMAGE_TYPE_3D, VK_FORMAT_R16_SFLOAT, 256, 256, 64, 9, 1, VK_IMAGE_USAGE_SAMPLED_BIT,
                           VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT);
     infos[3] = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_D32_SFLOAT, 512, 512, 1, 1, 2,
                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -2245,6 +2347,220 @@ static void test_sparse_device_requirements(void)
     }
 }
 
+/* Sparse residency is not offered with storage usage (Metal gets the
+ * residency of a ShaderWrite texture's mip tail wrong); sparse binding is. */
+static void test_sparse_storage_formats(void)
+{
+    VkImageFormatProperties props;
+    VkSparseImageFormatProperties sp[2];
+    uint32_t count = 2;
+
+    if (!has_sparse() || !supported.sparseResidencyImage2D)
+        return;
+    CHECK_VK(vkGetPhysicalDeviceImageFormatProperties(
+                 pd, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_STORAGE_BIT,
+                 VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT, &props),
+             VK_ERROR_FORMAT_NOT_SUPPORTED);
+    vkGetPhysicalDeviceSparseImageFormatProperties(pd, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D, VK_SAMPLE_COUNT_1_BIT,
+                                                   VK_IMAGE_USAGE_STORAGE_BIT, VK_IMAGE_TILING_OPTIMAL, &count, sp);
+    CHECK(count == 0);
+    count = 2;
+    vkGetPhysicalDeviceSparseImageFormatProperties(pd, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D, VK_SAMPLE_COUNT_1_BIT,
+                                                   VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_TILING_OPTIMAL, &count, sp);
+    CHECK(count == 1);
+    CHECK_VK(vkGetPhysicalDeviceImageFormatProperties(pd, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D,
+                                                      VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_STORAGE_BIT,
+                                                      VK_IMAGE_CREATE_SPARSE_BINDING_BIT, &props),
+             VK_SUCCESS);
+}
+
+/* 3D images without residency whose Metal tail is many tiles (10 for
+ * 1024x128x8 32-bit texels; 3, the whole image, for 11x137x3): binds of the
+ * memory alignment, each from memory of its own, hold a whole tail, and
+ * every level of the full mip chain is written and read back. */
+static void test_sparse_binding_3d_tail(void)
+{
+    static const uint32_t sizes[][3] = { { 1024, 128, 8 }, { 11, 137, 3 }, { 512, 256, 6 } };
+    unsigned s;
+
+    if (!has_sparse())
+        return;
+    for (s = 0; s < PVK_ARRAY_SIZE(sizes); s++) {
+        const uint32_t W = sizes[s][0], H = sizes[s][1], D = sizes[s][2];
+        const VkDeviceSize back = (VkDeviceSize)W * H * D * 4;
+        VkImageCreateInfo info = image_info(VK_IMAGE_TYPE_3D, VK_FORMAT_R32_UINT, W, H, D, 1, 1,
+                                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                            VK_IMAGE_CREATE_SPARSE_BINDING_BIT);
+        VkDeviceMemory memories[64];
+        VkMemoryRequirements req;
+        VkImage image;
+        struct buf host;
+        uint32_t levels = 1, n, i, lv;
+
+        while (((W > H ? W : H) >> levels) > 0)
+            levels++;
+        info.mipLevels = levels;
+        REQUIRE_VK(vkCreateImage(device, &info, NULL, &image));
+        vkGetImageMemoryRequirements(device, image, &req);
+        n = (uint32_t)(req.size / req.alignment);
+        CHECK(req.size % req.alignment == 0 && n <= PVK_ARRAY_SIZE(memories));
+        if (n > PVK_ARRAY_SIZE(memories))
+            n = PVK_ARRAY_SIZE(memories);
+        for (i = 0; i < n; i++) {
+            memories[i] = allocate(private_type, req.alignment);
+            bind_opaque(image, i * req.alignment, req.alignment, memories[i], 0);
+        }
+        host = host_buf(2 * back);
+        REQUIRE(host.data);
+        for (lv = 0; lv < levels; lv++) {
+            uint32_t w = W >> lv ? W >> lv : 1, h = H >> lv ? H >> lv : 1, d = D >> lv ? D >> lv : 1, k;
+            uint32_t *words = (uint32_t *)host.data;
+            for (k = 0; k < w * h * d; k++)
+                words[k] = pattern(k, lv + 40);
+            memset(words + back / 4, 0, (size_t)w * h * d * 4);
+            upload_download(image, &host, back, lv, 0, w, h, d);
+            for (k = 0; k < w * h * d && words[back / 4 + k] == pattern(k, lv + 40); k++)
+                ;
+            if (k < w * h * d)
+                PVK_TEST_FAIL("%ux%ux%u level %u: texel %u of %u", W, H, D, lv, k, w * h * d);
+        }
+        vkDestroyImage(device, image, NULL);
+        for (i = 0; i < n; i++)
+            vkFreeMemory(device, memories[i], NULL);
+        free_buf(&host);
+    }
+}
+
+/* spv_storage_tail on an 11x37 storage image without residency, every level
+ * in Metal's tail: sparse loads of a ShaderWrite texture's tail hang the GPU
+ * on macOS 27.2, so PlasmaVK reads storage images plainly. All resident,
+ * with the uploaded texels. */
+static void test_sparse_storage_tail(void)
+{
+    const uint32_t W = 11, H = 37;
+    VkImageCreateInfo info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UINT, W, H, 1, 6, 1,
+                                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+                                        VK_IMAGE_CREATE_SPARSE_BINDING_BIT);
+    VkDescriptorSetLayoutBinding binding;
+    VkDescriptorSetLayoutCreateInfo set_layout_info;
+    VkDescriptorPoolSize pool_size;
+    VkDescriptorPoolCreateInfo pool_info;
+    VkDescriptorSetAllocateInfo set_info;
+    VkDescriptorImageInfo desc;
+    VkWriteDescriptorSet write;
+    VkPushConstantRange range;
+    VkPipelineLayoutCreateInfo layout_info;
+    VkMemoryRequirements req;
+    VkDescriptorSetLayout set_layout;
+    VkDescriptorPool desc_pool;
+    VkDescriptorSet set;
+    VkPipelineLayout layout;
+    VkPipeline pipeline;
+    VkImageView view;
+    VkImage image;
+    VkDeviceMemory memory;
+    VkCommandBuffer cb;
+    VkBufferImageCopy copy;
+    struct buf host;
+    struct {
+        VkDeviceAddress dst;
+        uint32_t w, h;
+    } push;
+    uint32_t *words, i, bad = 0;
+
+    if (!has_sparse())
+        return;
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &image));
+    vkGetImageMemoryRequirements(device, image, &req);
+    memory = allocate(private_type, req.size);
+    host = host_buf(W * H * 4 + W * H * 16);
+    REQUIRE(memory && host.data);
+    bind_opaque(image, 0, req.size, memory, 0);
+    words = (uint32_t *)host.data;
+    for (i = 0; i < W * H; i++)
+        words[i] = pattern(i, 50);
+    cb = begin();
+    to_general(cb, image, VK_IMAGE_ASPECT_COLOR_BIT);
+    copy_region(&copy, 0, 0, 0, 0, 0, 0, W, H, 1);
+    vkCmdCopyBufferToImage(cb, host.buffer, image, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
+    barrier(cb);
+    submit(cb);
+
+    view = make_view(image, VK_FORMAT_R8G8B8A8_UINT, VK_IMAGE_ASPECT_COLOR_BIT);
+    memset(&binding, 0, sizeof(binding));
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    memset(&set_layout_info, 0, sizeof(set_layout_info));
+    set_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    set_layout_info.bindingCount = 1;
+    set_layout_info.pBindings = &binding;
+    REQUIRE_VK(vkCreateDescriptorSetLayout(device, &set_layout_info, NULL, &set_layout));
+    pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    pool_size.descriptorCount = 1;
+    memset(&pool_info, 0, sizeof(pool_info));
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.maxSets = 1;
+    pool_info.poolSizeCount = 1;
+    pool_info.pPoolSizes = &pool_size;
+    REQUIRE_VK(vkCreateDescriptorPool(device, &pool_info, NULL, &desc_pool));
+    memset(&set_info, 0, sizeof(set_info));
+    set_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    set_info.descriptorPool = desc_pool;
+    set_info.descriptorSetCount = 1;
+    set_info.pSetLayouts = &set_layout;
+    REQUIRE_VK(vkAllocateDescriptorSets(device, &set_info, &set));
+    desc.sampler = VK_NULL_HANDLE;
+    desc.imageView = view;
+    desc.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    memset(&write, 0, sizeof(write));
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = set;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    write.pImageInfo = &desc;
+    vkUpdateDescriptorSets(device, 1, &write, 0, NULL);
+    memset(&range, 0, sizeof(range));
+    range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    range.size = sizeof(push);
+    memset(&layout_info, 0, sizeof(layout_info));
+    layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout_info.setLayoutCount = 1;
+    layout_info.pSetLayouts = &set_layout;
+    layout_info.pushConstantRangeCount = 1;
+    layout_info.pPushConstantRanges = &range;
+    REQUIRE_VK(vkCreatePipelineLayout(device, &layout_info, NULL, &layout));
+    pipeline = compute_pipeline(spv_storage_tail, sizeof(spv_storage_tail), layout);
+    REQUIRE(pipeline);
+
+    memset(&push, 0, sizeof(push));
+    push.dst = host.address + W * H * 4;
+    push.w = W;
+    push.h = H;
+    cb = begin();
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, NULL);
+    vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(cb, (W + 7) / 8, (H + 7) / 8, 1);
+    barrier(cb);
+    submit(cb);
+    for (i = 0; i < W * H; i++) {
+        const uint32_t *o = &words[W * H + i * 4], p = pattern(i, 50);
+        if ((o[0] != 1 || o[1] != (p & 0xFF) || o[2] != ((p >> 8) & 0xFF) || o[3] != 7) && bad++ < 4)
+            PVK_TEST_FAIL("texel %u: %u %u %u %u", i, o[0], o[1], o[2], o[3]);
+    }
+    CHECK(bad == 0);
+
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyPipelineLayout(device, layout, NULL);
+    vkDestroyDescriptorPool(device, desc_pool, NULL);
+    vkDestroyDescriptorSetLayout(device, set_layout, NULL);
+    vkDestroyImageView(device, view, NULL);
+    vkDestroyImage(device, image, NULL);
+    vkFreeMemory(device, memory, NULL);
+    free_buf(&host);
+}
+
 int main(void)
 {
     setup();
@@ -2264,6 +2580,9 @@ int main(void)
     RUN(test_sparse_texel_view);
     RUN(test_sparse_free_bound_memory);
     RUN(test_sparse_device_requirements);
+    RUN(test_sparse_storage_formats);
+    RUN(test_sparse_binding_3d_tail);
+    RUN(test_sparse_storage_tail);
     teardown();
     return TEST_RESULT();
 }

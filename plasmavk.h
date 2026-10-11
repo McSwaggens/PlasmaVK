@@ -34181,7 +34181,22 @@ static uint32_t pvk_mip_levels(uint32_t w, uint32_t h, uint32_t d)
  *     only levels smaller than a block in bytes, so sparse images report
  *     VK_SPARSE_IMAGE_FORMAT_ALIGNED_MIP_SIZE_BIT (residencyAlignedMipSize):
  *     their tail starts at the first level that is not a whole number of
- *     blocks, never after Metal's (section 11, SPARSE IMAGES).
+ *     blocks, never after Metal's (section 11, SPARSE IMAGES). A 3D
+ *     texture's tail holds every slice of its levels and may be many tiles
+ *     (10 for 1024x128x8 32-bit texels).
+ *   - A tail's tiles are a row along x at its first level: an operation on
+ *     tiles (0, 0, 0) + (n, 1, 1) maps them onto n consecutive heap tiles.
+ *     Mapped piece by piece from several places, a tail of many tiles reads
+ *     wrong; mapped by one operation from one place it reads right. So the
+ *     tail is mapped whole at the bind of its first block and must come
+ *     from one memory: images without residency bind in units that hold a
+ *     whole tail (section 11).
+ *   - Residency queries (sparse_read) of tail texels of a texture made with
+ *     MTLTextureUsageShaderWrite report them not resident although mapped,
+ *     and hang the GPU (MTL4CommandQueueErrorTimeout) when every level is in
+ *     the tail; without ShaderWrite they are right (macOS 27.2 beta). So
+ *     sparse residency is not offered with storage usage, and storage image
+ *     reads never ask (section 13: storage images are always resident).
  *   - Metal makes no texture buffer over a placement sparse buffer: texel
  *     buffer views of sparse buffers are sparse texture buffers of their own
  *     whose pages follow the buffer's (section 11, BUFFER VIEWS); only views
@@ -34418,11 +34433,13 @@ static VkResult pvk_image_format_properties(const struct pvk_physical_device *pd
         return VK_ERROR_FORMAT_NOT_SUPPORTED;
     if (info->flags & PVK_IMAGE_CREATE_SPARSE) {
         /* Sparse images (SPARSE RESOURCES): optimal tiling, private storage
-         * (no host image copies), 2D or 3D with residency. */
+         * (no host image copies), 2D or 3D with residency, and residency
+         * not with storage usage. */
         VkExtent3D block;
         if (linear || (usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT) ||
             !pvk_sparse_block(pd, f, info->type, 1, &block) ||
-            ((info->flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) && info->type == VK_IMAGE_TYPE_1D))
+            ((info->flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) &&
+             (info->type == VK_IMAGE_TYPE_1D || (usage & VK_IMAGE_USAGE_STORAGE_BIT))))
             return VK_ERROR_FORMAT_NOT_SUPPORTED;
     }
     switch (info->type) {
@@ -37291,7 +37308,8 @@ struct pvk_sparse_layout {
     uint32_t metal_tail;     /* MTLTexture.firstMipmapInTail; levels: no Metal tail */
     VkDeviceSize metal_tail_size; /* tailSizeInBytes, per slice */
     VkDeviceSize level_offset[PVK_SPARSE_MAX_LEVELS + 1]; /* in a layer, for levels up to metal_tail */
-    VkDeviceSize layer_size; /* bytes of a layer's blocks: level_offset[metal_tail] + metal_tail_size */
+    VkDeviceSize layer_size; /* bytes of a layer's blocks: level_offset[metal_tail] + metal_tail_size, aligned */
+    VkDeviceSize align;      /* of binds: a block, or without residency a whole tail's power of two */
 };
 
 struct pvk_image {
@@ -37569,6 +37587,13 @@ static uint32_t pvk_image_memory_type_bits(const struct pvk_physical_device *pd,
  *   order (x, then y, then z: the order in which Metal maps a region's tiles
  *   onto consecutive heap tiles), then the blocks of Metal's tail for that
  *   slice. That is the opaque layout of VkSparseImageOpaqueMemoryBindInfo.
+ *   Metal's tail must be mapped whole, from one place (section 7): a bind
+ *   starting at the tail's first block maps all of it, binds of its other
+ *   blocks map nothing. Images with residency bind blocks (64 KB, the sparse block
+ *   size), so their tail needs one bind for all of it (Vulkan's mip tail
+ *   bind, imageMipTailSize, is one); images without residency bind in units
+ *   of a power-of-two number of blocks holding the whole tail (their memory
+ *   alignment), each layer's tail starting at one.
  *   The mip tail (VK_SPARSE_IMAGE_FORMAT_ALIGNED_MIP_SIZE_BIT) starts at the
  *   first level that is not a whole number of blocks in each dimension, or
  *   at Metal's tail if that comes first; Metal's tail starts at the same
@@ -37594,7 +37619,7 @@ static id pvk_sparse_texture(const struct pvk_physical_device *pd, const struct 
 static bool pvk_sparse_layout_init(const struct pvk_physical_device *pd, const struct pvk_image *image, id texture,
                                    struct pvk_sparse_layout *l)
 {
-    VkDeviceSize off = 0;
+    VkDeviceSize off = 0, tail;
     uint32_t lv;
 
     memset(l, 0, sizeof(*l));
@@ -37621,8 +37646,14 @@ static bool pvk_sparse_layout_init(const struct pvk_physical_device *pd, const s
         off += (VkDeviceSize)((w + l->block.width - 1) / l->block.width) * ((h + l->block.height - 1) / l->block.height) *
                ((d + l->block.depth - 1) / l->block.depth) * PVK_SPARSE_BLOCK;
     }
-    l->level_offset[l->metal_tail] = off;
-    l->layer_size = off + pvk_round_up(l->metal_tail_size, PVK_SPARSE_BLOCK);
+    /* Without residency, binds hold whole tails (SPARSE IMAGES). */
+    tail = pvk_round_up(l->metal_tail_size, PVK_SPARSE_BLOCK);
+    l->align = PVK_SPARSE_BLOCK;
+    if (!(image->flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT))
+        while (l->align < tail)
+            l->align *= 2;
+    l->level_offset[l->metal_tail] = pvk_round_up(off, l->align);
+    l->layer_size = pvk_round_up(l->level_offset[l->metal_tail] + tail, l->align);
     return true;
 }
 
@@ -37670,7 +37701,7 @@ static void pvk_image_memory_requirements(const struct pvk_device *device, const
     req->memoryTypeBits = pvk_image_memory_type_bits(pd, image);
     if (layout) {
         size = layout->layer_size * layout->layers;
-        align = PVK_SPARSE_BLOCK;
+        align = layout->align;
     } else if (image->plane_count && plane_aspect && (image->flags & VK_IMAGE_CREATE_DISJOINT_BIT)) {
         const struct pvk_image_plane *pl = &image->planes[pvk_aspect_plane(image, plane_aspect)];
         size = pl->size;
@@ -40290,7 +40321,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   sparse_gather, sparse_gather_compare); their result struct is
  *   { resident() ? 0 : 1, value() } (a ConstOffsets gather: resident if all
  *   four are), and OpImageSparseTexelsResident tests the code for 0. Texel
- *   buffers are never sparse (code 0); a robust read outside the image reads
+ *   buffers and storage images are never partially resident (code 0: sparse
+ *   residency is not offered with storage usage, whose tail residency Metal
+ *   gets wrong, section 7); a robust read outside the image reads
  *   nothing (code 0, zero texel).
  *   Not supported: implicit LOD and derivatives outside fragment shaders,
  *   OpImageSparseSampleProj* (Vulkan forbids them), atomics on cube images
@@ -46954,7 +46987,8 @@ static void pvk_spv_image_gather(struct pvk_spv *ctx, const struct pvk_spv_insn 
 
 /* OpImageFetch (sampled images) and OpImageRead (storage images), and
  * OpImageSparseFetch / OpImageSparseRead (SPARSE RESIDENCY): MSL's
- * sparse_read (texel buffers are never sparse: always resident). */
+ * sparse_read (texel buffers and storage images are never partially resident:
+ * always resident, section 7, SPARSE RESOURCES). */
 static void pvk_spv_image_read(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     uint32_t rid = in->w[2], img = pvk_spv_arg(ctx, in, 3), coord = pvk_spv_arg(ctx, in, 4);
@@ -46969,7 +47003,7 @@ static void pvk_spv_image_read(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         pvk_spv_fail(ctx, "unsupported image operands for a texel read");
     if (sparse && it->img.dim == PVK_SPV_DimSubpassData)
         pvk_spv_fail(ctx, "sparse reads of input attachments");
-    if (sparse && it->img.dim == PVK_SPV_DimBuffer)
+    if (sparse && (it->img.dim == PVK_SPV_DimBuffer || !fetch))
         read = "read"; /* (resident: the code is set below) */
     if (it->img.dim == PVK_SPV_DimSubpassData) {
         /* subpassLoad: the image value is the framebuffer-fetched color. The
@@ -47001,11 +47035,11 @@ static void pvk_spv_image_read(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     ok = pvk_spv_texel_bounds(ctx, it, tex, coord, o.const_offset ? o.const_offset : o.offset,
                               fetch ? (o.lod ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.lod)) : "0u") : NULL,
                               o.sample ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.sample)) : NULL);
-    if (sparse && it->img.dim != PVK_SPV_DimBuffer) {
+    if (sparse && fetch && it->img.dim != PVK_SPV_DimBuffer) {
         pvk_spv_sparse_result(ctx, rid, &e, 1, strncmp(it->msl, "depth", 5) == 0 ? 1 : 4, it, ok);
         return;
     }
-    if (sparse) { /* a texel buffer: { 0, texel } */
+    if (sparse) { /* a texel buffer or a storage image: { 0, texel } */
         struct pvk_spv_type *r = pvk_spv_vtype(ctx, rid);
         const char *vals[2];
         if (r->op != PVK_SPV_OpTypeStruct || pvk_spv_type_parts(ctx, r) != 2)
@@ -59342,22 +59376,28 @@ static uint32_t pvk_sparse_opaque_ops(const struct pvk_image *image, const VkSpa
         VkDeviceSize local = blk % per_layer, i, k, t;
         while (lv < l->metal_tail && local >= l->level_offset[lv + 1] / PVK_SPARSE_BLOCK)
             lv++;
-        if (lv == l->metal_tail) { /* Metal's tail: tiles by x */
+        if (lv == l->metal_tail) { /* Metal's tail: whole, at the bind of its first block (SPARSE IMAGES) */
             run = per_layer - local < left ? per_layer - local : left;
-            if (ops)
-                pvk_sparse_texture_op(&ops[n], image->mtl_texture, heap, lv, layer,
-                                      (uint32_t)(local - l->level_offset[lv] / PVK_SPARSE_BLOCK), 0, 0, (uint32_t)run, 1,
-                                      1, tile);
-            n++;
+            if (local == l->level_offset[lv] / PVK_SPARSE_BLOCK && lv < l->levels) {
+                if (ops)
+                    pvk_sparse_texture_op(&ops[n], image->mtl_texture, heap, lv, layer, 0, 0, 0,
+                                          (uint32_t)((l->metal_tail_size + PVK_SPARSE_BLOCK - 1) / PVK_SPARSE_BLOCK), 1,
+                                          1, tile);
+                n++;
+            }
             continue;
         }
         /* A run of level lv's tiles in row-major order: boxes of a partial
-         * row, whole rows, whole slices. */
+         * row, whole rows, whole slices; past the last level's tiles, the
+         * padding before the tail. */
         pvk_sparse_level_tiles(image, lv, &w, &h, &d);
         run = l->level_offset[lv + 1] / PVK_SPARSE_BLOCK - local;
         if (run > left)
             run = left;
-        for (i = local - l->level_offset[lv] / PVK_SPARSE_BLOCK, k = run, t = tile; k;) {
+        i = local - l->level_offset[lv] / PVK_SPARSE_BLOCK;
+        if (i >= (VkDeviceSize)w * h * d)
+            continue;
+        for (k = run < (VkDeviceSize)w * h * d - i ? run : (VkDeviceSize)w * h * d - i, t = tile; k;) {
             uint32_t x = (uint32_t)(i % w), y = (uint32_t)(i / w % h), z = (uint32_t)(i / ((VkDeviceSize)w * h));
             uint32_t bw = w, bh = 1, bd = 1;
             VkDeviceSize m;
