@@ -31632,6 +31632,8 @@ enum pvk_device_extension {
     /* Core in 1.2 but optional: offered (with samplerFilterMinmax) only where
      * Metal samplers reduce (pvk_device_extension_available, section 7). */
     PVK_DEVICE_EXT_EXT_sampler_filter_minmax,
+    /* Core in 1.2 but optional: offered with descriptorIndexing (section 7). */
+    PVK_DEVICE_EXT_EXT_descriptor_indexing,
     PVK_DEVICE_EXTENSION_COUNT
 };
 
@@ -31639,6 +31641,7 @@ static const VkExtensionProperties pvk_device_extensions[] = {
     { VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_SWAPCHAIN_SPEC_VERSION },
     { VK_KHR_MAINTENANCE_5_EXTENSION_NAME, VK_KHR_MAINTENANCE_5_SPEC_VERSION },
     { VK_EXT_SAMPLER_FILTER_MINMAX_EXTENSION_NAME, VK_EXT_SAMPLER_FILTER_MINMAX_SPEC_VERSION },
+    { VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME, VK_EXT_DESCRIPTOR_INDEXING_SPEC_VERSION },
 };
 
 /* The instance extension each device extension depends on (-1: none), from
@@ -31651,6 +31654,7 @@ static const int pvk_device_extension_needs[PVK_DEVICE_EXTENSION_COUNT] = {
     PVK_INSTANCE_EXT_KHR_surface, /* VK_KHR_swapchain */
     -1,                           /* VK_KHR_maintenance5 */
     -1,                           /* VK_EXT_sampler_filter_minmax */
+    -1,                           /* VK_EXT_descriptor_indexing (VK_KHR_maintenance3: core in 1.1) */
 };
 
 /* ==========================================================================
@@ -32117,14 +32121,23 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
     p12->shaderRoundingModeRTEFloat16 = VK_TRUE;
     p12->shaderRoundingModeRTEFloat32 = VK_TRUE;
 
-    /* Descriptor indexing. The update-after-bind features are not reported,
-     * but these limits also bound ordinary descriptor sets
-     * (VkPipelineLayoutCreateInfo valid usage), so they equal the limits
-     * above. Pools are memory: no cap across them. A non-uniform index into
-     * an address table is a per-thread load; image indices may need a loop. */
+    /* Descriptor indexing (pvk_physical_device_init_descriptor_features).
+     * Update-after-bind descriptors are the same table entries as others
+     * (section 12), so these limits equal the limits above (they also bound
+     * ordinary descriptor sets: VkPipelineLayoutCreateInfo valid usage), and
+     * robust buffer access works the same for them (the size is read from the
+     * descriptor when the shader runs). Pools are memory: no cap across them.
+     * A non-uniform index is a per-thread load of the descriptor: the
+     * translator emits no loop, and Metal resolves the MTLResourceID of each
+     * thread's texture (checked on M4 Max with indices that differ within a
+     * SIMD-group). Implicit LOD (fragment shaders) is not verified yet. */
     p12->maxUpdateAfterBindDescriptorsInAllPools = UINT32_MAX;
     p12->shaderUniformBufferArrayNonUniformIndexingNative = VK_TRUE;
+    p12->shaderSampledImageArrayNonUniformIndexingNative = VK_TRUE;
     p12->shaderStorageBufferArrayNonUniformIndexingNative = VK_TRUE;
+    p12->shaderStorageImageArrayNonUniformIndexingNative = VK_TRUE;
+    p12->robustBufferAccessUpdateAfterBind = VK_TRUE;
+    p12->quadDivergentImplicitLod = VK_FALSE;
     p12->maxPerStageDescriptorUpdateAfterBindSamplers = l->maxPerStageDescriptorSamplers;
     p12->maxPerStageDescriptorUpdateAfterBindUniformBuffers = l->maxPerStageDescriptorUniformBuffers;
     p12->maxPerStageDescriptorUpdateAfterBindStorageBuffers = l->maxPerStageDescriptorStorageBuffers;
@@ -32211,7 +32224,8 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
  * VK_VERSION_1_0..1_4), plus hostImageCopy, which a 1.4 device must support
  * when its only transfer-capable queue family supports graphics, as here.
  * The only optional features reported are those of the formats and samplers
- * the GPU has (pvk_physical_device_init_texture_features).
+ * the GPU has (pvk_physical_device_init_texture_features) and descriptor
+ * indexing (pvk_physical_device_init_descriptor_features).
  *
  * Most of these have no implementation yet (their commands are stubs in
  * section 17): reporting them follows from claiming 1.4, and each subsystem
@@ -32322,6 +32336,39 @@ static void pvk_physical_device_init_texture_features(struct pvk_physical_device
     pd->properties_1x.v12.filterMinmaxImageComponentMapping = VK_FALSE;
 }
 
+/* Descriptor indexing (section 12). A set is a table in shared memory that
+ * the GPU reads when it runs, so descriptors may be written after binding
+ * (or while unused by pending work), arrays may be partially bound, and the
+ * last binding's size is chosen per set. Shaders index descriptors as data
+ * (section 13), uniformly or not, also in runtime arrays. Input attachments
+ * (graphics) are not offered. descriptorIndexing requires update after bind
+ * of sampled images, which makes the update-after-bind sampler limit
+ * (maxPerStageDescriptorSamplers) at least 500000: Apple9 and later. */
+static void pvk_physical_device_init_descriptor_features(struct pvk_physical_device *pd)
+{
+    VkPhysicalDeviceVulkan12Features *f = &pd->features.v12;
+    VkBool32 samplers = pd->properties.limits.maxPerStageDescriptorSamplers >= 500000;
+
+    f->shaderUniformBufferArrayNonUniformIndexing = VK_TRUE;
+    f->shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    f->shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
+    f->shaderStorageImageArrayNonUniformIndexing = VK_TRUE;
+    f->shaderUniformTexelBufferArrayNonUniformIndexing = VK_TRUE;
+    f->shaderStorageTexelBufferArrayNonUniformIndexing = VK_TRUE;
+    f->descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
+    f->descriptorBindingSampledImageUpdateAfterBind = samplers;
+    f->descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
+    f->descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
+    f->descriptorBindingUniformTexelBufferUpdateAfterBind = VK_TRUE;
+    f->descriptorBindingStorageTexelBufferUpdateAfterBind = VK_TRUE;
+    f->descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+    f->descriptorBindingPartiallyBound = VK_TRUE;
+    f->descriptorBindingVariableDescriptorCount = VK_TRUE;
+    f->runtimeDescriptorArray = VK_TRUE;
+    f->descriptorIndexing = samplers;
+    pd->features.v13.descriptorBindingInlineUniformBlockUpdateAfterBind = VK_TRUE;
+}
+
 static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
 {
     VkPhysicalDeviceProperties *p = &pd->properties;
@@ -32340,6 +32387,7 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     pvk_physical_device_init_properties_1x(pd);
     pvk_physical_device_init_features(&pd->features);
     pvk_physical_device_init_texture_features(pd);
+    pvk_physical_device_init_descriptor_features(pd);
 
     /* Apple GPUs have unified memory: one heap; private, shared (twice) and
      * lazily allocated (memoryless tile memory) types. The order follows the
@@ -33409,6 +33457,8 @@ static bool pvk_device_extension_supported(const struct pvk_instance *instance, 
 static bool pvk_device_extension_available(const struct pvk_physical_device *pd, unsigned ext)
 {
     if (ext == PVK_DEVICE_EXT_EXT_sampler_filter_minmax && !pd->filter_minmax)
+        return false;
+    if (ext == PVK_DEVICE_EXT_EXT_descriptor_indexing && !pd->features.v12.descriptorIndexing)
         return false;
     return pvk_device_extension_supported(pd->instance, ext);
 }

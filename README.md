@@ -19,7 +19,10 @@ and timeline semaphores, and compute pipelines (SPIR-V translated to MSL,
 push constants and buffer device addresses) work. Formats (every core format
 Metal can hold, compressed BC/ETC2/ASTC included), images, image and buffer
 views, samplers, image copies, blits, clears and resolves, and host image
-copies work. Descriptor sets and graphics are next; every other Vulkan 1.4
+copies work. Descriptor sets work: every descriptor type, dynamic offsets,
+inline uniform blocks, push descriptors, update templates and descriptor
+indexing (update after bind, partially bound, variable-count and runtime
+arrays, non-uniform indexing). Graphics is next; every other Vulkan 1.4
 command exists but logs "not implemented". The target is full Vulkan 1.4 plus
 the Roadmap 2026 profile, measured by the Khronos conformance suite.
 

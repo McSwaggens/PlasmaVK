@@ -336,6 +336,184 @@ static const uint32_t spv_length[] = {
     0x00010038,
 };
 
+/*
+ * #version 450
+ * #extension GL_EXT_nonuniform_qualifier : require
+ * layout(local_size_x = 16) in;
+ * layout(std430, set = 0, binding = 0) buffer Out { uvec4 v[]; } o;
+ * layout(set = 0, binding = 1) uniform sampler smp;
+ * layout(set = 0, binding = 2) uniform sampler2D comb;
+ * layout(set = 0, binding = 3, r32f) uniform image2D simg[2];
+ * layout(set = 0, binding = 4) uniform utextureBuffer utb[2];
+ * layout(set = 0, binding = 5, r32ui) uniform uimageBuffer stb[2];
+ * layout(set = 0, binding = 6) uniform texture1D line;
+ * layout(set = 0, binding = 7) uniform texture2D imgs[];
+ * layout(push_constant) uniform Push { uint count; } pc;
+ * void main()
+ * {
+ *     uint i = gl_GlobalInvocationID.x;
+ *     ivec2 xy = ivec2(i % 4u, (i / 4u) % 4u);
+ *     vec2 uv = (vec2(xy) + 0.5) / 4.0;
+ *     uint k = i / 8u;
+ *     ivec2 sxy = ivec2(i % 4u, (i / 4u) % 2u);
+ *     float a = textureLod(sampler2D(imgs[nonuniformEXT(i % pc.count)], smp), uv, 0.0).r;
+ *     float b = textureLod(comb, uv, 0.0).r;
+ *     float c = imageLoad(simg[nonuniformEXT(k)], sxy).r;
+ *     imageStore(simg[nonuniformEXT(k)], sxy, vec4(c + 1000.0));
+ *     uint d = texelFetch(utb[nonuniformEXT(i % 2u)], int(i)).r;
+ *     imageStore(stb[nonuniformEXT(i % 2u)], int(i), uvec4(i * 3u + 1u));
+ *     float e = textureLod(sampler1D(line, smp), (float(i % 4u) + 0.5) / 4.0, 0.0).r;
+ *     o.v[i] = uvec4(uint(a), uint(b), uint(c), d);
+ *     o.v[16u + i] = uvec4(uint(e), 0u, 0u, 0u);
+ * }
+ */
+static const uint32_t spv_images[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x000000ba, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x0000002b, 0x00020011, 0x0000002e, 0x00020011, 0x0000002f, 0x00020011, 0x000014b5, 0x00020011,
+    0x000014b6, 0x00020011, 0x000014bb, 0x00020011, 0x000014bd, 0x00020011, 0x000014bf, 0x00020011,
+    0x000014c0, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
+    0x00000000, 0x00000001, 0x000f000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000b,
+    0x0000003c, 0x00000040, 0x0000004c, 0x00000057, 0x00000060, 0x00000076, 0x00000085, 0x00000097,
+    0x000000a6, 0x00060010, 0x00000004, 0x00000011, 0x00000010, 0x00000001, 0x00000001, 0x00030003,
+    0x00000002, 0x000001c2, 0x00080004, 0x455f4c47, 0x6e5f5458, 0x6e756e6f, 0x726f6669, 0x75715f6d,
+    0x66696c61, 0x00726569, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000008,
+    0x00000069, 0x00080005, 0x0000000b, 0x475f6c67, 0x61626f6c, 0x766e496c, 0x7461636f, 0x496e6f69,
+    0x00000044, 0x00030005, 0x00000013, 0x00007978, 0x00030005, 0x00000020, 0x00007675, 0x00030005,
+    0x00000029, 0x0000006b, 0x00030005, 0x0000002d, 0x00797873, 0x00030005, 0x00000038, 0x00000061,
+    0x00040005, 0x0000003c, 0x73676d69, 0x00000000, 0x00040005, 0x0000003e, 0x68737550, 0x00000000,
+    0x00050006, 0x0000003e, 0x00000000, 0x6e756f63, 0x00000074, 0x00030005, 0x00000040, 0x00006370,
+    0x00030005, 0x0000004c, 0x00706d73, 0x00030005, 0x00000055, 0x00000062, 0x00040005, 0x00000057,
+    0x626d6f63, 0x00000000, 0x00030005, 0x0000005c, 0x00000063, 0x00040005, 0x00000060, 0x676d6973,
+    0x00000000, 0x00030005, 0x00000072, 0x00000064, 0x00030005, 0x00000076, 0x00627475, 0x00030005,
+    0x00000085, 0x00627473, 0x00030005, 0x00000094, 0x00000065, 0x00040005, 0x00000097, 0x656e696c,
+    0x00000000, 0x00030005, 0x000000a4, 0x0074754f, 0x00040006, 0x000000a4, 0x00000000, 0x00000076,
+    0x00030005, 0x000000a6, 0x0000006f, 0x00040047, 0x0000000b, 0x0000000b, 0x0000001c, 0x00040047,
+    0x0000003c, 0x00000021, 0x00000007, 0x00040047, 0x0000003c, 0x00000022, 0x00000000, 0x00030047,
+    0x0000003e, 0x00000002, 0x00050048, 0x0000003e, 0x00000000, 0x00000023, 0x00000000, 0x00030047,
+    0x00000046, 0x000014b4, 0x00030047, 0x00000048, 0x000014b4, 0x00030047, 0x00000049, 0x000014b4,
+    0x00040047, 0x0000004c, 0x00000021, 0x00000001, 0x00040047, 0x0000004c, 0x00000022, 0x00000000,
+    0x00040047, 0x00000057, 0x00000021, 0x00000002, 0x00040047, 0x00000057, 0x00000022, 0x00000000,
+    0x00040047, 0x00000060, 0x00000021, 0x00000003, 0x00040047, 0x00000060, 0x00000022, 0x00000000,
+    0x00030047, 0x00000062, 0x000014b4, 0x00030047, 0x00000064, 0x000014b4, 0x00030047, 0x00000065,
+    0x000014b4, 0x00030047, 0x0000006a, 0x000014b4, 0x00030047, 0x0000006b, 0x000014b4, 0x00030047,
+    0x0000006c, 0x000014b4, 0x00040047, 0x00000076, 0x00000021, 0x00000004, 0x00040047, 0x00000076,
+    0x00000022, 0x00000000, 0x00030047, 0x00000079, 0x000014b4, 0x00030047, 0x0000007b, 0x000014b4,
+    0x00030047, 0x0000007c, 0x000014b4, 0x00040047, 0x00000085, 0x00000021, 0x00000005, 0x00040047,
+    0x00000085, 0x00000022, 0x00000000, 0x00030047, 0x00000088, 0x000014b4, 0x00030047, 0x0000008a,
+    0x000014b4, 0x00030047, 0x0000008b, 0x000014b4, 0x00040047, 0x00000097, 0x00000021, 0x00000006,
+    0x00040047, 0x00000097, 0x00000022, 0x00000000, 0x00040047, 0x000000a3, 0x00000006, 0x00000010,
+    0x00030047, 0x000000a4, 0x00000002, 0x00050048, 0x000000a4, 0x00000000, 0x00000023, 0x00000000,
+    0x00040047, 0x000000a6, 0x00000021, 0x00000000, 0x00040047, 0x000000a6, 0x00000022, 0x00000000,
+    0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020,
+    0x00000000, 0x00040020, 0x00000007, 0x00000007, 0x00000006, 0x00040017, 0x00000009, 0x00000006,
+    0x00000003, 0x00040020, 0x0000000a, 0x00000001, 0x00000009, 0x0004003b, 0x0000000a, 0x0000000b,
+    0x00000001, 0x0004002b, 0x00000006, 0x0000000c, 0x00000000, 0x00040020, 0x0000000d, 0x00000001,
+    0x00000006, 0x00040015, 0x00000010, 0x00000020, 0x00000001, 0x00040017, 0x00000011, 0x00000010,
+    0x00000002, 0x00040020, 0x00000012, 0x00000007, 0x00000011, 0x0004002b, 0x00000006, 0x00000015,
+    0x00000004, 0x00030016, 0x0000001d, 0x00000020, 0x00040017, 0x0000001e, 0x0000001d, 0x00000002,
+    0x00040020, 0x0000001f, 0x00000007, 0x0000001e, 0x0004002b, 0x0000001d, 0x00000023, 0x3f000000,
+    0x0004002b, 0x0000001d, 0x00000026, 0x40800000, 0x0004002b, 0x00000006, 0x0000002b, 0x00000008,
+    0x0004002b, 0x00000006, 0x00000033, 0x00000002, 0x00040020, 0x00000037, 0x00000007, 0x0000001d,
+    0x00090019, 0x00000039, 0x0000001d, 0x00000001, 0x00000000, 0x00000000, 0x00000000, 0x00000001,
+    0x00000000, 0x0003001d, 0x0000003a, 0x00000039, 0x00040020, 0x0000003b, 0x00000000, 0x0000003a,
+    0x0004003b, 0x0000003b, 0x0000003c, 0x00000000, 0x0003001e, 0x0000003e, 0x00000006, 0x00040020,
+    0x0000003f, 0x00000009, 0x0000003e, 0x0004003b, 0x0000003f, 0x00000040, 0x00000009, 0x0004002b,
+    0x00000010, 0x00000041, 0x00000000, 0x00040020, 0x00000042, 0x00000009, 0x00000006, 0x00040020,
+    0x00000047, 0x00000000, 0x00000039, 0x0002001a, 0x0000004a, 0x00040020, 0x0000004b, 0x00000000,
+    0x0000004a, 0x0004003b, 0x0000004b, 0x0000004c, 0x00000000, 0x0003001b, 0x0000004e, 0x00000039,
+    0x0004002b, 0x0000001d, 0x00000051, 0x00000000, 0x00040017, 0x00000052, 0x0000001d, 0x00000004,
+    0x00040020, 0x00000056, 0x00000000, 0x0000004e, 0x0004003b, 0x00000056, 0x00000057, 0x00000000,
+    0x00090019, 0x0000005d, 0x0000001d, 0x00000001, 0x00000000, 0x00000000, 0x00000000, 0x00000002,
+    0x00000003, 0x0004001c, 0x0000005e, 0x0000005d, 0x00000033, 0x00040020, 0x0000005f, 0x00000000,
+    0x0000005e, 0x0004003b, 0x0000005f, 0x00000060, 0x00000000, 0x00040020, 0x00000063, 0x00000000,
+    0x0000005d, 0x0004002b, 0x0000001d, 0x0000006f, 0x447a0000, 0x00090019, 0x00000073, 0x00000006,
+    0x00000005, 0x00000000, 0x00000000, 0x00000000, 0x00000001, 0x00000000, 0x0004001c, 0x00000074,
+    0x00000073, 0x00000033, 0x00040020, 0x00000075, 0x00000000, 0x00000074, 0x0004003b, 0x00000075,
+    0x00000076, 0x00000000, 0x00040020, 0x0000007a, 0x00000000, 0x00000073, 0x00040017, 0x0000007f,
+    0x00000006, 0x00000004, 0x00090019, 0x00000082, 0x00000006, 0x00000005, 0x00000000, 0x00000000,
+    0x00000000, 0x00000002, 0x00000021, 0x0004001c, 0x00000083, 0x00000082, 0x00000033, 0x00040020,
+    0x00000084, 0x00000000, 0x00000083, 0x0004003b, 0x00000084, 0x00000085, 0x00000000, 0x00040020,
+    0x00000089, 0x00000000, 0x00000082, 0x0004002b, 0x00000006, 0x0000008f, 0x00000003, 0x0004002b,
+    0x00000006, 0x00000091, 0x00000001, 0x00090019, 0x00000095, 0x0000001d, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000001, 0x00000000, 0x00040020, 0x00000096, 0x00000000, 0x00000095,
+    0x0004003b, 0x00000096, 0x00000097, 0x00000000, 0x0003001b, 0x0000009a, 0x00000095, 0x0003001d,
+    0x000000a3, 0x0000007f, 0x0003001e, 0x000000a4, 0x000000a3, 0x00040020, 0x000000a5, 0x0000000c,
+    0x000000a4, 0x0004003b, 0x000000a5, 0x000000a6, 0x0000000c, 0x00040020, 0x000000b0, 0x0000000c,
+    0x0000007f, 0x0004002b, 0x00000006, 0x000000b2, 0x00000010, 0x0006002c, 0x00000009, 0x000000b9,
+    0x000000b2, 0x00000091, 0x00000091, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
+    0x000200f8, 0x00000005, 0x0004003b, 0x00000007, 0x00000008, 0x00000007, 0x0004003b, 0x00000012,
+    0x00000013, 0x00000007, 0x0004003b, 0x0000001f, 0x00000020, 0x00000007, 0x0004003b, 0x00000007,
+    0x00000029, 0x00000007, 0x0004003b, 0x00000012, 0x0000002d, 0x00000007, 0x0004003b, 0x00000037,
+    0x00000038, 0x00000007, 0x0004003b, 0x00000037, 0x00000055, 0x00000007, 0x0004003b, 0x00000037,
+    0x0000005c, 0x00000007, 0x0004003b, 0x00000007, 0x00000072, 0x00000007, 0x0004003b, 0x00000037,
+    0x00000094, 0x00000007, 0x00050041, 0x0000000d, 0x0000000e, 0x0000000b, 0x0000000c, 0x0004003d,
+    0x00000006, 0x0000000f, 0x0000000e, 0x0003003e, 0x00000008, 0x0000000f, 0x0004003d, 0x00000006,
+    0x00000014, 0x00000008, 0x00050089, 0x00000006, 0x00000016, 0x00000014, 0x00000015, 0x0004007c,
+    0x00000010, 0x00000017, 0x00000016, 0x0004003d, 0x00000006, 0x00000018, 0x00000008, 0x00050086,
+    0x00000006, 0x00000019, 0x00000018, 0x00000015, 0x00050089, 0x00000006, 0x0000001a, 0x00000019,
+    0x00000015, 0x0004007c, 0x00000010, 0x0000001b, 0x0000001a, 0x00050050, 0x00000011, 0x0000001c,
+    0x00000017, 0x0000001b, 0x0003003e, 0x00000013, 0x0000001c, 0x0004003d, 0x00000011, 0x00000021,
+    0x00000013, 0x0004006f, 0x0000001e, 0x00000022, 0x00000021, 0x00050050, 0x0000001e, 0x00000024,
+    0x00000023, 0x00000023, 0x00050081, 0x0000001e, 0x00000025, 0x00000022, 0x00000024, 0x00050050,
+    0x0000001e, 0x00000027, 0x00000026, 0x00000026, 0x00050088, 0x0000001e, 0x00000028, 0x00000025,
+    0x00000027, 0x0003003e, 0x00000020, 0x00000028, 0x0004003d, 0x00000006, 0x0000002a, 0x00000008,
+    0x00050086, 0x00000006, 0x0000002c, 0x0000002a, 0x0000002b, 0x0003003e, 0x00000029, 0x0000002c,
+    0x0004003d, 0x00000006, 0x0000002e, 0x00000008, 0x00050089, 0x00000006, 0x0000002f, 0x0000002e,
+    0x00000015, 0x0004007c, 0x00000010, 0x00000030, 0x0000002f, 0x0004003d, 0x00000006, 0x00000031,
+    0x00000008, 0x00050086, 0x00000006, 0x00000032, 0x00000031, 0x00000015, 0x00050089, 0x00000006,
+    0x00000034, 0x00000032, 0x00000033, 0x0004007c, 0x00000010, 0x00000035, 0x00000034, 0x00050050,
+    0x00000011, 0x00000036, 0x00000030, 0x00000035, 0x0003003e, 0x0000002d, 0x00000036, 0x0004003d,
+    0x00000006, 0x0000003d, 0x00000008, 0x00050041, 0x00000042, 0x00000043, 0x00000040, 0x00000041,
+    0x0004003d, 0x00000006, 0x00000044, 0x00000043, 0x00050089, 0x00000006, 0x00000045, 0x0000003d,
+    0x00000044, 0x00040053, 0x00000006, 0x00000046, 0x00000045, 0x00050041, 0x00000047, 0x00000048,
+    0x0000003c, 0x00000046, 0x0004003d, 0x00000039, 0x00000049, 0x00000048, 0x0004003d, 0x0000004a,
+    0x0000004d, 0x0000004c, 0x00050056, 0x0000004e, 0x0000004f, 0x00000049, 0x0000004d, 0x0004003d,
+    0x0000001e, 0x00000050, 0x00000020, 0x00070058, 0x00000052, 0x00000053, 0x0000004f, 0x00000050,
+    0x00000002, 0x00000051, 0x00050051, 0x0000001d, 0x00000054, 0x00000053, 0x00000000, 0x0003003e,
+    0x00000038, 0x00000054, 0x0004003d, 0x0000004e, 0x00000058, 0x00000057, 0x0004003d, 0x0000001e,
+    0x00000059, 0x00000020, 0x00070058, 0x00000052, 0x0000005a, 0x00000058, 0x00000059, 0x00000002,
+    0x00000051, 0x00050051, 0x0000001d, 0x0000005b, 0x0000005a, 0x00000000, 0x0003003e, 0x00000055,
+    0x0000005b, 0x0004003d, 0x00000006, 0x00000061, 0x00000029, 0x00040053, 0x00000006, 0x00000062,
+    0x00000061, 0x00050041, 0x00000063, 0x00000064, 0x00000060, 0x00000062, 0x0004003d, 0x0000005d,
+    0x00000065, 0x00000064, 0x0004003d, 0x00000011, 0x00000066, 0x0000002d, 0x00050062, 0x00000052,
+    0x00000067, 0x00000065, 0x00000066, 0x00050051, 0x0000001d, 0x00000068, 0x00000067, 0x00000000,
+    0x0003003e, 0x0000005c, 0x00000068, 0x0004003d, 0x00000006, 0x00000069, 0x00000029, 0x00040053,
+    0x00000006, 0x0000006a, 0x00000069, 0x00050041, 0x00000063, 0x0000006b, 0x00000060, 0x0000006a,
+    0x0004003d, 0x0000005d, 0x0000006c, 0x0000006b, 0x0004003d, 0x00000011, 0x0000006d, 0x0000002d,
+    0x0004003d, 0x0000001d, 0x0000006e, 0x0000005c, 0x00050081, 0x0000001d, 0x00000070, 0x0000006e,
+    0x0000006f, 0x00070050, 0x00000052, 0x00000071, 0x00000070, 0x00000070, 0x00000070, 0x00000070,
+    0x00040063, 0x0000006c, 0x0000006d, 0x00000071, 0x0004003d, 0x00000006, 0x00000077, 0x00000008,
+    0x00050089, 0x00000006, 0x00000078, 0x00000077, 0x00000033, 0x00040053, 0x00000006, 0x00000079,
+    0x00000078, 0x00050041, 0x0000007a, 0x0000007b, 0x00000076, 0x00000079, 0x0004003d, 0x00000073,
+    0x0000007c, 0x0000007b, 0x0004003d, 0x00000006, 0x0000007d, 0x00000008, 0x0004007c, 0x00000010,
+    0x0000007e, 0x0000007d, 0x0006005f, 0x0000007f, 0x00000080, 0x0000007c, 0x0000007e, 0x00002000,
+    0x00050051, 0x00000006, 0x00000081, 0x00000080, 0x00000000, 0x0003003e, 0x00000072, 0x00000081,
+    0x0004003d, 0x00000006, 0x00000086, 0x00000008, 0x00050089, 0x00000006, 0x00000087, 0x00000086,
+    0x00000033, 0x00040053, 0x00000006, 0x00000088, 0x00000087, 0x00050041, 0x00000089, 0x0000008a,
+    0x00000085, 0x00000088, 0x0004003d, 0x00000082, 0x0000008b, 0x0000008a, 0x0004003d, 0x00000006,
+    0x0000008c, 0x00000008, 0x0004007c, 0x00000010, 0x0000008d, 0x0000008c, 0x0004003d, 0x00000006,
+    0x0000008e, 0x00000008, 0x00050084, 0x00000006, 0x00000090, 0x0000008e, 0x0000008f, 0x00050080,
+    0x00000006, 0x00000092, 0x00000090, 0x00000091, 0x00070050, 0x0000007f, 0x00000093, 0x00000092,
+    0x00000092, 0x00000092, 0x00000092, 0x00050063, 0x0000008b, 0x0000008d, 0x00000093, 0x00002000,
+    0x0004003d, 0x00000095, 0x00000098, 0x00000097, 0x0004003d, 0x0000004a, 0x00000099, 0x0000004c,
+    0x00050056, 0x0000009a, 0x0000009b, 0x00000098, 0x00000099, 0x0004003d, 0x00000006, 0x0000009c,
+    0x00000008, 0x00050089, 0x00000006, 0x0000009d, 0x0000009c, 0x00000015, 0x00040070, 0x0000001d,
+    0x0000009e, 0x0000009d, 0x00050081, 0x0000001d, 0x0000009f, 0x0000009e, 0x00000023, 0x00050088,
+    0x0000001d, 0x000000a0, 0x0000009f, 0x00000026, 0x00070058, 0x00000052, 0x000000a1, 0x0000009b,
+    0x000000a0, 0x00000002, 0x00000051, 0x00050051, 0x0000001d, 0x000000a2, 0x000000a1, 0x00000000,
+    0x0003003e, 0x00000094, 0x000000a2, 0x0004003d, 0x00000006, 0x000000a7, 0x00000008, 0x0004003d,
+    0x0000001d, 0x000000a8, 0x00000038, 0x0004006d, 0x00000006, 0x000000a9, 0x000000a8, 0x0004003d,
+    0x0000001d, 0x000000aa, 0x00000055, 0x0004006d, 0x00000006, 0x000000ab, 0x000000aa, 0x0004003d,
+    0x0000001d, 0x000000ac, 0x0000005c, 0x0004006d, 0x00000006, 0x000000ad, 0x000000ac, 0x0004003d,
+    0x00000006, 0x000000ae, 0x00000072, 0x00070050, 0x0000007f, 0x000000af, 0x000000a9, 0x000000ab,
+    0x000000ad, 0x000000ae, 0x00060041, 0x000000b0, 0x000000b1, 0x000000a6, 0x00000041, 0x000000a7,
+    0x0003003e, 0x000000b1, 0x000000af, 0x0004003d, 0x00000006, 0x000000b3, 0x00000008, 0x00050080,
+    0x00000006, 0x000000b4, 0x000000b2, 0x000000b3, 0x0004003d, 0x0000001d, 0x000000b5, 0x00000094,
+    0x0004006d, 0x00000006, 0x000000b6, 0x000000b5, 0x00070050, 0x0000007f, 0x000000b7, 0x000000b6,
+    0x0000000c, 0x0000000c, 0x0000000c, 0x00060041, 0x000000b0, 0x000000b8, 0x000000a6, 0x00000041,
+    0x000000b4, 0x0003003e, 0x000000b8, 0x000000b7, 0x000100fd, 0x00010038,
+};
+
 static VkInstance instance;
 static VkPhysicalDevice pd;
 static VkDevice device;
@@ -1125,11 +1303,27 @@ static void test_inline_uniform_block(void)
     w[0].descriptorType = INLINE;
     w[1] = buffer_write(sets[0], 1, 0, UBO, infos, 3);
     vkUpdateDescriptorSets(device, 2, w, 0, NULL);
-    data.dataSize = 4;
-    data.pData = &second;
-    w[0].dstArrayElement = 16;
-    w[0].descriptorCount = 4;
-    vkUpdateDescriptorSets(device, 1, w, 0, NULL);
+    { /* bytes 16..20 through a template: an inline block entry's bytes are at its offset */
+        VkDescriptorUpdateTemplateEntry entry;
+        VkDescriptorUpdateTemplateCreateInfo tinfo;
+        VkDescriptorUpdateTemplate tmpl;
+        uint32_t tdata[2] = { 0xdead, second };
+        memset(&entry, 0, sizeof(entry));
+        entry.dstBinding = 0;
+        entry.dstArrayElement = 16;
+        entry.descriptorCount = 4;
+        entry.descriptorType = INLINE;
+        entry.offset = 4;
+        memset(&tinfo, 0, sizeof(tinfo));
+        tinfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO;
+        tinfo.descriptorUpdateEntryCount = 1;
+        tinfo.pDescriptorUpdateEntries = &entry;
+        tinfo.templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET;
+        tinfo.descriptorSetLayout = sl;
+        REQUIRE_VK(vkCreateDescriptorUpdateTemplate(device, &tinfo, NULL, &tmpl));
+        vkUpdateDescriptorSetWithTemplate(device, sets[0], tmpl, tdata);
+        vkDestroyDescriptorUpdateTemplate(device, tmpl, NULL);
+    }
     write_buffer(sets[0], 2, 0, SSBO, &out, 0, VK_WHOLE_SIZE);
 
     /* set 1: the block's bytes 4..20 and the uniform buffers 1 and 2 */
@@ -1550,6 +1744,469 @@ static void test_layout_lifetime(void)
     free_buf(&dst);
 }
 
+/* ---- Images, samplers and texel buffers ---- */
+
+struct img {
+    VkImage image;
+    VkDeviceMemory memory;
+    VkImageView view;
+};
+
+static struct img make_image(VkImageType type, uint32_t w, uint32_t h)
+{
+    VkImageCreateInfo info;
+    VkImageViewCreateInfo view;
+    VkMemoryAllocateInfo alloc;
+    VkMemoryRequirements req;
+    struct img m;
+    uint32_t t = 0;
+
+    memset(&m, 0, sizeof(m));
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    info.imageType = type;
+    info.format = VK_FORMAT_R32_SFLOAT;
+    info.extent.width = w;
+    info.extent.height = h;
+    info.extent.depth = 1;
+    info.mipLevels = 1;
+    info.arrayLayers = 1;
+    info.samples = VK_SAMPLE_COUNT_1_BIT;
+    info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                 VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (vkCreateImage(device, &info, NULL, &m.image) != VK_SUCCESS)
+        return m;
+    vkGetImageMemoryRequirements(device, m.image, &req);
+    while (!(req.memoryTypeBits & (1u << t)))
+        t++;
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = t;
+    if (vkAllocateMemory(device, &alloc, NULL, &m.memory) != VK_SUCCESS ||
+        vkBindImageMemory(device, m.image, m.memory, 0) != VK_SUCCESS)
+        return m;
+    memset(&view, 0, sizeof(view));
+    view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view.image = m.image;
+    view.viewType = type == VK_IMAGE_TYPE_1D ? VK_IMAGE_VIEW_TYPE_1D : VK_IMAGE_VIEW_TYPE_2D;
+    view.format = info.format;
+    view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view.subresourceRange.levelCount = 1;
+    view.subresourceRange.layerCount = 1;
+    vkCreateImageView(device, &view, NULL, &m.view);
+    return m;
+}
+
+static void free_image(struct img *m)
+{
+    vkDestroyImageView(device, m->view, NULL);
+    vkDestroyImage(device, m->image, NULL);
+    vkFreeMemory(device, m->memory, NULL);
+}
+
+static VkBufferView make_buffer_view(const struct buf *b, VkFormat format)
+{
+    VkBufferViewCreateInfo info;
+    VkBufferView view = VK_NULL_HANDLE;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
+    info.buffer = b->buffer;
+    info.format = format;
+    info.range = VK_WHOLE_SIZE;
+    CHECK_VK(vkCreateBufferView(device, &info, NULL, &view), VK_SUCCESS);
+    return view;
+}
+
+static struct buf make_texel_buf(VkDeviceSize size)
+{
+    struct buf b;
+    VkBufferCreateInfo info;
+    VkMemoryAllocateInfo alloc;
+    VkMemoryRequirements req;
+    void *p = NULL;
+    memset(&b, 0, sizeof(b));
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    info.size = size;
+    info.usage = VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
+    if (vkCreateBuffer(device, &info, NULL, &b.buffer) != VK_SUCCESS)
+        return b;
+    vkGetBufferMemoryRequirements(device, b.buffer, &req);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = shared_type;
+    if (vkAllocateMemory(device, &alloc, NULL, &b.memory) != VK_SUCCESS)
+        return b;
+    vkBindBufferMemory(device, b.buffer, b.memory, 0);
+    if (vkMapMemory(device, b.memory, 0, VK_WHOLE_SIZE, 0, &p) == VK_SUCCESS) {
+        b.data = p;
+        memset(b.data, 0, (size_t)size);
+    }
+    b.size = size;
+    return b;
+}
+
+static void image_barrier(VkCommandBuffer cb, VkImage image, VkImageLayout from, VkImageLayout to,
+                          VkPipelineStageFlags src, VkAccessFlags src_access, VkPipelineStageFlags dst,
+                          VkAccessFlags dst_access)
+{
+    VkImageMemoryBarrier b;
+    memset(&b, 0, sizeof(b));
+    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b.srcAccessMask = src_access;
+    b.dstAccessMask = dst_access;
+    b.oldLayout = from;
+    b.newLayout = to;
+    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = image;
+    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    b.subresourceRange.levelCount = 1;
+    b.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(cb, src, dst, 0, 0, NULL, 0, NULL, 1, &b);
+}
+
+/* What spv_images reads and writes: 3 (+1 unwritten) sampled 4x4 images,
+ * a combined one, 2 storage 4x2 images, 2 uniform and 2 storage texel
+ * buffers of 16 R32_UINT texels, a 1D image of 4 texels. All images are
+ * R32_SFLOAT in VK_IMAGE_LAYOUT_GENERAL. */
+struct scene {
+    struct img imgs[3], comb, simg[2], line;
+    struct buf staging, utb[2], stb[2], out, readback;
+    VkBufferView utb_view[2], stb_view[2];
+    VkSampler sampler;
+};
+
+static void copy_to_image(VkCommandBuffer cb, const struct scene *s, const struct img *m, VkDeviceSize offset,
+                          uint32_t w, uint32_t h)
+{
+    VkBufferImageCopy r;
+    memset(&r, 0, sizeof(r));
+    r.bufferOffset = offset;
+    r.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    r.imageSubresource.layerCount = 1;
+    r.imageExtent.width = w;
+    r.imageExtent.height = h;
+    r.imageExtent.depth = 1;
+    vkCmdCopyBufferToImage(cb, s->staging.buffer, m->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
+}
+
+/* Staging layout: imgs[k] at 64 k, comb at 192, simg[k] at 256 + 32 k, line at 320. */
+static void scene_upload(struct scene *s, bool first)
+{
+    struct img *all[7];
+    VkCommandBuffer cb = begin();
+    uint32_t i, k, n = 0;
+    for (k = 0; k < 3; k++)
+        all[n++] = &s->imgs[k];
+    all[n++] = &s->comb;
+    all[n++] = &s->line;
+    all[n++] = &s->simg[0];
+    all[n++] = &s->simg[1];
+    for (i = first ? 0 : 5; i < n; i++)
+        image_barrier(cb, all[i]->image, first ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
+                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    if (first) {
+        for (k = 0; k < 3; k++)
+            copy_to_image(cb, s, &s->imgs[k], 64 * k, 4, 4);
+        copy_to_image(cb, s, &s->comb, 192, 4, 4);
+        copy_to_image(cb, s, &s->line, 320, 4, 1);
+    }
+    for (k = 0; k < 2; k++)
+        copy_to_image(cb, s, &s->simg[k], 256 + 32 * k, 4, 2);
+    for (i = first ? 0 : 5; i < n; i++)
+        image_barrier(cb, all[i]->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    CHECK_VK(finish(cb), VK_SUCCESS);
+    for (k = 0; k < 2; k++)
+        memset(s->stb[k].data, 0, 64);
+    memset(s->out.data, 0, (size_t)s->out.size);
+}
+
+static bool scene_init(struct scene *s)
+{
+    VkSamplerCreateInfo si;
+    uint32_t i, k;
+    float f;
+
+    memset(s, 0, sizeof(*s));
+    for (k = 0; k < 3; k++)
+        s->imgs[k] = make_image(VK_IMAGE_TYPE_2D, 4, 4);
+    s->comb = make_image(VK_IMAGE_TYPE_2D, 4, 4);
+    s->simg[0] = make_image(VK_IMAGE_TYPE_2D, 4, 2);
+    s->simg[1] = make_image(VK_IMAGE_TYPE_2D, 4, 2);
+    s->line = make_image(VK_IMAGE_TYPE_1D, 4, 1);
+    s->staging = make_buf(512);
+    s->out = make_buf(32 * 16);
+    s->readback = make_buf(64);
+    for (k = 0; k < 2; k++) {
+        s->utb[k] = make_texel_buf(64);
+        s->stb[k] = make_texel_buf(64);
+        if (!s->utb[k].data || !s->stb[k].data)
+            return false;
+        s->utb_view[k] = make_buffer_view(&s->utb[k], VK_FORMAT_R32_UINT);
+        s->stb_view[k] = make_buffer_view(&s->stb[k], VK_FORMAT_R32_UINT);
+        for (i = 0; i < 16; i++)
+            put(&s->utb[k], i, 7000 + 100 * k + i);
+    }
+    memset(&si, 0, sizeof(si));
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.magFilter = si.minFilter = VK_FILTER_NEAREST;
+    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.maxLod = VK_LOD_CLAMP_NONE;
+    if (vkCreateSampler(device, &si, NULL, &s->sampler) != VK_SUCCESS || !s->staging.data || !s->out.data ||
+        !s->readback.data || !s->line.view || !s->comb.view || !s->simg[1].view)
+        return false;
+    for (k = 0; k < 3; k++)
+        for (i = 0; i < 16; i++) {
+            f = (float)(100 * k + i);
+            memcpy(s->staging.data + 64 * k + 4 * i, &f, 4);
+        }
+    for (i = 0; i < 16; i++) {
+        f = (float)(500 + i);
+        memcpy(s->staging.data + 192 + 4 * i, &f, 4);
+        f = (float)(900 + (i / 8) * 100 + i % 8);
+        memcpy(s->staging.data + 256 + 4 * i, &f, 4);
+    }
+    for (i = 0; i < 4; i++) {
+        f = (float)(300 + i);
+        memcpy(s->staging.data + 320 + 4 * i, &f, 4);
+    }
+    scene_upload(s, true);
+    return true;
+}
+
+static void scene_free(struct scene *s)
+{
+    uint32_t k;
+    for (k = 0; k < 3; k++)
+        free_image(&s->imgs[k]);
+    free_image(&s->comb);
+    free_image(&s->simg[0]);
+    free_image(&s->simg[1]);
+    free_image(&s->line);
+    for (k = 0; k < 2; k++) {
+        vkDestroyBufferView(device, s->utb_view[k], NULL);
+        vkDestroyBufferView(device, s->stb_view[k], NULL);
+        free_buf(&s->utb[k]);
+        free_buf(&s->stb[k]);
+    }
+    vkDestroySampler(device, s->sampler, NULL);
+    free_buf(&s->staging);
+    free_buf(&s->out);
+    free_buf(&s->readback);
+}
+
+/* spv_images' bindings; binding 7 has `imgs` descriptors (variable: flags). */
+static void scene_bindings(VkDescriptorSetLayoutBinding b[8], uint32_t imgs, const VkSampler *immutable)
+{
+    b[0] = lb(0, SSBO, 1);
+    b[1] = lb(1, VK_DESCRIPTOR_TYPE_SAMPLER, 1);
+    b[2] = lb(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1);
+    b[3] = lb(3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2);
+    b[4] = lb(4, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 2);
+    b[5] = lb(5, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 2);
+    b[6] = lb(6, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1);
+    b[7] = lb(7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imgs);
+    b[1].pImmutableSamplers = immutable;
+    b[2].pImmutableSamplers = immutable;
+}
+
+/* The writes of every binding (binding 1 not with immutable samplers). */
+static uint32_t scene_writes(const struct scene *s, VkDescriptorSet set, bool immutable, VkWriteDescriptorSet *w,
+                             VkDescriptorImageInfo *ii, VkDescriptorBufferInfo *out)
+{
+    uint32_t n = 0, k;
+    memset(ii, 0, sizeof(*ii) * 8);
+    *out = bi(&s->out, 0, VK_WHOLE_SIZE);
+    w[n++] = buffer_write(set, 0, 0, SSBO, out, 1);
+    ii[0].sampler = s->sampler;
+    ii[1].sampler = immutable ? VK_NULL_HANDLE : s->sampler;
+    ii[1].imageView = s->comb.view;
+    ii[2].imageView = s->simg[0].view;
+    ii[3].imageView = s->simg[1].view;
+    ii[4].imageView = s->line.view;
+    for (k = 0; k < 3; k++)
+        ii[5 + k].imageView = s->imgs[k].view;
+    for (k = 0; k < 8; k++)
+        ii[k].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    if (!immutable) {
+        w[n] = buffer_write(set, 1, 0, VK_DESCRIPTOR_TYPE_SAMPLER, NULL, 1);
+        w[n++].pImageInfo = &ii[0];
+    }
+    w[n] = buffer_write(set, 2, 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, NULL, 1);
+    w[n++].pImageInfo = &ii[1];
+    w[n] = buffer_write(set, 3, 0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, NULL, 2);
+    w[n++].pImageInfo = &ii[2];
+    w[n] = buffer_write(set, 4, 0, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, NULL, 2);
+    w[n++].pTexelBufferView = s->utb_view;
+    w[n] = buffer_write(set, 5, 0, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, NULL, 2);
+    w[n++].pTexelBufferView = s->stb_view;
+    w[n] = buffer_write(set, 6, 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, NULL, 1);
+    w[n++].pImageInfo = &ii[4];
+    w[n] = buffer_write(set, 7, 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, NULL, 3);
+    w[n++].pImageInfo = &ii[5];
+    return n;
+}
+
+/* After the dispatch: the storage images to the readback buffer. */
+static void scene_readback(VkCommandBuffer cb, const struct scene *s)
+{
+    VkBufferImageCopy r;
+    uint32_t k;
+    memset(&r, 0, sizeof(r));
+    r.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    r.imageSubresource.layerCount = 1;
+    r.imageExtent.width = 4;
+    r.imageExtent.height = 2;
+    r.imageExtent.depth = 1;
+    for (k = 0; k < 2; k++) {
+        image_barrier(cb, s->simg[k].image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                      VK_ACCESS_TRANSFER_READ_BIT);
+        r.bufferOffset = 32 * k;
+        vkCmdCopyImageToBuffer(cb, s->simg[k].image, VK_IMAGE_LAYOUT_GENERAL, s->readback.buffer, 1, &r);
+    }
+    {
+        VkMemoryBarrier b;
+        memset(&b, 0, sizeof(b));
+        b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &b, 0, NULL, 0, NULL);
+    }
+}
+
+static int scene_check(const struct scene *s)
+{
+    uint32_t i, ok = 1;
+    for (i = 0; i < 16; i++) {
+        uint32_t x = i % 4, y = (i / 4) % 4, sx = i % 4, sy = (i / 4) % 2, k = i / 8;
+        uint32_t want[5], got[5], j;
+        float f;
+        want[0] = 100 * (i % 3) + 4 * y + x;
+        want[1] = 500 + 4 * y + x;
+        want[2] = 900 + 100 * k + 4 * sy + sx;
+        want[3] = 7000 + 100 * (i % 2) + i;
+        want[4] = 300 + i % 4;
+        for (j = 0; j < 4; j++)
+            got[j] = word(&s->out, 4 * i + j);
+        got[4] = word(&s->out, 4 * (16 + i));
+        if (memcmp(got, want, sizeof(want)) != 0) {
+            fprintf(stderr, "  thread %u: %u %u %u %u %u, want %u %u %u %u %u\n", i, got[0], got[1], got[2], got[3],
+                    got[4], want[0], want[1], want[2], want[3], want[4]);
+            ok = 0;
+        }
+        memcpy(&f, s->readback.data + 4 * i, 4);
+        if (f != (float)(want[2] + 1000)) {
+            fprintf(stderr, "  storage image texel %u: %g\n", i, f);
+            ok = 0;
+        }
+        if (word(&s->stb[i % 2], i) != i * 3 + 1 || word(&s->stb[1 - i % 2], i) != 0) {
+            fprintf(stderr, "  storage texel %u: %u %u\n", i, word(&s->stb[0], i), word(&s->stb[1], i));
+            ok = 0;
+        }
+    }
+    return ok;
+}
+
+/* Every image-type descriptor in one dispatch: a set with a variable-count
+ * sampled image array (3 of 4 written, indexed non-uniformly); the same
+ * with immutable samplers and update after bind (descriptors written after
+ * recording); and push descriptors. */
+static void test_images(void)
+{
+    VkDescriptorBindingFlags flags[8];
+    VkDescriptorSetLayoutBinding b[8];
+    VkDescriptorPoolSize sizes[6];
+    VkWriteDescriptorSet w[8];
+    VkDescriptorImageInfo ii[8];
+    VkDescriptorBufferInfo out;
+    struct scene s;
+    uint32_t variant, i, count = 3, variable = 4;
+
+    if (!scene_init(&s)) {
+        CHECK(0);
+        scene_free(&s);
+        return;
+    }
+    sizes[0] = ps(SSBO, 2);
+    sizes[1] = ps(VK_DESCRIPTOR_TYPE_SAMPLER, 2);
+    sizes[2] = ps(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2);
+    sizes[3] = ps(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4);
+    sizes[4] = ps(VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 4);
+    sizes[5] = ps(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 10);
+    for (variant = 0; variant < 3; variant++) {
+        bool immutable = variant == 1, push = variant == 2;
+        VkDescriptorPoolCreateFlags pool_flags = immutable ? VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT : 0;
+        VkDescriptorSetLayoutCreateFlags layout_flags =
+            push ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT
+                 : immutable ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT : 0;
+        VkDescriptorSetLayout sl;
+        VkPipelineLayout pl;
+        VkDescriptorPool pool = VK_NULL_HANDLE;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        VkPipeline p;
+        VkCommandBuffer cb;
+        VkDescriptorPoolSize stb_size = ps(VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 4);
+        VkDescriptorPoolSize all[7];
+        uint32_t n;
+
+        if (variant)
+            scene_upload(&s, false);
+        for (i = 0; i < 8; i++)
+            flags[i] = immutable ? VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT : 0;
+        if (!push)
+            flags[7] |= VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+        scene_bindings(b, push ? 3 : 4, immutable ? &s.sampler : NULL);
+        sl = make_set_layout(b, 8, layout_flags, push ? NULL : flags);
+        pl = make_pipeline_layout(&sl, 1, 4);
+        p = make_pipeline(spv_images, sizeof(spv_images), pl);
+        REQUIRE(sl && pl && p);
+        if (!push) {
+            memcpy(all, sizes, sizeof(sizes));
+            all[6] = stb_size;
+            pool = make_pool(1, all, 7, pool_flags, NULL);
+            REQUIRE(pool);
+            CHECK_VK(alloc_sets(pool, &sl, 1, &variable, &set), VK_SUCCESS);
+            REQUIRE(set);
+        }
+        n = scene_writes(&s, set, immutable, w, ii, &out);
+        if (!push && !immutable)
+            vkUpdateDescriptorSets(device, n, w, 0, NULL);
+        cb = begin();
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+        if (push)
+            vkCmdPushDescriptorSet(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, n, w);
+        else
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
+        vkCmdPushConstants(cb, pl, COMPUTE, 0, 4, &count);
+        vkCmdDispatch(cb, 1, 1, 1);
+        host_barrier(cb);
+        scene_readback(cb, &s);
+        REQUIRE_VK(vkEndCommandBuffer(cb));
+        if (immutable) /* update after bind */
+            vkUpdateDescriptorSets(device, n, w, 0, NULL);
+        REQUIRE_VK(submit_wait(cb));
+        vkFreeCommandBuffers(device, cmd_pool, 1, &cb);
+        if (!scene_check(&s)) {
+            fprintf(stderr, "  variant %u\n", variant);
+            CHECK(0);
+        }
+        vkDestroyPipeline(device, p, NULL);
+        vkDestroyDescriptorPool(device, pool, NULL);
+        vkDestroyPipelineLayout(device, pl, NULL);
+        vkDestroyDescriptorSetLayout(device, sl, NULL);
+    }
+    scene_free(&s);
+}
+
 int main(void)
 {
     setup();
@@ -1567,6 +2224,7 @@ int main(void)
     RUN(test_copies_and_templates);
     RUN(test_push_descriptors);
     RUN(test_layout_lifetime);
+    RUN(test_images);
     teardown();
     return TEST_RESULT();
 }

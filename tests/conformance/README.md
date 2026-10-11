@@ -29,6 +29,7 @@ One file per chapter of the Vulkan specification:
 | `samplers.c` | Samplers: creation with every parameter, maxSamplerAllocationCount | 6 |
 | `copies.c` | Copy Commands: buffer/image and image/image copies, blits, resolves, host image copies, texel by texel | 10 |
 | `clears.c` | Clear Commands: color and depth/stencil image clears, texel by texel | 4 |
+| `descriptorsets.c` | Resource Descriptors > Descriptor Sets: set layouts and support queries, pools and allocation, writes, copies, inline uniform blocks, update templates, dynamic offsets, push descriptors, update after bind, variable-count and partially bound bindings, every descriptor type read by a compute shader | 19 |
 
 Framework: `ct.h` (test macros, helpers), `ct.c` (runner, helpers),
 `commands.c` (every Vulkan 1.4 core command and the commands of PlasmaVK's
@@ -187,7 +188,6 @@ a required behaviour.
 | `resources.buffer_capture_replay` | Metal cannot place a resource at a requested GPU address, so `bufferDeviceAddressCaptureReplay` is unsupported. |
 | `extensions.instance_layer_extensions` | No layers: PlasmaVK is linked directly, without a loader. |
 | `features.shaderInt64` | Required only with 64-bit shader atomics, which Apple7/Apple8 GPUs lack. |
-| `features.descriptorIndexing` and the 12 descriptor-indexing features, the 14 update-after-bind limits | Required only with descriptor indexing, which needs descriptor sets (not implemented yet). |
 | `features.shaderDrawParameters`, `features.drawIndirectCount`, `features.shaderOutputViewportIndex`, `features.shaderOutputLayer` | Required only with their extensions, which need graphics pipelines (not implemented yet). |
 | `features.samplerFilterMinmax`, `formats.filter_minmax_formats`, `samplers.create_sampler_reduction` | Required only with VK_EXT_sampler_filter_minmax, which PlasmaVK offers from Apple10 (M5, A19): Metal's `MTLSamplerDescriptor.reductionMode` is an Apple10 feature (FST "Sampler minimum and maximum reduction"), and on Apple9 (M4 Max) it is accepted and ignored, minimum and maximum sampling as the weighted average. A shader cannot emulate it: a sampler descriptor is only its MTLResourceID. |
 
@@ -198,6 +198,19 @@ whose features may forbid them (MoltenVK's do). It reports `UNASSIGNED-vkAllocat
 for `memory.allocate_too_large`, which deliberately exceeds that limit: the
 specification allows such an allocation to succeed or to fail with
 `VK_ERROR_OUT_OF_DEVICE_MEMORY` (Limits > maxMemoryAllocationSize), and the
-test accepts either. `initialization.instance_allocation_failure` crashes
+test accepts either. It warns (`WARNING-VkDescriptorSetAllocateInfo-maxSet`,
+not a valid usage rule) that `descriptorsets.pool_out_of_memory` allocates
+more sets than maxSets, which that test does on purpose: Resource Descriptors >
+Allocation of Descriptor Sets says such an allocation "may fail", and the test
+accepts success or `VK_ERROR_OUT_OF_POOL_MEMORY`. It reports
+`VUID-VkComputePipelineCreateInfo-layout-parameter` ("references deleted
+object VkDescriptorSetLayout") for `descriptorsets.set_layout_lifetime`,
+which creates a pipeline with a pipeline layout whose set layout was destroyed.
+That is valid: Fundamentals > Object Lifetime says "a VkDescriptorSetLayout
+object passed as a parameter to create another object is not further
+accessed by that object after the duration of the command it is passed
+into", so the pipeline layout stays a valid handle (the test binds a set of a
+second, identically defined layout that is still alive).
+`initialization.instance_allocation_failure` crashes
 inside the validation layer, which does not survive injected allocation
 failures; without the layer it passes.
