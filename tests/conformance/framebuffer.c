@@ -598,6 +598,60 @@ CT_TEST(logic_op_uint_ops,
     ct_scene_fini(&s);
 }
 
+static uint32_t expect_snorm_bits(uint32_t x, uint32_t y, const void *ctx)
+{
+    (void)x;
+    (void)ctx;
+    return y < H / 2 ? CT_RGBA(0xff, 0x01, 0x80, 0xc0) : CT_RGBA(0x80, 0x7e, 0xff, 0xbf);
+}
+
+CT_TEST(logic_op_snorm_bits,
+        "The Framebuffer > Logical Operations: the source is converted to the attachment's format (Fixed-Point "
+        "Data Conversions) and the operation applies to the bits, on R8G8B8A8_SNORM too: COPY_INVERTED of "
+        "(1, -1, 0, 64/127) stores (0x80, 0x7e, 0xff, 0xbf), and XOR 0x7f of a stored 0x80 (-128) in a later "
+        "render pass gives 0xff, read back by copying the image to a buffer",
+        FB_COMMANDS)
+{
+    float clear[4] = { 1.0f, -1.0f, 64.0f / 127.0f, 0.0f }, src[4] = { 1.0f, -1.0f, 0.0f, 64.0f / 127.0f };
+    static const float sevens[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    struct ct_scene s;
+    struct ct_target c;
+    struct ct_gfx g;
+    VkPipeline inverted, xor_pipe;
+    VkCommandBuffer cb;
+
+    ct_scene_init(t, &s);
+    if (!s.f.f2.features.logicOp)
+        ct_skip(t, "logicOp is not supported");
+    if (!(ct_format_features(&s.e, VK_FORMAT_R8G8B8A8_SNORM, 0) & VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT))
+        ct_skip(t, "R8G8B8A8_SNORM is not a color attachment format");
+    ct_target(t, &s.e, VK_FORMAT_R8G8B8A8_SNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+              &c);
+    ct_gfx_init(&g, s.vs, s.fs, s.layout, W, H);
+    g.color_formats[0] = VK_FORMAT_R8G8B8A8_SNORM;
+    g.cb.logicOpEnable = VK_TRUE;
+    g.cb.logicOp = VK_LOGIC_OP_COPY_INVERTED;
+    inverted = ct_gfx_pipeline(t, &s.e, &g);
+    g.cb.logicOp = VK_LOGIC_OP_XOR;
+    xor_pipe = ct_gfx_pipeline(t, &s.e, &g);
+    cb = ct_begin_commands(t, &s.e);
+    ct_begin_rendering(cb, &c, 1, clear, NULL, 0.0f); /* (0x7f, 0x81, 0x40, 0x00) */
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, inverted);
+    ct_draw_rect(cb, s.layout, -1.0f, -1.0f, 1.0f, 1.0f, src, 0.0f); /* ~(0x7f, 0x81, 0x00, 0x40) */
+    vkCmdEndRendering(cb);
+    ct_begin_rendering(cb, &c, 1, NULL, NULL, 0.0f); /* loaded */
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, xor_pipe);
+    ct_draw_rect(cb, s.layout, -1.0f, -1.0f, 1.0f, 0.0f, sevens, 0.0f); /* top half: ^ 0x7f */
+    vkCmdEndRendering(cb);
+    ct_scene_read(t, &s, cb, &c);
+    ct_check_rgba8(t, s.out.data, W, H, expect_snorm_bits, NULL, 0,
+                   "top: (0x80, 0x7e, 0xff, 0xbf) ^ 0x7f; bottom: ~(0x7f, 0x81, 0x00, 0x40)");
+    vkDestroyPipeline(s.e.device, inverted, NULL);
+    vkDestroyPipeline(s.e.device, xor_pipe, NULL);
+    ct_target_fini(&s.e, &c);
+    ct_scene_fini(&s);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(blend_equations),
     CT_REF(color_write_mask),
@@ -606,6 +660,7 @@ static const struct ct_test *const tests[] = {
     CT_REF(srgb_blending),
     CT_REF(logic_op),
     CT_REF(logic_op_uint_ops),
+    CT_REF(logic_op_snorm_bits),
 };
 
 CT_SUITE(framebuffer, tests)

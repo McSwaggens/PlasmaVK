@@ -39,7 +39,7 @@ One file per chapter of the Vulkan specification:
 | `drawing.c` | Drawing Commands and Fixed-Function Vertex Processing: vertex and instance numbering of direct, indexed (UINT16, UINT32, UINT8) and indirect draws, draw counts, primitive restart (static and dynamic), every primitive topology, draw parameters (BaseVertex, BaseInstance, DrawIndex), vertex attribute formats, offsets and instance rates, divisors, dynamic binding strides; `vkCmdBindIndexBuffer2` ranges; the KHR aliases of VK_KHR_maintenance5 and VK_KHR_draw_indirect_count on a 1.3 device | 15 |
 | `rasterization.c` | Fixed-Function Vertex Post-Processing and Rasterization: viewport transform (offsets, negative heights, depth ranges), clipping and depth clamping, ViewportIndex and Layer from the vertex shader, culling, rasterizer discard, coverage at the standard sample locations, sample shading, wide points, flat and smooth interpolation, dynamic line width and line stipple | 13 |
 | `fragops.c` | Fragment Operations: scissor test, every depth compare op, every stencil op (clamping, wrapping, fail and depth-fail ops, write and compare masks), depth bounds (static and dynamic), sample mask (alone, and with the SampleMask built-ins), alpha to one | 8 |
-| `framebuffer.c` | The Framebuffer: blend factors and operations (constants static and dynamic), color write masks, independent blending, dual-source blending, sRGB blending in linear space, logic operations (XOR on UNORM, every operation on UINT with a write mask) | 7 |
+| `framebuffer.c` | The Framebuffer: blend factors and operations (constants static and dynamic), color write masks, independent blending, dual-source blending, sRGB blending in linear space, logic operations (XOR on UNORM, every operation on UINT with a write mask, the bits of SNORM) | 8 |
 | `dispatch.c` | Dispatching Commands: `vkCmdDispatchIndirect` (parameters read at execution, zero counts), `vkCmdDispatchBase` (WorkgroupId, NumWorkgroups, GlobalInvocationId), no base carried over | 3 |
 | `sparsemem.c` | Sparse Resources: sparse image memory requirements (none without sparse residency), `vkQueueBindSparse` on a sparse binding queue | 3 |
 | `wsi.c` | Window System Integration: Metal surfaces, surface queries (support, capabilities, formats, present modes, present rectangles, device group modes), swapchains (images, allocation callbacks, `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`, recreation with `oldSwapchain`, aliasing a swapchain image), acquire and present (semaphores, fences, timeouts, two swapchains in one present), swapchain images as transfer source and destination | 20 |
@@ -238,7 +238,7 @@ against the specification; the tests are right:
   equivalent to vkCmdDispatchBase(0,0,0,groupCountX,groupCountY,groupCountZ)".
 
 The graphics chapters' tests also skip on MoltenVK where it lacks a feature
-(`drawIndirectCount`, `depthBounds`, `logicOp`: both logic operation tests), and draw no triangle fans on
+(`drawIndirectCount`, `depthBounds`, `logicOp`: the logic operation tests), and draw no triangle fans on
 it (`VK_KHR_portability_subset`, whose `triangleFans` may be off); and
 without `VK_KHR_draw_indirect_count`, `drawing.draw_indirect_count_khr`.
 Sparse resources, wide lines, stippled lines, depth bounds and external
