@@ -469,5 +469,6 @@ extern const size_t ct_command_count;
 
 /* VK_API_VERSION_1_x of a core origin, or 0 for an extension. */
 uint32_t ct_command_version(const struct ct_command *c);
+int ct_origin_is_device_extension(const char *origin);
 
 #endif /* CT_H */

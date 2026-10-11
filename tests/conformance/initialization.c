@@ -217,8 +217,8 @@ CT_TEST(gipa_disabled_instance_extension,
     ct_env_init(t, &e); /* enables no extension but, if offered, portability enumeration */
     for (i = 0; i < ct_command_count; i++) {
         const struct ct_command *c = &ct_commands[i];
-        if (ct_command_version(c) || strcmp(c->origin, "VK_KHR_swapchain") == 0)
-            continue;
+        if (ct_command_version(c) || ct_origin_is_device_extension(c->origin))
+            continue; /* core, or a device extension: returned when available */
         CT_CHECKF(t, vkGetInstanceProcAddr(e.instance, c->name) == NULL, "%s (%s not enabled) is not NULL", c->name,
                   c->origin);
     }
