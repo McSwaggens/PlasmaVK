@@ -97,6 +97,42 @@ static const uint32_t dual_frag[] = {
     0x00000010, 0x0003003e, 0x00000009, 0x00000011, 0x0003003e, 0x00000012, 0x00000017, 0x000100fd,
     0x00010038,
 };
+/*
+ * #version 450
+ * // The push constants' color, as the bits of unsigned integers.
+ * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
+ * layout(location = 0) out uvec4 o_color;
+ * void main()
+ * {
+ *     o_color = floatBitsToUint(pc.color);
+ * }
+ */
+static const uint32_t uint_frag[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000015, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0007000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000f, 0x00030010,
+    0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d,
+    0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c, 0x00030005, 0x0000000d, 0x00000050,
+    0x00050006, 0x0000000d, 0x00000000, 0x74636572, 0x00000000, 0x00050006, 0x0000000d, 0x00000001,
+    0x6f6c6f63, 0x00000072, 0x00050006, 0x0000000d, 0x00000002, 0x74706564, 0x00000068, 0x00050006,
+    0x0000000d, 0x00000003, 0x6579616c, 0x00000072, 0x00060006, 0x0000000d, 0x00000004, 0x77656976,
+    0x74726f70, 0x00000000, 0x00030005, 0x0000000f, 0x00006370, 0x00040047, 0x00000009, 0x0000001e,
+    0x00000000, 0x00030047, 0x0000000d, 0x00000002, 0x00050048, 0x0000000d, 0x00000000, 0x00000023,
+    0x00000000, 0x00050048, 0x0000000d, 0x00000001, 0x00000023, 0x00000010, 0x00050048, 0x0000000d,
+    0x00000002, 0x00000023, 0x00000020, 0x00050048, 0x0000000d, 0x00000003, 0x00000023, 0x00000024,
+    0x00050048, 0x0000000d, 0x00000004, 0x00000023, 0x00000028, 0x00020013, 0x00000002, 0x00030021,
+    0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000000, 0x00040017, 0x00000007,
+    0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008,
+    0x00000009, 0x00000003, 0x00030016, 0x0000000a, 0x00000020, 0x00040017, 0x0000000b, 0x0000000a,
+    0x00000004, 0x00040015, 0x0000000c, 0x00000020, 0x00000001, 0x0007001e, 0x0000000d, 0x0000000b,
+    0x0000000b, 0x0000000a, 0x0000000c, 0x0000000c, 0x00040020, 0x0000000e, 0x00000009, 0x0000000d,
+    0x0004003b, 0x0000000e, 0x0000000f, 0x00000009, 0x0004002b, 0x0000000c, 0x00000010, 0x00000001,
+    0x00040020, 0x00000011, 0x00000009, 0x0000000b, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200f8, 0x00000005, 0x00050041, 0x00000011, 0x00000012, 0x0000000f, 0x00000010,
+    0x0004003d, 0x0000000b, 0x00000013, 0x00000012, 0x0004007c, 0x00000007, 0x00000014, 0x00000013,
+    0x0003003e, 0x00000009, 0x00000014, 0x000100fd, 0x00010038,
+};
+
 static float unorm8(float v)
 {
     v = v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
@@ -475,6 +511,93 @@ CT_TEST(logic_op,
     ct_scene_fini(&s);
 }
 
+static uint32_t logic_op_result(VkLogicOp op, uint32_t s, uint32_t d)
+{
+    switch (op) {
+    case VK_LOGIC_OP_CLEAR: return 0;
+    case VK_LOGIC_OP_AND: return s & d;
+    case VK_LOGIC_OP_AND_REVERSE: return s & ~d;
+    case VK_LOGIC_OP_COPY: return s;
+    case VK_LOGIC_OP_AND_INVERTED: return ~s & d;
+    case VK_LOGIC_OP_NO_OP: return d;
+    case VK_LOGIC_OP_XOR: return s ^ d;
+    case VK_LOGIC_OP_OR: return s | d;
+    case VK_LOGIC_OP_NOR: return ~(s | d);
+    case VK_LOGIC_OP_EQUIVALENT: return ~(s ^ d);
+    case VK_LOGIC_OP_INVERT: return ~d;
+    case VK_LOGIC_OP_OR_REVERSE: return s | ~d;
+    case VK_LOGIC_OP_COPY_INVERTED: return ~s;
+    case VK_LOGIC_OP_OR_INVERTED: return ~s | d;
+    case VK_LOGIC_OP_NAND: return ~(s & d);
+    default: return ~0u; /* SET */
+    }
+}
+
+CT_TEST(logic_op_uint_ops,
+        "The Framebuffer > Logical Operations: each of the 16 VkLogicOp values combines the source and the "
+        "stored value bitwise as its table defines (logicOp), on R8G8B8A8_UINT, and the color write mask "
+        "applies to the result (odd operations write R and B only)",
+        FB_COMMANDS)
+{
+    static const uint32_t src[4] = { 0xcc, 0x55, 0xf0, 0x0f }, dst[4] = { 0xf0, 0x3c, 0xaa, 0x0f };
+    float dst_bits[4];
+    struct ct_scene s;
+    struct ct_target c;
+    struct ct_gfx g;
+    struct ct_rect_pc pc;
+    VkShaderModule fs;
+    VkPipeline pipes[16];
+    VkCommandBuffer cb;
+    uint32_t k, x, y, ch;
+    int bad = 0;
+
+    ct_scene_init(t, &s);
+    if (!s.f.f2.features.logicOp)
+        ct_skip(t, "logicOp is not supported");
+    ct_target(t, &s.e, VK_FORMAT_R8G8B8A8_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &c);
+    fs = ct_shader_module(t, &s.e, uint_frag, sizeof(uint_frag));
+    for (k = 0; k < 16; k++) {
+        ct_gfx_init(&g, s.vs, fs, s.layout, W, H);
+        g.color_formats[0] = VK_FORMAT_R8G8B8A8_UINT;
+        g.cb.logicOpEnable = VK_TRUE;
+        g.cb.logicOp = (VkLogicOp)k;
+        g.blend[0].colorWriteMask = k & 1 ? VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_B_BIT : 0xf;
+        pipes[k] = ct_gfx_pipeline(t, &s.e, &g);
+    }
+    memcpy(dst_bits, dst, sizeof(dst_bits)); /* the clear value's uint32 members */
+    memset(&pc, 0, sizeof(pc));
+    memcpy(pc.color, src, sizeof(pc.color)); /* the shader writes their bits */
+    cb = ct_begin_commands(t, &s.e);
+    ct_begin_rendering(cb, &c, 1, dst_bits, NULL, 0.0f);
+    for (k = 0; k < 16; k++) { /* operation k in the 4x4 cell at column k % 4, row k / 4 */
+        pc.rect[0] = -1.0f + 0.5f * (float)(k % 4);
+        pc.rect[1] = -1.0f + 0.5f * (float)(k / 4);
+        pc.rect[2] = pc.rect[0] + 0.5f;
+        pc.rect[3] = pc.rect[1] + 0.5f;
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[k]);
+        vkCmdPushConstants(cb, s.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+        vkCmdDraw(cb, 4, 1, 0, 0);
+    }
+    vkCmdEndRendering(cb);
+    ct_scene_read(t, &s, cb, &c);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            uint32_t op = (y / 4) * 4 + x / 4, got = ct_texel32(s.out.data, W, x, y), want = 0;
+            for (ch = 0; ch < 4; ch++) {
+                uint32_t v = (op & 1) && (ch == 1 || ch == 3) ? dst[ch] : logic_op_result((VkLogicOp)op, src[ch], dst[ch]);
+                want |= (v & 0xffu) << (8 * ch);
+            }
+            if (got != want && bad++ < 4)
+                CT_CHECKF(t, got == want, "texel (%u, %u), operation %u: %08x, expected %08x", x, y, op, got, want);
+        }
+    CT_CHECKF(t, bad == 0, "%d texels differ", bad);
+    for (k = 0; k < 16; k++)
+        vkDestroyPipeline(s.e.device, pipes[k], NULL);
+    vkDestroyShaderModule(s.e.device, fs, NULL);
+    ct_target_fini(&s.e, &c);
+    ct_scene_fini(&s);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(blend_equations),
     CT_REF(color_write_mask),
@@ -482,6 +605,7 @@ static const struct ct_test *const tests[] = {
     CT_REF(dual_source_blend),
     CT_REF(srgb_blending),
     CT_REF(logic_op),
+    CT_REF(logic_op_uint_ops),
 };
 
 CT_SUITE(framebuffer, tests)
