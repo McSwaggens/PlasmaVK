@@ -112,14 +112,15 @@ static void test_proc_addr(void)
  * through vkGetInstanceProcAddr. */
 static void test_entrypoint_table(void)
 {
-    const char *extensions[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_METAL_SURFACE_EXTENSION_NAME };
+    const char *extensions[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_METAL_SURFACE_EXTENSION_NAME,
+                                 VK_EXT_DEBUG_UTILS_EXTENSION_NAME };
     VkInstanceCreateInfo info;
     VkInstance instance = VK_NULL_HANDLE;
     size_t i, j;
 
     memset(&info, 0, sizeof(info));
     info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    info.enabledExtensionCount = 2;
+    info.enabledExtensionCount = 3;
     info.ppEnabledExtensionNames = extensions;
     REQUIRE_VK(vkCreateInstance(&info, NULL, &instance));
 

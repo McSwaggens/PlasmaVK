@@ -21,6 +21,12 @@
 #                                                    still restarts a strip
 #   dispatch.dispatch_indirect_after_base            vkCmdDispatchIndirect keeps an
 #                                                    earlier vkCmdDispatchBase's base
+#   debugging.debug_utils_messenger_allocator        the loader frees, through the
+#                                                    messenger's pfnFree, memory it
+#                                                    did not allocate with it
+#   debugging.debug_utils_object_name_messenger      naming a VkDebugUtilsMessengerEXT
+#                                                    crashes in MoltenVK (given the
+#                                                    loader's handle)
 
 initialization.enumerate_instance_version
 initialization.gipa_global_commands_null_instance
@@ -140,6 +146,10 @@ extensions.device_extensions
 extensions.device_extensions_incomplete
 extensions.device_extensions_missing_layer
 extensions.device_layers
+extensions.instance_layer_enable
+extensions.instance_layer_extensions_enable
+extensions.device_layers_enabled_layer
+extensions.device_layer_extensions
 extensions.device_extension_with_instance_extension
 features.robustBufferAccess
 features.multiview
@@ -631,3 +641,11 @@ dispatch.dispatch_base
 sparsemem.sparse_requirements_non_sparse
 
 debugging.tool_properties
+debugging.debug_utils_messenger_filter
+debugging.debug_utils_message_data
+debugging.debug_utils_messenger_destroy
+debugging.debug_utils_instance_create_info
+debugging.debug_utils_object_names
+debugging.debug_utils_queue_labels
+debugging.debug_utils_cmd_labels
+debugging.debug_utils_proc_addr

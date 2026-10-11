@@ -589,13 +589,13 @@ static void test_small_commands(void)
     VkPhysicalDeviceExternalSemaphoreInfo sem_info;
     VkExternalSemaphoreProperties sem_props;
     VkPhysicalDeviceToolProperties tool;
-    uint32_t count = 5;
+    uint32_t count = 5, tools = ((struct pvk_physical_device *)pd)->instance->debug ? 1 : 0; /* the debug layer */
 
     CHECK_VK(vkGetPhysicalDeviceToolProperties(pd, &count, NULL), VK_SUCCESS);
-    CHECK(count == 0);
+    CHECK(count == tools);
     count = 1;
     CHECK_VK(vkGetPhysicalDeviceToolProperties(pd, &count, &tool), VK_SUCCESS);
-    CHECK(count == 0);
+    CHECK(count == tools);
 
     memset(&buffer_info, 0, sizeof(buffer_info));
     buffer_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO;

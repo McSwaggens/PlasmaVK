@@ -20,9 +20,32 @@
  * CONFIGURATION (define before including the implementation)
  *   PLASMAVK_ABORT_ON_UNIMPLEMENTED  abort() when an unimplemented command is
  *                                    called, instead of logging once.
+ *   VK_LAYER_PLASMAVK_debug          (in VkInstanceCreateInfo::
+ *                                    ppEnabledLayerNames) the debug layer,
+ *                                    see DEBUGGING.
  *
  * ENVIRONMENT
- *   PLASMAVK_LOG=error|warn|info|debug   log verbosity (default: warn)
+ *   PLASMAVK_LOG=error|warn|info|debug   verbosity of diagnostics on stderr
+ *                                        (default: warn). A diagnostic that
+ *                                        a VK_EXT_debug_utils messenger takes
+ *                                        does not also go to stderr.
+ *   PLASMAVK_DEBUG=1                     the debug layer for every instance,
+ *                                        for applications you can't change.
+ *
+ * DEBUGGING
+ *   VK_EXT_debug_utils is offered: messengers receive PlasmaVK's own
+ *   diagnostics (errors, warnings, info, debug output) with their objects
+ *   and names, object names become Metal labels and label regions Metal
+ *   debug groups, which Xcode's GPU capture shows. The built-in layer
+ *   VK_LAYER_PLASMAVK_debug (no loader, so no other layer can run) turns on
+ *   a debugging configuration: every diagnostic at every level to stderr
+ *   as well, Metal debug groups named after every command buffer, render
+ *   pass instance, draw, dispatch and transfer and the Vulkan names of their
+ *   objects, and cheap checks of common errors (destroyed handles, command
+ *   buffer states, mismatched allocation callbacks, missing features,
+ *   leaks...) reported with their VUIDs; a check that finds a command would
+ *   crash skips it. Section 8 (DEBUG LAYER) and section 9 (DEBUG LAYER
+ *   CHECKS) have the details.
  *
  * LAYOUT
  *    1. Khronos Vulkan headers (verbatim)
@@ -31644,6 +31667,31 @@ static inline unsigned long pvk_MTLTexture_firstMipmapInTail(id self) { PVK_SEL_
 static inline unsigned long pvk_MTLTexture_tailSizeInBytes(id self) { PVK_SEL_CACHE("tailSizeInBytes"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
 static inline void pvk_MTL4CommandQueue_updateTextureMappings_heap_operations_count(id self, id texture, id heap, const pvk_MTL4UpdateSparseTextureMappingOperation * operations, unsigned long count) { PVK_SEL_CACHE("updateTextureMappings:heap:operations:count:"); PVK_MSG(void, (id, SEL, id, id, const pvk_MTL4UpdateSparseTextureMappingOperation *, unsigned long))(self, pvk_sel_, texture, heap, operations, count); }
 static inline void pvk_MTL4CommandQueue_updateBufferMappings_heap_operations_count(id self, id buffer, id heap, const pvk_MTL4UpdateSparseBufferMappingOperation * operations, unsigned long count) { PVK_SEL_CACHE("updateBufferMappings:heap:operations:count:"); PVK_MSG(void, (id, SEL, id, id, const pvk_MTL4UpdateSparseBufferMappingOperation *, unsigned long))(self, pvk_sel_, buffer, heap, operations, count); }
+/* Debug labels: VK_EXT_debug_utils object names and labels (sections 9-16) */
+static inline id pvk_MTLResource_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTLResource_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
+static inline id pvk_MTLHeap_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTLHeap_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
+static inline id pvk_MTLEvent_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTLEvent_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
+static inline void pvk_MTLBuffer_addDebugMarker_range(id self, id marker, pvk_NSRange range) { PVK_SEL_CACHE("addDebugMarker:range:"); PVK_MSG(void, (id, SEL, id, pvk_NSRange))(self, pvk_sel_, marker, range); }
+static inline id pvk_MTL4CommandBuffer_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTL4CommandBuffer_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
+static inline void pvk_MTL4CommandBuffer_pushDebugGroup(id self, id string) { PVK_SEL_CACHE("pushDebugGroup:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, string); }
+static inline void pvk_MTL4CommandBuffer_popDebugGroup(id self) { PVK_SEL_CACHE("popDebugGroup"); PVK_MSG(void, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_MTL4CommandEncoder_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTL4CommandEncoder_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
+static inline void pvk_MTL4CommandEncoder_insertDebugSignpost(id self, id string) { PVK_SEL_CACHE("insertDebugSignpost:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, string); }
+static inline void pvk_MTL4CommandEncoder_pushDebugGroup(id self, id string) { PVK_SEL_CACHE("pushDebugGroup:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, string); }
+static inline void pvk_MTL4CommandEncoder_popDebugGroup(id self) { PVK_SEL_CACHE("popDebugGroup"); PVK_MSG(void, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_MTL4CommandQueueDescriptor_new(void) { PVK_CLASS_CACHE("MTL4CommandQueueDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTL4CommandQueueDescriptor_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
+static inline id pvk_MTLDevice_newMTL4CommandQueueWithDescriptor_error(id self, id descriptor, id * error) { PVK_SEL_CACHE("newMTL4CommandQueueWithDescriptor:error:"); return PVK_MSG(id, (id, SEL, id, id *))(self, pvk_sel_, descriptor, error); }
+static inline id pvk_MTL4CommandQueue_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTLComputePipelineDescriptor_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
+static inline id pvk_MTLComputePipelineState_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTL4PipelineDescriptor_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
+static inline id pvk_MTLRenderPipelineState_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 
 /* ==========================================================================
  * 5. Internals
@@ -31660,48 +31708,51 @@ static inline void pvk_MTL4CommandQueue_updateBufferMappings_heap_operations_cou
 #define PVK_MAX_QUEUES (PVK_MAX_QUEUES_PER_FAMILY * PVK_QUEUE_FAMILY_COUNT)
 #define PVK_ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
-/* ---- Logging ---- */
+/* ---- Logging ----
+ *
+ * Every diagnostic is a message ("Debug messages", after section 6): it goes
+ * to the VK_EXT_debug_utils messengers whose filters take it, and to stderr
+ * when none did and PLASMAVK_LOG asks for its level, or always with the
+ * debug layer (section 8, DEBUG LAYER). pvk_logi(NULL, ...) is a message no
+ * instance owns: every instance's messengers see it. */
 
 enum pvk_log_level { PVK_LOG_ERROR, PVK_LOG_WARN, PVK_LOG_INFO, PVK_LOG_DEBUG };
 
 static int pvk_log_threshold = PVK_LOG_WARN;
+static bool pvk_debug_env; /* PLASMAVK_DEBUG: the debug layer is on for every instance */
 static pthread_once_t pvk_log_once = PTHREAD_ONCE_INIT;
 
 static void pvk_log_init(void)
 {
     static const char *const names[] = { "error", "warn", "info", "debug" };
-    const char *env = getenv("PLASMAVK_LOG");
+    const char *env = getenv("PLASMAVK_LOG"), *debug = getenv("PLASMAVK_DEBUG");
     unsigned i;
     for (i = 0; env && i < PVK_ARRAY_SIZE(names); i++)
         if (strcmp(env, names[i]) == 0)
             pvk_log_threshold = (int)i;
+    pvk_debug_env = debug && debug[0] && strcmp(debug, "0") != 0;
 }
 
-static void pvk_log(enum pvk_log_level level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-static void pvk_log(enum pvk_log_level level, const char *fmt, ...)
-{
-    static const char *const names[] = { "error", "warn", "info", "debug" };
-    va_list args;
-    pthread_once(&pvk_log_once, pvk_log_init);
-    if ((int)level > pvk_log_threshold)
-        return;
-    fprintf(stderr, "plasmavk: %s: ", names[level]);
-    va_start(args, fmt);
-    vfprintf(stderr, fmt, args);
-    va_end(args);
-    fputc('\n', stderr);
-}
+struct pvk_instance;
+struct pvk_msg;
+static VkBool32 pvk_vmessage(const struct pvk_msg *m, enum pvk_log_level level, const char *fmt, va_list args);
+
+/* A message of instance (NULL: every instance) with id (pMessageIdName). */
+static void pvk_logi(const struct pvk_instance *instance, enum pvk_log_level level, const char *id, const char *fmt, ...)
+    __attribute__((format(printf, 4, 5)));
 
 /* Body of every stub in section 19. */
 #ifdef PLASMAVK_ABORT_ON_UNIMPLEMENTED
-#define PVK_UNIMPLEMENTED() (pvk_log(PVK_LOG_ERROR, "%s is not implemented", __func__), abort())
+#define PVK_UNIMPLEMENTED() \
+    (pvk_logi(NULL, PVK_LOG_ERROR, "PlasmaVK-unimplemented", "%s is not implemented", __func__), abort())
 #else
 #define PVK_UNIMPLEMENTED()                                              \
     do {                                                                 \
         static int pvk_warned_;                                          \
         if (!pvk_warned_) {                                              \
             pvk_warned_ = 1;                                             \
-            pvk_log(PVK_LOG_WARN, "%s is not implemented", __func__);    \
+            pvk_logi(NULL, PVK_LOG_WARN, "PlasmaVK-unimplemented",       \
+                     "%s is not implemented", __func__);                 \
         }                                                                \
     } while (0)
 #endif
@@ -31735,11 +31786,16 @@ static void pvk_free_raw(const VkAllocationCallbacks *alloc, void *p)
  * allocated later at the same address starts without any. */
 static long pvk_private_data_entries; /* in all slots (atomic) */
 static void pvk_private_data_forget(const void *object);
+/* The same for VK_EXT_debug_utils object names and tags (section 9). */
+static long pvk_named_objects; /* in all devices' tables (atomic) */
+static void pvk_names_forget(const void *object);
 
 static void pvk_free(const VkAllocationCallbacks *alloc, void *p)
 {
     if (p && __atomic_load_n(&pvk_private_data_entries, __ATOMIC_ACQUIRE))
         pvk_private_data_forget(p);
+    if (p && __atomic_load_n(&pvk_named_objects, __ATOMIC_ACQUIRE))
+        pvk_names_forget(p);
     pvk_free_raw(alloc, p);
 }
 
@@ -31796,6 +31852,10 @@ enum pvk_instance_extension {
     PVK_INSTANCE_EXT_KHR_portability_enumeration, /* accepted so MoltenVK-era apps keep working */
     /* No commands: the surface color spaces CAMetalLayer can show (section 18). */
     PVK_INSTANCE_EXT_EXT_swapchain_colorspace,
+    /* Messengers, object names and labels (sections 8, 9, 15 and 16), also
+     * provided by the debug layer below. Its device-level commands are
+     * returned by vkGetDeviceProcAddr when the instance enabled it. */
+    PVK_INSTANCE_EXT_EXT_debug_utils,
     PVK_INSTANCE_EXTENSION_COUNT
 };
 
@@ -31804,6 +31864,21 @@ static const VkExtensionProperties pvk_instance_extensions[] = {
     { VK_EXT_METAL_SURFACE_EXTENSION_NAME, VK_EXT_METAL_SURFACE_SPEC_VERSION },
     { VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME, VK_KHR_PORTABILITY_ENUMERATION_SPEC_VERSION },
     { VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME, VK_EXT_SWAPCHAIN_COLOR_SPACE_SPEC_VERSION },
+    { VK_EXT_DEBUG_UTILS_EXTENSION_NAME, VK_EXT_DEBUG_UTILS_SPEC_VERSION },
+};
+
+/* The one layer: built in, since without a loader no other layer can run
+ * (section 8, DEBUG LAYER). It provides VK_EXT_debug_utils (which PlasmaVK
+ * also offers on its own) and no device extensions. */
+#define PVK_DEBUG_LAYER_NAME "VK_LAYER_PLASMAVK_debug"
+
+static const VkLayerProperties pvk_layers[] = {
+    { PVK_DEBUG_LAYER_NAME, PVK_API_VERSION, PLASMAVK_VERSION,
+      "PlasmaVK debugging: all diagnostics, Metal debug labels and runtime checks of common errors" },
+};
+
+static const VkExtensionProperties pvk_debug_layer_extensions[] = {
+    { VK_EXT_DEBUG_UTILS_EXTENSION_NAME, VK_EXT_DEBUG_UTILS_SPEC_VERSION },
 };
 
 enum pvk_device_extension {
@@ -31856,12 +31931,39 @@ static const int pvk_device_extension_needs[PVK_DEVICE_EXTENSION_COUNT] = {
  * handles need no dispatch-table header.
  * ========================================================================== */
 
+struct pvk_messenger;
+
 struct pvk_instance {
     VkAllocationCallbacks alloc;
     bool has_alloc;
     uint32_t api_version;
     bool extensions[PVK_INSTANCE_EXTENSION_COUNT];
     struct pvk_physical_device *physical_device; /* NULL: no Metal 4 GPU */
+    /* VK_EXT_debug_utils and the debug layer ("Debug messages" below, section 8) */
+    bool debug;                         /* the debug layer is enabled */
+    struct pvk_instance *next_instance; /* every instance, under pvk_instances_lock */
+    pthread_mutex_t debug_lock;         /* the messenger lists */
+    bool debug_lock_ready;
+    struct pvk_messenger *messengers;   /* made by vkCreateDebugUtilsMessengerEXT */
+    struct pvk_messenger *chained;      /* VkInstanceCreateInfo's chain, an array */
+    uint32_t chained_count;
+    bool chained_active;                /* during vkCreateInstance and vkDestroyInstance */
+    long devices;                       /* live VkDevices (atomic), for the debug layer's leak check */
+};
+
+/* Debug label regions (VK_EXT_debug_utils, sections 15 and 16): a stack of
+ * labels. text is owned when owned is set; otherwise it points into the
+ * packets of a command buffer being recorded or submitted. */
+struct pvk_label {
+    const char *text;
+    char *owned;
+    float color[4];
+    bool synthetic; /* the debug layer's own: a command buffer, render pass or command */
+};
+
+struct pvk_labels {
+    struct pvk_label *items;
+    uint32_t count, capacity;
 };
 
 /* Every core feature, 1.0 to 1.4. The feature structs of promoted
@@ -31899,6 +32001,7 @@ struct pvk_physical_device {
 };
 
 struct pvk_submission;
+struct pvk_names;
 struct pvk_upload_chunk;
 struct pvk_deferred;
 
@@ -31929,6 +32032,11 @@ struct pvk_queue {
     /* Image transfers (section 16): */
     id render_table;   /* MTL4ArgumentTable of internal blit/resolve draws */
     bool ordered;      /* a barrier was recorded: each new encoder waits for earlier work */
+    /* VK_EXT_debug_utils (section 16, DEBUG LABELS), externally synchronized
+     * like vkQueueSubmit: the queue's label regions, and the command buffer
+     * label regions open on the queue (they may span submissions) */
+    struct pvk_labels queue_labels, cmd_labels;
+    struct pvk_labels queue_inserts; /* vkQueueInsertDebugUtilsLabelEXT, for the next submission */
 };
 
 struct pvk_device {
@@ -31982,6 +32090,10 @@ struct pvk_device {
     uint64_t sparse_serial;
     pthread_mutex_t sparse_lock;
     bool sparse_lock_ready;
+    /* VK_EXT_debug_utils (section 9) */
+    bool debug;               /* the instance enabled the debug layer */
+    bool app_alloc;           /* made with pAllocator (the debug layer checks vkDestroyDevice's) */
+    struct pvk_names *names;  /* object names and tags (pvk_names_lock); NULL: none yet */
 };
 
 /* Section 13: a queue's submission state, and waiting for the GPU before
@@ -31998,6 +32110,280 @@ static const VkAllocationCallbacks *pvk_instance_alloc(const struct pvk_instance
 static const VkAllocationCallbacks *pvk_device_alloc(const struct pvk_device *device)
 {
     return device->has_alloc ? &device->alloc : NULL;
+}
+
+static struct pvk_instance *pvk_device_instance(const struct pvk_device *device)
+{
+    return device->physical_device->instance;
+}
+
+/* ==========================================================================
+ * Debug messages
+ *
+ * PlasmaVK's diagnostics and the debug layer's findings are VK_EXT_debug_utils
+ * messages (section 8 makes the messengers). A message goes to every
+ * messenger of its instance whose messageSeverity and messageType masks
+ * both take it, then to stderr ("plasmavk: <level>: <text>") if none took
+ * it and PLASMAVK_LOG asks for its level; with the debug layer it always
+ * goes to stderr, at every level. A message no instance owns (pvk_log: global
+ * commands, internal shaders) goes to the messengers of every instance.
+ *
+ * Severities: errors are ERROR, warnings WARNING, info INFO, debug output
+ * (MSL dumps) VERBOSE. Types: VALIDATION for the debug layer's valid usage
+ * checks, whose pMessageIdName is the VUID; GENERAL otherwise, named
+ * "PlasmaVK-...". messageIdNumber is the 32-bit FNV-1a hash of the name.
+ * pObjects lists the objects involved with their names (section 9); a
+ * message about a queue or a command buffer carries its label regions
+ * (pQueueLabels, pCmdBufLabels: outermost first, the innermost 16).
+ * Callbacks run on the thread that caused the message, with the instance's
+ * messenger lock held: they must not call Vulkan
+ * (VUID-PFN_vkDebugUtilsMessengerCallbackEXT-None-04769). A callback that
+ * returns VK_TRUE asks the debug layer to skip the command it reports on, as
+ * the Khronos validation layer does; a command returning VkResult then
+ * returns VK_ERROR_VALIDATION_FAILED_EXT.
+ * ========================================================================== */
+
+struct pvk_messenger {
+    struct pvk_messenger *next;
+    struct pvk_instance *instance;
+    VkDebugUtilsMessageSeverityFlagsEXT severities;
+    VkDebugUtilsMessageTypeFlagsEXT types;
+    PFN_vkDebugUtilsMessengerCallbackEXT callback;
+    void *user;
+    VkAllocationCallbacks alloc; /* pAllocator of vkCreateDebugUtilsMessengerEXT */
+    bool has_alloc;
+};
+
+#define PVK_MSG_OBJECTS 4
+#define PVK_MSG_LABELS 16
+
+struct pvk_msg {
+    struct pvk_instance *instance;        /* NULL: every instance */
+    const char *id;                       /* pMessageIdName; NULL: "PlasmaVK" */
+    VkDebugUtilsMessageTypeFlagsEXT type; /* 0: general */
+    uint32_t object_count;
+    VkObjectType object_types[PVK_MSG_OBJECTS];
+    uint64_t objects[PVK_MSG_OBJECTS];
+    const struct pvk_labels *queue_labels, *cb_labels; /* NULL: none */
+};
+
+static pthread_mutex_t pvk_instances_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct pvk_instance *pvk_instances; /* every instance, for messages no instance owns */
+
+static void pvk_msg_init(struct pvk_msg *m, struct pvk_instance *instance, const char *id,
+                         VkDebugUtilsMessageTypeFlagsEXT type)
+{
+    memset(m, 0, sizeof(*m));
+    m->instance = instance;
+    m->id = id;
+    m->type = type;
+}
+
+static void pvk_msg_object(struct pvk_msg *m, VkObjectType type, uint64_t handle)
+{
+    if (m->object_count < PVK_MSG_OBJECTS && handle) {
+        m->object_types[m->object_count] = type;
+        m->objects[m->object_count++] = handle;
+    }
+}
+
+/* Section 9: copies the name of the object into buf; false if it has none. */
+static bool pvk_name_get(uint64_t handle, char *buf, size_t size);
+
+static int32_t pvk_message_number(const char *id)
+{
+    uint32_t h = 2166136261u;
+    for (; *id; id++) {
+        h ^= (unsigned char)*id;
+        h *= 16777619u;
+    }
+    return (int32_t)h;
+}
+
+static uint32_t pvk_labels_export(const struct pvk_labels *l, VkDebugUtilsLabelEXT *out)
+{
+    uint32_t i, n = 0;
+    for (i = l && l->count > PVK_MSG_LABELS ? l->count - PVK_MSG_LABELS : 0; l && i < l->count; i++, n++) {
+        memset(&out[n], 0, sizeof(out[n]));
+        out[n].sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+        out[n].pLabelName = l->items[i].text;
+        memcpy(out[n].color, l->items[i].color, sizeof(out[n].color));
+    }
+    return n;
+}
+
+static bool pvk_messenger_takes(const struct pvk_messenger *m, VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+                                VkDebugUtilsMessageTypeFlagsEXT types)
+{
+    return (m->severities & (VkDebugUtilsMessageSeverityFlagsEXT)severity) && (m->types & types);
+}
+
+/* Calls the messengers of instance that take the message; true if one did.
+ * *skip is set if a callback returned VK_TRUE. */
+static bool pvk_messengers_call(struct pvk_instance *instance, VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+                                VkDebugUtilsMessageTypeFlagsEXT types, const VkDebugUtilsMessengerCallbackDataEXT *data,
+                                VkBool32 *skip)
+{
+    struct pvk_messenger *m;
+    bool taken = false;
+    uint32_t i;
+    if (!instance->debug_lock_ready)
+        return false;
+    pthread_mutex_lock(&instance->debug_lock);
+    for (m = instance->messengers; m; m = m->next) {
+        if (!pvk_messenger_takes(m, severity, types))
+            continue;
+        taken = true;
+        if (m->callback(severity, types, data, m->user))
+            *skip = VK_TRUE;
+    }
+    for (i = 0; instance->chained_active && i < instance->chained_count; i++) {
+        m = &instance->chained[i];
+        if (!pvk_messenger_takes(m, severity, types))
+            continue;
+        taken = true;
+        if (m->callback(severity, types, data, m->user))
+            *skip = VK_TRUE;
+    }
+    pthread_mutex_unlock(&instance->debug_lock);
+    return taken;
+}
+
+static VkBool32 pvk_vmessage(const struct pvk_msg *m, enum pvk_log_level level, const char *fmt, va_list args)
+{
+    static const char *const levels[] = { "error", "warn", "info", "debug" };
+    static const VkDebugUtilsMessageSeverityFlagBitsEXT severities[] = {
+        VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT, VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT,
+        VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT, VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT,
+    };
+    char stack[1024], *text = stack, *heap = NULL, names[PVK_MSG_OBJECTS][256];
+    VkDebugUtilsObjectNameInfoEXT objects[PVK_MSG_OBJECTS];
+    VkDebugUtilsLabelEXT queue_labels[PVK_MSG_LABELS], cb_labels[PVK_MSG_LABELS];
+    VkDebugUtilsMessengerCallbackDataEXT data;
+    VkDebugUtilsMessageTypeFlagsEXT type;
+    const VkAllocationCallbacks *alloc;
+    struct pvk_instance *instance;
+    struct pvk_msg none;
+    VkBool32 skip = VK_FALSE;
+    bool taken = false, layer;
+    va_list copy;
+    uint32_t i;
+    int n;
+
+    pthread_once(&pvk_log_once, pvk_log_init);
+    if (!m) {
+        pvk_msg_init(&none, NULL, NULL, 0);
+        m = &none;
+    }
+    alloc = m->instance ? pvk_instance_alloc(m->instance) : NULL;
+    va_copy(copy, args);
+    n = vsnprintf(stack, sizeof(stack), fmt, args);
+    if (n >= (int)sizeof(stack) && (heap = pvk_alloc(alloc, (size_t)n + 1, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND))) {
+        vsnprintf(heap, (size_t)n + 1, fmt, copy);
+        text = heap;
+    }
+    va_end(copy);
+
+    memset(&data, 0, sizeof(data));
+    data.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CALLBACK_DATA_EXT;
+    data.pMessageIdName = m->id ? m->id : "PlasmaVK";
+    data.messageIdNumber = pvk_message_number(data.pMessageIdName);
+    data.pMessage = text;
+    for (i = 0; i < m->object_count; i++) {
+        memset(&objects[i], 0, sizeof(objects[i]));
+        objects[i].sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+        objects[i].objectType = m->object_types[i];
+        objects[i].objectHandle = m->objects[i];
+        objects[i].pObjectName = pvk_name_get(m->objects[i], names[i], sizeof(names[i])) ? names[i] : NULL;
+    }
+    data.objectCount = m->object_count;
+    data.pObjects = m->object_count ? objects : NULL;
+    data.queueLabelCount = pvk_labels_export(m->queue_labels, queue_labels);
+    data.pQueueLabels = data.queueLabelCount ? queue_labels : NULL;
+    data.cmdBufLabelCount = pvk_labels_export(m->cb_labels, cb_labels);
+    data.pCmdBufLabels = data.cmdBufLabelCount ? cb_labels : NULL;
+    type = m->type ? m->type : VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT;
+
+    if (m->instance) {
+        taken = pvk_messengers_call(m->instance, severities[level], type, &data, &skip);
+        layer = m->instance->debug;
+    } else {
+        pthread_mutex_lock(&pvk_instances_lock);
+        layer = pvk_debug_env;
+        for (instance = pvk_instances; instance; instance = instance->next_instance) {
+            taken |= pvk_messengers_call(instance, severities[level], type, &data, &skip);
+            layer |= instance->debug;
+        }
+        pthread_mutex_unlock(&pvk_instances_lock);
+    }
+    if (layer || (!taken && (int)level <= pvk_log_threshold)) {
+        if (type & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT)
+            fprintf(stderr, "plasmavk: %s: %s: %s\n", levels[level], data.pMessageIdName, text);
+        else
+            fprintf(stderr, "plasmavk: %s: %s\n", levels[level], text);
+    }
+    pvk_free_raw(alloc, heap);
+    return skip;
+}
+
+static VkBool32 pvk_message(const struct pvk_msg *m, enum pvk_log_level level, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+static VkBool32 pvk_message(const struct pvk_msg *m, enum pvk_log_level level, const char *fmt, ...)
+{
+    VkBool32 skip;
+    va_list args;
+    va_start(args, fmt);
+    skip = pvk_vmessage(m, level, fmt, args);
+    va_end(args);
+    return skip;
+}
+
+static void pvk_logi(const struct pvk_instance *instance, enum pvk_log_level level, const char *id, const char *fmt, ...)
+{
+    struct pvk_msg m;
+    va_list args;
+    pvk_msg_init(&m, (struct pvk_instance *)instance, id, 0);
+    va_start(args, fmt);
+    pvk_vmessage(&m, level, fmt, args);
+    va_end(args);
+}
+
+/* A diagnostic of the device's instance about an object (handle 0: the
+ * device itself). */
+static void pvk_logd(const struct pvk_device *device, enum pvk_log_level level, const char *id, VkObjectType type,
+                     uint64_t handle, const char *fmt, ...) __attribute__((format(printf, 6, 7)));
+static void pvk_logd(const struct pvk_device *device, enum pvk_log_level level, const char *id, VkObjectType type,
+                     uint64_t handle, const char *fmt, ...)
+{
+    struct pvk_msg m;
+    va_list args;
+    pvk_msg_init(&m, pvk_device_instance(device), id, 0);
+    if (handle)
+        pvk_msg_object(&m, type, handle);
+    else
+        pvk_msg_object(&m, VK_OBJECT_TYPE_DEVICE, (uint64_t)(uintptr_t)device);
+    va_start(args, fmt);
+    pvk_vmessage(&m, level, fmt, args);
+    va_end(args);
+}
+
+/* The debug layer's report of a valid usage violation: an error about one
+ * object (handle 0: none) of the device's instance, named by its VUID. True
+ * if a messenger asked to skip the command. */
+static bool pvk_vuid(const struct pvk_device *device, const char *vuid, VkObjectType type, uint64_t handle,
+                     const char *fmt, ...) __attribute__((format(printf, 5, 6)));
+static bool pvk_vuid(const struct pvk_device *device, const char *vuid, VkObjectType type, uint64_t handle,
+                     const char *fmt, ...)
+{
+    struct pvk_msg m;
+    VkBool32 skip;
+    va_list args;
+    pvk_msg_init(&m, pvk_device_instance(device), vuid, VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT);
+    pvk_msg_object(&m, type, handle);
+    va_start(args, fmt);
+    skip = pvk_vmessage(&m, PVK_LOG_ERROR, fmt, args);
+    va_end(args);
+    return skip != VK_FALSE;
 }
 
 /* ==========================================================================
@@ -32719,12 +33105,12 @@ static VkResult pvk_physical_device_create(struct pvk_instance *instance)
     id mtl = pvk_MTLCreateSystemDefaultDevice();
 
     if (!mtl) {
-        pvk_log(PVK_LOG_INFO, "no Metal device; exposing no physical devices");
+        pvk_logi(instance, PVK_LOG_INFO, "PlasmaVK-no-metal-device", "no Metal device; exposing no physical devices");
         return VK_SUCCESS;
     }
     if (!pvk_MTLDevice_supportsFamily(mtl, PVK_MTLGPUFamilyMetal4)) {
-        pvk_log(PVK_LOG_WARN, "%s does not support Metal 4; exposing no physical devices",
-                pvk_ns_utf8(pvk_MTLDevice_name(mtl)));
+        pvk_logi(instance, PVK_LOG_WARN, "PlasmaVK-no-metal4", "%s does not support Metal 4; exposing no physical devices",
+                 pvk_ns_utf8(pvk_MTLDevice_name(mtl)));
         pvk_release(mtl);
         return VK_SUCCESS;
     }
@@ -34224,13 +34610,33 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceExternalSemaphoreProperties(
     pExternalSemaphoreProperties->externalSemaphoreFeatures = 0;
 }
 
-/* No layers or tools: PlasmaVK is linked directly, without a loader. */
+/* The one tool there can be: the debug layer (section 8), when enabled.
+ * Written member by member: sType and pNext belong to the application. */
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceToolProperties(VkPhysicalDevice physicalDevice, uint32_t *pToolCount,
                                                                   VkPhysicalDeviceToolProperties *pToolProperties)
 {
-    (void)physicalDevice;
-    (void)pToolProperties;
-    *pToolCount = 0;
+    const struct pvk_physical_device *pd = (const struct pvk_physical_device *)physicalDevice;
+    uint32_t count = pd->instance->debug ? 1 : 0;
+    VkPhysicalDeviceToolProperties *t = pToolProperties;
+
+    if (!t) {
+        *pToolCount = count;
+        return VK_SUCCESS;
+    }
+    if (*pToolCount < count) {
+        *pToolCount = 0;
+        return VK_INCOMPLETE;
+    }
+    *pToolCount = count;
+    if (count) {
+        snprintf(t->name, sizeof(t->name), "PlasmaVK debug layer");
+        snprintf(t->version, sizeof(t->version), "%u.%u.%u", PLASMAVK_VERSION_MAJOR, PLASMAVK_VERSION_MINOR,
+                 PLASMAVK_VERSION_PATCH);
+        t->purposes = VK_TOOL_PURPOSE_VALIDATION_BIT | VK_TOOL_PURPOSE_DEBUG_REPORTING_BIT_EXT |
+                      VK_TOOL_PURPOSE_DEBUG_MARKERS_BIT_EXT;
+        snprintf(t->description, sizeof(t->description), "%s", pvk_layers[0].description);
+        snprintf(t->layer, sizeof(t->layer), "%s", PVK_DEBUG_LAYER_NAME);
+    }
     return VK_SUCCESS;
 }
 
@@ -34268,28 +34674,59 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceExtensionProperties(VkPhysicalDe
     VkExtensionProperties supported[PVK_DEVICE_EXTENSION_COUNT];
     unsigned i, count = 0;
 
-    if (pLayerName)
-        return VK_ERROR_LAYER_NOT_PRESENT;
+    if (pLayerName) /* the debug layer provides no device extensions */
+        return strcmp(pLayerName, PVK_DEBUG_LAYER_NAME) == 0
+                   ? pvk_enumerate(NULL, sizeof(VkExtensionProperties), 0, pPropertyCount, pProperties)
+                   : VK_ERROR_LAYER_NOT_PRESENT;
     for (i = 0; i < PVK_DEVICE_EXTENSION_COUNT; i++)
         if (pvk_device_extension_available(pd, i))
             supported[count++] = pvk_device_extensions[i];
     return pvk_enumerate(supported, sizeof(supported[0]), count, pPropertyCount, pProperties);
 }
 
+/* Layers & Extensions > Layers: the device layers are the layers enabled on
+ * the instance (device layers are deprecated). */
 VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceLayerProperties(VkPhysicalDevice physicalDevice,
                                                                 uint32_t *pPropertyCount,
                                                                 VkLayerProperties *pProperties)
 {
-    (void)physicalDevice;
-    (void)pProperties;
-    *pPropertyCount = 0;
-    return VK_SUCCESS;
+    const struct pvk_physical_device *pd = (const struct pvk_physical_device *)physicalDevice;
+    return pvk_enumerate(pvk_layers, sizeof(VkLayerProperties), pd->instance->debug ? 1 : 0, pPropertyCount,
+                         pProperties);
 }
 
 /* ==========================================================================
  * 8. Instance
  *
- * Global commands and VkInstance.
+ * Global commands, VkInstance and VK_EXT_debug_utils messengers.
+ *
+ * DEBUG LAYER
+ *   VK_LAYER_PLASMAVK_debug is the only layer (PlasmaVK has no loader, so no
+ *   other layer can run). It is enabled by naming it in
+ *   VkInstanceCreateInfo::ppEnabledLayerNames, or for every instance by
+ *   PLASMAVK_DEBUG=1 in the environment (an implicit layer then: listed by
+ *   vkEnumerateDeviceLayerProperties, and as a tool by
+ *   vkGetPhysicalDeviceToolProperties, as an explicitly enabled one is). It
+ *   provides VK_EXT_debug_utils, which PlasmaVK also offers without it; the
+ *   application still enables the extension to make messengers. It turns
+ *   the instance and its devices into a debugging configuration:
+ *   - Every diagnostic, at every level, goes to stderr as well as to the
+ *     messengers ("Debug messages", after section 6).
+ *   - Metal debug labels for Xcode's GPU capture (section 16, DEBUG LABELS):
+ *     each Metal command buffer is named after its queue and submission;
+ *     each Vulkan command buffer, render pass instance, draw, dispatch, copy,
+ *     clear and blit is a debug group named after the command and the
+ *     Vulkan names of its objects; render encoders are named after their
+ *     render pass and framebuffer.
+ *   - Checks of common errors that cost little, reported as VALIDATION
+ *     errors named by their VUIDs (section 9, DEBUG LAYER CHECKS lists them).
+ *     A check that finds a command would crash or corrupt PlasmaVK (a
+ *     destroyed handle, mismatched allocation callbacks) skips the command;
+ *     the others let it run unless a messenger callback returned VK_TRUE. A
+ *     skipped command returning VkResult returns
+ *     VK_ERROR_VALIDATION_FAILED_EXT.
+ *   The layer's bookkeeping (the live handle table) uses malloc, as layers
+ *   do, not the application's allocation callbacks.
  * ========================================================================== */
 
 VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceVersion(uint32_t *pApiVersion)
@@ -34302,6 +34739,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceExtensionProperties(const char
                                                                       uint32_t *pPropertyCount,
                                                                       VkExtensionProperties *pProperties)
 {
+    if (pLayerName && strcmp(pLayerName, PVK_DEBUG_LAYER_NAME) == 0)
+        return pvk_enumerate(pvk_debug_layer_extensions, sizeof(VkExtensionProperties),
+                             PVK_ARRAY_SIZE(pvk_debug_layer_extensions), pPropertyCount, pProperties);
     if (pLayerName)
         return VK_ERROR_LAYER_NOT_PRESENT;
     return pvk_enumerate(pvk_instance_extensions, sizeof(VkExtensionProperties),
@@ -34311,9 +34751,32 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceExtensionProperties(const char
 VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceLayerProperties(uint32_t *pPropertyCount,
                                                                   VkLayerProperties *pProperties)
 {
-    (void)pProperties;
-    *pPropertyCount = 0; /* layers need a loader */
-    return VK_SUCCESS;
+    return pvk_enumerate(pvk_layers, sizeof(VkLayerProperties), PVK_ARRAY_SIZE(pvk_layers), pPropertyCount,
+                         pProperties);
+}
+
+static void pvk_messenger_init(struct pvk_messenger *m, struct pvk_instance *instance,
+                               const VkDebugUtilsMessengerCreateInfoEXT *info)
+{
+    m->instance = instance;
+    m->severities = info->messageSeverity;
+    m->types = info->messageType;
+    m->callback = info->pfnUserCallback;
+    m->user = info->pUserData;
+}
+
+static void pvk_instance_free(struct pvk_instance *instance)
+{
+    const VkAllocationCallbacks *alloc = pvk_instance_alloc(instance);
+    struct pvk_messenger *m, *next;
+    for (m = instance->messengers; m; m = next) { /* left by the application */
+        next = m->next;
+        pvk_free(m->has_alloc ? &m->alloc : alloc, m);
+    }
+    if (instance->debug_lock_ready)
+        pthread_mutex_destroy(&instance->debug_lock);
+    pvk_free(alloc, instance->chained);
+    pvk_free(alloc, instance);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCreateInfo,
@@ -34321,15 +34784,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCre
                                                 VkInstance *pInstance)
 {
     struct pvk_instance *instance;
+    const VkBaseInStructure *s;
+    uint32_t i, chained = 0;
     VkResult result;
-    uint32_t i;
 
-    if (pCreateInfo->enabledLayerCount > 0) {
-        pvk_log(PVK_LOG_WARN, "layers are not supported without a loader (requested %s)",
-                pCreateInfo->ppEnabledLayerNames[0]);
-        return VK_ERROR_LAYER_NOT_PRESENT;
-    }
-
+    pthread_once(&pvk_log_once, pvk_log_init);
     instance = pvk_alloc(pAllocator, sizeof(*instance), VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
     if (!instance)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -34337,13 +34796,50 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCre
         instance->alloc = *pAllocator;
         instance->has_alloc = true;
     }
+    if (pthread_mutex_init(&instance->debug_lock, NULL) != 0) {
+        pvk_instance_free(instance);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    instance->debug_lock_ready = true;
+
+    /* Messengers in the chain report what happens in vkCreateInstance and
+     * vkDestroyInstance, and only then. */
+    for (s = pCreateInfo->pNext; s; s = s->pNext)
+        chained += s->sType == VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+    if (chained) {
+        instance->chained = pvk_alloc(pAllocator, sizeof(*instance->chained) * chained,
+                                      VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+        if (!instance->chained) {
+            pvk_instance_free(instance);
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
+        for (s = pCreateInfo->pNext; s; s = s->pNext)
+            if (s->sType == VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT)
+                pvk_messenger_init(&instance->chained[instance->chained_count++], instance,
+                                   (const VkDebugUtilsMessengerCreateInfoEXT *)s);
+        instance->chained_active = true;
+    }
+
+    instance->debug = pvk_debug_env;
+    for (i = 0; i < pCreateInfo->enabledLayerCount; i++) {
+        const char *name = pCreateInfo->ppEnabledLayerNames[i];
+        if (strcmp(name, PVK_DEBUG_LAYER_NAME) == 0) {
+            instance->debug = true;
+            continue;
+        }
+        pvk_logi(instance, PVK_LOG_WARN, "PlasmaVK-vkCreateInstance-layer-not-present",
+                 "vkCreateInstance: layer %s is not present (the only layer is %s)", name, PVK_DEBUG_LAYER_NAME);
+        pvk_instance_free(instance);
+        return VK_ERROR_LAYER_NOT_PRESENT;
+    }
 
     for (i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
         const char *name = pCreateInfo->ppEnabledExtensionNames[i];
         int ext = pvk_find_extension(pvk_instance_extensions, PVK_INSTANCE_EXTENSION_COUNT, name);
         if (ext < 0) {
-            pvk_log(PVK_LOG_WARN, "unsupported instance extension %s", name);
-            pvk_free(pAllocator, instance);
+            pvk_logi(instance, PVK_LOG_WARN, "PlasmaVK-vkCreateInstance-extension-not-present",
+                     "vkCreateInstance: unsupported instance extension %s", name);
+            pvk_instance_free(instance);
             return VK_ERROR_EXTENSION_NOT_PRESENT;
         }
         instance->extensions[ext] = true;
@@ -34352,25 +34848,148 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCre
     instance->api_version = VK_API_VERSION_1_0;
     if (pCreateInfo->pApplicationInfo && pCreateInfo->pApplicationInfo->apiVersion)
         instance->api_version = pCreateInfo->pApplicationInfo->apiVersion;
+    if (instance->debug)
+        pvk_logi(instance, PVK_LOG_INFO, "PlasmaVK-debug-layer", "%s is enabled%s (PlasmaVK %u.%u.%u)",
+                 PVK_DEBUG_LAYER_NAME, pvk_debug_env ? " by PLASMAVK_DEBUG" : "", PLASMAVK_VERSION_MAJOR,
+                 PLASMAVK_VERSION_MINOR, PLASMAVK_VERSION_PATCH);
 
     result = pvk_physical_device_create(instance);
     if (result != VK_SUCCESS) {
-        pvk_free(pAllocator, instance);
+        pvk_instance_free(instance);
         return result;
     }
 
+    pthread_mutex_lock(&instance->debug_lock);
+    instance->chained_active = false;
+    pthread_mutex_unlock(&instance->debug_lock);
+    pthread_mutex_lock(&pvk_instances_lock);
+    instance->next_instance = pvk_instances;
+    pvk_instances = instance;
+    pthread_mutex_unlock(&pvk_instances_lock);
     *pInstance = (VkInstance)instance;
     return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkDestroyInstance(VkInstance _instance, const VkAllocationCallbacks *pAllocator)
 {
-    struct pvk_instance *instance = (struct pvk_instance *)_instance;
-    (void)pAllocator; /* must match creation; the stored copy is authoritative */
+    struct pvk_instance *instance = (struct pvk_instance *)_instance, **p;
+    struct pvk_messenger *m;
+    struct pvk_msg msg;
+    long devices;
+
     if (!instance)
         return;
+    pthread_mutex_lock(&pvk_instances_lock);
+    for (p = &pvk_instances; *p && *p != instance; p = &(*p)->next_instance)
+        ;
+    if (*p)
+        *p = instance->next_instance;
+    pthread_mutex_unlock(&pvk_instances_lock);
+    pthread_mutex_lock(&instance->debug_lock);
+    instance->chained_active = true;
+    pthread_mutex_unlock(&instance->debug_lock);
+    if (instance->debug) { /* the stored allocation callbacks are used either way */
+        pvk_msg_init(&msg, instance, NULL, VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT);
+        pvk_msg_object(&msg, VK_OBJECT_TYPE_INSTANCE, (uint64_t)(uintptr_t)instance);
+        if ((pAllocator != NULL) != instance->has_alloc) {
+            msg.id = instance->has_alloc ? "VUID-vkDestroyInstance-instance-00630" : "VUID-vkDestroyInstance-instance-00631";
+            pvk_message(&msg, PVK_LOG_ERROR, "vkDestroyInstance: the instance was created %s allocation callbacks, "
+                        "but pAllocator is %s", instance->has_alloc ? "with" : "without",
+                        pAllocator ? "not NULL" : "NULL");
+        }
+        msg.id = "VUID-vkDestroyInstance-instance-00629";
+        devices = __atomic_load_n(&instance->devices, __ATOMIC_ACQUIRE);
+        if (devices)
+            pvk_message(&msg, PVK_LOG_ERROR, "vkDestroyInstance: %ld VkDevice of the instance not destroyed", devices);
+        for (m = instance->messengers; m; m = m->next) {
+            msg.object_count = 0;
+            pvk_msg_object(&msg, VK_OBJECT_TYPE_DEBUG_UTILS_MESSENGER_EXT, (uint64_t)(uintptr_t)m);
+            pvk_message(&msg, PVK_LOG_ERROR, "vkDestroyInstance: a VkDebugUtilsMessengerEXT of the instance not "
+                        "destroyed");
+        }
+    }
     pvk_physical_device_destroy(instance->physical_device);
-    pvk_free(pvk_instance_alloc(instance), instance);
+    pvk_instance_free(instance);
+}
+
+/* ---- Messengers (VK_EXT_debug_utils) ---- */
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateDebugUtilsMessengerEXT(VkInstance _instance,
+                                                              const VkDebugUtilsMessengerCreateInfoEXT *pCreateInfo,
+                                                              const VkAllocationCallbacks *pAllocator,
+                                                              VkDebugUtilsMessengerEXT *pMessenger)
+{
+    struct pvk_instance *instance = (struct pvk_instance *)_instance;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_instance_alloc(instance);
+    struct pvk_messenger *m = pvk_alloc(alloc, sizeof(*m), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT), **p;
+
+    if (!m)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    pvk_messenger_init(m, instance, pCreateInfo);
+    if (pAllocator) {
+        m->alloc = *pAllocator;
+        m->has_alloc = true;
+    }
+    pthread_mutex_lock(&instance->debug_lock); /* called in creation order */
+    for (p = &instance->messengers; *p; p = &(*p)->next)
+        ;
+    *p = m;
+    pthread_mutex_unlock(&instance->debug_lock);
+    *pMessenger = (VkDebugUtilsMessengerEXT)m;
+    return VK_SUCCESS;
+}
+
+/* A messenger that is not on the instance's list (destroyed, or another
+ * instance's) is left alone. */
+VKAPI_ATTR void VKAPI_CALL vkDestroyDebugUtilsMessengerEXT(VkInstance _instance, VkDebugUtilsMessengerEXT messenger,
+                                                           const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_instance *instance = (struct pvk_instance *)_instance;
+    struct pvk_messenger *m = (struct pvk_messenger *)messenger, **p;
+    bool found, keep = false;
+    struct pvk_msg msg;
+
+    if (!m)
+        return;
+    pthread_mutex_lock(&instance->debug_lock);
+    for (p = &instance->messengers; *p && *p != m; p = &(*p)->next)
+        ;
+    found = *p != NULL;
+    if (found && instance->debug && (pAllocator != NULL) != m->has_alloc)
+        keep = true;
+    else if (found)
+        *p = m->next;
+    pthread_mutex_unlock(&instance->debug_lock);
+    if (found && !keep) {
+        pvk_free(m->has_alloc ? &m->alloc : pvk_instance_alloc(instance), m);
+        return;
+    }
+    if (!instance->debug)
+        return;
+    pvk_msg_init(&msg, instance, NULL, VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT);
+    pvk_msg_object(&msg, VK_OBJECT_TYPE_DEBUG_UTILS_MESSENGER_EXT, (uint64_t)(uintptr_t)m);
+    if (!found) {
+        msg.id = "VUID-vkDestroyDebugUtilsMessengerEXT-messenger-parameter";
+        pvk_message(&msg, PVK_LOG_ERROR, "vkDestroyDebugUtilsMessengerEXT: messenger is not a live "
+                    "VkDebugUtilsMessengerEXT of this instance (destroyed already?); skipped");
+    } else {
+        msg.id = m->has_alloc ? "VUID-vkDestroyDebugUtilsMessengerEXT-messenger-01915"
+                              : "VUID-vkDestroyDebugUtilsMessengerEXT-messenger-01916";
+        pvk_message(&msg, PVK_LOG_ERROR, "vkDestroyDebugUtilsMessengerEXT: the messenger was created %s allocation "
+                    "callbacks, but pAllocator is %s; skipped", m->has_alloc ? "with" : "without",
+                    pAllocator ? "not NULL" : "NULL");
+    }
+}
+
+/* The application's message, to every messenger of the instance that takes
+ * it, with the application's callback data as it is. */
+VKAPI_ATTR void VKAPI_CALL vkSubmitDebugUtilsMessageEXT(VkInstance instance,
+                                                        VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+                                                        VkDebugUtilsMessageTypeFlagsEXT messageTypes,
+                                                        const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData)
+{
+    VkBool32 skip = VK_FALSE;
+    pvk_messengers_call((struct pvk_instance *)instance, messageSeverity, messageTypes, pCallbackData, &skip);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkEnumeratePhysicalDevices(VkInstance _instance,
@@ -34448,7 +35067,8 @@ static VkResult pvk_device_features(const struct pvk_physical_device *pd, const 
         bad = pvk_enable_features((const VkBool32 *)info->pEnabledFeatures, (const VkBool32 *)&pd->features.core,
                                   (VkBool32 *)&enabled->core, sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32));
         if (bad >= 0) {
-            pvk_log(PVK_LOG_WARN, "vkCreateDevice: VkPhysicalDeviceFeatures member %ld is not supported", bad);
+            pvk_logi(pd->instance, PVK_LOG_WARN, "PlasmaVK-vkCreateDevice-feature-not-present",
+                     "vkCreateDevice: VkPhysicalDeviceFeatures member %ld is not supported", bad);
             return VK_ERROR_FEATURE_NOT_PRESENT;
         }
     }
@@ -34461,8 +35081,8 @@ static VkResult pvk_device_features(const struct pvk_physical_device *pd, const 
                                       (const VkBool32 *)((const char *)&pd->features + run->source),
                                       (VkBool32 *)((char *)enabled + run->source), run->size / sizeof(VkBool32));
             if (bad >= 0) {
-                pvk_log(PVK_LOG_WARN, "vkCreateDevice: feature %ld of the struct with sType %d is not supported", bad,
-                        (int)s->sType);
+                pvk_logi(pd->instance, PVK_LOG_WARN, "PlasmaVK-vkCreateDevice-feature-not-present",
+                         "vkCreateDevice: feature %ld of the struct with sType %d is not supported", bad, (int)s->sType);
                 return VK_ERROR_FEATURE_NOT_PRESENT;
             }
         }
@@ -34741,6 +35361,657 @@ VKAPI_ATTR void VKAPI_CALL vkGetPrivateData(VkDevice device, VkObjectType object
     pthread_mutex_unlock(&pvk_private_data_lock);
 }
 
+/* ---- Object names and tags (VK_EXT_debug_utils) ----
+ *
+ * A device has a table from object handle to name and tags (open addressing,
+ * as private data has), allocated from the device's callbacks, on one list
+ * of every device's table behind one lock. pvk_free (section 5) drops the
+ * entries of a freed object, so that an object made later at the same
+ * address starts without a name. A name set through a device lasts until
+ * the object is freed or the device destroyed (also for instance- and
+ * physical-device-level objects). Messages name their objects with them
+ * ("Debug messages"), and they become Metal labels where Metal allows
+ * (pvk_debug_label, section 16, DEBUG LABELS). Tags are kept for nobody to
+ * read: no tool can attach to PlasmaVK. */
+
+struct pvk_tag {
+    struct pvk_tag *next;
+    uint64_t name;
+    size_t size;
+    unsigned char data[];
+};
+
+struct pvk_name {
+    uint64_t handle; /* 0: empty; PVK_PRIVATE_DATA_GONE: deleted */
+    char *name;      /* NULL: tags only */
+    struct pvk_tag *tags;
+};
+
+struct pvk_names {
+    struct pvk_names *prev, *next; /* pvk_names_tables */
+    struct pvk_device *device;
+    uint32_t capacity, used, live; /* used: live and deleted entries */
+    struct pvk_name *entries;
+};
+
+static pthread_mutex_t pvk_names_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct pvk_names *pvk_names_tables;
+
+/* Lock held. */
+static struct pvk_name *pvk_names_find(const struct pvk_names *t, uint64_t handle)
+{
+    uint32_t i, n;
+    if (!t || !t->capacity)
+        return NULL;
+    for (i = pvk_private_data_hash(handle, t->capacity), n = 0; n < t->capacity; i = (i + 1) & (t->capacity - 1), n++) {
+        if (t->entries[i].handle == handle)
+            return &t->entries[i];
+        if (!t->entries[i].handle)
+            return NULL;
+    }
+    return NULL;
+}
+
+/* Lock held. */
+static void pvk_names_clear(struct pvk_names *t, struct pvk_name *e)
+{
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(t->device);
+    struct pvk_tag *tag, *next;
+    pvk_free_raw(alloc, e->name);
+    for (tag = e->tags; tag; tag = next) {
+        next = tag->next;
+        pvk_free_raw(alloc, tag);
+    }
+    e->handle = PVK_PRIVATE_DATA_GONE;
+    e->name = NULL;
+    e->tags = NULL;
+    t->live--;
+    __atomic_sub_fetch(&pvk_named_objects, 1, __ATOMIC_RELEASE);
+}
+
+/* The entry of handle in the device's table, made if missing; NULL when out
+ * of memory. Lock held. */
+static struct pvk_name *pvk_names_entry(struct pvk_device *device, uint64_t handle)
+{
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(device);
+    struct pvk_names *t = device->names;
+    struct pvk_name *e;
+    uint32_t i;
+
+    if (!t) {
+        if (!(t = pvk_alloc(alloc, sizeof(*t), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)))
+            return NULL;
+        t->device = device;
+        t->next = pvk_names_tables;
+        if (t->next)
+            t->next->prev = t;
+        pvk_names_tables = t;
+        device->names = t;
+    }
+    if ((e = pvk_names_find(t, handle)))
+        return e;
+    if (!t->capacity || (t->used + 1) * 4 > t->capacity * 3) { /* at most 3/4 full, deletions included */
+        struct pvk_name *old = t->entries, *entries;
+        uint32_t capacity = t->capacity ? t->capacity : 64, old_capacity = t->capacity, j;
+        while ((t->live + 1) * 2 > capacity)
+            capacity *= 2;
+        if (!(entries = pvk_alloc(alloc, sizeof(*entries) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)))
+            return NULL;
+        for (i = 0; i < old_capacity; i++) {
+            if (!old[i].handle || old[i].handle == PVK_PRIVATE_DATA_GONE)
+                continue;
+            for (j = pvk_private_data_hash(old[i].handle, capacity); entries[j].handle; j = (j + 1) & (capacity - 1))
+                ;
+            entries[j] = old[i];
+        }
+        pvk_free_raw(alloc, old);
+        t->entries = entries;
+        t->capacity = capacity;
+        t->used = t->live;
+    }
+    for (i = pvk_private_data_hash(handle, t->capacity);
+         t->entries[i].handle && t->entries[i].handle != PVK_PRIVATE_DATA_GONE; i = (i + 1) & (t->capacity - 1))
+        ;
+    if (!t->entries[i].handle)
+        t->used++;
+    t->entries[i].handle = handle;
+    t->entries[i].name = NULL;
+    t->entries[i].tags = NULL;
+    t->live++;
+    __atomic_add_fetch(&pvk_named_objects, 1, __ATOMIC_RELEASE);
+    return &t->entries[i];
+}
+
+static void pvk_names_forget(const void *object)
+{
+    struct pvk_names *t;
+    struct pvk_name *e;
+    pthread_mutex_lock(&pvk_names_lock);
+    for (t = pvk_names_tables; t; t = t->next)
+        if ((e = pvk_names_find(t, (uint64_t)(uintptr_t)object)))
+            pvk_names_clear(t, e);
+    pthread_mutex_unlock(&pvk_names_lock);
+}
+
+static bool pvk_name_get(uint64_t handle, char *buf, size_t size)
+{
+    const struct pvk_names *t;
+    const struct pvk_name *e;
+    bool found = false;
+    if (!handle || !__atomic_load_n(&pvk_named_objects, __ATOMIC_ACQUIRE))
+        return false;
+    pthread_mutex_lock(&pvk_names_lock);
+    for (t = pvk_names_tables; t && !found; t = t->next)
+        if ((e = pvk_names_find(t, handle)) && e->name) {
+            snprintf(buf, size, "%s", e->name);
+            found = true;
+        }
+    pthread_mutex_unlock(&pvk_names_lock);
+    return found;
+}
+
+static void pvk_names_free(struct pvk_device *device)
+{
+    struct pvk_names *t = device->names;
+    uint32_t i;
+    if (!t)
+        return;
+    pthread_mutex_lock(&pvk_names_lock);
+    for (i = 0; i < t->capacity; i++)
+        if (t->entries[i].handle && t->entries[i].handle != PVK_PRIVATE_DATA_GONE)
+            pvk_names_clear(t, &t->entries[i]);
+    if (t->prev)
+        t->prev->next = t->next;
+    else
+        pvk_names_tables = t->next;
+    if (t->next)
+        t->next->prev = t->prev;
+    pthread_mutex_unlock(&pvk_names_lock);
+    pvk_free_raw(pvk_device_alloc(device), t->entries);
+    pvk_free_raw(pvk_device_alloc(device), t);
+    device->names = NULL;
+}
+
+static const char *pvk_object_type_name(VkObjectType type)
+{
+    switch (type) {
+    case VK_OBJECT_TYPE_INSTANCE: return "VkInstance";
+    case VK_OBJECT_TYPE_PHYSICAL_DEVICE: return "VkPhysicalDevice";
+    case VK_OBJECT_TYPE_DEVICE: return "VkDevice";
+    case VK_OBJECT_TYPE_QUEUE: return "VkQueue";
+    case VK_OBJECT_TYPE_SEMAPHORE: return "VkSemaphore";
+    case VK_OBJECT_TYPE_COMMAND_BUFFER: return "VkCommandBuffer";
+    case VK_OBJECT_TYPE_FENCE: return "VkFence";
+    case VK_OBJECT_TYPE_DEVICE_MEMORY: return "VkDeviceMemory";
+    case VK_OBJECT_TYPE_BUFFER: return "VkBuffer";
+    case VK_OBJECT_TYPE_IMAGE: return "VkImage";
+    case VK_OBJECT_TYPE_EVENT: return "VkEvent";
+    case VK_OBJECT_TYPE_QUERY_POOL: return "VkQueryPool";
+    case VK_OBJECT_TYPE_BUFFER_VIEW: return "VkBufferView";
+    case VK_OBJECT_TYPE_IMAGE_VIEW: return "VkImageView";
+    case VK_OBJECT_TYPE_SHADER_MODULE: return "VkShaderModule";
+    case VK_OBJECT_TYPE_PIPELINE_CACHE: return "VkPipelineCache";
+    case VK_OBJECT_TYPE_PIPELINE_LAYOUT: return "VkPipelineLayout";
+    case VK_OBJECT_TYPE_RENDER_PASS: return "VkRenderPass";
+    case VK_OBJECT_TYPE_PIPELINE: return "VkPipeline";
+    case VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT: return "VkDescriptorSetLayout";
+    case VK_OBJECT_TYPE_SAMPLER: return "VkSampler";
+    case VK_OBJECT_TYPE_DESCRIPTOR_POOL: return "VkDescriptorPool";
+    case VK_OBJECT_TYPE_DESCRIPTOR_SET: return "VkDescriptorSet";
+    case VK_OBJECT_TYPE_FRAMEBUFFER: return "VkFramebuffer";
+    case VK_OBJECT_TYPE_COMMAND_POOL: return "VkCommandPool";
+    case VK_OBJECT_TYPE_SAMPLER_YCBCR_CONVERSION: return "VkSamplerYcbcrConversion";
+    case VK_OBJECT_TYPE_DESCRIPTOR_UPDATE_TEMPLATE: return "VkDescriptorUpdateTemplate";
+    case VK_OBJECT_TYPE_PRIVATE_DATA_SLOT: return "VkPrivateDataSlot";
+    case VK_OBJECT_TYPE_SURFACE_KHR: return "VkSurfaceKHR";
+    case VK_OBJECT_TYPE_SWAPCHAIN_KHR: return "VkSwapchainKHR";
+    case VK_OBJECT_TYPE_DEBUG_UTILS_MESSENGER_EXT: return "VkDebugUtilsMessengerEXT";
+    default: return "object";
+    }
+}
+
+/* Writes "<type> 0x<handle> '<name>'" (the name if it has one) to buf. */
+static const char *pvk_object_label(char *buf, size_t size, VkObjectType type, uint64_t handle)
+{
+    char name[200];
+    if (pvk_name_get(handle, name, sizeof(name)))
+        snprintf(buf, size, "%s '%s'", pvk_object_type_name(type), name);
+    else
+        snprintf(buf, size, "%s 0x%llx", pvk_object_type_name(type), (unsigned long long)handle);
+    return buf;
+}
+
+/* ---- Debug layer: live handles ----
+ *
+ * DEBUG LAYER CHECKS (section 8, DEBUG LAYER)
+ *   With the debug layer, PlasmaVK keeps a table of the live handles of the
+ *   objects whose misuse most often crashes: VkBuffer, VkImage, VkImageView,
+ *   VkSampler, VkDeviceMemory, VkPipeline, VkFence, VkSemaphore and
+ *   VkCommandBuffer, each with its device, its command pool and whether it
+ *   was made with allocation callbacks. The checks, with their VUIDs:
+ *   - Use of a destroyed (or never created, or other-typed) handle, before
+ *     PlasmaVK touches it: destroying or freeing one (vkDestroy*-*-parameter,
+ *     vkFreeCommandBuffers-pCommandBuffers-00048), and passing one to
+ *     vkQueueSubmit(2) (command buffers, semaphores, fence), vkCmdBindPipeline,
+ *     vkBindBufferMemory(2), vkBindImageMemory(2), vkMapMemory,
+ *     vkCmdBindVertexBuffers, vkCmdBindIndexBuffer, vkCmdCopyBuffer: the
+ *     *-parameter VUIDs. An object of another device: *-parent. An address
+ *     reused by a new object of the same type looks alive: not caught.
+ *   - Destroying with allocation callbacks that do not match creation's
+ *     (one given, the other NULL): vkDestroy*-*-0092x and the like.
+ *   - Leaks: objects of the tracked types alive at vkDestroyDevice
+ *     (vkDestroyDevice-device-05137), devices and messengers alive at
+ *     vkDestroyInstance (vkDestroyInstance-instance-00629).
+ *   - Command buffer states (section 15): vkBeginCommandBuffer on a recording
+ *     command buffer (-00049) or, without RESET_COMMAND_BUFFER_BIT, one not
+ *     initial (-00050); vkResetCommandBuffer without it (-00046);
+ *     vkEndCommandBuffer not recording (-00059), in a render pass (-00060),
+ *     with a secondary's label region open (-01815); submitting one that is
+ *     not executable, a one-time-submit one again (vkQueueSubmit-00070,
+ *     vkQueueSubmit2-03874), a secondary (VkSubmitInfo-00075,
+ *     VkCommandBufferSubmitInfo-03890), one of another queue family
+ *     (-00074, -03878).
+ *   - A submission's fence that is signaled (vkQueueSubmit-fence-00063,
+ *     vkQueueSubmit2-fence-04894) or still pending (-00064, -04895).
+ *   - Label regions: vkQueueEndDebugUtilsLabelEXT without one open (-01911),
+ *     vkCmdEndDebugUtilsLabelEXT without one open in a secondary (-01913) or
+ *     on the queue when submitted (-01912).
+ *   - Features a command needs, not enabled: samplerAnisotropy
+ *     (VkSamplerCreateInfo-anisotropyEnable-01070), multiDrawIndirect
+ *     (vkCmdDraw(Indexed)Indirect-drawCount-02718), drawIndirectCount
+ *     (vkCmdDraw(Indexed)IndirectCount-None-04445), wideLines
+ *     (vkCmdSetLineWidth-lineWidth-00788), bufferDeviceAddress
+ *     (vkGetBufferDeviceAddress-bufferDeviceAddress-03324).
+ *   - Memory: vkMapMemory of mapped memory (-00678) or memory that is not
+ *     host-visible (-00682), vkUnmapMemory of unmapped memory (-00689),
+ *     binding a buffer or image that is bound already (vkBindBufferMemory-
+ *     buffer-07459, vkBindImageMemory-image-07460, and their *Info forms).
+ *   - Object names: vkSetDebugUtilsObjectNameEXT of VK_OBJECT_TYPE_UNKNOWN
+ *     (-02587) or VK_NULL_HANDLE (-02588), of a tracked handle that is not a
+ *     live object of objectType (VkDebugUtilsObjectNameInfoEXT-objectType-02590)
+ *     or of another device (-07874); the same for tags. */
+
+struct pvk_live {
+    uint64_t handle; /* 0: empty; PVK_PRIVATE_DATA_GONE: deleted */
+    const struct pvk_device *device;
+    const void *parent; /* command buffers: their pool */
+    VkObjectType type;
+    bool has_alloc;     /* made with pAllocator */
+};
+
+static pthread_mutex_t pvk_live_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct pvk_live *pvk_live_table; /* malloc'd: the layer's own memory */
+static uint32_t pvk_live_capacity, pvk_live_used, pvk_live_count;
+
+/* Lock held. */
+static struct pvk_live *pvk_live_find(uint64_t handle)
+{
+    uint32_t i, n;
+    if (!pvk_live_capacity)
+        return NULL;
+    for (i = pvk_private_data_hash(handle, pvk_live_capacity), n = 0; n < pvk_live_capacity;
+         i = (i + 1) & (pvk_live_capacity - 1), n++) {
+        if (pvk_live_table[i].handle == handle)
+            return &pvk_live_table[i];
+        if (!pvk_live_table[i].handle)
+            return NULL;
+    }
+    return NULL;
+}
+
+/* Records a new object (debug layer only). */
+static void pvk_live_add(const struct pvk_device *device, VkObjectType type, const void *object, const void *parent,
+                         bool has_alloc)
+{
+    uint64_t handle = (uint64_t)(uintptr_t)object;
+    struct pvk_live *e;
+    uint32_t i;
+    if (!device->debug || !object)
+        return;
+    pthread_mutex_lock(&pvk_live_lock);
+    if (!(e = pvk_live_find(handle))) {
+        if ((pvk_live_used + 1) * 4 > pvk_live_capacity * 3) {
+            struct pvk_live *old = pvk_live_table, *table;
+            uint32_t capacity = pvk_live_capacity ? pvk_live_capacity : 1024, old_capacity = pvk_live_capacity, j;
+            while ((pvk_live_count + 1) * 2 > capacity)
+                capacity *= 2;
+            if (!(table = calloc(capacity, sizeof(*table)))) {
+                pthread_mutex_unlock(&pvk_live_lock);
+                return; /* untracked: its checks are skipped */
+            }
+            for (i = 0; i < old_capacity; i++) {
+                if (!old[i].handle || old[i].handle == PVK_PRIVATE_DATA_GONE)
+                    continue;
+                for (j = pvk_private_data_hash(old[i].handle, capacity); table[j].handle; j = (j + 1) & (capacity - 1))
+                    ;
+                table[j] = old[i];
+            }
+            free(old);
+            pvk_live_table = table;
+            pvk_live_capacity = capacity;
+            pvk_live_used = pvk_live_count;
+        }
+        for (i = pvk_private_data_hash(handle, pvk_live_capacity);
+             pvk_live_table[i].handle && pvk_live_table[i].handle != PVK_PRIVATE_DATA_GONE;
+             i = (i + 1) & (pvk_live_capacity - 1))
+            ;
+        if (!pvk_live_table[i].handle)
+            pvk_live_used++;
+        pvk_live_count++;
+        e = &pvk_live_table[i];
+    }
+    e->handle = handle;
+    e->device = device;
+    e->parent = parent;
+    e->type = type;
+    e->has_alloc = has_alloc;
+    pthread_mutex_unlock(&pvk_live_lock);
+}
+
+static void pvk_live_remove(const void *object)
+{
+    struct pvk_live *e;
+    pthread_mutex_lock(&pvk_live_lock);
+    if ((e = pvk_live_find((uint64_t)(uintptr_t)object))) {
+        e->handle = PVK_PRIVATE_DATA_GONE;
+        pvk_live_count--;
+    }
+    pthread_mutex_unlock(&pvk_live_lock);
+}
+
+/* A copy of handle's record; false if it is not a live tracked object. */
+static bool pvk_live_get(uint64_t handle, struct pvk_live *out)
+{
+    struct pvk_live *e;
+    pthread_mutex_lock(&pvk_live_lock);
+    e = handle ? pvk_live_find(handle) : NULL;
+    if (e)
+        *out = *e;
+    pthread_mutex_unlock(&pvk_live_lock);
+    return e != NULL;
+}
+
+/* With the debug layer: whether handle (not VK_NULL_HANDLE) is a live object
+ * of the type; reported under vuid if not. */
+static bool pvk_live_check(const struct pvk_device *device, VkObjectType type, uint64_t handle, const char *vuid,
+                           const char *command)
+{
+    struct pvk_live e;
+    char what[256];
+    if (!device->debug || !handle)
+        return true;
+    if (pvk_live_get(handle, &e) && e.type == type)
+        return true;
+    pvk_vuid(device, vuid, type, handle, "%s: %s is not a live %s (destroyed, freed, or never made)%s", command,
+             pvk_object_label(what, sizeof(what), type, handle), pvk_object_type_name(type),
+             pvk_live_get(handle, &e) ? ": it is another type of object" : "");
+    return false;
+}
+
+/* The VUIDs of the destroy commands of the tracked types. */
+static const struct pvk_destroy_vuids {
+    VkObjectType type;
+    const char *command, *param, *with_alloc, *without_alloc;
+} pvk_destroy_vuids[] = {
+    { VK_OBJECT_TYPE_BUFFER, "vkDestroyBuffer", "buffer", "00923", "00924" },
+    { VK_OBJECT_TYPE_IMAGE, "vkDestroyImage", "image", "01001", "01002" },
+    { VK_OBJECT_TYPE_IMAGE_VIEW, "vkDestroyImageView", "imageView", "01027", "01028" },
+    { VK_OBJECT_TYPE_SAMPLER, "vkDestroySampler", "sampler", "01083", "01084" },
+    { VK_OBJECT_TYPE_DEVICE_MEMORY, "vkFreeMemory", "memory", NULL, NULL },
+    { VK_OBJECT_TYPE_PIPELINE, "vkDestroyPipeline", "pipeline", "00766", "00767" },
+    { VK_OBJECT_TYPE_FENCE, "vkDestroyFence", "fence", "01121", "01122" },
+    { VK_OBJECT_TYPE_SEMAPHORE, "vkDestroySemaphore", "semaphore", "01138", "01139" },
+};
+
+/* With the debug layer, before a tracked object (not VK_NULL_HANDLE) is
+ * destroyed: whether it is a live object of the type made on device with
+ * matching allocation callbacks (false: reported, skip the destruction).
+ * The object leaves the table when it may be destroyed. */
+static bool pvk_live_destroy(const struct pvk_device *device, VkObjectType type, const void *object,
+                             const VkAllocationCallbacks *pAllocator)
+{
+    uint64_t handle = (uint64_t)(uintptr_t)object;
+    const struct pvk_destroy_vuids *v = NULL;
+    char vuid[128], what[256];
+    struct pvk_live e;
+    size_t i;
+
+    if (!device->debug || !object)
+        return true;
+    for (i = 0; i < PVK_ARRAY_SIZE(pvk_destroy_vuids); i++)
+        if (pvk_destroy_vuids[i].type == type)
+            v = &pvk_destroy_vuids[i];
+    if (!v)
+        return true;
+    pvk_object_label(what, sizeof(what), type, handle);
+    if (!pvk_live_get(handle, &e) || e.type != type) {
+        snprintf(vuid, sizeof(vuid), "VUID-%s-%s-parameter", v->command, v->param);
+        pvk_vuid(device, vuid, type, handle, "%s: %s is not a live %s (destroyed already?); skipped", v->command, what,
+                 pvk_object_type_name(type));
+        return false;
+    }
+    if (e.device != device) {
+        snprintf(vuid, sizeof(vuid), "VUID-%s-%s-parent", v->command, v->param);
+        pvk_vuid(device, vuid, type, handle, "%s: %s belongs to another VkDevice; skipped", v->command, what);
+        return false;
+    }
+    if (v->with_alloc && e.has_alloc != (pAllocator != NULL)) {
+        snprintf(vuid, sizeof(vuid), "VUID-%s-%s-%s", v->command, v->param, e.has_alloc ? v->with_alloc : v->without_alloc);
+        pvk_vuid(device, vuid, type, handle, "%s: %s was made %s allocation callbacks, but pAllocator is %s; skipped",
+                 v->command, what, e.has_alloc ? "with" : "without", pAllocator ? "not NULL" : "NULL");
+        return false;
+    }
+    pvk_live_remove(object);
+    return true;
+}
+
+/* At vkDestroyDevice with the debug layer: reports and forgets the
+ * device's objects still alive. */
+static void pvk_live_leaks(const struct pvk_device *device)
+{
+    struct pvk_live leaked[16];
+    uint32_t i, n = 0, total = 0;
+    char what[256];
+
+    pthread_mutex_lock(&pvk_live_lock);
+    for (i = 0; i < pvk_live_capacity; i++) {
+        struct pvk_live *e = &pvk_live_table[i];
+        if (!e->handle || e->handle == PVK_PRIVATE_DATA_GONE || e->device != device)
+            continue;
+        if (n < PVK_ARRAY_SIZE(leaked))
+            leaked[n++] = *e;
+        total++;
+        e->handle = PVK_PRIVATE_DATA_GONE;
+        pvk_live_count--;
+    }
+    pthread_mutex_unlock(&pvk_live_lock);
+    for (i = 0; i < n; i++)
+        pvk_vuid(device, "VUID-vkDestroyDevice-device-05137", leaked[i].type, leaked[i].handle,
+                 "vkDestroyDevice: %s not destroyed", pvk_object_label(what, sizeof(what), leaked[i].type, leaked[i].handle));
+    if (total > n)
+        pvk_vuid(device, "VUID-vkDestroyDevice-device-05137", VK_OBJECT_TYPE_DEVICE, (uint64_t)(uintptr_t)device,
+                 "vkDestroyDevice: %u more objects not destroyed", total - n);
+}
+
+/* ---- Label stacks (VK_EXT_debug_utils, sections 15 and 16) ---- */
+
+/* Pushes a label; copy: own a copy of text. False when out of memory. */
+static bool pvk_labels_push(struct pvk_labels *l, const VkAllocationCallbacks *alloc, const char *text,
+                            const float *color, bool synthetic, bool copy)
+{
+    struct pvk_label *item;
+    if (l->count == l->capacity) {
+        uint32_t capacity = l->capacity ? l->capacity * 2 : 8;
+        struct pvk_label *items = pvk_alloc(alloc, sizeof(*items) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+        if (!items)
+            return false;
+        if (l->count)
+            memcpy(items, l->items, sizeof(*items) * l->count);
+        pvk_free_raw(alloc, l->items);
+        l->items = items;
+        l->capacity = capacity;
+    }
+    item = &l->items[l->count];
+    memset(item, 0, sizeof(*item));
+    item->text = text ? text : "";
+    if (copy) {
+        size_t n = strlen(item->text) + 1;
+        if (!(item->owned = pvk_alloc(alloc, n, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT)))
+            return false;
+        memcpy(item->owned, item->text, n);
+        item->text = item->owned;
+    }
+    if (color)
+        memcpy(item->color, color, sizeof(item->color));
+    item->synthetic = synthetic;
+    l->count++;
+    return true;
+}
+
+static void pvk_labels_remove(struct pvk_labels *l, const VkAllocationCallbacks *alloc, uint32_t index)
+{
+    pvk_free_raw(alloc, l->items[index].owned);
+    memmove(&l->items[index], &l->items[index + 1], sizeof(*l->items) * (l->count - index - 1));
+    l->count--;
+}
+
+/* The topmost label (synthetic or not), or -1. */
+static int pvk_labels_top(const struct pvk_labels *l, bool synthetic)
+{
+    uint32_t i;
+    for (i = l->count; i-- > 0;)
+        if (l->items[i].synthetic == synthetic)
+            return (int)i;
+    return -1;
+}
+
+static void pvk_labels_free(struct pvk_labels *l, const VkAllocationCallbacks *alloc)
+{
+    uint32_t i;
+    for (i = 0; i < l->count; i++)
+        pvk_free_raw(alloc, l->items[i].owned);
+    pvk_free_raw(alloc, l->items);
+    memset(l, 0, sizeof(*l));
+}
+
+/* ---- vkSetDebugUtilsObjectNameEXT, vkSetDebugUtilsObjectTagEXT ---- */
+
+/* Section 16 (DEBUG LABELS): a new name as Metal labels; NULL: none. */
+static void pvk_debug_label(struct pvk_device *device, VkObjectType type, uint64_t handle, const char *name);
+
+/* With the debug layer: the checks of naming or tagging an object; false:
+ * skip the command (a tracked handle that is not alive is never touched:
+ * labeling it would). */
+static bool pvk_debug_check_name(const struct pvk_device *device, bool tag, VkObjectType type, uint64_t handle)
+{
+    static const VkObjectType tracked[] = {
+        VK_OBJECT_TYPE_BUFFER, VK_OBJECT_TYPE_IMAGE, VK_OBJECT_TYPE_IMAGE_VIEW, VK_OBJECT_TYPE_SAMPLER,
+        VK_OBJECT_TYPE_DEVICE_MEMORY, VK_OBJECT_TYPE_PIPELINE, VK_OBJECT_TYPE_FENCE, VK_OBJECT_TYPE_SEMAPHORE,
+        VK_OBJECT_TYPE_COMMAND_BUFFER,
+    };
+    const char *command = tag ? "vkSetDebugUtilsObjectTagEXT" : "vkSetDebugUtilsObjectNameEXT";
+    struct pvk_live e;
+    char what[256];
+    size_t i;
+
+    if (type == VK_OBJECT_TYPE_UNKNOWN)
+        return !pvk_vuid(device, tag ? "VUID-VkDebugUtilsObjectTagInfoEXT-objectType-01908"
+                                     : "VUID-vkSetDebugUtilsObjectNameEXT-pNameInfo-02587",
+                         type, handle, "%s: objectType is VK_OBJECT_TYPE_UNKNOWN", command);
+    if (!handle)
+        return !pvk_vuid(device, tag ? "VUID-VkDebugUtilsObjectTagInfoEXT-objectHandle-01910"
+                                     : "VUID-vkSetDebugUtilsObjectNameEXT-pNameInfo-02588",
+                         type, handle, "%s: objectHandle is VK_NULL_HANDLE", command);
+    for (i = 0; i < PVK_ARRAY_SIZE(tracked) && tracked[i] != type; i++)
+        ;
+    if (i == PVK_ARRAY_SIZE(tracked))
+        return true;
+    pvk_object_label(what, sizeof(what), type, handle);
+    if (!pvk_live_get(handle, &e) || e.type != type) {
+        pvk_vuid(device, tag ? "VUID-VkDebugUtilsObjectTagInfoEXT-objectHandle-01910"
+                             : "VUID-VkDebugUtilsObjectNameInfoEXT-objectType-02590",
+                 type, handle, "%s: objectHandle is not a live %s; skipped", command, pvk_object_type_name(type));
+        return false;
+    }
+    if (e.device != device)
+        return !pvk_vuid(device, tag ? "VUID-vkSetDebugUtilsObjectTagEXT-pNameInfo-07877"
+                                     : "VUID-vkSetDebugUtilsObjectNameEXT-pNameInfo-07874",
+                         type, handle, "%s: %s belongs to another VkDevice", command, what);
+    return true;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkSetDebugUtilsObjectNameEXT(VkDevice _device, const VkDebugUtilsObjectNameInfoEXT *pNameInfo)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(device);
+    const char *name = pNameInfo->pObjectName;
+    uint64_t handle = pNameInfo->objectHandle;
+    size_t len = name ? strlen(name) : 0;
+    struct pvk_name *e;
+    char *copy = NULL;
+
+    if (device->debug && !pvk_debug_check_name(device, false, pNameInfo->objectType, handle))
+        return VK_ERROR_VALIDATION_FAILED_EXT;
+    if (!handle)
+        return VK_SUCCESS;
+    if (len) {
+        if (!(copy = pvk_alloc(alloc, len + 1, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT)))
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        memcpy(copy, name, len + 1);
+    }
+    pthread_mutex_lock(&pvk_names_lock);
+    e = copy ? pvk_names_entry(device, handle) : pvk_names_find(device->names, handle);
+    if (e) {
+        pvk_free_raw(alloc, e->name);
+        e->name = copy;
+        if (!copy && !e->tags) /* "any previously set name is removed" */
+            pvk_names_clear(device->names, e);
+    }
+    pthread_mutex_unlock(&pvk_names_lock);
+    if (!e && copy) {
+        pvk_free_raw(alloc, copy);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    pvk_debug_label(device, pNameInfo->objectType, handle, len ? name : NULL);
+    return VK_SUCCESS;
+}
+
+/* A tag replaces the object's tag of the same tagName. */
+VKAPI_ATTR VkResult VKAPI_CALL vkSetDebugUtilsObjectTagEXT(VkDevice _device, const VkDebugUtilsObjectTagInfoEXT *pTagInfo)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(device);
+    struct pvk_tag *tag, **p;
+    struct pvk_name *e;
+
+    if (device->debug && !pvk_debug_check_name(device, true, pTagInfo->objectType, pTagInfo->objectHandle))
+        return VK_ERROR_VALIDATION_FAILED_EXT;
+    if (!pTagInfo->objectHandle)
+        return VK_SUCCESS;
+    if (!(tag = pvk_alloc(alloc, sizeof(*tag) + pTagInfo->tagSize, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT)))
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    tag->name = pTagInfo->tagName;
+    tag->size = pTagInfo->tagSize;
+    if (pTagInfo->tagSize)
+        memcpy(tag->data, pTagInfo->pTag, pTagInfo->tagSize);
+    pthread_mutex_lock(&pvk_names_lock);
+    if ((e = pvk_names_entry(device, pTagInfo->objectHandle))) {
+        for (p = &e->tags; *p && (*p)->name != tag->name; p = &(*p)->next)
+            ;
+        if (*p) { /* replaced */
+            tag->next = (*p)->next;
+            pvk_free_raw(alloc, *p);
+        }
+        *p = tag;
+    }
+    pthread_mutex_unlock(&pvk_names_lock);
+    if (!e) {
+        pvk_free_raw(alloc, tag);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    return VK_SUCCESS;
+}
+
 static void pvk_device_free(struct pvk_device *device)
 {
     uint32_t i;
@@ -34754,12 +36025,34 @@ static void pvk_device_free(struct pvk_device *device)
     if (device->sparse_lock_ready)
         pthread_mutex_destroy(&device->sparse_lock);
     for (i = 0; i < device->queue_count; i++) {
-        pvk_queue_finish(&device->queues[i]);
-        pvk_release(device->queues[i].mtl_queue);
+        struct pvk_queue *q = &device->queues[i];
+        pvk_queue_finish(q);
+        pvk_release(q->mtl_queue);
+        pvk_labels_free(&q->queue_labels, pvk_device_alloc(device));
+        pvk_labels_free(&q->cmd_labels, pvk_device_alloc(device));
+        pvk_labels_free(&q->queue_inserts, pvk_device_alloc(device));
     }
     pvk_release(device->residency_set);
     pthread_mutex_destroy(&device->residency_lock);
+    pvk_names_free(device);
     pvk_free(pvk_device_alloc(device), device);
+}
+
+/* An MTL4CommandQueue labeled "VkQueue <family>.<index>": Metal fixes a
+ * queue's label at creation, before any name (section 16, DEBUG LABELS). */
+static id pvk_device_new_queue(id mtl, uint32_t family, uint32_t index)
+{
+    void *pool = objc_autoreleasePoolPush();
+    id desc = pvk_MTL4CommandQueueDescriptor_new(), queue = NULL;
+    char label[64];
+    if (desc) {
+        snprintf(label, sizeof(label), "VkQueue %u.%u", family, index);
+        pvk_MTL4CommandQueueDescriptor_setLabel(desc, pvk_NSString_stringWithUTF8String(label));
+        queue = pvk_MTLDevice_newMTL4CommandQueueWithDescriptor_error(mtl, desc, NULL);
+        pvk_release(desc);
+    }
+    objc_autoreleasePoolPop(pool);
+    return queue ? queue : pvk_MTLDevice_newMTL4CommandQueue(mtl);
 }
 
 /* ---- Residency ----
@@ -34877,6 +36170,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
     }
     device->physical_device = pd;
     device->features = features;
+    device->debug = pd->instance->debug;
+    device->app_alloc = pAllocator != NULL;
     device->visibility = PVK_MTL4VisibilityOptionDevice;
     if (features.core.sparseBinding)
         device->visibility |= PVK_MTL4VisibilityOptionResourceAlias;
@@ -34901,7 +36196,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
         const char *name = pCreateInfo->ppEnabledExtensionNames[i];
         int index = pvk_find_extension(pvk_device_extensions, PVK_DEVICE_EXTENSION_COUNT, name);
         if (index < 0 || !pvk_device_extension_available(pd, (unsigned)index)) {
-            pvk_log(PVK_LOG_WARN, "unsupported device extension %s", name);
+            pvk_logi(pd->instance, PVK_LOG_WARN, "PlasmaVK-vkCreateDevice-extension-not-present",
+                     "vkCreateDevice: unsupported device extension %s", name);
             pvk_device_free(device);
             return VK_ERROR_EXTENSION_NOT_PRESENT;
         }
@@ -34922,7 +36218,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
                 return VK_ERROR_INITIALIZATION_FAILED;
             }
             queue = &device->queues[device->queue_count];
-            queue->mtl_queue = pvk_MTLDevice_newMTL4CommandQueue(pd->mtl_device);
+            queue->mtl_queue = pvk_device_new_queue(pd->mtl_device, info->queueFamilyIndex, j);
             if (!queue->mtl_queue) {
                 pvk_device_free(device);
                 return VK_ERROR_INITIALIZATION_FAILED;
@@ -34942,15 +36238,26 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
         }
     }
 
+    __atomic_add_fetch(&pd->instance->devices, 1, __ATOMIC_ACQ_REL);
     *pDevice = (VkDevice)device;
     return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkDestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
 {
-    (void)pAllocator; /* must match creation; the stored copy is authoritative */
-    if (_device)
-        pvk_device_free((struct pvk_device *)_device);
+    struct pvk_device *device = (struct pvk_device *)_device;
+    if (!device)
+        return;
+    if (device->debug) { /* the stored allocation callbacks are used either way */
+        if (device->app_alloc != (pAllocator != NULL))
+            pvk_vuid(device, device->app_alloc ? "VUID-vkDestroyDevice-device-00379" : "VUID-vkDestroyDevice-device-00380",
+                     VK_OBJECT_TYPE_DEVICE, (uint64_t)(uintptr_t)device,
+                     "vkDestroyDevice: the device was created %s allocation callbacks, but pAllocator is %s",
+                     device->app_alloc ? "with" : "without", pAllocator ? "not NULL" : "NULL");
+        pvk_live_leaks(device);
+    }
+    __atomic_sub_fetch(&pvk_device_instance(device)->devices, 1, __ATOMIC_ACQ_REL);
+    pvk_device_free(device);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkGetDeviceQueue2(VkDevice _device, const VkDeviceQueueInfo2 *pQueueInfo,
@@ -35034,6 +36341,7 @@ struct pvk_device_memory {
     char *contents; /* NULL unless host-visible */
     VkDeviceSize size;
     uint32_t type_index;
+    bool mapped;    /* by vkMapMemory (the debug layer checks maps and unmaps) */
 };
 
 /* Where a page of a sparse buffer with texel buffer usage is bound. */
@@ -35101,6 +36409,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemory
     /* Lazily allocated memory is a placeholder: images bound to it become
      * memoryless textures, which own no memory, so nothing is reserved. */
     if (types->memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) {
+        pvk_live_add(device, VK_OBJECT_TYPE_DEVICE_MEMORY, memory, NULL, pAllocator != NULL);
         *pMemory = (VkDeviceMemory)memory;
         return VK_SUCCESS;
     }
@@ -35132,6 +36441,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemory
     if (types->memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
         memory->contents = pvk_MTLBuffer_contents(memory->mtl_buffer);
     pvk_device_make_resident(device, memory->mtl_heap);
+    pvk_live_add(device, VK_OBJECT_TYPE_DEVICE_MEMORY, memory, NULL, pAllocator != NULL);
     *pMemory = (VkDeviceMemory)memory;
     return VK_SUCCESS;
 }
@@ -35142,7 +36452,7 @@ VKAPI_ATTR void VKAPI_CALL vkFreeMemory(VkDevice _device, VkDeviceMemory _memory
     struct pvk_device_memory *memory = (struct pvk_device_memory *)_memory;
     void *pool;
 
-    if (!memory)
+    if (!memory || !pvk_live_destroy(device, VK_OBJECT_TYPE_DEVICE_MEMORY, memory, pAllocator))
         return;
     pool = objc_autoreleasePoolPush();
     if (memory->mtl_heap) /* none for lazily allocated memory */
@@ -35153,38 +36463,78 @@ VKAPI_ATTR void VKAPI_CALL vkFreeMemory(VkDevice _device, VkDeviceMemory _memory
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc(device), memory);
 }
 
-/* Host-visible memory is MTLStorageModeShared: always mapped, coherent. */
-VKAPI_ATTR VkResult VKAPI_CALL vkMapMemory(VkDevice device, VkDeviceMemory _memory, VkDeviceSize offset,
-                                           VkDeviceSize size, VkMemoryMapFlags flags, void **ppData)
+/* Host-visible memory is MTLStorageModeShared: always mapped, coherent.
+ * info2: called as vkMapMemory2 (the debug layer's VUIDs differ). */
+static VkResult pvk_map_memory(struct pvk_device *device, struct pvk_device_memory *memory, VkDeviceSize offset,
+                               void **ppData, bool info2)
 {
-    struct pvk_device_memory *memory = (struct pvk_device_memory *)_memory;
-    (void)device;
-    (void)size;
-    (void)flags;
+    if (device->debug) {
+        const char *command = info2 ? "vkMapMemory2" : "vkMapMemory";
+        bool host;
+        if (!pvk_live_check(device, VK_OBJECT_TYPE_DEVICE_MEMORY, (uint64_t)(uintptr_t)memory,
+                            info2 ? "VUID-VkMemoryMapInfo-memory-parameter" : "VUID-vkMapMemory-memory-parameter",
+                            command)) {
+            *ppData = NULL;
+            return VK_ERROR_VALIDATION_FAILED_EXT;
+        }
+        host = (device->physical_device->memory_properties.memoryTypes[memory->type_index].propertyFlags &
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+        if ((!host && pvk_vuid(device, info2 ? "VUID-VkMemoryMapInfo-memory-07962" : "VUID-vkMapMemory-memory-00682",
+                               VK_OBJECT_TYPE_DEVICE_MEMORY, (uint64_t)(uintptr_t)memory,
+                               "%s: the memory's type (%u) is not host-visible", command, memory->type_index)) ||
+            (memory->mapped && pvk_vuid(device, info2 ? "VUID-VkMemoryMapInfo-memory-07958" : "VUID-vkMapMemory-memory-00678",
+                                        VK_OBJECT_TYPE_DEVICE_MEMORY, (uint64_t)(uintptr_t)memory,
+                                        "%s: the memory is mapped already", command))) {
+            *ppData = NULL;
+            return VK_ERROR_VALIDATION_FAILED_EXT;
+        }
+    }
     if (!memory->contents) {
         *ppData = NULL;
         return VK_ERROR_MEMORY_MAP_FAILED;
     }
+    memory->mapped = true;
     *ppData = memory->contents + offset;
     return VK_SUCCESS;
 }
 
+static void pvk_unmap_memory(struct pvk_device *device, struct pvk_device_memory *memory, bool info2)
+{
+    if (device->debug) {
+        const char *command = info2 ? "vkUnmapMemory2" : "vkUnmapMemory";
+        if (!pvk_live_check(device, VK_OBJECT_TYPE_DEVICE_MEMORY, (uint64_t)(uintptr_t)memory,
+                            info2 ? "VUID-VkMemoryUnmapInfo-memory-parameter" : "VUID-vkUnmapMemory-memory-parameter",
+                            command))
+            return;
+        if (!memory->mapped)
+            pvk_vuid(device, info2 ? "VUID-VkMemoryUnmapInfo-memory-07964" : "VUID-vkUnmapMemory-memory-00689",
+                     VK_OBJECT_TYPE_DEVICE_MEMORY, (uint64_t)(uintptr_t)memory, "%s: the memory is not mapped", command);
+    }
+    memory->mapped = false;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkMapMemory(VkDevice device, VkDeviceMemory memory, VkDeviceSize offset,
+                                           VkDeviceSize size, VkMemoryMapFlags flags, void **ppData)
+{
+    (void)size;
+    (void)flags;
+    return pvk_map_memory((struct pvk_device *)device, (struct pvk_device_memory *)memory, offset, ppData, false);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL vkMapMemory2(VkDevice device, const VkMemoryMapInfo *pMemoryMapInfo, void **ppData)
 {
-    return vkMapMemory(device, pMemoryMapInfo->memory, pMemoryMapInfo->offset, pMemoryMapInfo->size,
-                       pMemoryMapInfo->flags, ppData);
+    return pvk_map_memory((struct pvk_device *)device, (struct pvk_device_memory *)pMemoryMapInfo->memory,
+                          pMemoryMapInfo->offset, ppData, true);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkUnmapMemory(VkDevice device, VkDeviceMemory memory)
 {
-    (void)device;
-    (void)memory;
+    pvk_unmap_memory((struct pvk_device *)device, (struct pvk_device_memory *)memory, false);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkUnmapMemory2(VkDevice device, const VkMemoryUnmapInfo *pMemoryUnmapInfo)
 {
-    (void)device;
-    (void)pMemoryUnmapInfo;
+    pvk_unmap_memory((struct pvk_device *)device, (struct pvk_device_memory *)pMemoryUnmapInfo->memory, true);
     return VK_SUCCESS;
 }
 
@@ -35282,6 +36632,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateBuffer(VkDevice _device, const VkBufferCr
         buffer->memory = m;
         buffer->gpu_address = m->gpu_address;
     }
+    pvk_live_add(device, VK_OBJECT_TYPE_BUFFER, buffer, NULL, pAllocator != NULL);
     *pBuffer = (VkBuffer)buffer;
     return VK_SUCCESS;
 }
@@ -35295,6 +36646,8 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyBuffer(VkDevice _device, VkBuffer _buffer, c
     struct pvk_device *device = (struct pvk_device *)_device;
     const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
     struct pvk_buffer *buffer = (struct pvk_buffer *)_buffer;
+    if (!pvk_live_destroy(device, VK_OBJECT_TYPE_BUFFER, buffer, pAllocator))
+        return;
     if (buffer && buffer->pages) {
         pthread_mutex_lock(&device->sparse_lock);
         pvk_sparse_buffer_forget(buffer);
@@ -35380,13 +36733,50 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceBufferMemoryRequirements(VkDevice device,
                                    pMemoryRequirements);
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL vkBindBufferMemory2(VkDevice device, uint32_t bindInfoCount,
-                                                   const VkBindBufferMemoryInfo *pBindInfos)
+/* With the debug layer: the checks of binding resources to memory (info2:
+ * the *Info structures of vkBind*Memory2). False: skip the command. */
+static bool pvk_debug_check_bind(const struct pvk_device *device, VkObjectType type, uint64_t resource, uint64_t memory,
+                                 bool bound, bool info2)
+{
+    bool image = type == VK_OBJECT_TYPE_IMAGE;
+    const char *command = image ? (info2 ? "vkBindImageMemory2" : "vkBindImageMemory")
+                                : (info2 ? "vkBindBufferMemory2" : "vkBindBufferMemory");
+    const char *prefix = image ? (info2 ? "VUID-VkBindImageMemoryInfo-image" : "VUID-vkBindImageMemory-image")
+                               : (info2 ? "VUID-VkBindBufferMemoryInfo-buffer" : "VUID-vkBindBufferMemory-buffer");
+    char vuid[96], what[256];
+
+    snprintf(vuid, sizeof(vuid), "%s-parameter", prefix);
+    if (!pvk_live_check(device, type, resource, vuid, command))
+        return false;
+    /* (VkBindImageMemoryInfo's memory may be VK_NULL_HANDLE: no VUID of its own) */
+    snprintf(vuid, sizeof(vuid), "%s-memory-parameter",
+             image ? (info2 ? "UNASSIGNED-VkBindImageMemoryInfo" : "VUID-vkBindImageMemory")
+                   : (info2 ? "VUID-VkBindBufferMemoryInfo" : "VUID-vkBindBufferMemory"));
+    if (memory && !pvk_live_check(device, VK_OBJECT_TYPE_DEVICE_MEMORY, memory, vuid, command))
+        return false;
+    snprintf(vuid, sizeof(vuid), "%s-%s", prefix, image ? "07460" : "07459");
+    return !(bound && pvk_vuid(device, vuid, type, resource, "%s: %s is bound to memory already", command,
+                               pvk_object_label(what, sizeof(what), type, resource)));
+}
+
+/* Section 16 (DEBUG LABELS): a named resource's Metal labels, once it is
+ * bound to the Metal objects that carry them. */
+static void pvk_debug_relabel(struct pvk_device *device, VkObjectType type, uint64_t handle);
+
+static VkResult pvk_bind_buffers(struct pvk_device *device, uint32_t count, const VkBindBufferMemoryInfo *infos,
+                                 bool info2)
 {
     uint32_t i;
-    (void)device;
-    for (i = 0; i < bindInfoCount; i++) {
-        const VkBindBufferMemoryInfo *info = &pBindInfos[i];
+    for (i = 0; device->debug && i < count; i++) {
+        const struct pvk_buffer *buffer = (const struct pvk_buffer *)infos[i].buffer;
+        if (!pvk_debug_check_bind(device, VK_OBJECT_TYPE_BUFFER, (uint64_t)(uintptr_t)buffer,
+                                  (uint64_t)(uintptr_t)infos[i].memory, false, info2) ||
+            !pvk_debug_check_bind(device, VK_OBJECT_TYPE_BUFFER, (uint64_t)(uintptr_t)buffer, 0,
+                                  buffer->memory && !(buffer->flags & PVK_BUFFER_CREATE_SPARSE), info2))
+            return VK_ERROR_VALIDATION_FAILED_EXT;
+    }
+    for (i = 0; i < count; i++) {
+        const VkBindBufferMemoryInfo *info = &infos[i];
         struct pvk_buffer *buffer = (struct pvk_buffer *)info->buffer;
         const VkBaseInStructure *ext;
 
@@ -35396,8 +36786,16 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBindBufferMemory2(VkDevice device, uint32_t bin
         for (ext = info->pNext; ext; ext = ext->pNext)
             if (ext->sType == VK_STRUCTURE_TYPE_BIND_MEMORY_STATUS)
                 *((const VkBindMemoryStatus *)ext)->pResult = VK_SUCCESS;
+        if (__atomic_load_n(&pvk_named_objects, __ATOMIC_ACQUIRE))
+            pvk_debug_relabel(device, VK_OBJECT_TYPE_BUFFER, (uint64_t)(uintptr_t)buffer);
     }
     return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkBindBufferMemory2(VkDevice device, uint32_t bindInfoCount,
+                                                   const VkBindBufferMemoryInfo *pBindInfos)
+{
+    return pvk_bind_buffers((struct pvk_device *)device, bindInfoCount, pBindInfos, true);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkBindBufferMemory(VkDevice device, VkBuffer buffer, VkDeviceMemory memory,
@@ -35409,12 +36807,16 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBindBufferMemory(VkDevice device, VkBuffer buff
     info.buffer = buffer;
     info.memory = memory;
     info.memoryOffset = memoryOffset;
-    return vkBindBufferMemory2(device, 1, &info);
+    return pvk_bind_buffers((struct pvk_device *)device, 1, &info, false);
 }
 
-VKAPI_ATTR VkDeviceAddress VKAPI_CALL vkGetBufferDeviceAddress(VkDevice device, const VkBufferDeviceAddressInfo *pInfo)
+VKAPI_ATTR VkDeviceAddress VKAPI_CALL vkGetBufferDeviceAddress(VkDevice _device, const VkBufferDeviceAddressInfo *pInfo)
 {
-    (void)device;
+    const struct pvk_device *device = (const struct pvk_device *)_device;
+    if (device->debug && !device->features.v12.bufferDeviceAddress)
+        pvk_vuid(device, "VUID-vkGetBufferDeviceAddress-bufferDeviceAddress-03324", VK_OBJECT_TYPE_BUFFER,
+                 (uint64_t)(uintptr_t)pInfo->buffer, "vkGetBufferDeviceAddress: the bufferDeviceAddress feature is "
+                 "not enabled");
     return ((struct pvk_buffer *)pInfo->buffer)->gpu_address;
 }
 
@@ -36064,6 +37466,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImage(VkDevice _device, const VkImageCrea
         }
         pvk_device_make_resident(device, image->mtl_texture);
     }
+    pvk_live_add(device, VK_OBJECT_TYPE_IMAGE, image, NULL, pAllocator != NULL);
     *pImage = (VkImage)image;
     return VK_SUCCESS;
 }
@@ -36074,7 +37477,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyImage(VkDevice _device, VkImage _image, cons
     const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
     struct pvk_image *image = (struct pvk_image *)_image;
     uint32_t p;
-    if (!image)
+    if (!image || !pvk_live_destroy(device, VK_OBJECT_TYPE_IMAGE, image, pAllocator))
         return;
     if (image->sparse) {
         pvk_device_evict(device, image->mtl_texture);
@@ -36270,11 +37673,20 @@ static VkResult pvk_image_bind(struct pvk_device *device, struct pvk_image *imag
 /* Section 18: the memory of a swapchain's image (bound at offset 0). */
 static struct pvk_device_memory *pvk_swapchain_image_memory(VkSwapchainKHR swapchain, uint32_t index);
 
-VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory2(VkDevice device, uint32_t bindInfoCount,
-                                                  const VkBindImageMemoryInfo *pBindInfos)
+static VkResult pvk_bind_images(struct pvk_device *device, uint32_t bindInfoCount, const VkBindImageMemoryInfo *pBindInfos,
+                                bool info2)
 {
     VkResult result = VK_SUCCESS;
     uint32_t i;
+    for (i = 0; device->debug && i < bindInfoCount; i++) {
+        const struct pvk_image *image = (const struct pvk_image *)pBindInfos[i].image;
+        if (!pvk_debug_check_bind(device, VK_OBJECT_TYPE_IMAGE, (uint64_t)(uintptr_t)image,
+                                  (uint64_t)(uintptr_t)pBindInfos[i].memory, false, info2) ||
+            !pvk_debug_check_bind(device, VK_OBJECT_TYPE_IMAGE, (uint64_t)(uintptr_t)image, 0,
+                                  image->memory && !image->sparse && !(image->flags & VK_IMAGE_CREATE_DISJOINT_BIT),
+                                  info2))
+            return VK_ERROR_VALIDATION_FAILED_EXT;
+    }
     for (i = 0; i < bindInfoCount; i++) {
         const VkBindImageMemoryInfo *info = &pBindInfos[i];
         struct pvk_device_memory *memory = (struct pvk_device_memory *)info->memory;
@@ -36292,14 +37704,22 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory2(VkDevice device, uint32_t bind
                 plane = ((const VkBindImagePlaneMemoryInfo *)ext)->planeAspect;
             }
         }
-        r = pvk_image_bind((struct pvk_device *)device, (struct pvk_image *)info->image, memory, offset, plane);
+        r = pvk_image_bind(device, (struct pvk_image *)info->image, memory, offset, plane);
         for (ext = info->pNext; ext; ext = ext->pNext)
             if (ext->sType == VK_STRUCTURE_TYPE_BIND_MEMORY_STATUS)
                 *((const VkBindMemoryStatus *)ext)->pResult = r;
         if (r != VK_SUCCESS && result == VK_SUCCESS)
             result = r;
+        if (r == VK_SUCCESS && __atomic_load_n(&pvk_named_objects, __ATOMIC_ACQUIRE))
+            pvk_debug_relabel(device, VK_OBJECT_TYPE_IMAGE, (uint64_t)(uintptr_t)info->image);
     }
     return result;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory2(VkDevice device, uint32_t bindInfoCount,
+                                                  const VkBindImageMemoryInfo *pBindInfos)
+{
+    return pvk_bind_images((struct pvk_device *)device, bindInfoCount, pBindInfos, true);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory(VkDevice device, VkImage image, VkDeviceMemory memory,
@@ -36311,7 +37731,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory(VkDevice device, VkImage image,
     info.image = image;
     info.memory = memory;
     info.memoryOffset = memoryOffset;
-    return vkBindImageMemory2(device, 1, &info);
+    return pvk_bind_images((struct pvk_device *)device, 1, &info, false);
 }
 
 /* Bytes of one texel block of an aspect, as buffer copies lay it out
@@ -36596,6 +38016,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
                 pvk_device_make_resident(device, view->planes[p]);
         view->resident = true;
     }
+    pvk_live_add(device, VK_OBJECT_TYPE_IMAGE_VIEW, view, NULL, pAllocator != NULL);
     *pView = (VkImageView)view;
     return VK_SUCCESS;
 }
@@ -36604,7 +38025,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyImageView(VkDevice device, VkImageView image
 {
     struct pvk_image_view *view = (struct pvk_image_view *)imageView;
     uint32_t p;
-    if (!view)
+    if (!view || !pvk_live_destroy((struct pvk_device *)device, VK_OBJECT_TYPE_IMAGE_VIEW, view, pAllocator))
         return;
     for (p = 0; p < 2; p++) {
         if (view->planes[p] && view->resident)
@@ -36686,7 +38107,9 @@ static id pvk_sparse_buffer_view(struct pvk_device *device, struct pvk_buffer *b
     unsigned long i;
 
     if (view->offset % PVK_SPARSE_BLOCK) {
-        pvk_log(PVK_LOG_WARN, "vkCreateBufferView: views of sparse buffers must start at a multiple of 64 KB");
+        pvk_logd(device, PVK_LOG_WARN, "PlasmaVK-vkCreateBufferView-sparse-offset", VK_OBJECT_TYPE_BUFFER,
+                 (uint64_t)(uintptr_t)buffer, "vkCreateBufferView: views of sparse buffers must start at a multiple "
+                 "of 64 KB");
         return NULL;
     }
     desc = pvk_MTLTextureDescriptor_textureBufferDescriptorWithPixelFormat_width_resourceOptions_usage(
@@ -37017,6 +38440,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSampler(VkDevice _device, const VkSampler
 
     if (!sampler)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
+    if (device->debug && pCreateInfo->anisotropyEnable && !device->features.core.samplerAnisotropy &&
+        pvk_vuid(device, "VUID-VkSamplerCreateInfo-anisotropyEnable-01070", VK_OBJECT_TYPE_DEVICE,
+                 (uint64_t)(uintptr_t)device, "vkCreateSampler: anisotropyEnable is VK_TRUE, but the samplerAnisotropy "
+                 "feature is not enabled")) {
+        pvk_free(alloc, sampler);
+        return VK_ERROR_VALIDATION_FAILED_EXT;
+    }
     for (ext = pCreateInfo->pNext; ext; ext = ext->pNext) {
         const struct pvk_ycbcr *y;
         if (ext->sType != VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO)
@@ -37057,6 +38487,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSampler(VkDevice _device, const VkSampler
     pthread_mutex_unlock(&pvk_sampler_lock);
     sampler->state = state;
     sampler->mtl_sampler = state->mtl_sampler;
+    pvk_live_add(device, VK_OBJECT_TYPE_SAMPLER, sampler, NULL, pAllocator != NULL);
     *pSampler = (VkSampler)sampler;
     return VK_SUCCESS;
 }
@@ -37067,7 +38498,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroySampler(VkDevice _device, VkSampler _sampler
     struct pvk_sampler *sampler = (struct pvk_sampler *)_sampler;
     struct pvk_sampler_state **p, *state = NULL;
 
-    if (!sampler)
+    if (!sampler || !pvk_live_destroy(device, VK_OBJECT_TYPE_SAMPLER, sampler, pAllocator))
         return;
     pthread_mutex_lock(&pvk_sampler_lock);
     if (--sampler->state->refs == 0) {
@@ -49267,7 +50698,8 @@ static id pvk_device_query_copy_pipeline(struct pvk_device *device)
         device->query_copy_pipeline =
             pvk_compile_compute(device, pvk_query_copy_msl, "pvk_query_copy", 64, error, sizeof(error));
         if (!device->query_copy_pipeline)
-            pvk_log(PVK_LOG_ERROR, "internal query copy kernel: %s", error);
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
+                     "internal query copy kernel: %s", error);
     }
     pso = device->query_copy_pipeline;
     pthread_mutex_unlock(&pvk_query_lock);
@@ -49359,6 +50791,15 @@ struct pvk_command_buffer {
     struct pvk_cmd_block *first, *last;
     struct pvk_push_descriptors *push; /* made by the first push, kept across resets */
     struct pvk_cb_render *render;      /* render pass instance being recorded (Graphics, below) */
+    /* VK_EXT_debug_utils: the label regions this recording opened and has not
+     * closed (texts in its packets), for messages and the debug layer's checks */
+    struct pvk_labels labels;
+    /* Debug layer: submitted since recorded (one-time submit command buffers
+     * become invalid), and the pipelines bound (graphics, compute) to name
+     * the debug groups of draws and dispatches */
+    bool submitted;
+    const void *debug_pipeline[2];
+    bool render_group; /* a debug group of the render pass instance is open */
 };
 
 static const VkAllocationCallbacks *pvk_pool_alloc(const struct pvk_command_pool *pool)
@@ -49402,6 +50843,12 @@ static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release
     cb->first = cb->last = NULL;
     cb->state = PVK_CB_INITIAL;
     cb->result = VK_SUCCESS;
+    cb->labels.count = 0;
+    cb->submitted = false;
+    cb->debug_pipeline[0] = cb->debug_pipeline[1] = NULL;
+    cb->render_group = false;
+    if (release)
+        pvk_labels_free(&cb->labels, pvk_pool_alloc(pool));
     pvk_cb_render_free(cb);
     if (cb->push && release) {
         pvk_free(pvk_pool_alloc(pool), cb->push);
@@ -49424,7 +50871,10 @@ static void pvk_command_pool_trim(struct pvk_command_pool *pool)
 static void pvk_command_buffer_free(struct pvk_command_buffer *cb)
 {
     struct pvk_command_pool *pool = cb->pool;
+    if (pool->device->debug)
+        pvk_live_remove(cb);
     pvk_command_buffer_reset(cb, false);
+    pvk_labels_free(&cb->labels, pvk_pool_alloc(pool));
     pvk_free(pvk_pool_alloc(pool), cb->push);
     if (cb->prev)
         cb->prev->next = cb->next;
@@ -49514,27 +50964,73 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateCommandBuffers(VkDevice device, const V
             pool->buffers->prev = cb;
         pool->buffers = cb;
         pCommandBuffers[i] = (VkCommandBuffer)cb;
+        pvk_live_add(pool->device, VK_OBJECT_TYPE_COMMAND_BUFFER, cb, pool, false);
     }
     return VK_SUCCESS;
 }
 
-VKAPI_ATTR void VKAPI_CALL vkFreeCommandBuffers(VkDevice device, VkCommandPool commandPool, uint32_t commandBufferCount,
+VKAPI_ATTR void VKAPI_CALL vkFreeCommandBuffers(VkDevice _device, VkCommandPool commandPool, uint32_t commandBufferCount,
                                                 const VkCommandBuffer *pCommandBuffers)
 {
+    const struct pvk_device *device = (const struct pvk_device *)_device;
+    struct pvk_live e;
     uint32_t i;
-    (void)device;
-    (void)commandPool;
-    for (i = 0; i < commandBufferCount; i++)
-        if (pCommandBuffers[i])
-            pvk_command_buffer_free((struct pvk_command_buffer *)pCommandBuffers[i]);
+    for (i = 0; i < commandBufferCount; i++) {
+        uint64_t handle = (uint64_t)(uintptr_t)pCommandBuffers[i];
+        if (!handle)
+            continue;
+        if (device->debug && !pvk_live_check(device, VK_OBJECT_TYPE_COMMAND_BUFFER, handle,
+                                             "VUID-vkFreeCommandBuffers-pCommandBuffers-00048", "vkFreeCommandBuffers"))
+            continue;
+        if (device->debug && pvk_live_get(handle, &e) && e.parent != (const void *)commandPool) {
+            pvk_vuid(device, "VUID-vkFreeCommandBuffers-pCommandBuffers-parent", VK_OBJECT_TYPE_COMMAND_BUFFER, handle,
+                     "vkFreeCommandBuffers: the command buffer was allocated from another VkCommandPool; skipped");
+            continue;
+        }
+        pvk_command_buffer_free((struct pvk_command_buffer *)pCommandBuffers[i]);
+    }
 }
 
 static void pvk_cb_inherit_render(struct pvk_command_buffer *cb, const VkCommandBufferInheritanceInfo *info);
+static bool pvk_cb_in_render_pass(const struct pvk_command_buffer *cb); /* Graphics, below */
+
+static bool pvk_cb_debug(const struct pvk_command_buffer *cb)
+{
+    return cb->pool->device->debug;
+}
+
+/* The debug layer's report about a command buffer being recorded, with its
+ * label regions. True if a messenger asked to skip the command. */
+static bool pvk_cb_vuid(const struct pvk_command_buffer *cb, const char *vuid, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+static bool pvk_cb_vuid(const struct pvk_command_buffer *cb, const char *vuid, const char *fmt, ...)
+{
+    struct pvk_msg m;
+    VkBool32 skip;
+    va_list args;
+    pvk_msg_init(&m, pvk_device_instance(cb->pool->device), vuid, VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT);
+    pvk_msg_object(&m, VK_OBJECT_TYPE_COMMAND_BUFFER, (uint64_t)(uintptr_t)cb);
+    m.cb_labels = &cb->labels;
+    va_start(args, fmt);
+    skip = pvk_vmessage(&m, PVK_LOG_ERROR, fmt, args);
+    va_end(args);
+    return skip != VK_FALSE;
+}
 
 VKAPI_ATTR VkResult VKAPI_CALL vkBeginCommandBuffer(VkCommandBuffer commandBuffer,
                                                     const VkCommandBufferBeginInfo *pBeginInfo)
 {
     struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    if (pvk_cb_debug(cb) &&
+        ((cb->state == PVK_CB_RECORDING &&
+          pvk_cb_vuid(cb, "VUID-vkBeginCommandBuffer-commandBuffer-00049",
+                      "vkBeginCommandBuffer: the command buffer is in the recording state")) ||
+         (cb->state != PVK_CB_INITIAL && cb->state != PVK_CB_RECORDING &&
+          !(cb->pool->flags & VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT) &&
+          pvk_cb_vuid(cb, "VUID-vkBeginCommandBuffer-commandBuffer-00050",
+                      "vkBeginCommandBuffer: the command buffer is not in the initial state, and its pool was "
+                      "created without VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT"))))
+        return VK_ERROR_VALIDATION_FAILED_EXT;
     if (cb->state != PVK_CB_INITIAL) /* implicit reset */
         pvk_command_buffer_reset(cb, false);
     cb->state = PVK_CB_RECORDING;
@@ -49550,14 +51046,34 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBeginCommandBuffer(VkCommandBuffer commandBuffe
 VKAPI_ATTR VkResult VKAPI_CALL vkEndCommandBuffer(VkCommandBuffer commandBuffer)
 {
     struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    if (pvk_cb_debug(cb)) {
+        bool skip = false;
+        if (cb->state != PVK_CB_RECORDING)
+            skip |= pvk_cb_vuid(cb, "VUID-vkEndCommandBuffer-commandBuffer-00059",
+                                "vkEndCommandBuffer: the command buffer is not in the recording state");
+        if (cb->level == VK_COMMAND_BUFFER_LEVEL_PRIMARY && pvk_cb_in_render_pass(cb))
+            skip |= pvk_cb_vuid(cb, "VUID-vkEndCommandBuffer-commandBuffer-00060",
+                                "vkEndCommandBuffer: a render pass instance is active");
+        if (cb->level == VK_COMMAND_BUFFER_LEVEL_SECONDARY && cb->labels.count)
+            skip |= pvk_cb_vuid(cb, "VUID-vkEndCommandBuffer-commandBuffer-01815",
+                                "vkEndCommandBuffer: %u label region(s) begun by vkCmdBeginDebugUtilsLabelEXT in this "
+                                "secondary command buffer are not ended", cb->labels.count);
+        if (skip)
+            return VK_ERROR_VALIDATION_FAILED_EXT;
+    }
     cb->state = PVK_CB_EXECUTABLE;
     return cb->result;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkResetCommandBuffer(VkCommandBuffer commandBuffer, VkCommandBufferResetFlags flags)
 {
-    pvk_command_buffer_reset((struct pvk_command_buffer *)commandBuffer,
-                             (flags & VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT) != 0);
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    if (pvk_cb_debug(cb) && !(cb->pool->flags & VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT) &&
+        pvk_cb_vuid(cb, "VUID-vkResetCommandBuffer-commandBuffer-00046",
+                    "vkResetCommandBuffer: the command buffer's pool was created without "
+                    "VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT"))
+        return VK_ERROR_VALIDATION_FAILED_EXT;
+    pvk_command_buffer_reset(cb, (flags & VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT) != 0);
     return VK_SUCCESS;
 }
 
@@ -49593,7 +51109,9 @@ enum pvk_cmd_op {
     PVK_CMD_CLEAR_ATTACHMENTS, /* struct pvk_cmd_clear_attachments, then clears and rects */
     /* Queries and events (end of this section) */
     PVK_CMD_QUERY,             /* struct pvk_cmd_query */
-    PVK_CMD_EVENT              /* struct pvk_cmd_event */
+    PVK_CMD_EVENT,             /* struct pvk_cmd_event */
+    /* Debug labels (Labels, below) */
+    PVK_CMD_LABEL              /* struct pvk_cmd_label, then the text */
 };
 
 struct pvk_cmd {
@@ -49712,26 +51230,116 @@ static void *pvk_cmd_append(struct pvk_command_buffer *cb, enum pvk_cmd_op op, s
     return c;
 }
 
+/* ---- Labels (VK_EXT_debug_utils) ----
+ *
+ * vkCmdBegin/End/InsertDebugUtilsLabelEXT are packets, encoded as Metal
+ * debug groups and signposts (section 16, DEBUG LABELS). With the debug
+ * layer, PlasmaVK records label packets of its own (synthetic) around
+ * render pass instances and actions, named after the command and the
+ * Vulkan names of its objects as they are when recorded. */
+
+enum pvk_label_kind { PVK_LABEL_BEGIN, PVK_LABEL_END, PVK_LABEL_INSERT };
+
+struct pvk_cmd_label {
+    struct pvk_cmd hdr;
+    uint32_t kind;      /* enum pvk_label_kind */
+    uint32_t synthetic; /* the debug layer's own */
+    float color[4];
+};
+
+static const struct pvk_cmd_label *pvk_cmd_label(struct pvk_command_buffer *cb, enum pvk_label_kind kind,
+                                                 bool synthetic, const char *text, const float *color)
+{
+    size_t n = text ? strlen(text) + 1 : 1;
+    struct pvk_cmd_label *c = pvk_cmd_append(cb, PVK_CMD_LABEL, sizeof(*c) + n);
+    if (!c)
+        return NULL;
+    c->kind = kind;
+    c->synthetic = synthetic;
+    if (color)
+        memcpy(c->color, color, sizeof(c->color));
+    else
+        memset(c->color, 0, sizeof(c->color));
+    memcpy(c + 1, text ? text : "", n);
+    return c;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdBeginDebugUtilsLabelEXT(VkCommandBuffer commandBuffer, const VkDebugUtilsLabelEXT *pLabelInfo)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    const struct pvk_cmd_label *c = pvk_cmd_label(cb, PVK_LABEL_BEGIN, false, pLabelInfo->pLabelName, pLabelInfo->color);
+    if (c && !pvk_labels_push(&cb->labels, pvk_pool_alloc(cb->pool), (const char *)(c + 1), c->color, false, false))
+        cb->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdEndDebugUtilsLabelEXT(VkCommandBuffer commandBuffer)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    if (!cb->labels.count && cb->level == VK_COMMAND_BUFFER_LEVEL_SECONDARY && pvk_cb_debug(cb)) {
+        pvk_cb_vuid(cb, "VUID-vkCmdEndDebugUtilsLabelEXT-commandBuffer-01913",
+                    "vkCmdEndDebugUtilsLabelEXT: no label region begun in this secondary command buffer is open; "
+                    "skipped");
+        return;
+    }
+    pvk_cmd_label(cb, PVK_LABEL_END, false, NULL, NULL);
+    if (cb->labels.count) /* in a primary, it may close a region of an earlier command buffer */
+        cb->labels.count--;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdInsertDebugUtilsLabelEXT(VkCommandBuffer commandBuffer, const VkDebugUtilsLabelEXT *pLabelInfo)
+{
+    pvk_cmd_label((struct pvk_command_buffer *)commandBuffer, PVK_LABEL_INSERT, false, pLabelInfo->pLabelName,
+                  pLabelInfo->color);
+}
+
+/* Debug layer: the packets recorded until pvk_cmd_group_end are one debug
+ * group "<command>: <object>, <object>" (objects with handle NULL left out).
+ * True if a group began. */
+static bool pvk_cmd_group_begin(struct pvk_command_buffer *cb, const char *command, VkObjectType t1, const void *o1,
+                                VkObjectType t2, const void *o2)
+{
+    char text[600], a[256], b[256];
+    if (!pvk_cb_debug(cb))
+        return false;
+    if (o1)
+        pvk_object_label(a, sizeof(a), t1, (uint64_t)(uintptr_t)o1);
+    if (o2)
+        pvk_object_label(b, sizeof(b), t2, (uint64_t)(uintptr_t)o2);
+    snprintf(text, sizeof(text), "%s%s%s%s%s", command, o1 || o2 ? ": " : "", o1 ? a : "", o1 && o2 ? ", " : "",
+             o2 ? b : "");
+    return pvk_cmd_label(cb, PVK_LABEL_BEGIN, true, text, NULL) != NULL;
+}
+
+static void pvk_cmd_group_end(struct pvk_command_buffer *cb, bool begun)
+{
+    if (begun)
+        pvk_cmd_label(cb, PVK_LABEL_END, true, NULL, NULL);
+}
+
 /* ---- Transfer commands ---- */
 
 VKAPI_ATTR void VKAPI_CALL vkCmdFillBuffer(VkCommandBuffer commandBuffer, VkBuffer dstBuffer, VkDeviceSize dstOffset,
                                            VkDeviceSize size, uint32_t data)
 {
     struct pvk_buffer *buffer = (struct pvk_buffer *)dstBuffer;
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
     struct pvk_cmd_fill *c;
+    bool group;
 
     if (size == VK_WHOLE_SIZE)
         size = (buffer->size - dstOffset) & ~(VkDeviceSize)3;
     if (!size || !buffer->memory)
         return;
-    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_FILL_BUFFER, sizeof(*c));
-    if (!c)
-        return;
-    c->buffer = buffer->memory->mtl_buffer;
-    c->offset = buffer->offset + dstOffset;
-    c->size = size;
-    c->address = buffer->gpu_address + dstOffset;
-    c->data = data;
+    group = pvk_cmd_group_begin(cb, "vkCmdFillBuffer", VK_OBJECT_TYPE_BUFFER, buffer, VK_OBJECT_TYPE_UNKNOWN, NULL);
+    c = pvk_cmd_append(cb, PVK_CMD_FILL_BUFFER, sizeof(*c));
+    if (c) {
+        c->buffer = buffer->memory->mtl_buffer;
+        c->offset = buffer->offset + dstOffset;
+        c->size = size;
+        c->address = buffer->gpu_address + dstOffset;
+        c->data = data;
+    }
+    pvk_cmd_group_end(cb, group);
 }
 
 static void pvk_cmd_copy_buffer(struct pvk_command_buffer *cb, const struct pvk_buffer *src,
@@ -49754,20 +51362,33 @@ static void pvk_cmd_copy_buffer(struct pvk_command_buffer *cb, const struct pvk_
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyBuffer(VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkBuffer dstBuffer,
                                            uint32_t regionCount, const VkBufferCopy *pRegions)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group;
     uint32_t i;
+    if (pvk_cb_debug(cb) &&
+        (!pvk_live_check(cb->pool->device, VK_OBJECT_TYPE_BUFFER, (uint64_t)(uintptr_t)srcBuffer,
+                         "VUID-vkCmdCopyBuffer-srcBuffer-parameter", "vkCmdCopyBuffer") ||
+         !pvk_live_check(cb->pool->device, VK_OBJECT_TYPE_BUFFER, (uint64_t)(uintptr_t)dstBuffer,
+                         "VUID-vkCmdCopyBuffer-dstBuffer-parameter", "vkCmdCopyBuffer")))
+        return;
+    group = pvk_cmd_group_begin(cb, "vkCmdCopyBuffer", VK_OBJECT_TYPE_BUFFER, srcBuffer, VK_OBJECT_TYPE_BUFFER, dstBuffer);
     for (i = 0; i < regionCount; i++)
-        pvk_cmd_copy_buffer((struct pvk_command_buffer *)commandBuffer, (struct pvk_buffer *)srcBuffer,
-                            (struct pvk_buffer *)dstBuffer, pRegions[i].srcOffset, pRegions[i].dstOffset,
-                            pRegions[i].size);
+        pvk_cmd_copy_buffer(cb, (struct pvk_buffer *)srcBuffer, (struct pvk_buffer *)dstBuffer, pRegions[i].srcOffset,
+                            pRegions[i].dstOffset, pRegions[i].size);
+    pvk_cmd_group_end(cb, group);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyBuffer2(VkCommandBuffer commandBuffer, const VkCopyBufferInfo2 *pCopyBufferInfo)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group = pvk_cmd_group_begin(cb, "vkCmdCopyBuffer2", VK_OBJECT_TYPE_BUFFER, pCopyBufferInfo->srcBuffer,
+                                     VK_OBJECT_TYPE_BUFFER, pCopyBufferInfo->dstBuffer);
     uint32_t i;
     for (i = 0; i < pCopyBufferInfo->regionCount; i++)
-        pvk_cmd_copy_buffer((struct pvk_command_buffer *)commandBuffer, (struct pvk_buffer *)pCopyBufferInfo->srcBuffer,
+        pvk_cmd_copy_buffer(cb, (struct pvk_buffer *)pCopyBufferInfo->srcBuffer,
                             (struct pvk_buffer *)pCopyBufferInfo->dstBuffer, pCopyBufferInfo->pRegions[i].srcOffset,
                             pCopyBufferInfo->pRegions[i].dstOffset, pCopyBufferInfo->pRegions[i].size);
+    pvk_cmd_group_end(cb, group);
 }
 
 /* The data travels in the packet; at submit it goes through the upload ring
@@ -49776,18 +51397,21 @@ VKAPI_ATTR void VKAPI_CALL vkCmdUpdateBuffer(VkCommandBuffer commandBuffer, VkBu
                                              VkDeviceSize dataSize, const void *pData)
 {
     struct pvk_buffer *buffer = (struct pvk_buffer *)dstBuffer;
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
     struct pvk_cmd_update *c;
+    bool group;
 
     if (!dataSize || dataSize > 65536 || !buffer->memory)
         return;
-    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_UPDATE_BUFFER,
-                       sizeof(*c) + (size_t)dataSize);
-    if (!c)
-        return;
-    c->buffer = buffer->memory->mtl_buffer;
-    c->offset = buffer->offset + dstOffset;
-    c->size = (uint32_t)dataSize;
-    memcpy(c + 1, pData, (size_t)dataSize);
+    group = pvk_cmd_group_begin(cb, "vkCmdUpdateBuffer", VK_OBJECT_TYPE_BUFFER, buffer, VK_OBJECT_TYPE_UNKNOWN, NULL);
+    c = pvk_cmd_append(cb, PVK_CMD_UPDATE_BUFFER, sizeof(*c) + (size_t)dataSize);
+    if (c) {
+        c->buffer = buffer->memory->mtl_buffer;
+        c->offset = buffer->offset + dstOffset;
+        c->size = (uint32_t)dataSize;
+        memcpy(c + 1, pData, (size_t)dataSize);
+    }
+    pvk_cmd_group_end(cb, group);
 }
 
 /* ---- Synchronization commands ---- */
@@ -49865,10 +51489,17 @@ VKAPI_ATTR void VKAPI_CALL vkCmdPipelineBarrier2(VkCommandBuffer commandBuffer, 
 VKAPI_ATTR void VKAPI_CALL vkCmdBindPipeline(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint,
                                              VkPipeline pipeline)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
     struct pvk_cmd_bind_pipeline *c;
     if (pipelineBindPoint != VK_PIPELINE_BIND_POINT_COMPUTE && pipelineBindPoint != VK_PIPELINE_BIND_POINT_GRAPHICS)
         return; /* no ray tracing or other bind points */
-    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_BIND_PIPELINE, sizeof(*c));
+    if (pvk_cb_debug(cb)) {
+        if (!pvk_live_check(cb->pool->device, VK_OBJECT_TYPE_PIPELINE, (uint64_t)(uintptr_t)pipeline,
+                            "VUID-vkCmdBindPipeline-pipeline-parameter", "vkCmdBindPipeline"))
+            return;
+        cb->debug_pipeline[pipelineBindPoint == VK_PIPELINE_BIND_POINT_COMPUTE] = pipeline;
+    }
+    c = pvk_cmd_append(cb, PVK_CMD_BIND_PIPELINE, sizeof(*c));
     if (c)
         c->pipeline = (struct pvk_pipeline *)pipeline;
 }
@@ -49903,36 +51534,51 @@ VKAPI_ATTR void VKAPI_CALL vkCmdPushConstants2(VkCommandBuffer commandBuffer,
                            pPushConstantsInfo->size, pPushConstantsInfo->pValues);
 }
 
+static void pvk_cmd_dispatch(struct pvk_command_buffer *cb, const char *command, uint32_t baseGroupX,
+                             uint32_t baseGroupY, uint32_t baseGroupZ, uint32_t groupCountX, uint32_t groupCountY,
+                             uint32_t groupCountZ)
+{
+    struct pvk_cmd_dispatch *c;
+    bool group;
+    if (!groupCountX || !groupCountY || !groupCountZ)
+        return;
+    group = pvk_cmd_group_begin(cb, command, VK_OBJECT_TYPE_PIPELINE, cb->debug_pipeline[1], VK_OBJECT_TYPE_UNKNOWN, NULL);
+    c = pvk_cmd_append(cb, PVK_CMD_DISPATCH, sizeof(*c));
+    if (c) {
+        c->base[0] = baseGroupX;
+        c->base[1] = baseGroupY;
+        c->base[2] = baseGroupZ;
+        c->count[0] = groupCountX;
+        c->count[1] = groupCountY;
+        c->count[2] = groupCountZ;
+    }
+    pvk_cmd_group_end(cb, group);
+}
+
 VKAPI_ATTR void VKAPI_CALL vkCmdDispatchBase(VkCommandBuffer commandBuffer, uint32_t baseGroupX, uint32_t baseGroupY,
                                              uint32_t baseGroupZ, uint32_t groupCountX, uint32_t groupCountY,
                                              uint32_t groupCountZ)
 {
-    struct pvk_cmd_dispatch *c;
-    if (!groupCountX || !groupCountY || !groupCountZ)
-        return;
-    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_DISPATCH, sizeof(*c));
-    if (!c)
-        return;
-    c->base[0] = baseGroupX;
-    c->base[1] = baseGroupY;
-    c->base[2] = baseGroupZ;
-    c->count[0] = groupCountX;
-    c->count[1] = groupCountY;
-    c->count[2] = groupCountZ;
+    pvk_cmd_dispatch((struct pvk_command_buffer *)commandBuffer, "vkCmdDispatchBase", baseGroupX, baseGroupY,
+                     baseGroupZ, groupCountX, groupCountY, groupCountZ);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdDispatch(VkCommandBuffer commandBuffer, uint32_t groupCountX, uint32_t groupCountY,
                                          uint32_t groupCountZ)
 {
-    vkCmdDispatchBase(commandBuffer, 0, 0, 0, groupCountX, groupCountY, groupCountZ);
+    pvk_cmd_dispatch((struct pvk_command_buffer *)commandBuffer, "vkCmdDispatch", 0, 0, 0, groupCountX, groupCountY,
+                     groupCountZ);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdDispatchIndirect(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset)
 {
-    struct pvk_cmd_dispatch_indirect *c;
-    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_DISPATCH_INDIRECT, sizeof(*c));
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group = pvk_cmd_group_begin(cb, "vkCmdDispatchIndirect", VK_OBJECT_TYPE_PIPELINE, cb->debug_pipeline[1],
+                                     VK_OBJECT_TYPE_BUFFER, buffer);
+    struct pvk_cmd_dispatch_indirect *c = pvk_cmd_append(cb, PVK_CMD_DISPATCH_INDIRECT, sizeof(*c));
     if (c)
         c->address = ((struct pvk_buffer *)buffer)->gpu_address + offset;
+    pvk_cmd_group_end(cb, group);
 }
 
 /* Secondary command buffers are replayed in place at submit. */
@@ -50286,48 +51932,62 @@ VKAPI_ATTR void VKAPI_CALL vkCmdCopyBufferToImage2(VkCommandBuffer commandBuffer
                                                    const VkCopyBufferToImageInfo2 *pCopyBufferToImageInfo)
 {
     const VkCopyBufferToImageInfo2 *info = pCopyBufferToImageInfo;
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group = pvk_cmd_group_begin(cb, "vkCmdCopyBufferToImage2", VK_OBJECT_TYPE_BUFFER, info->srcBuffer,
+                                     VK_OBJECT_TYPE_IMAGE, info->dstImage);
     uint32_t i;
     for (i = 0; i < info->regionCount; i++)
-        pvk_cmd_buffer_image_copy((struct pvk_command_buffer *)commandBuffer, (const struct pvk_buffer *)info->srcBuffer,
-                                  (const struct pvk_image *)info->dstImage, &info->pRegions[i], true);
+        pvk_cmd_buffer_image_copy(cb, (const struct pvk_buffer *)info->srcBuffer, (const struct pvk_image *)info->dstImage,
+                                  &info->pRegions[i], true);
+    pvk_cmd_group_end(cb, group);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyBufferToImage(VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkImage dstImage,
                                                   VkImageLayout dstImageLayout, uint32_t regionCount,
                                                   const VkBufferImageCopy *pRegions)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group = pvk_cmd_group_begin(cb, "vkCmdCopyBufferToImage", VK_OBJECT_TYPE_BUFFER, srcBuffer,
+                                     VK_OBJECT_TYPE_IMAGE, dstImage);
     uint32_t i;
     (void)dstImageLayout;
     for (i = 0; i < regionCount; i++) {
         VkBufferImageCopy2 r;
         pvk_buffer_image_copy2(&pRegions[i], &r);
-        pvk_cmd_buffer_image_copy((struct pvk_command_buffer *)commandBuffer, (const struct pvk_buffer *)srcBuffer,
-                                  (const struct pvk_image *)dstImage, &r, true);
+        pvk_cmd_buffer_image_copy(cb, (const struct pvk_buffer *)srcBuffer, (const struct pvk_image *)dstImage, &r, true);
     }
+    pvk_cmd_group_end(cb, group);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyImageToBuffer2(VkCommandBuffer commandBuffer,
                                                    const VkCopyImageToBufferInfo2 *pCopyImageToBufferInfo)
 {
     const VkCopyImageToBufferInfo2 *info = pCopyImageToBufferInfo;
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group = pvk_cmd_group_begin(cb, "vkCmdCopyImageToBuffer2", VK_OBJECT_TYPE_IMAGE, info->srcImage,
+                                     VK_OBJECT_TYPE_BUFFER, info->dstBuffer);
     uint32_t i;
     for (i = 0; i < info->regionCount; i++)
-        pvk_cmd_buffer_image_copy((struct pvk_command_buffer *)commandBuffer, (const struct pvk_buffer *)info->dstBuffer,
-                                  (const struct pvk_image *)info->srcImage, &info->pRegions[i], false);
+        pvk_cmd_buffer_image_copy(cb, (const struct pvk_buffer *)info->dstBuffer, (const struct pvk_image *)info->srcImage,
+                                  &info->pRegions[i], false);
+    pvk_cmd_group_end(cb, group);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyImageToBuffer(VkCommandBuffer commandBuffer, VkImage srcImage,
                                                   VkImageLayout srcImageLayout, VkBuffer dstBuffer, uint32_t regionCount,
                                                   const VkBufferImageCopy *pRegions)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group = pvk_cmd_group_begin(cb, "vkCmdCopyImageToBuffer", VK_OBJECT_TYPE_IMAGE, srcImage,
+                                     VK_OBJECT_TYPE_BUFFER, dstBuffer);
     uint32_t i;
     (void)srcImageLayout;
     for (i = 0; i < regionCount; i++) {
         VkBufferImageCopy2 r;
         pvk_buffer_image_copy2(&pRegions[i], &r);
-        pvk_cmd_buffer_image_copy((struct pvk_command_buffer *)commandBuffer, (const struct pvk_buffer *)dstBuffer,
-                                  (const struct pvk_image *)srcImage, &r, false);
+        pvk_cmd_buffer_image_copy(cb, (const struct pvk_buffer *)dstBuffer, (const struct pvk_image *)srcImage, &r, false);
     }
+    pvk_cmd_group_end(cb, group);
 }
 
 static void pvk_cmd_image_copy(struct pvk_command_buffer *cb, const struct pvk_image *src, const struct pvk_image *dst,
@@ -50405,25 +52065,31 @@ static void pvk_image_copy2(const VkImageCopy *in, VkImageCopy2 *out)
 
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyImage2(VkCommandBuffer commandBuffer, const VkCopyImageInfo2 *pCopyImageInfo)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group = pvk_cmd_group_begin(cb, "vkCmdCopyImage2", VK_OBJECT_TYPE_IMAGE, pCopyImageInfo->srcImage,
+                                     VK_OBJECT_TYPE_IMAGE, pCopyImageInfo->dstImage);
     uint32_t i;
     for (i = 0; i < pCopyImageInfo->regionCount; i++)
-        pvk_cmd_image_copy((struct pvk_command_buffer *)commandBuffer, (const struct pvk_image *)pCopyImageInfo->srcImage,
+        pvk_cmd_image_copy(cb, (const struct pvk_image *)pCopyImageInfo->srcImage,
                            (const struct pvk_image *)pCopyImageInfo->dstImage, &pCopyImageInfo->pRegions[i]);
+    pvk_cmd_group_end(cb, group);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
                                           VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount,
                                           const VkImageCopy *pRegions)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group = pvk_cmd_group_begin(cb, "vkCmdCopyImage", VK_OBJECT_TYPE_IMAGE, srcImage, VK_OBJECT_TYPE_IMAGE, dstImage);
     uint32_t i;
     (void)srcImageLayout;
     (void)dstImageLayout;
     for (i = 0; i < regionCount; i++) {
         VkImageCopy2 r;
         pvk_image_copy2(&pRegions[i], &r);
-        pvk_cmd_image_copy((struct pvk_command_buffer *)commandBuffer, (const struct pvk_image *)srcImage,
-                           (const struct pvk_image *)dstImage, &r);
+        pvk_cmd_image_copy(cb, (const struct pvk_image *)srcImage, (const struct pvk_image *)dstImage, &r);
     }
+    pvk_cmd_group_end(cb, group);
 }
 
 /* The source swizzle a blit applies: the format's (B4G4R4A4 and the other
@@ -50488,17 +52154,23 @@ static void pvk_cmd_blit(struct pvk_command_buffer *cb, const struct pvk_image *
 
 VKAPI_ATTR void VKAPI_CALL vkCmdBlitImage2(VkCommandBuffer commandBuffer, const VkBlitImageInfo2 *pBlitImageInfo)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group = pvk_cmd_group_begin(cb, "vkCmdBlitImage2", VK_OBJECT_TYPE_IMAGE, pBlitImageInfo->srcImage,
+                                     VK_OBJECT_TYPE_IMAGE, pBlitImageInfo->dstImage);
     uint32_t i;
     for (i = 0; i < pBlitImageInfo->regionCount; i++)
-        pvk_cmd_blit((struct pvk_command_buffer *)commandBuffer, (const struct pvk_image *)pBlitImageInfo->srcImage,
+        pvk_cmd_blit(cb, (const struct pvk_image *)pBlitImageInfo->srcImage,
                      (const struct pvk_image *)pBlitImageInfo->dstImage, &pBlitImageInfo->pRegions[i],
                      pBlitImageInfo->filter);
+    pvk_cmd_group_end(cb, group);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdBlitImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
                                           VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount,
                                           const VkImageBlit *pRegions, VkFilter filter)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group = pvk_cmd_group_begin(cb, "vkCmdBlitImage", VK_OBJECT_TYPE_IMAGE, srcImage, VK_OBJECT_TYPE_IMAGE, dstImage);
     uint32_t i;
     (void)srcImageLayout;
     (void)dstImageLayout;
@@ -50512,9 +52184,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBlitImage(VkCommandBuffer commandBuffer, VkImage
         r.dstSubresource = pRegions[i].dstSubresource;
         r.dstOffsets[0] = pRegions[i].dstOffsets[0];
         r.dstOffsets[1] = pRegions[i].dstOffsets[1];
-        pvk_cmd_blit((struct pvk_command_buffer *)commandBuffer, (const struct pvk_image *)srcImage,
-                     (const struct pvk_image *)dstImage, &r, filter);
+        pvk_cmd_blit(cb, (const struct pvk_image *)srcImage, (const struct pvk_image *)dstImage, &r, filter);
     }
+    pvk_cmd_group_end(cb, group);
 }
 
 /* Resolves average the samples of float formats and take sample 0 of
@@ -50554,16 +52226,23 @@ static void pvk_cmd_resolve(struct pvk_command_buffer *cb, const struct pvk_imag
 
 VKAPI_ATTR void VKAPI_CALL vkCmdResolveImage2(VkCommandBuffer commandBuffer, const VkResolveImageInfo2 *pResolveImageInfo)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group = pvk_cmd_group_begin(cb, "vkCmdResolveImage2", VK_OBJECT_TYPE_IMAGE, pResolveImageInfo->srcImage,
+                                     VK_OBJECT_TYPE_IMAGE, pResolveImageInfo->dstImage);
     uint32_t i;
     for (i = 0; i < pResolveImageInfo->regionCount; i++)
-        pvk_cmd_resolve((struct pvk_command_buffer *)commandBuffer, (const struct pvk_image *)pResolveImageInfo->srcImage,
+        pvk_cmd_resolve(cb, (const struct pvk_image *)pResolveImageInfo->srcImage,
                         (const struct pvk_image *)pResolveImageInfo->dstImage, &pResolveImageInfo->pRegions[i]);
+    pvk_cmd_group_end(cb, group);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdResolveImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
                                              VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount,
                                              const VkImageResolve *pRegions)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group = pvk_cmd_group_begin(cb, "vkCmdResolveImage", VK_OBJECT_TYPE_IMAGE, srcImage, VK_OBJECT_TYPE_IMAGE,
+                                     dstImage);
     uint32_t i;
     (void)srcImageLayout;
     (void)dstImageLayout;
@@ -50576,9 +52255,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdResolveImage(VkCommandBuffer commandBuffer, VkIm
         r.dstSubresource = pRegions[i].dstSubresource;
         r.dstOffset = pRegions[i].dstOffset;
         r.extent = pRegions[i].extent;
-        pvk_cmd_resolve((struct pvk_command_buffer *)commandBuffer, (const struct pvk_image *)srcImage,
-                        (const struct pvk_image *)dstImage, &r);
+        pvk_cmd_resolve(cb, (const struct pvk_image *)srcImage, (const struct pvk_image *)dstImage, &r);
     }
+    pvk_cmd_group_end(cb, group);
 }
 
 /* Integer clear values are converted by keeping the low bits (Clear
@@ -50649,15 +52328,18 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearColorImage(VkCommandBuffer commandBuffer, V
                                                 const VkImageSubresourceRange *pRanges)
 {
     const struct pvk_image *image = (const struct pvk_image *)_image;
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group = pvk_cmd_group_begin(cb, "vkCmdClearColorImage", VK_OBJECT_TYPE_IMAGE, image, VK_OBJECT_TYPE_UNKNOWN, NULL);
     uint32_t i;
     (void)imageLayout;
     for (i = 0; i < rangeCount; i++) {
-        struct pvk_cmd_clear *c = pvk_cmd_clear_range((struct pvk_command_buffer *)commandBuffer, image, &pRanges[i]);
+        struct pvk_cmd_clear *c = pvk_cmd_clear_range(cb, image, &pRanges[i]);
         if (!c)
-            return;
+            break;
         c->color = 1;
         c->value = pvk_clear_color(image->fmt, pColor);
     }
+    pvk_cmd_group_end(cb, group);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBuffer, VkImage _image,
@@ -50666,17 +52348,21 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
                                                        const VkImageSubresourceRange *pRanges)
 {
     const struct pvk_image *image = (const struct pvk_image *)_image;
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    bool group = pvk_cmd_group_begin(cb, "vkCmdClearDepthStencilImage", VK_OBJECT_TYPE_IMAGE, image,
+                                     VK_OBJECT_TYPE_UNKNOWN, NULL);
     uint32_t i;
     (void)imageLayout;
     for (i = 0; i < rangeCount; i++) {
-        struct pvk_cmd_clear *c = pvk_cmd_clear_range((struct pvk_command_buffer *)commandBuffer, image, &pRanges[i]);
+        struct pvk_cmd_clear *c = pvk_cmd_clear_range(cb, image, &pRanges[i]);
         if (!c)
-            return;
+            break;
         c->clear_depth = (pRanges[i].aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) != 0;
         c->clear_stencil = (pRanges[i].aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT) != 0;
         c->depth_value = pDepthStencil->depth;
         c->stencil = pDepthStencil->stencil & 0xffu;
     }
+    pvk_cmd_group_end(cb, group);
 }
 
 /* ---- Graphics ----
@@ -51173,6 +52859,11 @@ static void pvk_cb_render_free(struct pvk_command_buffer *cb)
     cb->render = NULL;
 }
 
+static bool pvk_cb_in_render_pass(const struct pvk_command_buffer *cb)
+{
+    return cb->render && cb->render->active;
+}
+
 /* The recording state, with room for `count` attachments; NULL (error kept)
  * when out of memory. */
 static struct pvk_cb_render *pvk_cb_render_get(struct pvk_command_buffer *cb, uint32_t count)
@@ -51458,6 +53149,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass2(VkCommandBuffer commandBuffer, 
     (void)pSubpassBeginInfo; /* secondaries or inline: the same packets */
     if (!(r = pvk_cb_render_get(cb, pass->attachment_count)))
         return;
+    cb->render_group = pvk_cmd_group_begin(cb, "vkCmdBeginRenderPass", VK_OBJECT_TYPE_RENDER_PASS, pass,
+                                           VK_OBJECT_TYPE_FRAMEBUFFER, fb);
     for (s = pRenderPassBegin->pNext; s; s = s->pNext)
         if (s->sType == VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO)
             imageless = (const VkRenderPassAttachmentBeginInfo *)s;
@@ -51531,6 +53224,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass2(VkCommandBuffer commandBuffer, co
         cb->render->pass = NULL;
         cb->render->active = false;
     }
+    pvk_cmd_group_end(cb, cb->render_group);
+    cb->render_group = false;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass(VkCommandBuffer commandBuffer)
@@ -51549,6 +53244,12 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
     struct pvk_cb_render *r;
     uint32_t i, k;
 
+    if (pvk_cb_debug(cb))
+        cb->render_group = pvk_cmd_group_begin(cb, first ? "vkCmdBeginRendering" : "vkCmdBeginRendering (resuming)",
+                                               VK_OBJECT_TYPE_IMAGE_VIEW,
+                                               info->colorAttachmentCount ? info->pColorAttachments[0].imageView : NULL,
+                                               VK_OBJECT_TYPE_IMAGE_VIEW,
+                                               info->pDepthAttachment ? info->pDepthAttachment->imageView : NULL);
     if (!(r = pvk_cb_render_get(cb, 0)) || !(c = pvk_cmd_append(cb, PVK_CMD_BEGIN_PASS, sizeof(*c))))
         return;
     pvk_cmd_zero(c, sizeof(*c));
@@ -51606,6 +53307,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdEndRendering(VkCommandBuffer commandBuffer)
     pvk_cmd_end_pass(cb, cb->render ? cb->render->flags & VK_RENDERING_SUSPENDING_BIT : 0);
     if (cb->render)
         cb->render->active = false;
+    pvk_cmd_group_end(cb, cb->render_group);
+    cb->render_group = false;
 }
 
 static uint32_t pvk_cb_query_views(const struct pvk_command_buffer *cb)
@@ -51731,6 +53434,11 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetScissorWithCount(VkCommandBuffer commandBuffe
 /* wideLines is not supported: lines are 1 pixel wide whatever the width. */
 VKAPI_ATTR void VKAPI_CALL vkCmdSetLineWidth(VkCommandBuffer commandBuffer, float lineWidth)
 {
+    const struct pvk_command_buffer *cb = (const struct pvk_command_buffer *)commandBuffer;
+    if (pvk_cb_debug(cb) && lineWidth != 1.0f && !cb->pool->device->features.core.wideLines &&
+        pvk_cb_vuid(cb, "VUID-vkCmdSetLineWidth-lineWidth-00788",
+                    "vkCmdSetLineWidth: lineWidth is %g, but the wideLines feature is not enabled", (double)lineWidth))
+        return;
     pvk_cmd_dynamic_floats(commandBuffer, PVK_DYN_LINE_WIDTH, &lineWidth, 1);
 }
 
@@ -51856,18 +53564,23 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetLineStipple(VkCommandBuffer commandBuffer, ui
 
 /* ---- Vertex and index buffers ---- */
 
-VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers2(VkCommandBuffer commandBuffer, uint32_t firstBinding,
-                                                   uint32_t bindingCount, const VkBuffer *pBuffers,
-                                                   const VkDeviceSize *pOffsets, const VkDeviceSize *pSizes,
-                                                   const VkDeviceSize *pStrides)
+static void pvk_cmd_bind_vertex_buffers(VkCommandBuffer commandBuffer, uint32_t firstBinding, uint32_t bindingCount,
+                                        const VkBuffer *pBuffers, const VkDeviceSize *pOffsets,
+                                        const VkDeviceSize *pSizes, const VkDeviceSize *pStrides, bool two)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
     struct pvk_cmd_bind_vertex *c;
     struct pvk_vertex_binding *v;
     uint32_t i;
     if (firstBinding >= PVK_MAX_VERTEX_BINDINGS || bindingCount > PVK_MAX_VERTEX_BINDINGS - firstBinding || !bindingCount)
         return;
-    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_BIND_VERTEX,
-                       sizeof(*c) + sizeof(*v) * bindingCount);
+    for (i = 0; pvk_cb_debug(cb) && i < bindingCount; i++)
+        if (!pvk_live_check(cb->pool->device, VK_OBJECT_TYPE_BUFFER, (uint64_t)(uintptr_t)pBuffers[i],
+                            two ? "VUID-vkCmdBindVertexBuffers2-pBuffers-parameter"
+                                : "VUID-vkCmdBindVertexBuffers-pBuffers-parameter",
+                            two ? "vkCmdBindVertexBuffers2" : "vkCmdBindVertexBuffers"))
+            return;
+    c = pvk_cmd_append(cb, PVK_CMD_BIND_VERTEX, sizeof(*c) + sizeof(*v) * bindingCount);
     if (!c)
         return;
     c->first = firstBinding;
@@ -51887,20 +53600,34 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers2(VkCommandBuffer commandBuffer
     }
 }
 
+VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers2(VkCommandBuffer commandBuffer, uint32_t firstBinding,
+                                                   uint32_t bindingCount, const VkBuffer *pBuffers,
+                                                   const VkDeviceSize *pOffsets, const VkDeviceSize *pSizes,
+                                                   const VkDeviceSize *pStrides)
+{
+    pvk_cmd_bind_vertex_buffers(commandBuffer, firstBinding, bindingCount, pBuffers, pOffsets, pSizes, pStrides, true);
+}
+
 VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers(VkCommandBuffer commandBuffer, uint32_t firstBinding,
                                                   uint32_t bindingCount, const VkBuffer *pBuffers,
                                                   const VkDeviceSize *pOffsets)
 {
-    vkCmdBindVertexBuffers2(commandBuffer, firstBinding, bindingCount, pBuffers, pOffsets, NULL, NULL);
+    pvk_cmd_bind_vertex_buffers(commandBuffer, firstBinding, bindingCount, pBuffers, pOffsets, NULL, NULL, false);
 }
 
-VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer2(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
-                                                 VkDeviceSize size, VkIndexType indexType)
+static void pvk_cmd_bind_index_buffer(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
+                                      VkDeviceSize size, VkIndexType indexType, const char *command)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
     const struct pvk_buffer *b = (const struct pvk_buffer *)buffer;
-    struct pvk_cmd_bind_index *c =
-        pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_BIND_INDEX, sizeof(*c));
-    if (!c)
+    struct pvk_cmd_bind_index *c;
+    char vuid[64];
+    if (pvk_cb_debug(cb)) {
+        snprintf(vuid, sizeof(vuid), "VUID-%s-buffer-parameter", command);
+        if (!pvk_live_check(cb->pool->device, VK_OBJECT_TYPE_BUFFER, (uint64_t)(uintptr_t)buffer, vuid, command))
+            return;
+    }
+    if (!(c = pvk_cmd_append(cb, PVK_CMD_BIND_INDEX, sizeof(*c))))
         return;
     c->address = c->size = 0;
     if (b && b->memory) { /* maintenance6: VK_NULL_HANDLE reads index 0 */
@@ -51911,10 +53638,16 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer2(VkCommandBuffer commandBuffer, 
     c->pad = 0;
 }
 
+VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer2(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
+                                                 VkDeviceSize size, VkIndexType indexType)
+{
+    pvk_cmd_bind_index_buffer(commandBuffer, buffer, offset, size, indexType, "vkCmdBindIndexBuffer2");
+}
+
 VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
                                                 VkIndexType indexType)
 {
-    vkCmdBindIndexBuffer2(commandBuffer, buffer, offset, VK_WHOLE_SIZE, indexType);
+    pvk_cmd_bind_index_buffer(commandBuffer, buffer, offset, VK_WHOLE_SIZE, indexType, "vkCmdBindIndexBuffer");
 }
 
 /* ---- Draws ---- */
@@ -51922,71 +53655,103 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer(VkCommandBuffer commandBuffer, V
 VKAPI_ATTR void VKAPI_CALL vkCmdDraw(VkCommandBuffer commandBuffer, uint32_t vertexCount, uint32_t instanceCount,
                                      uint32_t firstVertex, uint32_t firstInstance)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
     struct pvk_cmd_draw *c;
+    bool group;
     if (!vertexCount || !instanceCount)
         return;
-    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_DRAW, sizeof(*c));
-    if (!c)
-        return;
-    c->vertex_count = vertexCount;
-    c->instance_count = instanceCount;
-    c->first_vertex = firstVertex;
-    c->first_instance = firstInstance;
+    group = pvk_cmd_group_begin(cb, "vkCmdDraw", VK_OBJECT_TYPE_PIPELINE, cb->debug_pipeline[0], VK_OBJECT_TYPE_UNKNOWN,
+                                NULL);
+    c = pvk_cmd_append(cb, PVK_CMD_DRAW, sizeof(*c));
+    if (c) {
+        c->vertex_count = vertexCount;
+        c->instance_count = instanceCount;
+        c->first_vertex = firstVertex;
+        c->first_instance = firstInstance;
+    }
+    pvk_cmd_group_end(cb, group);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexed(VkCommandBuffer commandBuffer, uint32_t indexCount, uint32_t instanceCount,
                                             uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
     struct pvk_cmd_draw_indexed *c;
+    bool group;
     if (!indexCount || !instanceCount)
         return;
-    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_DRAW_INDEXED, sizeof(*c));
-    if (!c)
-        return;
-    c->index_count = indexCount;
-    c->instance_count = instanceCount;
-    c->first_index = firstIndex;
-    c->vertex_offset = vertexOffset;
-    c->first_instance = firstInstance;
-    c->pad = 0;
+    group = pvk_cmd_group_begin(cb, "vkCmdDrawIndexed", VK_OBJECT_TYPE_PIPELINE, cb->debug_pipeline[0],
+                                VK_OBJECT_TYPE_UNKNOWN, NULL);
+    c = pvk_cmd_append(cb, PVK_CMD_DRAW_INDEXED, sizeof(*c));
+    if (c) {
+        c->index_count = indexCount;
+        c->instance_count = instanceCount;
+        c->first_index = firstIndex;
+        c->vertex_offset = vertexOffset;
+        c->first_instance = firstInstance;
+        c->pad = 0;
+    }
+    pvk_cmd_group_end(cb, group);
 }
 
 static void pvk_cmd_draw_indirect(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
                                   VkBuffer countBuffer, VkDeviceSize countBufferOffset, uint32_t drawCount,
-                                  uint32_t stride, bool indexed)
+                                  uint32_t stride, bool indexed, const char *command)
 {
     const struct pvk_buffer *b = (const struct pvk_buffer *)buffer, *cnt = (const struct pvk_buffer *)countBuffer;
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    const struct pvk_device *device = cb->pool->device;
     struct pvk_cmd_draw_indirect *c;
+    char vuid[96];
+    bool group;
+
+    if (pvk_cb_debug(cb)) {
+        if (!cnt && drawCount > 1 && !device->features.core.multiDrawIndirect) {
+            snprintf(vuid, sizeof(vuid), "VUID-%s-drawCount-02718", command);
+            if (pvk_cb_vuid(cb, vuid, "%s: drawCount is %u, but the multiDrawIndirect feature is not enabled", command,
+                            drawCount))
+                return;
+        }
+        if (cnt && !device->features.v12.drawIndirectCount && !device->extensions[PVK_DEVICE_EXT_KHR_draw_indirect_count]) {
+            snprintf(vuid, sizeof(vuid), "VUID-%s-None-04445", command);
+            if (pvk_cb_vuid(cb, vuid, "%s: the drawIndirectCount feature is not enabled", command))
+                return;
+        }
+    }
     if (!drawCount || !b->memory || (cnt && !cnt->memory))
         return;
-    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_DRAW_INDIRECT, sizeof(*c));
-    if (!c)
-        return;
-    c->address = b->gpu_address + offset;
-    c->count_address = cnt ? cnt->gpu_address + countBufferOffset : 0;
-    c->draw_count = drawCount;
-    c->stride = stride ? stride : (indexed ? 20u : 16u); /* drawCount 1 may pass stride 0 */
-    c->indexed = indexed;
-    c->pad = 0;
+    group = pvk_cmd_group_begin(cb, command, VK_OBJECT_TYPE_PIPELINE, cb->debug_pipeline[0], VK_OBJECT_TYPE_BUFFER, b);
+    c = pvk_cmd_append(cb, PVK_CMD_DRAW_INDIRECT, sizeof(*c));
+    if (c) {
+        c->address = b->gpu_address + offset;
+        c->count_address = cnt ? cnt->gpu_address + countBufferOffset : 0;
+        c->draw_count = drawCount;
+        c->stride = stride ? stride : (indexed ? 20u : 16u); /* drawCount 1 may pass stride 0 */
+        c->indexed = indexed;
+        c->pad = 0;
+    }
+    pvk_cmd_group_end(cb, group);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndirect(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
                                              uint32_t drawCount, uint32_t stride)
 {
-    pvk_cmd_draw_indirect(commandBuffer, buffer, offset, VK_NULL_HANDLE, 0, drawCount, stride, false);
+    pvk_cmd_draw_indirect(commandBuffer, buffer, offset, VK_NULL_HANDLE, 0, drawCount, stride, false, "vkCmdDrawIndirect");
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexedIndirect(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
                                                     uint32_t drawCount, uint32_t stride)
 {
-    pvk_cmd_draw_indirect(commandBuffer, buffer, offset, VK_NULL_HANDLE, 0, drawCount, stride, true);
+    pvk_cmd_draw_indirect(commandBuffer, buffer, offset, VK_NULL_HANDLE, 0, drawCount, stride, true,
+                          "vkCmdDrawIndexedIndirect");
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndirectCount(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
                                                   VkBuffer countBuffer, VkDeviceSize countBufferOffset,
                                                   uint32_t maxDrawCount, uint32_t stride)
 {
-    pvk_cmd_draw_indirect(commandBuffer, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride, false);
+    pvk_cmd_draw_indirect(commandBuffer, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride, false,
+                          "vkCmdDrawIndirectCount");
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexedIndirectCount(VkCommandBuffer commandBuffer, VkBuffer buffer,
@@ -51994,31 +53759,36 @@ VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexedIndirectCount(VkCommandBuffer command
                                                          VkDeviceSize countBufferOffset, uint32_t maxDrawCount,
                                                          uint32_t stride)
 {
-    pvk_cmd_draw_indirect(commandBuffer, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride, true);
+    pvk_cmd_draw_indirect(commandBuffer, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride, true,
+                          "vkCmdDrawIndexedIndirectCount");
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdClearAttachments(VkCommandBuffer commandBuffer, uint32_t attachmentCount,
                                                  const VkClearAttachment *pAttachments, uint32_t rectCount,
                                                  const VkClearRect *pRects)
 {
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
     struct pvk_cmd_clear_attachments *c;
     struct pvk_clear_att *a;
     uint32_t i;
+    bool group;
     if (!attachmentCount || !rectCount)
         return;
-    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_CLEAR_ATTACHMENTS,
+    group = pvk_cmd_group_begin(cb, "vkCmdClearAttachments", VK_OBJECT_TYPE_UNKNOWN, NULL, VK_OBJECT_TYPE_UNKNOWN, NULL);
+    c = pvk_cmd_append(cb, PVK_CMD_CLEAR_ATTACHMENTS,
                        sizeof(*c) + sizeof(*a) * attachmentCount + sizeof(VkClearRect) * rectCount);
-    if (!c)
-        return;
-    c->count = attachmentCount;
-    c->rect_count = rectCount;
-    a = (struct pvk_clear_att *)(c + 1);
-    for (i = 0; i < attachmentCount; i++) {
-        a[i].aspects = pAttachments[i].aspectMask;
-        a[i].attachment = pAttachments[i].colorAttachment;
-        a[i].value = pAttachments[i].clearValue;
+    if (c) {
+        c->count = attachmentCount;
+        c->rect_count = rectCount;
+        a = (struct pvk_clear_att *)(c + 1);
+        for (i = 0; i < attachmentCount; i++) {
+            a[i].aspects = pAttachments[i].aspectMask;
+            a[i].attachment = pAttachments[i].colorAttachment;
+            a[i].value = pAttachments[i].clearValue;
+        }
+        memcpy(a + attachmentCount, pRects, sizeof(VkClearRect) * rectCount);
     }
-    memcpy(a + attachmentCount, pRects, sizeof(VkClearRect) * rectCount);
+    pvk_cmd_group_end(cb, group);
 }
 
 /* ---- Query and event commands ----
@@ -52288,6 +54058,38 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   -waitUntilSignaledValue:timeoutMS: (nanoseconds rounded up to
  *   milliseconds; UINT64_MAX is infinite). Waiting for any of several
  *   objects polls them, sleeping at most 1 ms between looks.
+ *
+ * DEBUG LABELS (VK_EXT_debug_utils)
+ *   Label regions become Metal debug groups. A Metal group lives in one
+ *   encoder (or one command buffer), a Vulkan region may span encoders,
+ *   command buffers and submissions; so the queue keeps the command buffer
+ *   regions open on it (queue->cmd_labels), every encoder starts with all
+ *   of them pushed and ends with them popped (pvk_labels_open/close), and a
+ *   region that ends below others (a region of an earlier command buffer
+ *   under the debug layer's groups of this one) pops the groups above it
+ *   and pushes them again. While a batch encodes their texts point into the
+ *   packets; those still open at its end get copies. An inserted label is
+ *   a signpost on the open encoder (between encoders, an empty group of the
+ *   command buffer). Queue regions are groups of each Metal command buffer,
+ *   pushed at its start and popped at its end, and inserted queue labels
+ *   empty groups at the start of the next one. A Metal command buffer is
+ *   labeled "<queue> #<submission>" when its queue is named, and always
+ *   with the debug layer, which also lists its Vulkan command buffers,
+ *   makes each Vulkan command buffer a group and has encoders say what they
+ *   encode (its groups of render passes and commands: section 15, Labels).
+ *   Object names become Metal labels where Metal allows: VkDeviceMemory
+ *   (its heap and buffer), VkBuffer (a debug marker on its range of the
+ *   memory's buffer; a sparse buffer's own buffer), VkImage, VkImageView and
+ *   VkBufferView textures (a view that is its image's texture keeps the
+ *   image's label), VkSemaphore events, VkEvent and VkQueryPool buffers; a
+ *   resource named before it is bound is labeled when it is. Metal fixes the
+ *   labels of command queues ("VkQueue <family>.<index>", section 9) and
+ *   pipeline states at creation, before a name can come: a queue's name
+ *   labels its command buffers instead; a pipeline state (shared by equal
+ *   pipelines, section 17) is labeled after its shader modules, with their
+ *   names of the time, and entry points ("VkShaderModule 'blur' main"), and
+ *   a pipeline's name goes in the debug layer's groups of its draws and
+ *   dispatches.
  * ========================================================================== */
 
 #include <time.h>
@@ -52688,6 +54490,10 @@ struct pvk_encoder {
     /* Queries made available since the last pvk_encode_query_flush */
     struct pvk_query_range queries[16];
     uint32_t query_count;
+    /* Debug labels (DEBUG LABELS): the open encoder, and how many of
+     * queue->cmd_labels are debug groups on it */
+    id label_enc;
+    uint32_t label_pushed;
 };
 
 /* A new upload chunk of `size` bytes, resident; NULL with e->result set. */
@@ -52777,6 +54583,209 @@ static void *pvk_upload(struct pvk_encoder *e, size_t size, size_t align, id *bu
 #define PVK_STAGES_RENDER (PVK_MTLStageVertex | PVK_MTLStageFragment | PVK_MTLStageTile)
 #define PVK_STAGES_ALL (PVK_STAGES_COMPUTE | PVK_STAGES_RENDER)
 
+/* ---- Debug labels (DEBUG LABELS) ---- */
+
+/* The debug layer's report about a queue, with its label regions. */
+static bool pvk_queue_vuid(const struct pvk_queue *queue, const char *vuid, VkObjectType type, uint64_t handle,
+                           const char *fmt, ...) __attribute__((format(printf, 5, 6)));
+static bool pvk_queue_vuid(const struct pvk_queue *queue, const char *vuid, VkObjectType type, uint64_t handle,
+                           const char *fmt, ...)
+{
+    struct pvk_msg m;
+    VkBool32 skip;
+    va_list args;
+    pvk_msg_init(&m, pvk_device_instance(queue->device), vuid, VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT);
+    pvk_msg_object(&m, VK_OBJECT_TYPE_QUEUE, (uint64_t)(uintptr_t)queue);
+    pvk_msg_object(&m, type, handle);
+    m.queue_labels = &queue->queue_labels;
+    va_start(args, fmt);
+    skip = pvk_vmessage(&m, PVK_LOG_ERROR, fmt, args);
+    va_end(args);
+    return skip != VK_FALSE;
+}
+
+/* The text of the innermost debug layer group, or of the innermost one
+ * whose text starts with prefix; NULL: none. */
+static const char *pvk_labels_synthetic(const struct pvk_encoder *e, const char *prefix)
+{
+    const struct pvk_labels *l = &e->queue->cmd_labels;
+    uint32_t i;
+    for (i = l->count; i-- > 0;)
+        if (l->items[i].synthetic && (!prefix || strncmp(l->items[i].text, prefix, strlen(prefix)) == 0))
+            return l->items[i].text;
+    return NULL;
+}
+
+/* A new encoder: the open command buffer label regions become its debug
+ * groups. With the debug layer it is labeled `what`, or (NULL) after the
+ * innermost debug layer group. */
+static void pvk_labels_open(struct pvk_encoder *e, id enc, const char *what)
+{
+    const struct pvk_labels *l = &e->queue->cmd_labels;
+    void *pool;
+    uint32_t i;
+    e->label_enc = enc;
+    e->label_pushed = 0;
+    if (!l->count && !e->device->debug)
+        return;
+    pool = objc_autoreleasePoolPush();
+    if (e->device->debug && (what || (what = pvk_labels_synthetic(e, NULL))))
+        pvk_MTL4CommandEncoder_setLabel(enc, pvk_NSString_stringWithUTF8String(what));
+    for (i = 0; i < l->count; i++)
+        pvk_MTL4CommandEncoder_pushDebugGroup(enc, pvk_NSString_stringWithUTF8String(l->items[i].text));
+    e->label_pushed = l->count;
+    objc_autoreleasePoolPop(pool);
+}
+
+/* Before an encoder ends: its debug groups are popped. */
+static void pvk_labels_close(struct pvk_encoder *e, id enc)
+{
+    if (e->label_enc != enc)
+        return;
+    for (; e->label_pushed; e->label_pushed--)
+        pvk_MTL4CommandEncoder_popDebugGroup(enc);
+    e->label_enc = NULL;
+}
+
+static void pvk_encoder_close(struct pvk_encoder *e, id enc)
+{
+    pvk_labels_close(e, enc);
+    pvk_MTL4CommandEncoder_endEncoding(enc);
+}
+
+/* A label region begins (text in a packet: owned at the end of the batch
+ * if still open). */
+static void pvk_labels_begin(struct pvk_encoder *e, const char *text, const float *color, bool synthetic)
+{
+    struct pvk_labels *l = &e->queue->cmd_labels;
+    void *pool;
+    if (!pvk_labels_push(l, pvk_device_alloc(e->device), text, color, synthetic, false)) {
+        e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        return;
+    }
+    if (e->label_enc && e->label_pushed == l->count - 1) {
+        pool = objc_autoreleasePoolPush();
+        pvk_MTL4CommandEncoder_pushDebugGroup(e->label_enc, pvk_NSString_stringWithUTF8String(text));
+        objc_autoreleasePoolPop(pool);
+        e->label_pushed++;
+    }
+}
+
+/* Label region index ends: Metal groups nest, so the open encoder's groups
+ * above it are popped and pushed again (regions may cross: a region of an
+ * earlier command buffer may end in the middle of the debug layer's). */
+static void pvk_labels_end_at(struct pvk_encoder *e, uint32_t index)
+{
+    struct pvk_labels *l = &e->queue->cmd_labels;
+    void *pool;
+    uint32_t i;
+    for (; e->label_enc && e->label_pushed > index; e->label_pushed--)
+        pvk_MTL4CommandEncoder_popDebugGroup(e->label_enc);
+    pvk_labels_remove(l, pvk_device_alloc(e->device), index);
+    if (e->label_enc && e->label_pushed == index && index < l->count) {
+        pool = objc_autoreleasePoolPush();
+        for (i = index; i < l->count; i++)
+            pvk_MTL4CommandEncoder_pushDebugGroup(e->label_enc, pvk_NSString_stringWithUTF8String(l->items[i].text));
+        objc_autoreleasePoolPop(pool);
+        e->label_pushed = l->count;
+    }
+}
+
+static void pvk_encode_label(struct pvk_encoder *e, const struct pvk_cmd_label *c)
+{
+    const char *text = (const char *)(c + 1);
+    void *pool;
+    int top;
+    switch ((enum pvk_label_kind)c->kind) {
+    case PVK_LABEL_BEGIN:
+        pvk_labels_begin(e, text, c->color, c->synthetic != 0);
+        break;
+    case PVK_LABEL_END:
+        top = pvk_labels_top(&e->queue->cmd_labels, c->synthetic != 0);
+        if (top >= 0)
+            pvk_labels_end_at(e, (uint32_t)top);
+        else if (!c->synthetic && e->device->debug)
+            pvk_queue_vuid(e->queue, "VUID-vkCmdEndDebugUtilsLabelEXT-commandBuffer-01912", VK_OBJECT_TYPE_UNKNOWN, 0,
+                           "vkCmdEndDebugUtilsLabelEXT: no label region begun by vkCmdBeginDebugUtilsLabelEXT is open "
+                           "on the queue the command buffer is submitted to");
+        break;
+    case PVK_LABEL_INSERT:
+        pool = objc_autoreleasePoolPush();
+        if (e->label_enc) {
+            pvk_MTL4CommandEncoder_insertDebugSignpost(e->label_enc, pvk_NSString_stringWithUTF8String(text));
+        } else { /* between encoders: an empty group of the command buffer */
+            pvk_MTL4CommandBuffer_pushDebugGroup(e->cb, pvk_NSString_stringWithUTF8String(text));
+            pvk_MTL4CommandBuffer_popDebugGroup(e->cb);
+        }
+        objc_autoreleasePoolPop(pool);
+        break;
+    }
+}
+
+/* The start of a batch's Metal command buffer: with the debug layer, or a
+ * named queue, its label ("<queue> #<submission>: <command buffers>"); the
+ * queue's label regions as its debug groups; the queue's inserted labels. */
+static void pvk_labels_batch_begin(struct pvk_encoder *e, const VkSubmitInfo2 *submit)
+{
+    struct pvk_queue *q = e->queue;
+    char text[512], what[256];
+    bool named = __atomic_load_n(&pvk_named_objects, __ATOMIC_ACQUIRE) && pvk_name_get((uint64_t)(uintptr_t)q, what, 8);
+    void *pool;
+    size_t n;
+    uint32_t i;
+
+    if (!e->device->debug && !named && !q->queue_labels.count && !q->queue_inserts.count)
+        return;
+    pool = objc_autoreleasePoolPush();
+    if (e->device->debug || named) {
+        if (named)
+            pvk_object_label(what, sizeof(what), VK_OBJECT_TYPE_QUEUE, (uint64_t)(uintptr_t)q);
+        else
+            snprintf(what, sizeof(what), "VkQueue %u.%u", q->family_index, q->index);
+        n = (size_t)snprintf(text, sizeof(text), "%s #%llu", what, (unsigned long long)e->serial);
+        for (i = 0; e->device->debug && i < submit->commandBufferInfoCount && n < sizeof(text); i++)
+            n += (size_t)snprintf(text + n, sizeof(text) - n, "%s%s", i ? ", " : ": ",
+                                  pvk_object_label(what, sizeof(what), VK_OBJECT_TYPE_COMMAND_BUFFER,
+                                                   (uint64_t)(uintptr_t)submit->pCommandBufferInfos[i].commandBuffer));
+        pvk_MTL4CommandBuffer_setLabel(e->cb, pvk_NSString_stringWithUTF8String(text));
+    }
+    for (i = 0; i < q->queue_inserts.count; i++) {
+        pvk_MTL4CommandBuffer_pushDebugGroup(e->cb, pvk_NSString_stringWithUTF8String(q->queue_inserts.items[i].text));
+        pvk_MTL4CommandBuffer_popDebugGroup(e->cb);
+    }
+    pvk_labels_free(&q->queue_inserts, pvk_device_alloc(e->device));
+    for (i = 0; i < q->queue_labels.count; i++)
+        pvk_MTL4CommandBuffer_pushDebugGroup(e->cb, pvk_NSString_stringWithUTF8String(q->queue_labels.items[i].text));
+    objc_autoreleasePoolPop(pool);
+}
+
+/* The end of a batch (its encoders ended): the debug layer's groups are
+ * closed, the command buffer label regions still open get their own copies
+ * of their texts (their command buffers may be reset once vkQueueSubmit
+ * returns), and the queue's groups are popped. */
+static void pvk_labels_batch_end(struct pvk_encoder *e)
+{
+    struct pvk_labels *l = &e->queue->cmd_labels;
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(e->device);
+    uint32_t i;
+    for (i = l->count; i-- > 0;)
+        if (l->items[i].synthetic)
+            pvk_labels_remove(l, alloc, i);
+    for (i = 0; i < l->count; i++) {
+        size_t n = strlen(l->items[i].text) + 1;
+        if (l->items[i].owned)
+            continue;
+        if (!(l->items[i].owned = pvk_alloc(alloc, n, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT))) {
+            l->items[i].text = "";
+            continue;
+        }
+        memcpy(l->items[i].owned, l->items[i].text, n);
+        l->items[i].text = l->items[i].owned;
+    }
+    for (i = 0; i < e->queue->queue_labels.count; i++)
+        pvk_MTL4CommandBuffer_popDebugGroup(e->cb);
+}
+
 static void pvk_render_end(struct pvk_encoder *e);
 
 static id pvk_encoder_get(struct pvk_encoder *e)
@@ -52789,6 +54798,7 @@ static id pvk_encoder_get(struct pvk_encoder *e)
             e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
             return NULL;
         }
+        pvk_labels_open(e, e->enc, "Compute and transfer commands");
         pvk_MTL4ComputeCommandEncoder_setArgumentTable(e->enc, e->queue->argument_table);
         e->consumer_barrier = false;
         e->pipeline_dirty = true;
@@ -52808,7 +54818,7 @@ static void pvk_encoder_end(struct pvk_encoder *e)
 {
     if (!e->enc)
         return;
-    pvk_MTL4CommandEncoder_endEncoding(e->enc);
+    pvk_encoder_close(e, e->enc);
     e->enc = NULL;
 }
 
@@ -53153,8 +55163,9 @@ static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MT
         pvk_release(options);
         pvk_free(pvk_device_alloc(device), msl);
         if (!device->blit_library)
-            pvk_log(PVK_LOG_ERROR, "internal blit shaders: %s",
-                    err ? pvk_ns_utf8(pvk_NSError_localizedDescription(err)) : "Metal could not compile them");
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
+                     "internal blit shaders: %s",
+                     err ? pvk_ns_utf8(pvk_NSError_localizedDescription(err)) : "Metal could not compile them");
     }
     if (device->blit_library) {
         id desc = pvk_MTLRenderPipelineDescriptor_new(), err = NULL;
@@ -53170,8 +55181,9 @@ static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MT
                 format);
             pso = pvk_MTLDevice_newRenderPipelineStateWithDescriptor_error(mtl, desc, &err);
             if (!pso)
-                pvk_log(PVK_LOG_ERROR, "internal blit pipeline %s, pixel format %lu: %s", pvk_blit_function_names[function],
-                        format, err ? pvk_ns_utf8(pvk_NSError_localizedDescription(err)) : "failed");
+                pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
+                         "internal blit pipeline %s, pixel format %lu: %s", pvk_blit_function_names[function], format,
+                         err ? pvk_ns_utf8(pvk_NSError_localizedDescription(err)) : "failed");
         }
         pvk_release(fs);
         pvk_release(vs);
@@ -53228,6 +55240,7 @@ static id pvk_encoder_render(struct pvk_encoder *e, id pass)
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
         return NULL;
     }
+    pvk_labels_open(e, enc, NULL);
     if (e->waits || e->queue->ordered)
         pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
             enc, PVK_STAGES_ALL, PVK_STAGES_RENDER, e->queue->device->visibility);
@@ -53436,7 +55449,7 @@ static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
             pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount(enc, PVK_MTLPrimitiveTypeTriangle, 0, 3);
         }
         if (enc)
-            pvk_MTL4CommandEncoder_endEncoding(enc);
+            pvk_encoder_close(e, enc);
         objc_autoreleasePoolPop(pool);
     }
 }
@@ -53490,7 +55503,7 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
             enc = pvk_encoder_render(e, pass);
             pvk_release(pass);
             if (enc)
-                pvk_MTL4CommandEncoder_endEncoding(enc);
+                pvk_encoder_close(e, enc);
             objc_autoreleasePoolPop(pool);
         }
     }
@@ -53889,7 +55902,8 @@ static id pvk_prepass_pipeline(struct pvk_device *device, unsigned kernel)
         device->prepass_pipelines[kernel] =
             pvk_compile_compute(device, pvk_prepass_msl, names[kernel], 64, error, sizeof(error));
         if (!device->prepass_pipelines[kernel])
-            pvk_log(PVK_LOG_ERROR, "internal draw preprocessing kernel %s: %s", names[kernel], error);
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
+                     "internal draw preprocessing kernel %s: %s", names[kernel], error);
     }
     pso = device->prepass_pipelines[kernel];
     pthread_mutex_unlock(&pvk_graphics_lock);
@@ -54291,7 +56305,8 @@ static id pvk_clear_pipeline(struct pvk_device *device, const struct pvk_clear_k
             pvk_release(library);
         }
         if (!pso)
-            pvk_log(PVK_LOG_ERROR, "internal clear pipeline: %s", error);
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
+                     "internal clear pipeline: %s", error);
         pvk_free(pvk_device_alloc(device), msl);
         objc_autoreleasePoolPop(pool);
         if (pso) {
@@ -54698,7 +56713,8 @@ static id pvk_ds_copy_pipeline(struct pvk_device *device, uint32_t kind, uint32_
     }
     objc_autoreleasePoolPop(pool);
     if (!pso) {
-        pvk_log(PVK_LOG_ERROR, "internal depth/stencil copy pipeline: %s", error);
+        pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
+                 "internal depth/stencil copy pipeline: %s", error);
         return NULL;
     }
     pthread_mutex_lock(&pvk_graphics_lock);
@@ -54873,7 +56889,7 @@ static void pvk_render_end(struct pvk_encoder *e)
     struct pvk_render *r = &e->render;
     uint32_t i;
     if (r->enc) {
-        pvk_MTL4CommandEncoder_endEncoding(r->enc);
+        pvk_encoder_close(e, r->enc);
         pvk_release(r->enc);
         r->enc = NULL;
         pvk_render_split_resolve(e);
@@ -54905,8 +56921,9 @@ static void pvk_render_pending(struct pvk_render *r, struct pvk_query_pool *pool
     } else {
         static int warned;
         if (!warned++)
-            pvk_log(PVK_LOG_WARN, "more than %u query ranges in a render pass: some never become available",
-                    (unsigned)PVK_ARRAY_SIZE(r->pending));
+            pvk_logi(NULL, PVK_LOG_WARN, "PlasmaVK-unsupported-query-ranges",
+                     "more than %u query ranges in a render pass: some never become available",
+                     (unsigned)PVK_ARRAY_SIZE(r->pending));
     }
 }
 
@@ -54932,7 +56949,9 @@ static void pvk_encode_occlusion(struct pvk_encoder *e, const struct pvk_cmd_que
         if (r->enc && r->vis_pool != c->pool) {
             static int warned;
             if (!warned++)
-                pvk_log(PVK_LOG_WARN, "occlusion queries of two pools in one render pass: the second pool's are not counted");
+                pvk_logd(e->device, PVK_LOG_WARN, "PlasmaVK-unsupported-occlusion-pools", VK_OBJECT_TYPE_QUERY_POOL,
+                         (uint64_t)(uintptr_t)c->pool, "occlusion queries of two pools in one render pass: the second "
+                         "pool's are not counted");
         }
         pvk_render_counting(e, true);
         return;
@@ -55012,9 +57031,10 @@ static void pvk_render_resolve_ds(struct pvk_encoder *e)
         pvk_release(pass);
     }
     if (enc) { /* after the pass's stores */
+        pvk_labels_open(e, enc, "Depth/stencil resolves");
         pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
             enc, PVK_STAGES_RENDER, PVK_STAGES_RENDER, e->queue->device->visibility);
-        pvk_MTL4CommandEncoder_endEncoding(enc);
+        pvk_encoder_close(e, enc);
     } else if (e->result == VK_SUCCESS) {
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
     }
@@ -55153,8 +57173,9 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
         if (!tex) {
             static int warned;
             if (!warned++)
-                pvk_log(PVK_LOG_WARN, "a render pass with 8 color attachments cannot keep a copy of its depth or "
-                                      "stencil: depth/stencil input attachments and depth bounds read nothing there");
+                pvk_logd(e->device, PVK_LOG_WARN, "PlasmaVK-unsupported-depth-copy", VK_OBJECT_TYPE_DEVICE, 0,
+                         "a render pass with 8 color attachments cannot keep a copy of its depth or stencil: "
+                         "depth/stencil input attachments and depth bounds read nothing there");
             r->hidden &= ~(1u << k);
             continue;
         }
@@ -55193,6 +57214,7 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
 static void pvk_render_takeover(struct pvk_encoder *e, id enc)
 {
     struct pvk_render *r = &e->render;
+    pvk_labels_open(e, enc, pvk_labels_synthetic(e, "vkCmdBeginRender"));
     pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->argument_table,
                                                            PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
     r->enc = enc;
@@ -55220,7 +57242,7 @@ static void pvk_render_rebind(struct pvk_encoder *e, uint32_t int_slots)
     id enc;
     if (int_slots == r->int_slots || !r->enc || !r->split || e->result != VK_SUCCESS)
         return;
-    pvk_MTL4CommandEncoder_endEncoding(r->enc);
+    pvk_encoder_close(e, r->enc);
     pvk_release(r->enc);
     r->enc = NULL;
     enc = pvk_render_open(e, r->begin, &r->pass_depth, &r->pass_stencil, true, true, int_slots);
@@ -55252,9 +57274,10 @@ static void pvk_render_split_resolve(struct pvk_encoder *e)
     enc = pvk_render_open(e, r->begin, &r->pass_depth, &r->pass_stencil, true, false, 0);
     if (!enc)
         return;
+    pvk_labels_open(e, enc, "Color resolves");
     pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
         enc, PVK_STAGES_RENDER, PVK_STAGES_RENDER, e->queue->device->visibility);
-    pvk_MTL4CommandEncoder_endEncoding(enc);
+    pvk_encoder_close(e, enc);
     pvk_release(enc);
 }
 
@@ -55623,8 +57646,9 @@ static bool pvk_render_flush(struct pvk_encoder *e)
         if (variant >= 0 && !(pso = pvk_gfx_variant(e->device, p, (unsigned)variant))) {
             static int warned;
             if (!warned++)
-                pvk_log(PVK_LOG_WARN, "a pipeline has no depth copy variant: depth input attachments and depth "
-                                      "bounds of its pass miss its depth writes");
+                pvk_logd(e->device, PVK_LOG_WARN, "PlasmaVK-unsupported-depth-copy", VK_OBJECT_TYPE_PIPELINE,
+                         (uint64_t)(uintptr_t)p, "a pipeline has no depth copy variant: depth input attachments and "
+                         "depth bounds of its pass miss its depth writes");
             pso = p->mtl_pipeline;
             variant = -1;
         }
@@ -56040,6 +58064,7 @@ static id pvk_encoder_alone(struct pvk_encoder *e)
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
         return NULL;
     }
+    pvk_labels_open(e, enc, "Query and event writes");
     pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
         enc, PVK_STAGES_ALL, PVK_MTLStageBlit, e->queue->device->visibility);
     return enc;
@@ -56081,7 +58106,7 @@ static void pvk_encode_query_flush(struct pvk_encoder *e)
     for (i = 0; i < n; i++)
         pvk_encode_fill_words(enc, e->queries[i].pool->buffer, (uint64_t)e->queries[i].pool->count + e->queries[i].first,
                               e->queries[i].count, 1);
-    pvk_MTL4CommandEncoder_endEncoding(enc);
+    pvk_encoder_close(e, enc);
 }
 
 /* Queries [first, first + count) of a pool become available once the work
@@ -56121,7 +58146,7 @@ static void pvk_encode_query_reset(struct pvk_encoder *e, const struct pvk_cmd_q
         return;
     pvk_encode_fill_words(enc, c->pool->buffer, c->first, c->count, 0);
     pvk_encode_fill_words(enc, c->pool->buffer, (uint64_t)c->pool->count + c->first, c->count, 0);
-    pvk_MTL4CommandEncoder_endEncoding(enc);
+    pvk_encoder_close(e, enc);
     /* Render passes counting occlusion into the results must start after
      * it, so later encoders wait for earlier work. Timestamps, availability
      * writes and copies wait for earlier work anyway. */
@@ -56198,8 +58223,10 @@ static void pvk_encode_event(struct pvk_encoder *e, const struct pvk_cmd_event *
     if (!(enc = pvk_encoder_alone(e)))
         return;
     pvk_encode_fill_words(enc, c->event->buffer, 0, 1, c->value ? 1 : 0);
-    pvk_MTL4CommandEncoder_endEncoding(enc);
+    pvk_encoder_close(e, enc);
 }
+
+static void pvk_encode_cb(struct pvk_encoder *e, const struct pvk_command_buffer *cb, uint32_t depth);
 
 static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_buffer *cb, uint32_t depth)
 {
@@ -56270,7 +58297,7 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
                 const VkCommandBuffer *list = (const VkCommandBuffer *)(x + 1);
                 uint32_t i;
                 for (i = 0; i < x->count && depth < 8; i++)
-                    pvk_encode_commands(e, (const struct pvk_command_buffer *)list[i], depth + 1);
+                    pvk_encode_cb(e, (const struct pvk_command_buffer *)list[i], depth + 1);
                 e->pipeline_dirty = true; /* the state after it is undefined */
                 break;
             }
@@ -56335,9 +58362,34 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
             case PVK_CMD_EVENT:
                 pvk_encode_event(e, (const struct pvk_cmd_event *)c);
                 break;
+            case PVK_CMD_LABEL:
+                pvk_encode_label(e, (const struct pvk_cmd_label *)c);
+                break;
             }
         }
     }
+}
+
+/* A command buffer's packets; with the debug layer, as a debug group named
+ * after it. */
+static void pvk_encode_cb(struct pvk_encoder *e, const struct pvk_command_buffer *cb, uint32_t depth)
+{
+    char text[256];
+    int top;
+    if (!e->device->debug) {
+        pvk_encode_commands(e, cb, depth);
+        return;
+    }
+    pvk_object_label(text, sizeof(text), VK_OBJECT_TYPE_COMMAND_BUFFER, (uint64_t)(uintptr_t)cb);
+    if (depth)
+        strncat(text, " (secondary)", sizeof(text) - strlen(text) - 1);
+    pvk_labels_begin(e, text, NULL, true);
+    pvk_encode_commands(e, cb, depth);
+    for (top = (int)e->queue->cmd_labels.count; top-- > 0;) /* its group: the text is ours */
+        if (e->queue->cmd_labels.items[top].text == text) {
+            pvk_labels_end_at(e, (uint32_t)top);
+            break;
+        }
 }
 
 static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission *s, const VkSubmitInfo2 *submit,
@@ -56355,13 +58407,15 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
     e.cursor.cbs = submit->pCommandBufferInfos;
     e.cursor.count = submit->commandBufferInfoCount;
     pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(s->cb, s->allocator);
+    pvk_labels_batch_begin(&e, submit);
     for (i = 0; i < submit->commandBufferInfoCount && e.result == VK_SUCCESS; i++) {
         e.cursor.index = i;
-        pvk_encode_commands(&e, (const struct pvk_command_buffer *)submit->pCommandBufferInfos[i].commandBuffer, 0);
+        pvk_encode_cb(&e, (const struct pvk_command_buffer *)submit->pCommandBufferInfos[i].commandBuffer, 0);
     }
     pvk_render_end(&e); /* only an instance left suspended (invalid) can still be open */
     pvk_encode_query_flush(&e);
     pvk_encoder_end(&e);
+    pvk_labels_batch_end(&e);
     pvk_MTL4CommandBuffer_endCommandBuffer(s->cb);
     pvk_free(pvk_device_alloc(e.device), e.pp);
     return e.result;
@@ -56394,8 +58448,8 @@ static void pvk_commit_feedback(void *user, id feedback)
     id error = pvk_MTL4CommitFeedback_error(feedback);
     if (error && !__atomic_exchange_n(&device->lost, 1, __ATOMIC_ACQ_REL)) {
         void *pool = objc_autoreleasePoolPush();
-        pvk_log(PVK_LOG_ERROR, "a command buffer failed, the device is lost: %s",
-                pvk_ns_utf8(pvk_NSError_localizedDescription(error)));
+        pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-device-lost", VK_OBJECT_TYPE_DEVICE, 0,
+                 "a command buffer failed, the device is lost: %s", pvk_ns_utf8(pvk_NSError_localizedDescription(error)));
         objc_autoreleasePoolPop(pool);
     }
     __atomic_sub_fetch(&device->feedback_pending, 1, __ATOMIC_ACQ_REL);
@@ -56746,10 +58800,103 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
     return VK_SUCCESS;
 }
 
+/* With the debug layer: the checks of a submission (two: as vkQueueSubmit2).
+ * False: skip it. Handles that are not alive, and command buffers that are
+ * not executable (they may be being recorded), always skip it. */
+static bool pvk_debug_check_submit(const struct pvk_queue *queue, uint32_t count, const VkSubmitInfo2 *submits,
+                                   VkFence _fence, bool two)
+{
+    const struct pvk_device *device = queue->device;
+    const char *command = two ? "vkQueueSubmit2" : "vkQueueSubmit";
+    const struct pvk_fence *fence = (const struct pvk_fence *)_fence;
+    bool skip = false;
+    char what[256];
+    uint32_t i, j;
+
+    for (i = 0; i < count; i++) {
+        const VkSubmitInfo2 *s = &submits[i];
+        for (j = 0; j < s->waitSemaphoreInfoCount + s->signalSemaphoreInfoCount; j++) {
+            bool wait = j < s->waitSemaphoreInfoCount;
+            const VkSemaphoreSubmitInfo *si = wait ? &s->pWaitSemaphoreInfos[j]
+                                                   : &s->pSignalSemaphoreInfos[j - s->waitSemaphoreInfoCount];
+            if (!pvk_live_check(device, VK_OBJECT_TYPE_SEMAPHORE, (uint64_t)(uintptr_t)si->semaphore,
+                                two ? "VUID-VkSemaphoreSubmitInfo-semaphore-parameter"
+                                    : wait ? "VUID-VkSubmitInfo-pWaitSemaphores-parameter"
+                                           : "VUID-VkSubmitInfo-pSignalSemaphores-parameter",
+                                command))
+                return false;
+        }
+        for (j = 0; j < s->commandBufferInfoCount; j++) {
+            uint64_t handle = (uint64_t)(uintptr_t)s->pCommandBufferInfos[j].commandBuffer;
+            const struct pvk_command_buffer *cb = (const struct pvk_command_buffer *)s->pCommandBufferInfos[j].commandBuffer;
+            if (!pvk_live_check(device, VK_OBJECT_TYPE_COMMAND_BUFFER, handle,
+                                two ? "VUID-VkCommandBufferSubmitInfo-commandBuffer-parameter"
+                                    : "VUID-VkSubmitInfo-pCommandBuffers-parameter",
+                                command))
+                return false;
+            pvk_object_label(what, sizeof(what), VK_OBJECT_TYPE_COMMAND_BUFFER, handle);
+            if (cb->level == VK_COMMAND_BUFFER_LEVEL_SECONDARY)
+                skip |= pvk_queue_vuid(queue, two ? "VUID-VkCommandBufferSubmitInfo-commandBuffer-03890"
+                                                  : "VUID-VkSubmitInfo-pCommandBuffers-00075",
+                                       VK_OBJECT_TYPE_COMMAND_BUFFER, handle, "%s: %s is a secondary command buffer",
+                                       command, what);
+            if (cb->state != PVK_CB_EXECUTABLE || (cb->submitted && (cb->usage & VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT))) {
+                pvk_queue_vuid(queue, two ? "VUID-vkQueueSubmit2-commandBuffer-03874" : "VUID-vkQueueSubmit-pCommandBuffers-00070",
+                               VK_OBJECT_TYPE_COMMAND_BUFFER, handle, "%s: %s is %s; the submission is skipped", command,
+                               what, cb->state == PVK_CB_INITIAL     ? "in the initial state (not recorded)"
+                                     : cb->state == PVK_CB_RECORDING ? "in the recording state (vkEndCommandBuffer "
+                                                                       "not called)"
+                                                                     : "invalid (recorded with "
+                                                                       "VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT and "
+                                                                       "submitted already)");
+                return false;
+            }
+            if (cb->pool->queue_family != queue->family_index)
+                skip |= pvk_queue_vuid(queue, two ? "VUID-vkQueueSubmit2-commandBuffer-03878"
+                                                  : "VUID-vkQueueSubmit-pCommandBuffers-00074",
+                                       VK_OBJECT_TYPE_COMMAND_BUFFER, handle,
+                                       "%s: %s was allocated from a pool of queue family %u, the queue is of family %u",
+                                       command, what, cb->pool->queue_family, queue->family_index);
+        }
+    }
+    if (fence) {
+        id event;
+        if (!pvk_live_check(device, VK_OBJECT_TYPE_FENCE, (uint64_t)(uintptr_t)fence,
+                            two ? "VUID-vkQueueSubmit2-fence-parameter" : "VUID-vkQueueSubmit-fence-parameter", command))
+            return false;
+        event = (id)__atomic_load_n(&fence->event, __ATOMIC_ACQUIRE);
+        if (fence->signaled || (event && pvk_MTLSharedEvent_signaledValue(event) >= fence->value))
+            skip |= pvk_queue_vuid(queue, two ? "VUID-vkQueueSubmit2-fence-04894" : "VUID-vkQueueSubmit-fence-00063",
+                                   VK_OBJECT_TYPE_FENCE, (uint64_t)(uintptr_t)fence,
+                                   "%s: the fence is signaled (reset it with vkResetFences first)", command);
+        else if (event)
+            skip |= pvk_queue_vuid(queue, two ? "VUID-vkQueueSubmit2-fence-04895" : "VUID-vkQueueSubmit-fence-00064",
+                                   VK_OBJECT_TYPE_FENCE, (uint64_t)(uintptr_t)fence,
+                                   "%s: the fence belongs to an earlier submission that is not done", command);
+    }
+    return !skip;
+}
+
+static VkResult pvk_queue_submit_checked(struct pvk_queue *queue, uint32_t count, const VkSubmitInfo2 *submits,
+                                         VkFence fence, bool two)
+{
+    VkResult result;
+    uint32_t i, j;
+    if (!queue->device->debug)
+        return pvk_queue_submit(queue, count, submits, fence, NULL);
+    if (!pvk_debug_check_submit(queue, count, submits, fence, two))
+        return VK_ERROR_VALIDATION_FAILED_EXT;
+    result = pvk_queue_submit(queue, count, submits, fence, NULL);
+    for (i = 0; result == VK_SUCCESS && i < count; i++) /* one-time submit command buffers are now invalid */
+        for (j = 0; j < submits[i].commandBufferInfoCount; j++)
+            ((struct pvk_command_buffer *)submits[i].pCommandBufferInfos[j].commandBuffer)->submitted = true;
+    return result;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit2(VkQueue queue, uint32_t submitCount, const VkSubmitInfo2 *pSubmits,
                                               VkFence fence)
 {
-    return pvk_queue_submit((struct pvk_queue *)queue, submitCount, pSubmits, fence, NULL);
+    return pvk_queue_submit_checked((struct pvk_queue *)queue, submitCount, pSubmits, fence, true);
 }
 
 /* vkQueueSubmit: the batches as VkSubmitInfo2. */
@@ -56770,7 +58917,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue _queue, uint32_t submitCoun
         ncb += pSubmits[i].commandBufferCount;
     }
     if (!submitCount)
-        return pvk_queue_submit(queue, 0, NULL, fence, NULL);
+        return pvk_queue_submit_checked(queue, 0, NULL, fence, false);
     size = sizeof(*submits) * submitCount + sizeof(*sems) * nsem + sizeof(*cbs) * ncb;
     submits = pvk_alloc(alloc, size, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
     if (!submits)
@@ -56811,9 +58958,39 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue _queue, uint32_t submitCoun
                 sems->value = values->pSignalSemaphoreValues[j];
         }
     }
-    result = pvk_queue_submit(queue, submitCount, submits, fence, NULL);
+    result = pvk_queue_submit_checked(queue, submitCount, submits, fence, false);
     pvk_free(alloc, submits);
     return result;
+}
+
+/* ---- Queue labels (VK_EXT_debug_utils, DEBUG LABELS) ---- */
+
+VKAPI_ATTR void VKAPI_CALL vkQueueBeginDebugUtilsLabelEXT(VkQueue _queue, const VkDebugUtilsLabelEXT *pLabelInfo)
+{
+    struct pvk_queue *queue = (struct pvk_queue *)_queue;
+    pvk_labels_push(&queue->queue_labels, pvk_device_alloc(queue->device), pLabelInfo->pLabelName, pLabelInfo->color,
+                    false, true);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkQueueEndDebugUtilsLabelEXT(VkQueue _queue)
+{
+    struct pvk_queue *queue = (struct pvk_queue *)_queue;
+    if (queue->queue_labels.count)
+        pvk_labels_remove(&queue->queue_labels, pvk_device_alloc(queue->device), queue->queue_labels.count - 1);
+    else if (queue->device->debug)
+        pvk_queue_vuid(queue, "VUID-vkQueueEndDebugUtilsLabelEXT-None-01911", VK_OBJECT_TYPE_UNKNOWN, 0,
+                       "vkQueueEndDebugUtilsLabelEXT: no label region begun by vkQueueBeginDebugUtilsLabelEXT is open "
+                       "on the queue");
+}
+
+/* Shown at the start of the queue's next submission (the last 64). */
+VKAPI_ATTR void VKAPI_CALL vkQueueInsertDebugUtilsLabelEXT(VkQueue _queue, const VkDebugUtilsLabelEXT *pLabelInfo)
+{
+    struct pvk_queue *queue = (struct pvk_queue *)_queue;
+    if (queue->queue_inserts.count >= 64)
+        pvk_labels_remove(&queue->queue_inserts, pvk_device_alloc(queue->device), 0);
+    pvk_labels_push(&queue->queue_inserts, pvk_device_alloc(queue->device), pLabelInfo->pLabelName, pLabelInfo->color,
+                    false, true);
 }
 
 /* ---- Sparse binding ----
@@ -57302,7 +59479,8 @@ static void pvk_device_finish(struct pvk_device *device)
     for (i = 0; i < device->queue_count; i++) {
         struct pvk_queue *queue = &device->queues[i];
         if (queue->timeline && !pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(queue->timeline, queue->serial, 5000))
-            pvk_log(PVK_LOG_ERROR, "vkDestroyDevice: queue %u still has work", i);
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-vkDestroyDevice-busy", VK_OBJECT_TYPE_QUEUE,
+                     (uint64_t)(uintptr_t)queue, "vkDestroyDevice: queue %u still has work", i);
         if (queue->thread_running) { /* what it has not committed is dropped */
             pthread_mutex_lock(&queue->lock);
             __atomic_store_n(&queue->stop, true, __ATOMIC_RELEASE);
@@ -57336,12 +59514,15 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateFence(VkDevice device, const VkFenceCreat
     if (!fence)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     fence->signaled = (pCreateInfo->flags & VK_FENCE_CREATE_SIGNALED_BIT) != 0;
+    pvk_live_add((struct pvk_device *)device, VK_OBJECT_TYPE_FENCE, fence, NULL, pAllocator != NULL);
     *pFence = (VkFence)fence;
     return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkDestroyFence(VkDevice device, VkFence fence, const VkAllocationCallbacks *pAllocator)
 {
+    if (!fence || !pvk_live_destroy((struct pvk_device *)device, VK_OBJECT_TYPE_FENCE, fence, pAllocator))
+        return;
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), fence);
 }
 
@@ -57411,6 +59592,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSemaphore(VkDevice _device, const VkSemap
     }
     if (sem->timeline && initial)
         pvk_MTLSharedEvent_setSignaledValue(sem->event, initial);
+    pvk_live_add(device, VK_OBJECT_TYPE_SEMAPHORE, sem, NULL, pAllocator != NULL);
     *pSemaphore = (VkSemaphore)sem;
     return VK_SUCCESS;
 }
@@ -57419,7 +59601,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroySemaphore(VkDevice device, VkSemaphore semap
                                               const VkAllocationCallbacks *pAllocator)
 {
     struct pvk_semaphore *sem = (struct pvk_semaphore *)semaphore;
-    if (!sem)
+    if (!sem || !pvk_live_destroy((struct pvk_device *)device, VK_OBJECT_TYPE_SEMAPHORE, sem, pAllocator))
         return;
     pvk_release(sem->event);
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), sem);
@@ -57515,6 +59697,106 @@ VKAPI_ATTR VkResult VKAPI_CALL vkResetEvent(VkDevice device, VkEvent event)
     return VK_SUCCESS;
 }
 
+/* ---- Metal labels of named objects (DEBUG LABELS) ---- */
+
+static void pvk_label_texture(id texture, id label, const struct pvk_image *image)
+{
+    uint32_t p;
+    if (!texture || (image && texture == image->mtl_texture))
+        return; /* a view that is the image's texture keeps the image's label */
+    for (p = 0; image && p < image->plane_count; p++)
+        if (texture == image->planes[p].mtl_texture)
+            return;
+    pvk_MTLResource_setLabel(texture, label);
+}
+
+static void pvk_debug_label(struct pvk_device *device, VkObjectType type, uint64_t handle, const char *name)
+{
+    void *pool;
+    id label;
+    uint32_t p;
+    (void)device;
+    switch (type) {
+    case VK_OBJECT_TYPE_DEVICE_MEMORY:
+    case VK_OBJECT_TYPE_BUFFER:
+    case VK_OBJECT_TYPE_IMAGE:
+    case VK_OBJECT_TYPE_IMAGE_VIEW:
+    case VK_OBJECT_TYPE_BUFFER_VIEW:
+    case VK_OBJECT_TYPE_SEMAPHORE:
+    case VK_OBJECT_TYPE_EVENT:
+    case VK_OBJECT_TYPE_QUERY_POOL:
+        break;
+    default:
+        return;
+    }
+    pool = objc_autoreleasePoolPush();
+    label = name ? pvk_NSString_stringWithUTF8String(name) : NULL;
+    switch (type) {
+    case VK_OBJECT_TYPE_DEVICE_MEMORY: {
+        struct pvk_device_memory *m = (struct pvk_device_memory *)(uintptr_t)handle;
+        if (m->mtl_heap)
+            pvk_MTLHeap_setLabel(m->mtl_heap, label);
+        if (m->mtl_buffer)
+            pvk_MTLResource_setLabel(m->mtl_buffer, label);
+        break;
+    }
+    case VK_OBJECT_TYPE_BUFFER: {
+        struct pvk_buffer *b = (struct pvk_buffer *)(uintptr_t)handle;
+        if (b->flags & PVK_BUFFER_CREATE_SPARSE) {
+            pvk_MTLResource_setLabel(b->sparse.mtl_buffer, label);
+        } else if (b->memory && b->memory->mtl_buffer && label && b->size) {
+            pvk_NSRange range; /* a range of the memory's buffer */
+            range.location = (unsigned long)b->offset;
+            range.length = (unsigned long)(b->size < b->memory->size - b->offset ? b->size : b->memory->size - b->offset);
+            pvk_MTLBuffer_addDebugMarker_range(b->memory->mtl_buffer, label, range);
+        }
+        break;
+    }
+    case VK_OBJECT_TYPE_IMAGE: {
+        struct pvk_image *image = (struct pvk_image *)(uintptr_t)handle;
+        if (image->plane_count)
+            for (p = 0; p < image->plane_count; p++)
+                pvk_label_texture(image->planes[p].mtl_texture, label, NULL);
+        else
+            pvk_label_texture(image->mtl_texture, label, NULL);
+        break;
+    }
+    case VK_OBJECT_TYPE_IMAGE_VIEW: {
+        struct pvk_image_view *view = (struct pvk_image_view *)(uintptr_t)handle;
+        pvk_label_texture(view->mtl_texture, label, view->image);
+        if (view->mtl_attachment != view->mtl_texture)
+            pvk_label_texture(view->mtl_attachment, label, view->image);
+        pvk_label_texture(view->mtl_int_attachment, label, view->image);
+        for (p = 0; p < 2; p++)
+            pvk_label_texture(view->planes[p], label, view->image);
+        break;
+    }
+    case VK_OBJECT_TYPE_BUFFER_VIEW:
+        pvk_label_texture(((struct pvk_buffer_view *)(uintptr_t)handle)->mtl_texture, label, NULL);
+        break;
+    case VK_OBJECT_TYPE_SEMAPHORE:
+        pvk_MTLEvent_setLabel(((struct pvk_semaphore *)(uintptr_t)handle)->event, label);
+        break;
+    case VK_OBJECT_TYPE_EVENT:
+        pvk_MTLResource_setLabel(((struct pvk_event *)(uintptr_t)handle)->buffer, label);
+        break;
+    case VK_OBJECT_TYPE_QUERY_POOL:
+        if (((struct pvk_query_pool *)(uintptr_t)handle)->buffer)
+            pvk_MTLResource_setLabel(((struct pvk_query_pool *)(uintptr_t)handle)->buffer, label);
+        break;
+    default:
+        break;
+    }
+    objc_autoreleasePoolPop(pool);
+}
+
+static void pvk_debug_relabel(struct pvk_device *device, VkObjectType type, uint64_t handle)
+{
+    char name[256];
+    if (pvk_name_get(handle, name, sizeof(name)))
+        pvk_debug_label(device, type, handle, name);
+}
+
 /* ==========================================================================
  * 17. Pipelines
  *
@@ -57566,10 +59848,12 @@ struct pvk_shader_module {
     uint32_t code[];
 };
 
-/* Compiles MSL into a compute pipeline state (retained), NULL with a message
- * in error[] on failure. max_threads: the threadgroup size it must run with. */
-static id pvk_compile_compute(struct pvk_device *device, const char *msl, const char *entry,
-                              unsigned long max_threads, char *error, size_t error_size)
+/* Compiles MSL into a compute pipeline state (retained) labeled `label`
+ * (Metal fixes a pipeline state's label at creation: section 16, DEBUG
+ * LABELS), NULL with a message in error[] on failure. max_threads: the
+ * threadgroup size it must run with. */
+static id pvk_compile_compute_labeled(struct pvk_device *device, const char *msl, const char *entry,
+                                      unsigned long max_threads, const char *label, char *error, size_t error_size)
 {
     id mtl = device->physical_device->mtl_device;
     void *pool = objc_autoreleasePoolPush(); /* strings, NSErrors */
@@ -57588,6 +59872,8 @@ static id pvk_compile_compute(struct pvk_device *device, const char *msl, const 
     if (desc) {
         pvk_MTLComputePipelineDescriptor_setComputeFunction(desc, function);
         pvk_MTLComputePipelineDescriptor_setMaxTotalThreadsPerThreadgroup(desc, max_threads);
+        if (label)
+            pvk_MTLComputePipelineDescriptor_setLabel(desc, pvk_NSString_stringWithUTF8String(label));
         pso = pvk_MTLDevice_newComputePipelineStateWithDescriptor_options_reflection_error(
             mtl, desc, PVK_MTLPipelineOptionNone, NULL, &err);
     }
@@ -57605,6 +59891,33 @@ static id pvk_compile_compute(struct pvk_device *device, const char *msl, const 
     pvk_release(options);
     objc_autoreleasePoolPop(pool);
     return pso;
+}
+
+/* An internal kernel, labeled after its entry point. */
+static id pvk_compile_compute(struct pvk_device *device, const char *msl, const char *entry,
+                              unsigned long max_threads, char *error, size_t error_size)
+{
+    char label[96];
+    snprintf(label, sizeof(label), "PlasmaVK %s", entry);
+    return pvk_compile_compute_labeled(device, msl, entry, max_threads, label, error, error_size);
+}
+
+/* The Metal label of a pipeline stage's code: "VkShaderModule '<name>'
+ * <entry point>" (an inline module named by a VkDebugUtilsObjectNameInfoEXT
+ * in the stage's chain). */
+static void pvk_stage_label(char *buf, size_t size, const VkPipelineShaderStageCreateInfo *stage)
+{
+    const VkBaseInStructure *s;
+    const char *inline_name = NULL;
+    char what[256];
+    for (s = stage->pNext; s; s = s->pNext)
+        if (s->sType == VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT)
+            inline_name = ((const VkDebugUtilsObjectNameInfoEXT *)s)->pObjectName;
+    if (stage->module)
+        pvk_object_label(what, sizeof(what), VK_OBJECT_TYPE_SHADER_MODULE, (uint64_t)(uintptr_t)stage->module);
+    else
+        snprintf(what, sizeof(what), "VkShaderModule '%s'", inline_name ? inline_name : "(inline)");
+    snprintf(buf, size, "%s %s", what, stage->pName);
 }
 
 /* vkCmdFillBuffer for patterns whose four bytes differ (section 16): one
@@ -57629,7 +59942,8 @@ static id pvk_device_fill_pipeline(struct pvk_device *device)
         char error[256];
         device->fill_pipeline = pvk_compile_compute(device, pvk_fill_msl, "pvk_fill_buffer", 64, error, sizeof(error));
         if (!device->fill_pipeline)
-            pvk_log(PVK_LOG_ERROR, "internal fill kernel: %s", error);
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
+                     "internal fill kernel: %s", error);
     }
     pso = device->fill_pipeline;
     pthread_mutex_unlock(&pvk_internal_lock);
@@ -58315,7 +60629,9 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
     if (!hit) {
         result = pvk_spirv_to_msl(code, words, stage->pName, &options, &res);
         if (result != VK_SUCCESS) {
-            pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: cannot translate the shader: %s", res.error);
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-translation", VK_OBJECT_TYPE_SHADER_MODULE,
+                     (uint64_t)(uintptr_t)stage->module, "vkCreateComputePipelines: cannot translate the shader: %s",
+                     res.error);
             pvk_msl_result_free(&res);
             pvk_free(alloc, bindings);
             pvk_free(alloc, ycbcr);
@@ -58323,7 +60639,9 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
         }
         if ((res.has_push_constants && res.push_constant_offset + res.push_constant_size > PVK_MAX_PUSH_CONSTANTS_SIZE) ||
             (res.dispatch_base && res.dispatch_base_offset > PVK_MAX_PUSH_CONSTANTS_SIZE)) {
-            pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: push constants beyond maxPushConstantsSize");
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-translation", VK_OBJECT_TYPE_SHADER_MODULE,
+                     (uint64_t)(uintptr_t)stage->module,
+                     "vkCreateComputePipelines: push constants beyond maxPushConstantsSize");
             pvk_msl_result_free(&res);
             pvk_free(alloc, bindings);
             pvk_free(alloc, ycbcr);
@@ -58341,13 +60659,18 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
     pvk_free(alloc, ycbcr);
     source = hit ? msl[0] : res.msl;
     name = hit ? entry[0] : res.entry_point;
-    if (!pso)
-        pso = pvk_compile_compute(device, source, name,
-                                  (unsigned long)ci.workgroup[0] * ci.workgroup[1] * ci.workgroup[2], error,
-                                  sizeof(error));
     if (!pso) {
-        pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: %s", error);
-        pvk_log(PVK_LOG_DEBUG, "MSL:\n%s", source);
+        char label[300];
+        pvk_stage_label(label, sizeof(label), stage);
+        pso = pvk_compile_compute_labeled(device, source, name,
+                                          (unsigned long)ci.workgroup[0] * ci.workgroup[1] * ci.workgroup[2], label,
+                                          error, sizeof(error));
+    }
+    if (!pso) {
+        pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-compilation", VK_OBJECT_TYPE_SHADER_MODULE,
+                 (uint64_t)(uintptr_t)stage->module, "vkCreateComputePipelines: %s", error);
+        pvk_logd(device, PVK_LOG_DEBUG, "PlasmaVK-shader-msl", VK_OBJECT_TYPE_SHADER_MODULE,
+                 (uint64_t)(uintptr_t)stage->module, "MSL:\n%s", source);
         pvk_free(alloc, msl[0]);
         pvk_msl_result_free(&res);
         return VK_ERROR_UNKNOWN;
@@ -58387,8 +60710,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateComputePipelines(VkDevice device, VkPipel
     for (i = 0; i < createInfoCount; i++) {
         VkResult r = pvk_compute_pipeline_create((struct pvk_device *)device, (struct pvk_pipeline_cache *)pipelineCache,
                                                  &pCreateInfos[i], alloc, &pPipelines[i]);
-        if (r == VK_SUCCESS)
+        if (r == VK_SUCCESS) {
+            pvk_live_add((struct pvk_device *)device, VK_OBJECT_TYPE_PIPELINE, pPipelines[i], NULL, pAllocator != NULL);
             continue;
+        }
         if (result == VK_SUCCESS)
             result = r;
         if (pvk_pipeline_flags(pCreateInfos[i].flags, pCreateInfos[i].pNext) &
@@ -58446,8 +60771,9 @@ static void pvk_subpass_ds_input(const struct pvk_render_pass *rp, struct pvk_su
             (sp->ds_input != VK_ATTACHMENT_UNUSED && a != sp->ds_input)) {
             static int warned;
             if (!warned++)
-                pvk_log(PVK_LOG_WARN, "vkCreateRenderPass: a subpass reads a depth/stencil attachment other than its "
-                                      "own as an input attachment, which is not supported (it reads its own)");
+                pvk_logi(NULL, PVK_LOG_WARN, "PlasmaVK-unsupported-ds-input",
+                         "vkCreateRenderPass: a subpass reads a depth/stencil attachment other than its own as an "
+                         "input attachment, which is not supported (it reads its own)");
             continue;
         }
         sp->ds_input = a;
@@ -59076,11 +61402,11 @@ static void pvk_stencil_face_state(struct pvk_stencil_face *f, const VkStencilOp
     f->reference = s->reference;
 }
 
-/* A render pipeline state from translated shaders (retained), NULL with a
- * message in error[]. */
+/* A render pipeline state from translated shaders (retained), labeled
+ * `label` (NULL: none), NULL with a message in error[]. */
 static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *d, const char *vs_msl,
                           const char *vs_entry, const char *fs_msl, const char *fs_entry, bool layered, bool invariant,
-                          char *error, size_t error_size)
+                          const char *label, char *error, size_t error_size)
 {
     void *pool = objc_autoreleasePoolPush();
     id vs_lib = pvk_msl_library(device, vs_msl, invariant, error, error_size), fs_lib = NULL, desc = NULL, vf = NULL;
@@ -59137,6 +61463,8 @@ static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *
             pvk_MTL4RenderPipelineDescriptor_setInputPrimitiveTopology(desc, d->topology_class);
         pvk_MTL4RenderPipelineDescriptor_setColorAttachmentMappingState(
             desc, PVK_MTL4LogicalToPhysicalColorAttachmentMappingStateInherited);
+        if (label)
+            pvk_MTL4PipelineDescriptor_setLabel(desc, pvk_NSString_stringWithUTF8String(label));
         pso = pvk_render_pipeline_compile(device, desc, error, error_size);
     }
     pvk_release(ff);
@@ -59239,11 +61567,13 @@ static id pvk_gfx_variant(struct pvk_device *device, struct pvk_pipeline *p, uns
     if (!v->pso[kind] && !v->failed[kind]) {
         char error[256];
         v->pso[kind] = pvk_gfx_compile(device, &v->desc, v->vs_msl, v->vs_entry, v->fs_msl[kind], v->fs_entry[kind],
-                                       v->layered, v->invariant, error, sizeof(error));
+                                       v->layered, v->invariant, "PlasmaVK depth copy variant", error, sizeof(error));
         if (!v->pso[kind]) {
             v->failed[kind] = true;
-            pvk_log(PVK_LOG_ERROR, "a graphics pipeline's depth copy variant: %s", error);
-            pvk_log(PVK_LOG_DEBUG, "fragment MSL:\n%s", v->fs_msl[kind]);
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-compilation", VK_OBJECT_TYPE_PIPELINE,
+                     (uint64_t)(uintptr_t)p, "a graphics pipeline's depth copy variant: %s", error);
+            pvk_logd(device, PVK_LOG_DEBUG, "PlasmaVK-shader-msl", VK_OBJECT_TYPE_PIPELINE, (uint64_t)(uintptr_t)p,
+                     "fragment MSL:\n%s", v->fs_msl[kind]);
         }
     }
     pso = v->pso[kind];
@@ -59352,8 +61682,10 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
         result = pvk_spirv_to_msl_graphics(src->vs_code, src->vs_words, vs->pName, vo, src->fs_code,
                                            fs ? src->fs_words : 0, fs ? fs->pName : NULL, fo, &vres, &fres);
         if (result != VK_SUCCESS) {
-            pvk_log(PVK_LOG_ERROR, "vkCreateGraphicsPipelines: cannot translate the shaders: %s",
-                    vres.error[0] ? vres.error : fres.error);
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-translation", VK_OBJECT_TYPE_SHADER_MODULE,
+                     (uint64_t)(uintptr_t)(vres.error[0] || !fs ? vs->module : fs->module),
+                     "vkCreateGraphicsPipelines: cannot translate the shaders: %s",
+                     vres.error[0] ? vres.error : fres.error);
             pvk_msl_result_free(&vres);
             pvk_msl_result_free(&fres);
             return result == VK_ERROR_OUT_OF_HOST_MEMORY ? result : VK_ERROR_UNKNOWN;
@@ -59364,7 +61696,9 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
         if (fres.has_push_constants && ((fres.push_constant_offset + fres.push_constant_size + 15) & ~15u) > ci->push_size)
             ci->push_size = (fres.push_constant_offset + fres.push_constant_size + 15) & ~15u;
         if (ci->push_size > PVK_MAX_PUSH_CONSTANTS_SIZE) {
-            pvk_log(PVK_LOG_ERROR, "vkCreateGraphicsPipelines: push constants beyond maxPushConstantsSize");
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-translation", VK_OBJECT_TYPE_SHADER_MODULE,
+                     (uint64_t)(uintptr_t)vs->module,
+                     "vkCreateGraphicsPipelines: push constants beyond maxPushConstantsSize");
             pvk_msl_result_free(&vres);
             pvk_msl_result_free(&fres);
             return VK_ERROR_UNKNOWN;
@@ -59383,15 +61717,25 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
     names[1] = *hit ? entry[1] : fres.entry_point;
     if (!*pso) {
         struct pvk_gfx_desc dc = *d;
+        char label[600], fs_label[300];
+        pvk_stage_label(label, sizeof(label), vs);
+        if (fs) {
+            pvk_stage_label(fs_label, sizeof(fs_label), fs);
+            strncat(label, " + ", sizeof(label) - strlen(label) - 1);
+            strncat(label, fs_label, sizeof(label) - strlen(label) - 1);
+        }
         pvk_gfx_hidden_formats(&dc, ci->workgroup[0]); /* the depth/stencil copies the shader reads */
         *pso = pvk_gfx_compile(device, &dc, sources[0], names[0], sources[1], names[1], ci->dispatch_base != 0,
-                               ci->dispatch_base_offset != 0, error, sizeof(error));
+                               ci->dispatch_base_offset != 0, label, error, sizeof(error));
     }
     if (!*pso) {
-        pvk_log(PVK_LOG_ERROR, "vkCreateGraphicsPipelines: %s", error);
-        pvk_log(PVK_LOG_DEBUG, "vertex MSL:\n%s", sources[0]);
+        pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-compilation", VK_OBJECT_TYPE_SHADER_MODULE,
+                 (uint64_t)(uintptr_t)vs->module, "vkCreateGraphicsPipelines: %s", error);
+        pvk_logd(device, PVK_LOG_DEBUG, "PlasmaVK-shader-msl", VK_OBJECT_TYPE_SHADER_MODULE,
+                 (uint64_t)(uintptr_t)vs->module, "vertex MSL:\n%s", sources[0]);
         if (sources[1])
-            pvk_log(PVK_LOG_DEBUG, "fragment MSL:\n%s", sources[1]);
+            pvk_logd(device, PVK_LOG_DEBUG, "PlasmaVK-shader-msl", VK_OBJECT_TYPE_SHADER_MODULE,
+                     (uint64_t)(uintptr_t)fs->module, "fragment MSL:\n%s", sources[1]);
         pvk_free(alloc, msl[0]);
         pvk_free(alloc, msl[1]);
         pvk_msl_result_free(&vres);
@@ -59460,7 +61804,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
             fs = &info->pStages[i];
     }
     if (!vs) {
-        pvk_log(PVK_LOG_ERROR, "vkCreateGraphicsPipelines: no vertex shader (other stages are not supported)");
+        pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-unsupported-shader-stages", VK_OBJECT_TYPE_DEVICE, 0,
+                 "vkCreateGraphicsPipelines: no vertex shader (other stages are not supported)");
         return VK_ERROR_UNKNOWN;
     }
     for (ext = info->pNext; ext; ext = ext->pNext) {
@@ -59800,8 +62145,9 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
             variant_msl[k] = pvk_hidden_fragment_msl(alloc, hidden_logical[0], bits, d.samples, k == PVK_VARIANT_BOUNDS);
             snprintf(variant_entry[k], sizeof(variant_entry[k]), "pvk_depth_fs");
         } else {
-            pvk_log(PVK_LOG_ERROR, "vkCreateGraphicsPipelines: cannot translate a depth copy variant: %s",
-                    vv.error[0] ? vv.error : fvr.error);
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-translation", VK_OBJECT_TYPE_SHADER_MODULE,
+                     (uint64_t)(uintptr_t)vs->module, "vkCreateGraphicsPipelines: cannot translate a depth copy "
+                     "variant: %s", vv.error[0] ? vv.error : fvr.error);
         }
         pvk_msl_result_free(&vv);
         pvk_msl_result_free(&fvr);
@@ -59836,7 +62182,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
             gfx.variants = v;
         } else {
             pvk_free(alloc, v);
-            pvk_log(PVK_LOG_ERROR, "vkCreateGraphicsPipelines: out of memory for the depth copy variants");
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-out-of-memory", VK_OBJECT_TYPE_DEVICE, 0,
+                     "vkCreateGraphicsPipelines: out of memory for the depth copy variants");
             eager = 0;
         }
     }
@@ -59881,8 +62228,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateGraphicsPipelines(VkDevice device, VkPipe
     for (i = 0; i < createInfoCount; i++) {
         VkResult r = pvk_graphics_pipeline_create((struct pvk_device *)device, (struct pvk_pipeline_cache *)pipelineCache,
                                                   &pCreateInfos[i], alloc, &pPipelines[i]);
-        if (r == VK_SUCCESS)
+        if (r == VK_SUCCESS) {
+            pvk_live_add((struct pvk_device *)device, VK_OBJECT_TYPE_PIPELINE, pPipelines[i], NULL, pAllocator != NULL);
             continue;
+        }
         if (result == VK_SUCCESS)
             result = r;
         if (pvk_pipeline_flags(pCreateInfos[i].flags, pCreateInfos[i].pNext) &
@@ -59900,7 +62249,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
 {
     struct pvk_pipeline *pipeline = (struct pvk_pipeline *)_pipeline;
     const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
-    if (!pipeline)
+    if (!pipeline || !pvk_live_destroy((struct pvk_device *)device, VK_OBJECT_TYPE_PIPELINE, pipeline, pAllocator))
         return;
     pvk_release(pipeline->mtl_pipeline);
     pvk_release(pipeline->mtl_pipeline_snorm);
@@ -60290,7 +62639,8 @@ static void pvk_swapchain_free(struct pvk_swapchain *sc, const VkAllocationCallb
         while (img->release_event &&
                !pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(img->release_event, img->release_value, 100)) {
             if (pvk_device_lost(device) || pvk_now_ns() - start > 5000000000ull) {
-                pvk_log(PVK_LOG_ERROR, "vkDestroySwapchainKHR: a present of image %u is not done", i);
+                pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-vkDestroySwapchainKHR-busy", VK_OBJECT_TYPE_SWAPCHAIN_KHR,
+                         (uint64_t)(uintptr_t)sc, "vkDestroySwapchainKHR: a present of image %u is not done", i);
                 break;
             }
         }
@@ -60644,7 +62994,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue _queue, const VkPresent
          * dropped. */
         batches[i].drawable = pvk_retain(pvk_CAMetalLayer_nextDrawable(sc->layer));
         if (!batches[i].drawable) {
-            pvk_log(PVK_LOG_INFO, "vkQueuePresentKHR: no drawable within a second, a frame is dropped");
+            pvk_logd(device, PVK_LOG_INFO, "PlasmaVK-vkQueuePresentKHR-frame-dropped", VK_OBJECT_TYPE_SWAPCHAIN_KHR,
+                     (uint64_t)(uintptr_t)sc, "vkQueuePresentKHR: no drawable within a second, a frame is dropped");
             continue;
         }
         result = pvk_present_encode(queue, sc, &sc->images[pPresentInfo->pImageIndices[i]], batches[i].drawable,
@@ -60744,6 +63095,7 @@ static const struct pvk_entrypoint {
     { "vkBindBufferMemory2", (PFN_vkVoidFunction)vkBindBufferMemory2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkBindImageMemory", (PFN_vkVoidFunction)vkBindImageMemory, PVK_SCOPE_DEVICE },
     { "vkBindImageMemory2", (PFN_vkVoidFunction)vkBindImageMemory2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkCmdBeginDebugUtilsLabelEXT", (PFN_vkVoidFunction)vkCmdBeginDebugUtilsLabelEXT, PVK_SCOPE_DEVICE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkCmdBeginQuery", (PFN_vkVoidFunction)vkCmdBeginQuery, PVK_SCOPE_DEVICE },
     { "vkCmdBeginRenderPass", (PFN_vkVoidFunction)vkCmdBeginRenderPass, PVK_SCOPE_DEVICE },
     { "vkCmdBeginRenderPass2", (PFN_vkVoidFunction)vkCmdBeginRenderPass2, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
@@ -60781,12 +63133,14 @@ static const struct pvk_entrypoint {
     { "vkCmdDrawIndirect", (PFN_vkVoidFunction)vkCmdDrawIndirect, PVK_SCOPE_DEVICE },
     { "vkCmdDrawIndirectCount", (PFN_vkVoidFunction)vkCmdDrawIndirectCount, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkCmdDrawIndirectCountKHR", (PFN_vkVoidFunction)vkCmdDrawIndirectCount, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_draw_indirect_count) },
+    { "vkCmdEndDebugUtilsLabelEXT", (PFN_vkVoidFunction)vkCmdEndDebugUtilsLabelEXT, PVK_SCOPE_DEVICE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkCmdEndQuery", (PFN_vkVoidFunction)vkCmdEndQuery, PVK_SCOPE_DEVICE },
     { "vkCmdEndRenderPass", (PFN_vkVoidFunction)vkCmdEndRenderPass, PVK_SCOPE_DEVICE },
     { "vkCmdEndRenderPass2", (PFN_vkVoidFunction)vkCmdEndRenderPass2, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkCmdEndRendering", (PFN_vkVoidFunction)vkCmdEndRendering, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdExecuteCommands", (PFN_vkVoidFunction)vkCmdExecuteCommands, PVK_SCOPE_DEVICE },
     { "vkCmdFillBuffer", (PFN_vkVoidFunction)vkCmdFillBuffer, PVK_SCOPE_DEVICE },
+    { "vkCmdInsertDebugUtilsLabelEXT", (PFN_vkVoidFunction)vkCmdInsertDebugUtilsLabelEXT, PVK_SCOPE_DEVICE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkCmdNextSubpass", (PFN_vkVoidFunction)vkCmdNextSubpass, PVK_SCOPE_DEVICE },
     { "vkCmdNextSubpass2", (PFN_vkVoidFunction)vkCmdNextSubpass2, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkCmdPipelineBarrier", (PFN_vkVoidFunction)vkCmdPipelineBarrier, PVK_SCOPE_DEVICE },
@@ -60843,6 +63197,7 @@ static const struct pvk_entrypoint {
     { "vkCreateBufferView", (PFN_vkVoidFunction)vkCreateBufferView, PVK_SCOPE_DEVICE },
     { "vkCreateCommandPool", (PFN_vkVoidFunction)vkCreateCommandPool, PVK_SCOPE_DEVICE },
     { "vkCreateComputePipelines", (PFN_vkVoidFunction)vkCreateComputePipelines, PVK_SCOPE_DEVICE },
+    { "vkCreateDebugUtilsMessengerEXT", (PFN_vkVoidFunction)vkCreateDebugUtilsMessengerEXT, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkCreateDescriptorPool", (PFN_vkVoidFunction)vkCreateDescriptorPool, PVK_SCOPE_DEVICE },
     { "vkCreateDescriptorSetLayout", (PFN_vkVoidFunction)vkCreateDescriptorSetLayout, PVK_SCOPE_DEVICE },
     { "vkCreateDescriptorUpdateTemplate", (PFN_vkVoidFunction)vkCreateDescriptorUpdateTemplate, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
@@ -60869,6 +63224,7 @@ static const struct pvk_entrypoint {
     { "vkDestroyBuffer", (PFN_vkVoidFunction)vkDestroyBuffer, PVK_SCOPE_DEVICE },
     { "vkDestroyBufferView", (PFN_vkVoidFunction)vkDestroyBufferView, PVK_SCOPE_DEVICE },
     { "vkDestroyCommandPool", (PFN_vkVoidFunction)vkDestroyCommandPool, PVK_SCOPE_DEVICE },
+    { "vkDestroyDebugUtilsMessengerEXT", (PFN_vkVoidFunction)vkDestroyDebugUtilsMessengerEXT, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkDestroyDescriptorPool", (PFN_vkVoidFunction)vkDestroyDescriptorPool, PVK_SCOPE_DEVICE },
     { "vkDestroyDescriptorSetLayout", (PFN_vkVoidFunction)vkDestroyDescriptorSetLayout, PVK_SCOPE_DEVICE },
     { "vkDestroyDescriptorUpdateTemplate", (PFN_vkVoidFunction)vkDestroyDescriptorUpdateTemplate, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
@@ -60967,7 +63323,10 @@ static const struct pvk_entrypoint {
     { "vkMapMemory", (PFN_vkVoidFunction)vkMapMemory, PVK_SCOPE_DEVICE },
     { "vkMapMemory2", (PFN_vkVoidFunction)vkMapMemory2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkMergePipelineCaches", (PFN_vkVoidFunction)vkMergePipelineCaches, PVK_SCOPE_DEVICE },
+    { "vkQueueBeginDebugUtilsLabelEXT", (PFN_vkVoidFunction)vkQueueBeginDebugUtilsLabelEXT, PVK_SCOPE_DEVICE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkQueueBindSparse", (PFN_vkVoidFunction)vkQueueBindSparse, PVK_SCOPE_DEVICE },
+    { "vkQueueEndDebugUtilsLabelEXT", (PFN_vkVoidFunction)vkQueueEndDebugUtilsLabelEXT, PVK_SCOPE_DEVICE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
+    { "vkQueueInsertDebugUtilsLabelEXT", (PFN_vkVoidFunction)vkQueueInsertDebugUtilsLabelEXT, PVK_SCOPE_DEVICE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkQueuePresentKHR", (PFN_vkVoidFunction)vkQueuePresentKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) },
     { "vkQueueSubmit", (PFN_vkVoidFunction)vkQueueSubmit, PVK_SCOPE_DEVICE },
     { "vkQueueSubmit2", (PFN_vkVoidFunction)vkQueueSubmit2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
@@ -60978,9 +63337,12 @@ static const struct pvk_entrypoint {
     { "vkResetEvent", (PFN_vkVoidFunction)vkResetEvent, PVK_SCOPE_DEVICE },
     { "vkResetFences", (PFN_vkVoidFunction)vkResetFences, PVK_SCOPE_DEVICE },
     { "vkResetQueryPool", (PFN_vkVoidFunction)vkResetQueryPool, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkSetDebugUtilsObjectNameEXT", (PFN_vkVoidFunction)vkSetDebugUtilsObjectNameEXT, PVK_SCOPE_DEVICE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
+    { "vkSetDebugUtilsObjectTagEXT", (PFN_vkVoidFunction)vkSetDebugUtilsObjectTagEXT, PVK_SCOPE_DEVICE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkSetEvent", (PFN_vkVoidFunction)vkSetEvent, PVK_SCOPE_DEVICE },
     { "vkSetPrivateData", (PFN_vkVoidFunction)vkSetPrivateData, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkSignalSemaphore", (PFN_vkVoidFunction)vkSignalSemaphore, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkSubmitDebugUtilsMessageEXT", (PFN_vkVoidFunction)vkSubmitDebugUtilsMessageEXT, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkTransitionImageLayout", (PFN_vkVoidFunction)vkTransitionImageLayout, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkTrimCommandPool", (PFN_vkVoidFunction)vkTrimCommandPool, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkUnmapMemory", (PFN_vkVoidFunction)vkUnmapMemory, PVK_SCOPE_DEVICE },

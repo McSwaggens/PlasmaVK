@@ -122,6 +122,7 @@ resources.buffer_device_address_shader
 extensions.instance_extensions
 extensions.instance_extensions_incomplete
 extensions.instance_extensions_missing_layer
+extensions.instance_layer_extensions
 extensions.instance_layers
 extensions.instance_extensions_enable_all
 extensions.device_extensions
@@ -129,6 +130,10 @@ extensions.device_extensions_incomplete
 extensions.device_extensions_missing_layer
 extensions.device_layers
 extensions.device_extension_needs_instance_extension
+extensions.instance_layer_enable
+extensions.instance_layer_extensions_enable
+extensions.device_layers_enabled_layer
+extensions.device_layer_extensions
 extensions.device_extension_with_instance_extension
 
 features.robustBufferAccess
@@ -650,3 +655,13 @@ sparsemem.sparse_image_opaque
 sparsemem.sparse_image_3d
 
 debugging.tool_properties
+debugging.debug_utils_messenger_filter
+debugging.debug_utils_message_data
+debugging.debug_utils_messenger_destroy
+debugging.debug_utils_messenger_allocator
+debugging.debug_utils_instance_create_info
+debugging.debug_utils_object_names
+debugging.debug_utils_object_name_messenger
+debugging.debug_utils_queue_labels
+debugging.debug_utils_cmd_labels
+debugging.debug_utils_proc_addr

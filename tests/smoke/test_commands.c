@@ -481,6 +481,7 @@ static void test_simultaneous(void)
 
     REQUIRE(b.data);
     cb = begin();
+    REQUIRE_VK(vkEndCommandBuffer(cb)); /* executable: a recording one must not be begun (the debug layer's 00049) */
     memset(&info, 0, sizeof(info));
     info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     info.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;

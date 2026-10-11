@@ -1,7 +1,8 @@
 /* Every Vulkan 1.4 core command, plus the commands of the extensions PlasmaVK
- * advertises: VK_KHR_surface, VK_EXT_metal_surface and VK_KHR_swapchain, and the
- * KHR aliases of VK_KHR_maintenance5 and VK_KHR_draw_indirect_count (the other
- * advertised extensions have no commands). Each entry names the core version or
+ * advertises: VK_KHR_surface, VK_EXT_metal_surface, VK_KHR_swapchain and
+ * VK_EXT_debug_utils, and the KHR aliases of VK_KHR_maintenance5 and
+ * VK_KHR_draw_indirect_count (the other advertised extensions have no
+ * commands). Each entry names the core version or
  * extension that introduced the command and its dispatch level (global,
  * instance, physical device or device; see Initialization > Command Function
  * Pointers). Used for coverage and by the vkGet*ProcAddr tests.
@@ -267,6 +268,19 @@ const struct ct_command ct_commands[] = {
     { "vkGetImageSubresourceLayout2KHR", "VK_KHR_maintenance5", CT_LEVEL_DEVICE },
     { "vkCmdDrawIndirectCountKHR", "VK_KHR_draw_indirect_count", CT_LEVEL_DEVICE },
     { "vkCmdDrawIndexedIndirectCountKHR", "VK_KHR_draw_indirect_count", CT_LEVEL_DEVICE },
+    /* VK_EXT_debug_utils: an instance extension with device-level commands
+     * (vkGetDeviceProcAddr returns them when the instance enabled it) */
+    { "vkCreateDebugUtilsMessengerEXT", "VK_EXT_debug_utils", CT_LEVEL_INSTANCE },
+    { "vkDestroyDebugUtilsMessengerEXT", "VK_EXT_debug_utils", CT_LEVEL_INSTANCE },
+    { "vkSubmitDebugUtilsMessageEXT", "VK_EXT_debug_utils", CT_LEVEL_INSTANCE },
+    { "vkSetDebugUtilsObjectNameEXT", "VK_EXT_debug_utils", CT_LEVEL_DEVICE },
+    { "vkSetDebugUtilsObjectTagEXT", "VK_EXT_debug_utils", CT_LEVEL_DEVICE },
+    { "vkQueueBeginDebugUtilsLabelEXT", "VK_EXT_debug_utils", CT_LEVEL_DEVICE },
+    { "vkQueueEndDebugUtilsLabelEXT", "VK_EXT_debug_utils", CT_LEVEL_DEVICE },
+    { "vkQueueInsertDebugUtilsLabelEXT", "VK_EXT_debug_utils", CT_LEVEL_DEVICE },
+    { "vkCmdBeginDebugUtilsLabelEXT", "VK_EXT_debug_utils", CT_LEVEL_DEVICE },
+    { "vkCmdEndDebugUtilsLabelEXT", "VK_EXT_debug_utils", CT_LEVEL_DEVICE },
+    { "vkCmdInsertDebugUtilsLabelEXT", "VK_EXT_debug_utils", CT_LEVEL_DEVICE },
 };
 
 const size_t ct_command_count = sizeof(ct_commands) / sizeof(ct_commands[0]);

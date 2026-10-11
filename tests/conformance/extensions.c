@@ -348,6 +348,181 @@ CT_TEST(device_extension_needs_instance_extension,
     ct_env_fini(&e);
 }
 
+/* ---- Enabling a layer ----
+ *
+ * Layers that need no configuration and are safe to enable in a test: the
+ * first of these the implementation lists is the one the tests below enable
+ * (PlasmaVK's built-in layer; through a loader, the Khronos validation
+ * layer). Other layers (capture, API dump) would change the test's process. */
+static const char *const known_layers[] = { "VK_LAYER_PLASMAVK_debug", "VK_LAYER_KHRONOS_validation" };
+
+/* The listed layer to enable, its properties in *props; ends the test with
+ * a skip if none is listed. */
+static void pick_layer(struct ct *t, VkLayerProperties *props)
+{
+    uint32_t count, i, k;
+    VkLayerProperties *layers = get_instance_layers(t, &count);
+    for (k = 0; k < CT_ARRAY_SIZE(known_layers); k++)
+        for (i = 0; i < count; i++)
+            if (strcmp(layers[i].layerName, known_layers[k]) == 0) {
+                *props = layers[i];
+                free(layers);
+                return;
+            }
+    free(layers);
+    ct_skip(t, "none of the layers known to be safe to enable is listed");
+}
+
+/* vkCreateInstance with the layer and extensions enabled (and portability
+ * enumeration when offered, as ct_create_instance does). */
+static VkResult create_instance_with_layer(const char *layer, const char *const *extensions, uint32_t extension_count,
+                                           VkInstance *instance)
+{
+    const char *names[64];
+    VkApplicationInfo app;
+    VkInstanceCreateInfo info;
+    uint32_t i, n = 0;
+    int portability = ct_instance_extension_supported(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+
+    for (i = 0; i < extension_count && n < 63; i++)
+        names[n++] = extensions[i];
+    if (portability)
+        names[n++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+    memset(&app, 0, sizeof(app));
+    app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    app.apiVersion = CT_MIN(VK_API_VERSION_1_4, CT_VERSION(ct_instance_version()));
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    info.flags = portability ? VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR : 0;
+    info.pApplicationInfo = &app;
+    info.enabledLayerCount = 1;
+    info.ppEnabledLayerNames = &layer;
+    info.enabledExtensionCount = n;
+    info.ppEnabledExtensionNames = n ? names : NULL;
+    return vkCreateInstance(&info, NULL, instance);
+}
+
+static VkPhysicalDevice first_physical_device(struct ct *t, VkInstance instance)
+{
+    VkPhysicalDevice pd[8];
+    uint32_t count = 8;
+    VkResult r = vkEnumeratePhysicalDevices(instance, &count, pd);
+    CT_REQUIRE(t, (r == VK_SUCCESS || r == VK_INCOMPLETE) && count > 0);
+    return pd[0];
+}
+
+CT_TEST(instance_layer_enable,
+        "Layers & Extensions > Layers: a layer vkEnumerateInstanceLayerProperties lists is enabled by naming it in "
+        "VkInstanceCreateInfo::ppEnabledLayerNames; vkCreateInstance succeeds and the instance works",
+        "vkEnumerateInstanceLayerProperties vkCreateInstance vkEnumeratePhysicalDevices vkGetPhysicalDeviceProperties "
+        "vkDestroyInstance")
+{
+    VkLayerProperties layer;
+    VkPhysicalDeviceProperties props;
+    VkInstance instance = VK_NULL_HANDLE;
+
+    pick_layer(t, &layer);
+    CT_REQUIRE_VK(t, create_instance_with_layer(layer.layerName, NULL, 0, &instance));
+    vkGetPhysicalDeviceProperties(first_physical_device(t, instance), &props);
+    CT_CHECK(t, VK_API_VERSION_MAJOR(props.apiVersion) >= 1);
+    vkDestroyInstance(instance, NULL);
+}
+
+CT_TEST(instance_layer_extensions_enable,
+        "Layers & Extensions > Instance Extensions: \"When pLayerName is the name of a layer, the instance "
+        "extensions provided by that layer are returned\"; with the layer enabled, every one of them can be enabled "
+        "together (extensions offered must be supported)",
+        "vkEnumerateInstanceLayerProperties vkEnumerateInstanceExtensionProperties vkCreateInstance vkDestroyInstance")
+{
+    VkLayerProperties layer;
+    VkExtensionProperties *props;
+    const char **names;
+    VkInstance instance = VK_NULL_HANDLE;
+    uint32_t count, i;
+
+    pick_layer(t, &layer);
+    props = get_instance_extensions(t, layer.layerName, &count);
+    names = calloc(count + 1, sizeof(*names));
+    CT_REQUIRE(t, names != NULL);
+    for (i = 0; i < count; i++) {
+        names[i] = props[i].extensionName;
+        ct_note(t, "%s provides %s (spec version %u)", layer.layerName, names[i], props[i].specVersion);
+    }
+    CT_CHECK_VK(t, create_instance_with_layer(layer.layerName, names, count, &instance), VK_SUCCESS);
+    if (instance)
+        vkDestroyInstance(instance, NULL);
+    free(names);
+    free(props);
+}
+
+CT_TEST(device_layers_enabled_layer,
+        "Layers & Extensions > Layers: \"The list of layers enumerated by vkEnumerateDeviceLayerProperties must be "
+        "exactly the sequence of layers enabled for the instance\", with the properties "
+        "vkEnumerateInstanceLayerProperties gave them: a layer enabled on the instance is listed",
+        "vkEnumerateInstanceLayerProperties vkCreateInstance vkEnumeratePhysicalDevices "
+        "vkEnumerateDeviceLayerProperties vkDestroyInstance")
+{
+    VkLayerProperties layer, *device_layers, *instance_layers;
+    VkInstance instance = VK_NULL_HANDLE;
+    struct device_ctx d;
+    uint32_t count = 0, instance_count, i, j;
+    int found = 0;
+
+    pick_layer(t, &layer);
+    instance_layers = get_instance_layers(t, &instance_count);
+    CT_REQUIRE_VK(t, create_instance_with_layer(layer.layerName, NULL, 0, &instance));
+    d.pd = first_physical_device(t, instance);
+    d.layer = NULL;
+    CT_REQUIRE_VK(t, vkEnumerateDeviceLayerProperties(d.pd, &count, NULL));
+    device_layers = calloc(count + 1, sizeof(*device_layers));
+    CT_REQUIRE(t, device_layers != NULL);
+    CT_REQUIRE_VK(t, vkEnumerateDeviceLayerProperties(d.pd, &count, device_layers));
+    for (i = 0; i < count; i++) {
+        int listed = 0;
+        found |= same_layer(&device_layers[i], &layer);
+        for (j = 0; j < instance_count; j++)
+            listed |= same_layer(&device_layers[i], &instance_layers[j]);
+        CT_CHECKF(t, listed, "device layer %u is not an instance layer with the same properties", i);
+    }
+    CT_CHECKF(t, found, "%s, enabled on the instance, is not a device layer with the same properties", layer.layerName);
+    check_incomplete(t, enum_device_layers, &d, sizeof(VkLayerProperties), "device layers");
+    free(device_layers);
+    free(instance_layers);
+    vkDestroyInstance(instance, NULL);
+}
+
+CT_TEST(device_layer_extensions,
+        "Layers & Extensions > Device Extensions: \"When pLayerName is the name of a layer, the device extensions "
+        "provided by that layer are returned\": for every listed layer the query succeeds, with the list rules and "
+        "the VK_INCOMPLETE protocol",
+        "vkEnumerateInstanceLayerProperties vkEnumerateDeviceExtensionProperties")
+{
+    struct ct_env e;
+    struct device_ctx d;
+    VkLayerProperties *layers;
+    uint32_t count, i;
+
+    layers = get_instance_layers(t, &count);
+    if (!count)
+        ct_skip(t, "no layers are available");
+    ct_env_init(t, &e);
+    d.pd = e.pd;
+    for (i = 0; i < count; i++) {
+        VkExtensionProperties *props;
+        uint32_t n = 0;
+        d.layer = layers[i].layerName;
+        CT_CHECK_VK(t, vkEnumerateDeviceExtensionProperties(e.pd, d.layer, &n, NULL), VK_SUCCESS);
+        props = calloc(n + 1, sizeof(*props));
+        CT_REQUIRE(t, props != NULL);
+        CT_CHECK_VK(t, vkEnumerateDeviceExtensionProperties(e.pd, d.layer, &n, props), VK_SUCCESS);
+        check_extension_list(t, props, n, d.layer);
+        check_incomplete(t, enum_device_extensions, &d, sizeof(VkExtensionProperties), d.layer);
+        free(props);
+    }
+    free(layers);
+    ct_env_fini(&e);
+}
+
 CT_TEST(device_extension_with_instance_extension,
         "Layers & Extensions > Extension Dependencies: with VK_KHR_surface enabled on the instance, a device "
         "offering VK_KHR_swapchain lists it and it can be enabled",
@@ -378,6 +553,10 @@ static const struct ct_test *const tests[] = {
     CT_REF(device_extensions_missing_layer),
     CT_REF(device_layers),
     CT_REF(device_extension_needs_instance_extension),
+    CT_REF(instance_layer_enable),
+    CT_REF(instance_layer_extensions_enable),
+    CT_REF(device_layers_enabled_layer),
+    CT_REF(device_layer_extensions),
     CT_REF(device_extension_with_instance_extension),
 };
 

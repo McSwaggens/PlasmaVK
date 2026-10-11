@@ -723,7 +723,6 @@ CT_TEST(sparse_buffer_residency,
     ct_transfer_barrier(cb);
     sp_copy(cb, buffer, block, dst.buffer, block, 2 * block);
     ct_host_read_barrier(cb);
-    CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
     ct_submit_and_wait(t, &e, cb);
     CT_CHECK(t, memcmp(dst.data + block, src.data + block, (size_t)(2 * block)) == 0);
     if (mem_data) {
@@ -742,7 +741,6 @@ CT_TEST(sparse_buffer_residency,
         ct_transfer_barrier(cb);
         sp_copy(cb, buffer, 0, dst.buffer, size, size);
         ct_host_read_barrier(cb);
-        CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
         ct_submit_and_wait(t, &e, cb);
         for (b = 0; b < 4; b++) {
             const unsigned char *got = dst.data + size + b * block;
@@ -809,7 +807,6 @@ CT_TEST(sparse_buffer_rebind,
         }
         sp_copy(cb, buffer, 0, dst.buffer, 0, block);
         ct_host_read_barrier(cb);
-        CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
         ct_submit_and_wait(t, &e, cb);
         if (which[step] < 0)
             CT_CHECKF(t, ct_all_bytes(dst.data, (size_t)block, 0), "step %u: the unbound block does not read 0", step);
@@ -873,7 +870,6 @@ CT_TEST(sparse_buffer_aliased,
     ct_transfer_barrier(cb);
     sp_copy(cb, x, 0, dst.buffer, 2 * block, block); /* read x block 0 */
     ct_host_read_barrier(cb);
-    CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
     ct_submit_and_wait(t, &e, cb);
     CT_CHECKF(t, sp_words_are(dst.data, (uint32_t)(block / 4), 3), "x block 1 does not see x block 0's write");
     CT_CHECKF(t, sp_words_are(dst.data + block, (uint32_t)(block / 4), 3), "y does not see x's write");
@@ -937,14 +933,12 @@ CT_TEST(bind_sparse_batches_order,
     cb = ct_begin_commands(t, &e);
     sp_copy(cb, src.buffer, block, buffer, 0, block);
     ct_host_read_barrier(cb);
-    CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
     ct_submit_and_wait(t, &e, cb);
     /* and memory a pattern 5 */
     sp_bind_buffer(t, &e, buffer, 0, block, a, 0);
     cb = ct_begin_commands(t, &e);
     sp_copy(cb, src.buffer, 0, buffer, 0, block);
     ct_host_read_barrier(cb);
-    CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
     ct_submit_and_wait(t, &e, cb);
 
     /* one call: batch 0 binds a and signals s1; batch 1 waits on s1, binds b, signals s2 */
@@ -1254,7 +1248,6 @@ CT_TEST(sparse_image_blocks,
     ct_transfer_barrier(cb);
     vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_GENERAL, dst.buffer, 1, &copy);
     ct_host_read_barrier(cb);
-    CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
     ct_submit_and_wait(t, &e, cb);
     for (y = gh; y < 2 * gh && bad < 4; y++)
         for (x = 2 * gw; x < 3 * gw && bad < 4; x++)
@@ -1274,7 +1267,6 @@ CT_TEST(sparse_image_blocks,
         ct_transfer_barrier(cb);
         vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_GENERAL, dst.buffer, 1, &copy);
         ct_host_read_barrier(cb);
-        CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
         ct_submit_and_wait(t, &e, cb);
         for (y = 0; y < h && bad < 4; y++)
             for (x = 0; x < w && bad < 4; x++) {
@@ -1354,7 +1346,6 @@ CT_TEST(sparse_image_mip_tail,
         }
     cb = ct_begin_commands(t, &e);
     ct_image_barrier(cb, image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-    CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
     ct_submit_and_wait(t, &e, cb);
     for (layer = 0; layer < info.arrayLayers; layer++)
         for (lv = 0; lv < info.mipLevels; lv++) {
@@ -1370,7 +1361,6 @@ CT_TEST(sparse_image_mip_tail,
             ct_transfer_barrier(cb);
             vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_GENERAL, dst.buffer, 1, &copy);
             ct_host_read_barrier(cb);
-            CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
             ct_submit_and_wait(t, &e, cb);
             CT_CHECKF(t, sp_words_are(dst.data, w * h, seed), "layer %u level %u (%s) differs", layer, lv,
                       lv >= r.imageMipTailFirstLod ? "mip tail" : "bound by image binds");
@@ -1429,7 +1419,6 @@ CT_TEST(sparse_image_opaque,
     ct_host_buffer(t, &e, 256 * 128 * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &dst);
     cb = ct_begin_commands(t, &e);
     ct_image_barrier(cb, image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-    CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
     ct_submit_and_wait(t, &e, cb);
     for (layer = 0; layer < 3; layer++)
         for (lv = 0; lv < 4; lv++) {
@@ -1443,7 +1432,6 @@ CT_TEST(sparse_image_opaque,
             ct_transfer_barrier(cb);
             vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_GENERAL, dst.buffer, 1, &copy);
             ct_host_read_barrier(cb);
-            CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
             ct_submit_and_wait(t, &e, cb);
             CT_CHECKF(t, sp_words_are(dst.data, w * h, seed), "layer %u level %u differs", layer, lv);
         }
@@ -1516,7 +1504,6 @@ CT_TEST(sparse_image_3d,
     ct_transfer_barrier(cb);
     vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_GENERAL, dst.buffer, 1, &copy);
     ct_host_read_barrier(cb);
-    CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
     ct_submit_and_wait(t, &e, cb);
     CT_CHECK(t, sp_words_are(dst.data, n, 9));
     vkDestroyImage(e.device, image, NULL);

@@ -22,7 +22,7 @@ One file per chapter of the Vulkan specification:
 | `cmdbuffers.c` | Command Buffers: resetting pools and command buffers (what they hold afterwards), trimming pools, `vkQueueSubmit2` (batches, binary and timeline semaphores, fences), the device mask | 5 |
 | `memory.c` | Memory Allocation: memory properties, allocation, mapping, flushing, host/device visibility, peer memory features | 28 |
 | `resources.c` | Resource Creation: buffers, images, memory requirements, binding, device addresses, subresource layouts, image and buffer views, multi-planar images (disjoint planes, linear plane layouts), the subresource layout queries of VK_KHR_maintenance5 on a 1.3 device | 32 |
-| `extensions.c` | Layers & Extensions: enumeration, extension dependencies | 12 |
+| `extensions.c` | Layers & Extensions: enumeration, extension dependencies, enabling a layer (with the instance extensions it provides), device layers of an instance with a layer enabled, the device extensions of each layer | 16 |
 | `features.c` | Features > Feature Requirements: one test per required feature | 86 |
 | `limits.c` | Limits > Limit Requirements: one test per limit of the Required Limits table | 145 |
 | `formats.c` | Formats: one test per format of the Required Format Support tables (features, image types), the required Y'CbCr formats, and the chapter's other rules | 66 |
@@ -43,7 +43,7 @@ One file per chapter of the Vulkan specification:
 | `dispatch.c` | Dispatching Commands: `vkCmdDispatchIndirect` (parameters read at execution, zero counts), `vkCmdDispatchBase` (WorkgroupId, NumWorkgroups, GlobalInvocationId), no base carried over | 3 |
 | `sparsemem.c` | Sparse Resources: memory requirements of sparse buffers and images (none without sparse residency), sparse image format properties and standard block shapes, mip tail rules; `vkQueueBindSparse` on a sparse binding queue: buffer blocks (residency, rebinding, unbinding, aliasing), image blocks, mip tails, fully resident images bound opaquely, 3D images, the order of batches; unbound regions where `residencyNonResidentStrict` | 14 |
 | `wsi.c` | Window System Integration: Metal surfaces, surface queries (support, capabilities, formats, present modes, present rectangles, device group modes), swapchains (images, allocation callbacks, `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`, recreation with `oldSwapchain`, aliasing a swapchain image), acquire and present (semaphores, fences, timeouts, two swapchains in one present), swapchain images as transfer source and destination | 20 |
-| `debugging.c` | Debugging > Active Tooling Information: `vkGetPhysicalDeviceToolProperties` (count protocol, strings) | 1 |
+| `debugging.c` | Debugging > Active Tooling Information: `vkGetPhysicalDeviceToolProperties` (count protocol, strings); Debug Utilities (VK_EXT_debug_utils): messenger filtering by severity and type, callback data passed through, destruction, allocation callbacks, messengers chained to `VkInstanceCreateInfo` (active only in `vkCreateInstance` and `vkDestroyInstance`), names of objects of every type (also instance-level ones and a messenger) and tags, queue labels, command buffer labels (nested, across render pass instances, command buffers of a batch and submissions, in secondaries), which `vkGet*ProcAddr` returns its commands | 11 |
 
 Framework: `ct.h` (test macros, helpers; for the graphics chapters
 offscreen render targets, a pipeline description with defaults, rectangle
@@ -156,9 +156,20 @@ of the file (an unlisted test is an unused static and breaks the build).
 
 `ct -c` reports which commands the selected tests call, against every Vulkan
 1.4 core command plus those of VK_KHR_surface, VK_EXT_metal_surface,
-VK_KHR_portability_enumeration and VK_KHR_swapchain, and lists the rest
-(VK_EXT_swapchain_colorspace has no commands). When PlasmaVK advertises
-another extension, add its commands to `commands.c`.
+VK_KHR_portability_enumeration, VK_KHR_swapchain and VK_EXT_debug_utils, and
+lists the rest (VK_EXT_swapchain_colorspace has no commands). When PlasmaVK
+advertises another extension, add its commands to `commands.c` (and, for a
+device extension, its name to `ct_origin_is_device_extension`).
+VK_EXT_debug_utils is an instance extension with device-level commands
+(object names, labels): the `vkGet*ProcAddr` tests treat them as instance
+extension commands, which `vkGetDeviceProcAddr` returns when the instance
+enabled the extension.
+
+The layer tests of `extensions.c` enable the first listed of the layers known
+to need no configuration (`VK_LAYER_PLASMAVK_debug`, PlasmaVK's built-in
+layer, or through a loader `VK_LAYER_KHRONOS_validation`) and skip if none is
+listed: enabling arbitrary layers (capture, API dump) would change the test's
+process.
 
 `wsi.c` makes its CAMetalLayers through the Objective-C runtime (plain C,
 `.linker_option` for QuartzCore and libobjc, so neither build needs link
@@ -236,6 +247,23 @@ against the specification; the tests are right:
   "behaves similarly to vkCmdDispatch except that the parameters are read by
   the device from a buffer during execution", and "vkCmdDispatch is
   equivalent to vkCmdDispatchBase(0,0,0,groupCountX,groupCountY,groupCountZ)".
+- `debugging.debug_utils_messenger_allocator`: `vkDestroyDebugUtilsMessengerEXT`
+  given the allocation callbacks the messenger was created with (one
+  allocation through them) calls their `pfnFree` twice: once for that
+  allocation, once with memory `pfnAllocation` did not return (in the
+  loader's `debug_utils_DestroyDebugUtilsMessengerEXT`). PFN_vkFreeFunction:
+  "If pMemory is non-NULL, it must be a pointer previously allocated by
+  pfnAllocation or pfnReallocation."
+- `debugging.debug_utils_object_name_messenger`: `vkSetDebugUtilsObjectNameEXT`
+  naming a `VkDebugUtilsMessengerEXT` (`VK_OBJECT_TYPE_DEBUG_UTILS_MESSENGER_EXT`)
+  crashes in `MVKVulkanAPIObject::setDebugName`: the loader passes MoltenVK
+  the handle it gave the application, which is the loader's own object. The
+  call is valid: VUID-VkDebugUtilsObjectNameInfoEXT-objectType-02590 asks for
+  "a valid Vulkan handle of the type associated with objectType as defined in
+  the VkObjectType and Vulkan Handle Relationship table", which pairs
+  `VK_OBJECT_TYPE_DEBUG_UTILS_MESSENGER_EXT` with `VkDebugUtilsMessengerEXT`.
+  Every other object type is named without trouble
+  (`debugging.debug_utils_object_names`).
 
 The graphics chapters' tests also skip on MoltenVK where it lacks a feature
 (`drawIndirectCount`, `depthBounds`, `logicOp`: the logic operation tests), and draw no triangle fans on
@@ -267,7 +295,6 @@ behaviour.
 | `devsandqueues.get_device_queue2_protected`, `features.pipelineProtectedAccess` | Apple GPUs have no protected memory. |
 | `memory.peer_memory_features` | Every device group has one physical device: `vkGetDeviceGroupPeerMemoryFeatures` has no valid call (its local and remote device indices must differ). |
 | `resources.buffer_capture_replay` | Metal cannot place a resource at a requested GPU address, so `bufferDeviceAddressCaptureReplay` is unsupported. |
-| `extensions.instance_layer_extensions` | No layers: PlasmaVK is linked directly, without a loader. |
 | `features.shaderInt64` | Required only with 64-bit shader atomics, which Apple7/Apple8 GPUs lack. |
 | `features.samplerFilterMinmax`, `formats.filter_minmax_formats`, `samplers.create_sampler_reduction` | Required only with VK_EXT_sampler_filter_minmax, which PlasmaVK offers from Apple10 (M5, A19): Metal's `MTLSamplerDescriptor.reductionMode` is an Apple10 feature (FST "Sampler minimum and maximum reduction"), and on Apple9 (M4 Max) it is accepted and ignored, minimum and maximum sampling as the weighted average. A shader cannot emulate it: a sampler descriptor is only its MTLResourceID. |
 
@@ -277,8 +304,12 @@ None: every test that does not skip is in `baseline.txt`.
 
 Running under the validation layer on MoltenVK reports no valid usage errors
 from the tests. (MoltenVK has no sparse features, so the sparse binding tests
-of `sparsemem.c` skip there and were checked against the chapter's valid usage
-by hand; the validation layer cannot run on PlasmaVK, which has no loader.)
+of `sparsemem.c` skip there; the validation layer cannot run on PlasmaVK,
+which has no loader.) On PlasmaVK the suite also runs under its own debug
+layer, `PLASMAVK_DEBUG=1 make conformance`, whose checks report nothing; they
+found that the sparse binding tests ended their command buffers twice
+(`vkEndCommandBuffer` before `ct_submit_and_wait`, which ends them:
+VUID-vkEndCommandBuffer-commandBuffer-00059), since fixed.
 Image view and sampler tests avoid component swizzles, format
 reinterpretation and LOD bias on devices with `VK_KHR_portability_subset`,
 whose features may forbid them (MoltenVK's do). It reports `UNASSIGNED-vkAllocateMemory-maxMemoryAllocationSize`
@@ -306,7 +337,12 @@ count of 0 with a non-NULL array by setting the count to 1 and returning
 `VK_SUCCESS`, where Fundamentals > Array Results requires that only as many
 elements be written as the count allows, the count be overwritten with the
 number written, and `VK_INCOMPLETE` be returned; without the layer there are no
-tools and it passes. With synchronization validation as well
+tools and it passes. `initialization.gdpa_disabled_device_extension` and
+`debugging.debug_utils_proc_addr` fail under the validation layer, which
+provides VK_EXT_debug_utils itself and returns its label commands from
+`vkGetDeviceProcAddr` although the instance did not enable the extension
+("any other case" of the vkGetDeviceProcAddr table: `NULL`); without the layer
+both pass. With synchronization validation as well
 (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true`), the only further reports are
 `SYNC-HAZARD-READ-AFTER-WRITE` for `synchronization.event_wait_device_signal`,
 whose copies wait (vkCmdWaitEvents) on events set by fills in another command

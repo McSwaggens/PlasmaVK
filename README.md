@@ -15,9 +15,9 @@ linker flags: the header links Metal itself.
 
 **Status:** every Vulkan 1.4 command is implemented on Metal 4 (no stubs left),
 along with the extensions PlasmaVK advertises: surfaces and swapchains on
-CAMetalLayer, maintenance5, descriptor indexing, draw parameters, indirect
-count, viewport index / layer output and, on Apple10 GPUs, sampler min/max
-filtering. Sparse resources (sparse binding; partially resident buffers and
+CAMetalLayer, debug utils, maintenance5, descriptor indexing, draw parameters,
+indirect count, viewport index / layer output and, on Apple10 GPUs, sampler
+min/max filtering, and a built-in debug layer (below). Sparse resources (sparse binding; partially resident buffers and
 2D, 3D and multisampled images; aliasing) map onto Metal 4's placement sparse
 buffers and textures (macOS/iOS 26.4). SPIR-V compute, vertex and fragment
 shaders are translated to MSL inside the header, including subgroups,
@@ -29,6 +29,20 @@ multi-GPU device groups or 64-bit shader atomics. It is not Khronos-conformant
 (that requires the Khronos CTS), and performance work has barely started:
 shaders compile in Metal's safe math mode, which costs GPU time against
 MoltenVK in the render benchmarks.
+
+## Debugging
+
+There is no loader, so the Khronos layers can't run on PlasmaVK; it has its
+own instead. `VK_EXT_debug_utils` is always offered: messengers receive
+PlasmaVK's diagnostics, and object names and label regions become Metal labels
+and debug groups in Xcode's GPU capture. The built-in layer
+`VK_LAYER_PLASMAVK_debug` (enable it in `ppEnabledLayerNames`, or set
+`PLASMAVK_DEBUG=1` for an application you can't change) prints every
+diagnostic, names Metal debug groups after each command buffer, render pass,
+draw, dispatch and transfer, and checks common errors (destroyed handles,
+command buffer states, mismatched allocation callbacks, missing features,
+leaks), reporting them with their VUIDs. The header comment's DEBUGGING part
+has the details.
 
 ## Requirements
 
