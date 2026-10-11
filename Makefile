@@ -29,6 +29,7 @@ LOADER_LIB := $(BREW)/lib
 MVK_ICD    := $(BREW)/etc/vulkan/icd.d/MoltenVK_icd.json
 
 .PHONY: all test check bench bench-mvk clean
+.PHONY: conformance conformance-mvk conformance-icd
 
 all: test
 
@@ -59,6 +60,7 @@ check:
 	@echo "== iOS (arm64, iOS 26)"
 	@$(IOS_CC) -std=c99 $(WARN) tests/compile/impl.c tests/compile/user.c -o $(BUILD)/check/ios
 	@$(MAKE) --no-print-directory test
+	@$(MAKE) --no-print-directory conformance
 
 # Every benchmark runs even if an earlier one reports an error (wrong output);
 # the target fails at the end if any did. See bench/README.md.
@@ -76,6 +78,41 @@ bench-mvk:
 			-L$(LOADER_LIB) -lvulkan -Wl,-rpath,$(LOADER_LIB) -o $(BUILD)/bench-loader/$$b || exit 1; \
 		VK_DRIVER_FILES=$(MVK_ICD) BENCH_IMPL=moltenvk ./$(BUILD)/bench-loader/$$b || status=1; \
 	done; exit $$status
+
+# Conformance tests (tests/conformance/README.md). The same sources build
+# twice: black-box against PlasmaVK (its implementation linked from a separate
+# translation unit), and against the system loader for any driver.
+#
+#   make conformance       on PlasmaVK, against the baseline (run by make check)
+#   make conformance-mvk   on MoltenVK through the system loader
+#   make conformance-icd ICD=/path/to/driver_icd.json   on any driver
+#   CONF_ARGS='pattern -v' selects tests and passes options to the runner
+CONF_DIR      := tests/conformance
+CONF_SRC      := $(wildcard $(CONF_DIR)/*.c)
+CONF_BASELINE := $(CONF_DIR)/baseline.txt
+CONF_ARGS     ?=
+CONF_SAN      := $(SAN) -fno-sanitize-recover=all # a sanitizer finding fails its test
+
+$(BUILD)/conformance/impl.o: tests/compile/impl.c plasmavk.h
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(CONF_SAN) -c tests/compile/impl.c -o $@
+
+$(BUILD)/conformance/ct-plasmavk: $(CONF_SRC) $(CONF_DIR)/ct.h plasmavk.h $(BUILD)/conformance/impl.o
+	$(CC) $(CFLAGS) $(CONF_SAN) $(CONF_SRC) $(BUILD)/conformance/impl.o -o $@
+
+$(BUILD)/conformance/ct-loader: $(CONF_SRC) $(CONF_DIR)/ct.h plasmavk.h
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(CONF_SRC) -L$(LOADER_LIB) -lvulkan -Wl,-rpath,$(LOADER_LIB) -o $@
+
+conformance: $(BUILD)/conformance/ct-plasmavk
+	./$< --baseline $(CONF_BASELINE) $(CONF_ARGS)
+
+conformance-mvk: $(BUILD)/conformance/ct-loader
+	VK_DRIVER_FILES=$(MVK_ICD) ./$< $(CONF_ARGS)
+
+conformance-icd: $(BUILD)/conformance/ct-loader
+	@test -n "$(ICD)" || { echo "usage: make conformance-icd ICD=/path/to/driver_icd.json"; exit 2; }
+	VK_DRIVER_FILES=$(ICD) ./$< $(CONF_ARGS)
 
 clean:
 	rm -rf $(BUILD)

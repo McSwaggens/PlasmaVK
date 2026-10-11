@@ -29,6 +29,7 @@ conformance suite.
 |---|---|
 | `plasmavk.h` | The library. It is the only source file and is edited directly; its header comment lists its sections. |
 | `tests/smoke/` | Fast C99 tests. Each one includes the header with no link flags. |
+| `tests/conformance/` | Black-box Vulkan conformance tests, spec-cited, one file per spec chapter; also run on MoltenVK or any driver. |
 | `tests/compile/` | Compile and link checks: C dialects, C++, ObjC (with and without `<Metal/Metal.h>`), iOS, two translation units. |
 | `bench/` | Realistic-workload benchmarks, comparable against MoltenVK and KosmicKrisp. |
 
@@ -36,7 +37,8 @@ conformance suite.
 
 ```bash
 make test       # smoke tests (ASan + UBSan)
-make check      # everything a user hits, then the smoke tests
+make check      # everything a user hits, then the smoke and conformance tests
+make conformance-mvk  # the conformance tests on MoltenVK (see tests/conformance/README.md)
 make bench      # benchmarks on PlasmaVK
 make bench-mvk  # the same benchmarks on MoltenVK (Homebrew molten-vk + vulkan-loader)
 ```
