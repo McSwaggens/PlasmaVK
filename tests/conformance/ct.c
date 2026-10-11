@@ -85,6 +85,9 @@ void ct_suite_samplers(struct ct_registry *r);
 void ct_suite_copies(struct ct_registry *r);
 void ct_suite_clears(struct ct_registry *r);
 void ct_suite_descriptorsets(struct ct_registry *r);
+void ct_suite_queries(struct ct_registry *r);
+void ct_suite_synchronization(struct ct_registry *r);
+void ct_suite_privatedata(struct ct_registry *r);
 void ct_suite_wsi(struct ct_registry *r);
 
 static void ct_register_all(struct ct_registry *r)
@@ -102,6 +105,9 @@ static void ct_register_all(struct ct_registry *r)
     ct_suite_copies(r);
     ct_suite_clears(r);
     ct_suite_descriptorsets(r);
+    ct_suite_queries(r);
+    ct_suite_synchronization(r);
+    ct_suite_privatedata(r);
     ct_suite_wsi(r);
 }
 
