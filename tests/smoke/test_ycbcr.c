@@ -1733,8 +1733,120 @@ static void test_plane_views(void)
     free(pl.data);
 }
 
+/* Descriptor writes, copies and update templates put the planes of a view
+ * with a conversion in the 32-byte descriptor (section 11), and keep the
+ * immutable sampler. Checked in the set tables. */
+static void test_descriptor_updates(void)
+{
+    const struct yfmt *f = &yfmts[FMT_3PLANE_420];
+    struct conv c = conv_default();
+    struct yimg m;
+    VkSamplerYcbcrConversion conv;
+    VkSampler sampler;
+    VkImageView view;
+    VkDescriptorSetLayoutBinding b;
+    VkDescriptorSetLayoutCreateInfo li;
+    VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+    VkDescriptorPoolSize size;
+    VkDescriptorPoolCreateInfo dpi;
+    VkDescriptorPool dpool = VK_NULL_HANDLE;
+    VkDescriptorSetLayout layouts[3];
+    VkDescriptorSetAllocateInfo dai;
+    VkDescriptorSet sets[3];
+    VkDescriptorImageInfo ii;
+    VkWriteDescriptorSet w;
+    VkCopyDescriptorSet cp;
+    VkDescriptorUpdateTemplateEntry entry;
+    VkDescriptorUpdateTemplateCreateInfo tci;
+    VkDescriptorUpdateTemplate tmpl = VK_NULL_HANDLE;
+    pvk_MTLResourceID want[4];
+    uint32_t s;
+
+    REQUIRE(make_yimg(&m, f, 16, 8, VK_IMAGE_TILING_OPTIMAL, 0, VK_IMAGE_USAGE_SAMPLED_BIT));
+    conv = make_conversion(f, &c);
+    sampler = make_sampler(conv, VK_FILTER_LINEAR, VK_FILTER_LINEAR);
+    view = make_view(m.image, f->format, VK_IMAGE_ASPECT_COLOR_BIT, conv);
+    REQUIRE(conv && sampler && view);
+    memset(&b, 0, sizeof(b));
+    b.binding = 3;
+    b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b.descriptorCount = 1;
+    b.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    b.pImmutableSamplers = &sampler;
+    memset(&li, 0, sizeof(li));
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 1;
+    li.pBindings = &b;
+    REQUIRE_VK(vkCreateDescriptorSetLayout(device, &li, NULL, &layout));
+    size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    size.descriptorCount = 3 * f->planes;
+    memset(&dpi, 0, sizeof(dpi));
+    dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpi.maxSets = 3;
+    dpi.poolSizeCount = 1;
+    dpi.pPoolSizes = &size;
+    REQUIRE_VK(vkCreateDescriptorPool(device, &dpi, NULL, &dpool));
+    layouts[0] = layouts[1] = layouts[2] = layout;
+    memset(&dai, 0, sizeof(dai));
+    dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dai.descriptorPool = dpool;
+    dai.descriptorSetCount = 3;
+    dai.pSetLayouts = layouts;
+    REQUIRE_VK(vkAllocateDescriptorSets(device, &dai, sets));
+    memset(&ii, 0, sizeof(ii));
+    ii.imageView = view;
+    ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    memset(&w, 0, sizeof(w));
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = sets[0];
+    w.dstBinding = 3;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = &ii;
+    memset(&cp, 0, sizeof(cp));
+    cp.sType = VK_STRUCTURE_TYPE_COPY_DESCRIPTOR_SET;
+    cp.srcSet = sets[0];
+    cp.srcBinding = 3;
+    cp.dstSet = sets[1];
+    cp.dstBinding = 3;
+    cp.descriptorCount = 1;
+    vkUpdateDescriptorSets(device, 1, &w, 0, NULL);
+    vkUpdateDescriptorSets(device, 0, NULL, 1, &cp);
+    entry.dstBinding = 3;
+    entry.dstArrayElement = 0;
+    entry.descriptorCount = 1;
+    entry.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    entry.offset = 0;
+    entry.stride = sizeof(ii);
+    memset(&tci, 0, sizeof(tci));
+    tci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO;
+    tci.descriptorUpdateEntryCount = 1;
+    tci.pDescriptorUpdateEntries = &entry;
+    tci.templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET;
+    tci.descriptorSetLayout = layout;
+    REQUIRE_VK(vkCreateDescriptorUpdateTemplate(device, &tci, NULL, &tmpl));
+    vkUpdateDescriptorSetWithTemplate(device, sets[2], tmpl, &ii);
+    want[0] = pvk_MTLTexture_gpuResourceID(((struct pvk_image_view *)view)->mtl_texture);
+    want[1] = pvk_MTLSamplerState_gpuResourceID(((struct pvk_sampler *)sampler)->mtl_sampler);
+    want[2] = pvk_MTLTexture_gpuResourceID(((struct pvk_image_view *)view)->planes[0]);
+    want[3] = pvk_MTLTexture_gpuResourceID(((struct pvk_image_view *)view)->planes[1]);
+    for (s = 0; s < 3; s++) {
+        const struct pvk_descriptor_set *set = (const struct pvk_descriptor_set *)sets[s];
+        if (memcmp(set->contents + set->layout->bindings[0].offset, want, sizeof(want)) != 0)
+            PVK_TEST_FAIL("set %u (%s): the descriptor is not { plane 0, sampler, plane 1, plane 2 }", s,
+                          s == 0 ? "write" : s == 1 ? "copy" : "template");
+    }
+    vkDestroyDescriptorUpdateTemplate(device, tmpl, NULL);
+    vkDestroyDescriptorPool(device, dpool, NULL);
+    vkDestroyDescriptorSetLayout(device, layout, NULL);
+    vkDestroyImageView(device, view, NULL);
+    vkDestroySampler(device, sampler, NULL);
+    vkDestroySamplerYcbcrConversion(device, conv, NULL);
+    free_yimg(&m);
+}
+
 /* Set layouts: combined image samplers with multi-planar conversions take
- * 32 bytes; descriptor copies and templates carry the planes. */
+ * 32 bytes, packed 4:2:2 ones 16. */
 static void test_descriptor_layouts(void)
 {
     static const uint32_t formats[] = { FMT_3PLANE_420, FMT_2PLANE_444, FMT_PACKED_GBGR };
@@ -2025,6 +2137,7 @@ int main(void)
     RUN(test_host_copies);
     RUN(test_plane_views);
     RUN(test_descriptor_layouts);
+    RUN(test_descriptor_updates);
     RUN(test_translator);
     RUN(test_sample_formats);
     RUN(test_sample_models);
