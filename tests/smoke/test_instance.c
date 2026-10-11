@@ -107,19 +107,28 @@ static void test_proc_addr(void)
     vkDestroyInstance(instance, NULL);
 }
 
-/* The hand-maintained table in plasmavk.h: no duplicates, every entry
- * resolves through vkGetInstanceProcAddr, device entries through
- * vkGetDeviceProcAddr's scope rule. */
+/* The hand-maintained table in plasmavk.h: no duplicates, and with every
+ * instance extension enabled every entry but the global commands resolves
+ * through vkGetInstanceProcAddr. */
 static void test_entrypoint_table(void)
 {
-    VkInstance instance = create_instance();
+    const char *extensions[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_METAL_SURFACE_EXTENSION_NAME };
+    VkInstanceCreateInfo info;
+    VkInstance instance = VK_NULL_HANDLE;
     size_t i, j;
-    REQUIRE(instance);
+
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    info.enabledExtensionCount = 2;
+    info.ppEnabledExtensionNames = extensions;
+    REQUIRE_VK(vkCreateInstance(&info, NULL, &instance));
 
     for (i = 0; i < PVK_ARRAY_SIZE(pvk_entrypoints); i++) {
         const struct pvk_entrypoint *e = &pvk_entrypoints[i];
+        int global = PVK_SCOPE(e->kind) == PVK_SCOPE_GLOBAL && e->fn != (PFN_vkVoidFunction)vkGetInstanceProcAddr;
         CHECK(e->fn != NULL);
-        CHECK(vkGetInstanceProcAddr(instance, e->name) == e->fn);
+        if (vkGetInstanceProcAddr(instance, e->name) != (global ? NULL : e->fn))
+            PVK_TEST_FAIL("vkGetInstanceProcAddr(instance, \"%s\")", e->name);
         for (j = i + 1; j < PVK_ARRAY_SIZE(pvk_entrypoints); j++)
             if (strcmp(e->name, pvk_entrypoints[j].name) == 0)
                 PVK_TEST_FAIL("duplicate entry point %s", e->name);

@@ -31330,6 +31330,10 @@ static inline id pvk_MTLDevice_name(id self) { PVK_SEL_CACHE("name"); return PVK
 static inline pvk_MTLSize pvk_MTLDevice_maxThreadsPerThreadgroup(id self) { PVK_SEL_CACHE("maxThreadsPerThreadgroup"); return PVK_MSG(pvk_MTLSize, (id, SEL))(self, pvk_sel_); }
 static inline uint64_t pvk_MTLDevice_recommendedMaxWorkingSetSize(id self) { PVK_SEL_CACHE("recommendedMaxWorkingSetSize"); return PVK_MSG(uint64_t, (id, SEL))(self, pvk_sel_); }
 static inline bool pvk_MTLDevice_supportsFamily(id self, pvk_MTLGPUFamily gpuFamily) { PVK_SEL_CACHE("supportsFamily:"); return PVK_MSG(bool, (id, SEL, pvk_MTLGPUFamily))(self, pvk_sel_, gpuFamily); }
+static inline bool pvk_MTLDevice_supportsTextureSampleCount(id self, unsigned long sampleCount) { PVK_SEL_CACHE("supportsTextureSampleCount:"); return PVK_MSG(bool, (id, SEL, unsigned long))(self, pvk_sel_, sampleCount); }
+static inline unsigned long pvk_MTLDevice_maxThreadgroupMemoryLength(id self) { PVK_SEL_CACHE("maxThreadgroupMemoryLength"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
+static inline unsigned long pvk_MTLDevice_maxArgumentBufferSamplerCount(id self) { PVK_SEL_CACHE("maxArgumentBufferSamplerCount"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
+static inline uint64_t pvk_MTLDevice_queryTimestampFrequency(id self) { PVK_SEL_CACHE("queryTimestampFrequency"); return PVK_MSG(uint64_t, (id, SEL))(self, pvk_sel_); }
 static inline id pvk_MTLDevice_newMTL4CommandQueue(id self) { PVK_SEL_CACHE("newMTL4CommandQueue"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline unsigned long pvk_MTLDevice_maxBufferLength(id self) { PVK_SEL_CACHE("maxBufferLength"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
 static inline pvk_MTLSizeAndAlign pvk_MTLDevice_heapBufferSizeAndAlignWithLength_options(id self, unsigned long length, pvk_MTLResourceOptions options) { PVK_SEL_CACHE("heapBufferSizeAndAlignWithLength:options:"); return PVK_MSG(pvk_MTLSizeAndAlign, (id, SEL, unsigned long, pvk_MTLResourceOptions))(self, pvk_sel_, length, options); }
@@ -31489,6 +31493,19 @@ static int pvk_find_extension(const VkExtensionProperties *list, uint32_t count,
     return -1;
 }
 
+/* 64-bit FNV-1a: a stable hash for identifiers that must be the same in
+ * every process (section 7's UUIDs). Not for anything adversarial. */
+static uint64_t pvk_hash64(uint64_t hash, const void *data, size_t size)
+{
+    const unsigned char *p = data;
+    size_t i;
+    for (i = 0; i < size; i++) {
+        hash ^= p[i];
+        hash *= 0x100000001b3ull;
+    }
+    return hash;
+}
+
 /* The standard two-call enumeration (count query, then fill). */
 static VkResult pvk_enumerate(const void *items, size_t item_size, uint32_t count,
                               uint32_t *pCount, void *pOut)
@@ -31534,6 +31551,16 @@ static const VkExtensionProperties pvk_device_extensions[] = {
     { VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_SWAPCHAIN_SPEC_VERSION },
 };
 
+/* The instance extension each device extension depends on (-1: none), from
+ * the depends= attributes of vk.xml. Layers & Extensions > Extension
+ * Dependencies: a device extension whose instance extension dependency was
+ * not enabled by vkCreateInstance is unsupported, so it is neither listed by
+ * vkEnumerateDeviceExtensionProperties nor accepted by vkCreateDevice, and
+ * its commands are not available (section 16). */
+static const int pvk_device_extension_needs[PVK_DEVICE_EXTENSION_COUNT] = {
+    PVK_INSTANCE_EXT_KHR_surface, /* VK_KHR_swapchain */
+};
+
 /* ==========================================================================
  * Objects
  *
@@ -31549,10 +31576,32 @@ struct pvk_instance {
     struct pvk_physical_device *physical_device; /* NULL: no Metal 4 GPU */
 };
 
+/* Every core feature, 1.0 to 1.4. The feature structs of promoted
+ * extensions are runs of members of these (section 7). sType and pNext are
+ * unused. */
+struct pvk_features {
+    VkPhysicalDeviceFeatures core;
+    VkPhysicalDeviceVulkan11Features v11;
+    VkPhysicalDeviceVulkan12Features v12;
+    VkPhysicalDeviceVulkan13Features v13;
+    VkPhysicalDeviceVulkan14Features v14;
+};
+
+/* The same for properties beyond VkPhysicalDeviceProperties. v14's copy
+ * layout pointers are unused: section 7 fills those lists itself. */
+struct pvk_properties_1x {
+    VkPhysicalDeviceVulkan11Properties v11;
+    VkPhysicalDeviceVulkan12Properties v12;
+    VkPhysicalDeviceVulkan13Properties v13;
+    VkPhysicalDeviceVulkan14Properties v14;
+};
+
 struct pvk_physical_device {
     struct pvk_instance *instance;
     id mtl_device;
     VkPhysicalDeviceProperties properties;
+    struct pvk_properties_1x properties_1x;
+    struct pvk_features features; /* supported */
     VkPhysicalDeviceMemoryProperties memory_properties;
 };
 
@@ -31591,6 +31640,7 @@ struct pvk_device {
     VkAllocationCallbacks alloc;
     bool has_alloc;
     bool extensions[PVK_DEVICE_EXTENSION_COUNT];
+    struct pvk_features features; /* enabled by vkCreateDevice */
     uint32_t queue_count;
     struct pvk_queue queues[PVK_MAX_QUEUES];
     id residency_set; /* MTLResidencySet attached to every queue (section 9) */
@@ -31636,6 +31686,36 @@ static const VkAllocationCallbacks *pvk_device_alloc(const struct pvk_device *de
  * memory starts page-aligned. */
 #define PVK_PAGE_SIZE 16384
 
+/* Apple GPUs run SIMD-groups of 32 threads (threadExecutionWidth). */
+#define PVK_SUBGROUP_SIZE 32u
+
+/* ---- Design limits ----
+ *
+ * Where Metal's own limit is below what Vulkan requires, a limit is what
+ * PlasmaVK's design provides. Descriptor sets are tables of GPU addresses and
+ * resource IDs in buffer memory (section 11's binding model), so descriptor
+ * counts are not bound by Metal's per-stage argument-table slots (FST: 31
+ * buffers, 128 textures, 16 samplers) but by what a shader may reach through
+ * such tables (FST "Argument buffers", per stage: buffers unlimited, 1 M
+ * textures, 996 samplers on Apple7/8 and 500 K from Apple9). */
+#define PVK_MAX_DESCRIPTORS 1000000u /* of one type, or in all, per stage or set */
+/* Set N is argument-table buffer N (section 11), and push constants and
+ * runtime-array sizes take two more of the 31 buffer slots (FST). 8 sets
+ * (Vulkan 1.4 requires 7) leave 21 slots, room for the vertex buffers. */
+#define PVK_MAX_BOUND_SETS 8u
+#define PVK_MAX_VERTEX_BINDINGS 16u
+/* Dynamic offsets are added to a set's addresses when it is bound, so the
+ * count only sizes that copy. Vulkan requires 8 uniform and 4 storage. */
+#define PVK_MAX_DYNAMIC_BUFFERS 16u
+/* Inline uniform blocks live in their set's memory and are read as constant
+ * buffers, whose size FST does not limit. */
+#define PVK_MAX_INLINE_UNIFORM_BLOCK_SIZE 65536u
+#define PVK_MAX_INLINE_UNIFORM_BLOCKS 32u
+/* Push constants are copied to command buffer memory (Metal 4 encoders have
+ * no setBytes), so any size works: Vulkan 1.4's minimum. */
+#define PVK_MAX_PUSH_CONSTANTS_SIZE 256u
+#define PVK_MAX_PUSH_DESCRIPTORS 32u /* Vulkan's minimum */
+
 static void pvk_physical_device_init_memory_limits(struct pvk_physical_device *pd)
 {
     static const pvk_MTLPixelFormat texel_formats[] = {
@@ -31676,40 +31756,441 @@ static void pvk_physical_device_init_memory_limits(struct pvk_physical_device *p
      * alignment and non-page sizes on M4 Max), so linear and optimal
      * resources may be neighbours. */
     l->bufferImageGranularity = 1;
+    /* Every allocation is backed by a buffer of its full size (section 10).
+     * These also answer VkPhysicalDeviceMaintenance3/4Properties. */
+    pd->properties_1x.v11.maxMemoryAllocationSize = max_buffer;
+    pd->properties_1x.v13.maxBufferSize = max_buffer;
 }
 
-/* Memory-related structs in vkGetPhysicalDeviceProperties2's chain. */
-static void pvk_physical_device_memory_properties2(struct pvk_physical_device *pd, void *pNext)
-{
-    /* Every allocation is backed by a buffer of its full size (section 10). */
-    VkDeviceSize max_size = pvk_MTLDevice_maxBufferLength(pd->mtl_device);
-    VkBaseOutStructure *s;
+/* ---- Limits ----
+ *
+ * Every VkPhysicalDeviceLimits member meets Vulkan 1.4's Required Limits
+ * (Limits > Limit Requirements, its "Vulkan 1.4" column where it has one).
+ * Values come from FST and MTLDevice, or are the design limits above. A
+ * limit that belongs to a feature PlasmaVK does not report (see Features
+ * below) has the table's "unsupported" value, which is what an application
+ * may use; the struct starts zeroed. The memory limits are in
+ * pvk_physical_device_init_memory_limits. */
 
-    for (s = pNext; s; s = s->pNext) {
-        switch (s->sType) {
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES:
-            ((VkPhysicalDeviceMaintenance3Properties *)s)->maxMemoryAllocationSize = max_size;
-            break;
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES:
-            ((VkPhysicalDeviceMaintenance4Properties *)s)->maxBufferSize = max_size;
-            break;
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES:
-            ((VkPhysicalDeviceVulkan11Properties *)s)->maxMemoryAllocationSize = max_size;
-            break;
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES:
-            ((VkPhysicalDeviceVulkan13Properties *)s)->maxBufferSize = max_size;
-            break;
-        default:
-            break;
-        }
+static VkSampleCountFlags pvk_sample_counts(id mtl)
+{
+    VkSampleCountFlags counts = 0;
+    unsigned long n;
+    for (n = 1; n <= 32; n *= 2) /* each VkSampleCountFlagBits is its count */
+        if (pvk_MTLDevice_supportsTextureSampleCount(mtl, n))
+            counts |= (VkSampleCountFlags)n;
+    return counts;
+}
+
+static void pvk_physical_device_init_limits(struct pvk_physical_device *pd)
+{
+    VkPhysicalDeviceLimits *l = &pd->properties.limits;
+    id mtl = pd->mtl_device;
+    pvk_MTLSize threads = pvk_MTLDevice_maxThreadsPerThreadgroup(mtl);
+    VkSampleCountFlags samples = pvk_sample_counts(mtl); /* 1, 2, 4 on M4 Max (FST: 8 from Apple10) */
+    unsigned long texels = pvk_MTLDevice_maxBufferLength(mtl) / 16; /* of the largest texel, 16 B */
+    unsigned long unique_samplers = pvk_MTLDevice_maxArgumentBufferSamplerCount(mtl);
+    uint64_t ticks = pvk_MTLDevice_queryTimestampFrequency(mtl);
+    uint32_t samplers = pvk_MTLDevice_supportsFamily(mtl, PVK_MTLGPUFamilyApple9) ? 500000 : 996;
+
+    /* Images: FST "Resources" (Apple10 raises 1D, 2D and cube to 32768). */
+    l->maxImageDimension1D = 16384;
+    l->maxImageDimension2D = 16384;
+    l->maxImageDimension3D = 2048;
+    l->maxImageDimensionCube = 16384;
+    l->maxImageArrayLayers = 2048;
+    /* Texel buffers are texture buffers: FST 256 M texels (creating a wider
+     * one fails on M4 Max), within maxBufferLength (FST footnote 9). */
+    l->maxTexelBufferElements = texels < (1ul << 28) ? (uint32_t)texels : 1u << 28;
+    l->maxPushConstantsSize = PVK_MAX_PUSH_CONSTANTS_SIZE;
+    /* Metal caps the unique sampler states argument buffers may hold
+     * (maxArgumentBufferSamplerCount: 500000 on M4 Max; Mesa's KosmicKrisp
+     * notes 1024 on M1/M2). VkSamplers with the same state can share one
+     * MTLSamplerState, which Metal counts once, so where the cap is lower
+     * Vulkan's minimum of 4000 sampler objects is reported. */
+    if (unique_samplers > UINT32_MAX)
+        unique_samplers = UINT32_MAX;
+    l->maxSamplerAllocationCount = unique_samplers > 4000 ? (uint32_t)unique_samplers : 4000;
+    l->sparseAddressSpaceSize = 0; /* sparseBinding is not supported */
+
+    /* Descriptors (design limits above). The images and texel buffers of a
+     * stage are all Metal textures; maxPerStageResources keeps their total
+     * within FST's 1 M. */
+    l->maxBoundDescriptorSets = PVK_MAX_BOUND_SETS;
+    l->maxPerStageDescriptorSamplers = samplers;
+    l->maxPerStageDescriptorUniformBuffers = PVK_MAX_DESCRIPTORS;
+    l->maxPerStageDescriptorStorageBuffers = PVK_MAX_DESCRIPTORS;
+    l->maxPerStageDescriptorSampledImages = PVK_MAX_DESCRIPTORS;
+    l->maxPerStageDescriptorStorageImages = PVK_MAX_DESCRIPTORS;
+    l->maxPerStageDescriptorInputAttachments = PVK_MAX_DESCRIPTORS;
+    l->maxPerStageResources = PVK_MAX_DESCRIPTORS;
+    l->maxDescriptorSetSamplers = samplers;
+    l->maxDescriptorSetUniformBuffers = PVK_MAX_DESCRIPTORS;
+    l->maxDescriptorSetUniformBuffersDynamic = PVK_MAX_DYNAMIC_BUFFERS;
+    l->maxDescriptorSetStorageBuffers = PVK_MAX_DESCRIPTORS;
+    l->maxDescriptorSetStorageBuffersDynamic = PVK_MAX_DYNAMIC_BUFFERS;
+    l->maxDescriptorSetSampledImages = PVK_MAX_DESCRIPTORS;
+    l->maxDescriptorSetStorageImages = PVK_MAX_DESCRIPTORS;
+    l->maxDescriptorSetInputAttachments = PVK_MAX_DESCRIPTORS;
+
+    /* Vertex input: FST "Function arguments", 31 attributes. FST sets no
+     * limit on strides and none on offsets; Vulkan's minimums are reported
+     * until larger values are tested. */
+    l->maxVertexInputAttributes = 31;
+    l->maxVertexInputBindings = PVK_MAX_VERTEX_BINDINGS;
+    l->maxVertexInputAttributeOffset = 2047;
+    l->maxVertexInputBindingStride = 2048;
+    /* FST: 124 input components to a fragment function. Vertex outputs
+     * beyond what a fragment shader can read are of no use. */
+    l->maxVertexOutputComponents = 124;
+    /* Tessellation and geometry limits stay 0: neither stage is supported. */
+    l->maxFragmentInputComponents = 124;
+    l->maxFragmentOutputAttachments = 8;  /* FST: 8 color render targets */
+    l->maxFragmentDualSrcAttachments = 0; /* dualSrcBlend is not supported */
+    l->maxFragmentCombinedOutputResources = PVK_MAX_DESCRIPTORS;
+
+    /* Compute: FST 32 KB threadgroup memory, 1024 threads per threadgroup.
+     * A pipeline's maxTotalThreadsPerThreadgroup can be lower when registers
+     * run short, so the translator must declare the workgroup size to Metal
+     * ([[max_total_threads_per_threadgroup]]). Metal documents no limit on
+     * threadgroups per grid; Vulkan's minimum is reported until larger grids
+     * are tested. */
+    l->maxComputeSharedMemorySize = (uint32_t)pvk_MTLDevice_maxThreadgroupMemoryLength(mtl);
+    l->maxComputeWorkGroupCount[0] = 65535;
+    l->maxComputeWorkGroupCount[1] = 65535;
+    l->maxComputeWorkGroupCount[2] = 65535;
+    l->maxComputeWorkGroupInvocations = 1024;
+    l->maxComputeWorkGroupSize[0] = (uint32_t)threads.width;
+    l->maxComputeWorkGroupSize[1] = (uint32_t)threads.height;
+    l->maxComputeWorkGroupSize[2] = (uint32_t)threads.depth;
+
+    /* Rasterization and sampling precision: Metal documents none. 8 bits,
+     * as Mesa's KosmicKrisp (Vulkan on Metal) reports; Vulkan 1.4 asks for
+     * 4, 8 and 6. */
+    l->subPixelPrecisionBits = 8;
+    l->subTexelPrecisionBits = 8;
+    l->mipmapPrecisionBits = 8;
+    l->maxDrawIndexedIndexValue = UINT32_MAX; /* fullDrawIndexUint32 */
+    l->maxDrawIndirectCount = 1;              /* multiDrawIndirect is not supported */
+    l->maxSamplerLodBias = 15.984375f;        /* MTLSamplerDescriptor.lodBias: S4.6 in [-16, 15.999] */
+    l->maxSamplerAnisotropy = 16.0f;          /* MTLSamplerDescriptor.maxAnisotropy: 1 to 16 */
+    l->maxViewports = 1;                      /* multiViewport is not supported (FST: 16) */
+    /* Viewports cover the largest render target (FST: 16384 px), within the
+     * [-2 x size, 2 x size - 1] bounds Vulkan asks for. Metal viewports are
+     * floats. */
+    l->maxViewportDimensions[0] = 16384;
+    l->maxViewportDimensions[1] = 16384;
+    l->viewportBoundsRange[0] = -32768.0f;
+    l->viewportBoundsRange[1] = 32767.0f;
+    l->viewportSubPixelBits = 8;
+    /* MSL texture sample and gather offsets are in [-8, 7]. Interpolation
+     * offsets as KosmicKrisp reports: [-0.5, 0.5 - 1/16]. */
+    l->minTexelOffset = -8;
+    l->maxTexelOffset = 7;
+    l->minTexelGatherOffset = -8;
+    l->maxTexelGatherOffset = 7;
+    l->minInterpolationOffset = -0.5f;
+    l->maxInterpolationOffset = 0.4375f;
+    l->subPixelInterpolationOffsetBits = 4;
+
+    /* Render targets: FST 16384 px, 2048 layers, 8 color targets. */
+    l->maxFramebufferWidth = 16384;
+    l->maxFramebufferHeight = 16384;
+    l->maxFramebufferLayers = 2048;
+    l->framebufferColorSampleCounts = samples;
+    l->framebufferDepthSampleCounts = samples;
+    l->framebufferStencilSampleCounts = samples;
+    l->framebufferNoAttachmentsSampleCounts = samples;
+    l->maxColorAttachments = 8;
+    l->sampledImageColorSampleCounts = samples;
+    l->sampledImageIntegerSampleCounts = VK_SAMPLE_COUNT_1_BIT; /* all integer formats: Vulkan's minimum */
+    l->sampledImageDepthSampleCounts = samples;
+    l->sampledImageStencilSampleCounts = samples;
+    l->storageImageSampleCounts = VK_SAMPLE_COUNT_1_BIT; /* shaderStorageImageMultisample is not supported */
+    l->maxSampleMaskWords = 1;                           /* MSL [[sample_mask]] is one uint */
+    l->timestampComputeAndGraphics = VK_TRUE;
+    /* MTLDevice.queryTimestampFrequency: 24 MHz on M4 Max. */
+    l->timestampPeriod = ticks ? 1e9f / (float)ticks : 1.0f;
+    /* Clip and cull distance limits stay 0: shaderClipDistance and
+     * shaderCullDistance are not reported. */
+    l->discreteQueuePriorities = 2; /* Metal queues have no priorities: Vulkan's minimum */
+    l->pointSizeRange[0] = 1.0f;
+    l->pointSizeRange[1] = 511.0f;    /* FST */
+    l->pointSizeGranularity = 0.125f; /* Metal documents none: Vulkan 1.4's coarsest */
+    l->lineWidthRange[0] = 1.0f;      /* wideLines is not supported */
+    l->lineWidthRange[1] = 1.0f;
+    l->lineWidthGranularity = 0.0f;
+    l->strictLines = VK_FALSE;
+    /* getDefaultSamplePositions:count: gives Vulkan's standard locations for
+     * 1, 2 and 4 samples (checked on M4 Max). */
+    l->standardSampleLocations = VK_TRUE;
+    /* FST: buffer alignment for copying a texture to a buffer, 16 B. */
+    l->optimalBufferCopyOffsetAlignment = 16;
+    l->optimalBufferCopyRowPitchAlignment = 16;
+}
+
+/* A name-based UUID (RFC 9562 version 8) of two strings: the same in every
+ * process, instance and boot. */
+static void pvk_make_uuid(uint8_t *uuid, const char *space, const char *name)
+{
+    uint64_t a = pvk_hash64(0xcbf29ce484222325ull, space, strlen(space) + 1);
+    uint64_t b = pvk_hash64(a ^ 0x9e3779b97f4a7c15ull, space, strlen(space) + 1);
+    unsigned i;
+
+    a = pvk_hash64(a, name, strlen(name));
+    b = pvk_hash64(b, name, strlen(name));
+    for (i = 0; i < 8; i++) {
+        uuid[i] = (uint8_t)(a >> (56 - 8 * i));
+        uuid[8 + i] = (uint8_t)(b >> (56 - 8 * i));
     }
+    uuid[6] = (uint8_t)((uuid[6] & 0x0F) | 0x80); /* version 8 */
+    uuid[8] = (uint8_t)((uuid[8] & 0x3F) | 0x80); /* variant */
+}
+
+/* VkPhysicalDeviceVulkan11..14Properties (and so the promoted property
+ * structs); members not set here are 0 / VK_FALSE. */
+static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *pd)
+{
+    VkPhysicalDeviceVulkan11Properties *p11 = &pd->properties_1x.v11;
+    VkPhysicalDeviceVulkan12Properties *p12 = &pd->properties_1x.v12;
+    VkPhysicalDeviceVulkan13Properties *p13 = &pd->properties_1x.v13;
+    VkPhysicalDeviceVulkan14Properties *p14 = &pd->properties_1x.v14;
+    const VkPhysicalDeviceLimits *l = &pd->properties.limits;
+    char version[32], name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE + 32];
+
+    snprintf(version, sizeof(version), "%d.%d.%d", PLASMAVK_VERSION_MAJOR, PLASMAVK_VERSION_MINOR,
+             PLASMAVK_VERSION_PATCH);
+
+    /* ---- Vulkan 1.1 ---- */
+    /* deviceUUID must stay the same across processes, driver versions and
+     * reboots. Metal has no such hardware identifier (registryID is an
+     * IORegistry entry ID, assigned at boot), but an Apple system has one
+     * GPU, so its name identifies the device there. driverUUID names this
+     * PlasmaVK version. LUIDs are Windows adapter IDs: deviceLUIDValid is
+     * VK_FALSE. */
+    pvk_make_uuid(p11->deviceUUID, "PlasmaVK device", pd->properties.deviceName);
+    pvk_make_uuid(p11->driverUUID, "PlasmaVK driver", version);
+    p11->deviceLUIDValid = VK_FALSE;
+    p11->subgroupSize = PVK_SUBGROUP_SIZE;
+    /* MSL's SIMD-group functions exist in compute and fragment functions:
+     * vote (simd_all/any), ballot, broadcast, shuffles, reductions and prefix
+     * scans, quad functions and simd_shuffle_rotate_up/down (clustered
+     * rotates are built from shuffles). Clustered reductions are not
+     * offered. */
+    p11->subgroupSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    p11->subgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_VOTE_BIT |
+                                       VK_SUBGROUP_FEATURE_ARITHMETIC_BIT | VK_SUBGROUP_FEATURE_BALLOT_BIT |
+                                       VK_SUBGROUP_FEATURE_SHUFFLE_BIT | VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT |
+                                       VK_SUBGROUP_FEATURE_QUAD_BIT | VK_SUBGROUP_FEATURE_ROTATE_BIT |
+                                       VK_SUBGROUP_FEATURE_ROTATE_CLUSTERED_BIT;
+    p11->subgroupQuadOperationsInAllStages = VK_FALSE;
+    /* Points are discarded by user clip planes only, as KosmicKrisp (CTS
+     * conformant on Metal) reports; MoltenVK reports ALL_CLIP_PLANES. To be
+     * checked when rasterization lands. */
+    p11->pointClippingBehavior = VK_POINT_CLIPPING_BEHAVIOR_USER_CLIP_PLANES_ONLY;
+    /* Multiview is vertex amplification (FST: 8 views from Apple7), so
+     * instance indices stay Metal's 32-bit [[instance_id]]. */
+    p11->maxMultiviewViewCount = 8;
+    p11->maxMultiviewInstanceIndex = UINT32_MAX;
+    p11->protectedNoFault = VK_FALSE; /* protectedMemory is not supported */
+    p11->maxPerSetDescriptors = PVK_MAX_DESCRIPTORS;
+    /* maxMemoryAllocationSize: pvk_physical_device_init_memory_limits */
+
+    /* ---- Vulkan 1.2 ---- */
+    p12->driverID = (VkDriverId)0; /* TODO: register a VkDriverId with Khronos; 0 names no driver */
+    snprintf(p12->driverName, sizeof(p12->driverName), "PlasmaVK");
+    snprintf(p12->driverInfo, sizeof(p12->driverInfo), "PlasmaVK %s on Metal 4", version);
+    /* conformanceVersion stays 0.0.0.0: PlasmaVK is not conformant. */
+
+    /* Shaders are compiled with MTLMathModeSafe (section 11): signed zeros,
+     * Inf and NaN are kept and results rounded to nearest even. MSL offers
+     * no control over denormals and has no 64-bit floats. */
+    p12->denormBehaviorIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE;
+    p12->roundingModeIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE;
+    p12->shaderSignedZeroInfNanPreserveFloat16 = VK_TRUE;
+    p12->shaderSignedZeroInfNanPreserveFloat32 = VK_TRUE;
+    p12->shaderRoundingModeRTEFloat16 = VK_TRUE;
+    p12->shaderRoundingModeRTEFloat32 = VK_TRUE;
+
+    /* Descriptor indexing. The update-after-bind features are not reported,
+     * but these limits also bound ordinary descriptor sets
+     * (VkPipelineLayoutCreateInfo valid usage), so they equal the limits
+     * above. Pools are memory: no cap across them. A non-uniform index into
+     * an address table is a per-thread load; image indices may need a loop. */
+    p12->maxUpdateAfterBindDescriptorsInAllPools = UINT32_MAX;
+    p12->shaderUniformBufferArrayNonUniformIndexingNative = VK_TRUE;
+    p12->shaderStorageBufferArrayNonUniformIndexingNative = VK_TRUE;
+    p12->maxPerStageDescriptorUpdateAfterBindSamplers = l->maxPerStageDescriptorSamplers;
+    p12->maxPerStageDescriptorUpdateAfterBindUniformBuffers = l->maxPerStageDescriptorUniformBuffers;
+    p12->maxPerStageDescriptorUpdateAfterBindStorageBuffers = l->maxPerStageDescriptorStorageBuffers;
+    p12->maxPerStageDescriptorUpdateAfterBindSampledImages = l->maxPerStageDescriptorSampledImages;
+    p12->maxPerStageDescriptorUpdateAfterBindStorageImages = l->maxPerStageDescriptorStorageImages;
+    p12->maxPerStageDescriptorUpdateAfterBindInputAttachments = l->maxPerStageDescriptorInputAttachments;
+    p12->maxPerStageUpdateAfterBindResources = l->maxPerStageResources;
+    p12->maxDescriptorSetUpdateAfterBindSamplers = l->maxDescriptorSetSamplers;
+    p12->maxDescriptorSetUpdateAfterBindUniformBuffers = l->maxDescriptorSetUniformBuffers;
+    p12->maxDescriptorSetUpdateAfterBindUniformBuffersDynamic = l->maxDescriptorSetUniformBuffersDynamic;
+    p12->maxDescriptorSetUpdateAfterBindStorageBuffers = l->maxDescriptorSetStorageBuffers;
+    p12->maxDescriptorSetUpdateAfterBindStorageBuffersDynamic = l->maxDescriptorSetStorageBuffersDynamic;
+    p12->maxDescriptorSetUpdateAfterBindSampledImages = l->maxDescriptorSetSampledImages;
+    p12->maxDescriptorSetUpdateAfterBindStorageImages = l->maxDescriptorSetStorageImages;
+    p12->maxDescriptorSetUpdateAfterBindInputAttachments = l->maxDescriptorSetInputAttachments;
+
+    /* Resolves: MTLMultisampleDepthResolveFilter (sample 0, min, max) and
+     * MTLMultisampleStencilResolveFilter (sample 0), set independently. */
+    p12->supportedDepthResolveModes =
+        VK_RESOLVE_MODE_SAMPLE_ZERO_BIT | VK_RESOLVE_MODE_MIN_BIT | VK_RESOLVE_MODE_MAX_BIT;
+    p12->supportedStencilResolveModes = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+    p12->independentResolveNone = VK_TRUE;
+    p12->independentResolve = VK_TRUE;
+    /* filterMinmax*: samplerFilterMinmax is not reported. */
+    p12->maxTimelineSemaphoreValueDifference = UINT64_MAX; /* MTLSharedEvent values are 64-bit */
+    p12->framebufferIntegerColorSampleCounts = VK_SAMPLE_COUNT_1_BIT; /* as sampledImageIntegerSampleCounts */
+
+    /* ---- Vulkan 1.3 ---- */
+    p13->minSubgroupSize = PVK_SUBGROUP_SIZE;
+    p13->maxSubgroupSize = PVK_SUBGROUP_SIZE;
+    p13->maxComputeWorkgroupSubgroups = l->maxComputeWorkGroupInvocations / PVK_SUBGROUP_SIZE;
+    p13->requiredSubgroupSizeStages = VK_SHADER_STAGE_COMPUTE_BIT;
+    p13->maxInlineUniformBlockSize = PVK_MAX_INLINE_UNIFORM_BLOCK_SIZE;
+    p13->maxPerStageDescriptorInlineUniformBlocks = PVK_MAX_INLINE_UNIFORM_BLOCKS;
+    p13->maxPerStageDescriptorUpdateAfterBindInlineUniformBlocks = PVK_MAX_INLINE_UNIFORM_BLOCKS;
+    p13->maxDescriptorSetInlineUniformBlocks = PVK_MAX_INLINE_UNIFORM_BLOCKS;
+    p13->maxDescriptorSetUpdateAfterBindInlineUniformBlocks = PVK_MAX_INLINE_UNIFORM_BLOCKS;
+    p13->maxInlineUniformTotalSize = PVK_MAX_INLINE_UNIFORM_BLOCK_SIZE;
+    /* integerDotProduct*Accelerated stay VK_FALSE: MSL has no dot product
+     * instructions on packed integers. Texel buffer views need
+     * minimumTextureBufferAlignmentForPixelFormat:, more than one texel. */
+    p13->storageTexelBufferOffsetAlignmentBytes = l->minTexelBufferOffsetAlignment;
+    p13->uniformTexelBufferOffsetAlignmentBytes = l->minTexelBufferOffsetAlignment;
+    /* maxBufferSize: pvk_physical_device_init_memory_limits */
+
+    /* ---- Vulkan 1.4 ---- */
+    p14->lineSubPixelPrecisionBits = l->subPixelPrecisionBits;
+    /* MTLVertexBufferLayoutDescriptor.stepRate is an NSUInteger. Whether
+     * Metal's per-instance fetch with a base instance matches Vulkan's
+     * divisor rule is unverified, so supportsNonZeroFirstInstance is
+     * VK_FALSE. */
+    p14->maxVertexAttribDivisor = UINT32_MAX;
+    p14->supportsNonZeroFirstInstance = VK_FALSE;
+    p14->maxPushDescriptors = PVK_MAX_PUSH_DESCRIPTORS;
+    /* Local reads are framebuffer fetch, which reads color attachments only;
+     * multisampled reads are unverified. Both stay VK_FALSE. */
+    p14->dynamicRenderingLocalReadDepthStencilAttachments = VK_FALSE;
+    p14->dynamicRenderingLocalReadMultisampledAttachments = VK_FALSE;
+    /* maintenance5 behaviour as KosmicKrisp and MoltenVK report it for Metal. */
+    p14->earlyFragmentMultisampleCoverageAfterSampleCounting = VK_TRUE;
+    p14->earlyFragmentSampleMaskTestBeforeSampleCounting = VK_FALSE;
+    p14->depthStencilSwizzleOneSupport = VK_TRUE;
+    /* Three-plane Y'CbCr formats take three descriptors. */
+    p14->maxCombinedImageSamplerDescriptorCount = 3;
+    /* Without robustness features, out-of-bounds accesses are not checked. */
+    p14->defaultRobustnessStorageBuffers = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED;
+    p14->defaultRobustnessUniformBuffers = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED;
+    p14->defaultRobustnessVertexInputs = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED;
+    p14->defaultRobustnessImages = VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DISABLED;
+    /* Host image copies (layouts: pvk_host_copy_layouts). Optimal-tiling
+     * data copied with VK_HOST_IMAGE_COPY_MEMCPY is in a layout of this
+     * PlasmaVK version on this GPU. Host-copied images need shared memory
+     * (-[MTLTexture replaceRegion:...] cannot write private storage), so
+     * VK_IMAGE_USAGE_HOST_TRANSFER_BIT narrows the memory types. */
+    snprintf(name, sizeof(name), "%s %s", pd->properties.deviceName, version);
+    pvk_make_uuid(p14->optimalTilingLayoutUUID, "PlasmaVK optimal tiling", name);
+    p14->identicalMemoryTypeRequirements = VK_FALSE;
+}
+
+/* ---- Features ----
+ *
+ * PlasmaVK claims Vulkan 1.4, so it reports exactly the features Vulkan 1.4
+ * requires (Features > Feature Requirements: the <require> lists of vk.xml's
+ * VK_VERSION_1_0..1_4), plus hostImageCopy, which a 1.4 device must support
+ * when its only transfer-capable queue family supports graphics, as here. No
+ * optional feature is reported.
+ *
+ * Most of these have no implementation yet (their commands are stubs in
+ * section 15): reporting them follows from claiming 1.4, and each subsystem
+ * must honour them as it lands. */
+static void pvk_physical_device_init_features(struct pvk_features *f)
+{
+    VkPhysicalDeviceFeatures *c = &f->core;
+
+    /* Vulkan 1.0 */
+    c->robustBufferAccess = VK_TRUE;
+    /* Vulkan 1.1 */
+    f->v11.multiview = VK_TRUE;
+    /* Vulkan 1.2 */
+    f->v12.subgroupBroadcastDynamicId = VK_TRUE;
+    f->v12.imagelessFramebuffer = VK_TRUE;
+    f->v12.uniformBufferStandardLayout = VK_TRUE;
+    f->v12.shaderSubgroupExtendedTypes = VK_TRUE;
+    f->v12.separateDepthStencilLayouts = VK_TRUE;
+    f->v12.hostQueryReset = VK_TRUE;
+    f->v12.timelineSemaphore = VK_TRUE;
+    /* Vulkan 1.3 */
+    f->v12.vulkanMemoryModel = VK_TRUE;
+    f->v12.vulkanMemoryModelDeviceScope = VK_TRUE;
+    f->v12.bufferDeviceAddress = VK_TRUE;
+    f->v13.robustImageAccess = VK_TRUE;
+    f->v13.inlineUniformBlock = VK_TRUE;
+    f->v13.pipelineCreationCacheControl = VK_TRUE;
+    f->v13.privateData = VK_TRUE;
+    f->v13.shaderDemoteToHelperInvocation = VK_TRUE;
+    f->v13.shaderTerminateInvocation = VK_TRUE;
+    f->v13.subgroupSizeControl = VK_TRUE;
+    f->v13.computeFullSubgroups = VK_TRUE;
+    f->v13.synchronization2 = VK_TRUE;
+    f->v13.shaderZeroInitializeWorkgroupMemory = VK_TRUE;
+    f->v13.dynamicRendering = VK_TRUE;
+    f->v13.shaderIntegerDotProduct = VK_TRUE;
+    f->v13.maintenance4 = VK_TRUE;
+    /* Vulkan 1.4 */
+    c->fullDrawIndexUint32 = VK_TRUE;
+    c->imageCubeArray = VK_TRUE;
+    c->independentBlend = VK_TRUE;
+    c->sampleRateShading = VK_TRUE;
+    c->drawIndirectFirstInstance = VK_TRUE;
+    c->depthClamp = VK_TRUE;
+    c->depthBiasClamp = VK_TRUE;
+    c->samplerAnisotropy = VK_TRUE;
+    c->fragmentStoresAndAtomics = VK_TRUE;
+    c->shaderStorageImageExtendedFormats = VK_TRUE;
+    c->shaderUniformBufferArrayDynamicIndexing = VK_TRUE;
+    c->shaderSampledImageArrayDynamicIndexing = VK_TRUE;
+    c->shaderStorageBufferArrayDynamicIndexing = VK_TRUE;
+    c->shaderStorageImageArrayDynamicIndexing = VK_TRUE;
+    c->shaderImageGatherExtended = VK_TRUE;
+    c->shaderInt16 = VK_TRUE;
+    c->largePoints = VK_TRUE;
+    f->v11.storageBuffer16BitAccess = VK_TRUE;
+    f->v11.variablePointersStorageBuffer = VK_TRUE;
+    f->v11.variablePointers = VK_TRUE;
+    f->v11.samplerYcbcrConversion = VK_TRUE;
+    f->v12.samplerMirrorClampToEdge = VK_TRUE;
+    f->v12.storageBuffer8BitAccess = VK_TRUE;
+    f->v12.shaderInt8 = VK_TRUE;
+    f->v12.shaderUniformTexelBufferArrayDynamicIndexing = VK_TRUE;
+    f->v12.shaderStorageTexelBufferArrayDynamicIndexing = VK_TRUE;
+    f->v12.scalarBlockLayout = VK_TRUE;
+    f->v14.globalPriorityQuery = VK_TRUE;
+    f->v14.shaderSubgroupRotate = VK_TRUE;
+    f->v14.shaderSubgroupRotateClustered = VK_TRUE;
+    f->v14.shaderFloatControls2 = VK_TRUE;
+    f->v14.shaderExpectAssume = VK_TRUE;
+    f->v14.bresenhamLines = VK_TRUE;
+    f->v14.vertexAttributeInstanceRateDivisor = VK_TRUE;
+    f->v14.indexTypeUint8 = VK_TRUE;
+    f->v14.dynamicRenderingLocalRead = VK_TRUE;
+    f->v14.maintenance5 = VK_TRUE;
+    f->v14.maintenance6 = VK_TRUE;
+    f->v14.pipelineRobustness = VK_TRUE;
+    f->v14.pushDescriptor = VK_TRUE;
+    f->v14.hostImageCopy = VK_TRUE; /* one queue family, graphics and transfer */
 }
 
 static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
 {
     VkPhysicalDeviceProperties *p = &pd->properties;
     VkPhysicalDeviceMemoryProperties *m = &pd->memory_properties;
-    pvk_MTLSize threads;
 
     p->apiVersion = PVK_API_VERSION;
     p->driverVersion = PLASMAVK_VERSION;
@@ -31718,14 +32199,11 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     p->deviceType = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
     snprintf(p->deviceName, sizeof(p->deviceName), "%s", pvk_ns_utf8(pvk_MTLDevice_name(pd->mtl_device)));
     memcpy(p->pipelineCacheUUID, "PlasmaVK", 8); /* TODO: include version and GPU family */
-
-    /* TODO: the remaining limits and sparseProperties, filled in as the
-     * subsystems that honour them land. Zero until then. */
-    threads = pvk_MTLDevice_maxThreadsPerThreadgroup(pd->mtl_device);
-    p->limits.maxComputeWorkGroupSize[0] = (uint32_t)threads.width;
-    p->limits.maxComputeWorkGroupSize[1] = (uint32_t)threads.height;
-    p->limits.maxComputeWorkGroupSize[2] = (uint32_t)threads.depth;
+    /* sparseProperties stay VK_FALSE: no sparse residency. */
+    pvk_physical_device_init_limits(pd);
     pvk_physical_device_init_memory_limits(pd);
+    pvk_physical_device_init_properties_1x(pd);
+    pvk_physical_device_init_features(&pd->features);
 
     /* Apple GPUs have unified memory: one heap, private and shared types. */
     m->memoryHeapCount = 1;
@@ -31781,26 +32259,323 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceProperties(VkPhysicalDevice physic
     *pProperties = ((struct pvk_physical_device *)physicalDevice)->properties;
 }
 
+/* ---- Feature and property structs ----
+ *
+ * The feature or property struct of an extension promoted to Vulkan 1.1-1.4
+ * is a run of consecutive members of a VkPhysicalDeviceVulkan1x struct, of
+ * the same types in the same order, so filling it (and, for features,
+ * checking it in vkCreateDevice) copies that byte range from struct
+ * pvk_features / pvk_properties_1x. PVK_RUN fails to compile if the two
+ * ranges differ in size. Structs not listed (other extensions) are left
+ * alone. */
+struct pvk_run {
+    VkStructureType sType;
+    uint16_t offset; /* of the run in the application's struct */
+    uint16_t source; /* of the same members in struct pvk_features / pvk_properties_1x */
+    uint16_t size;
+};
+
+#define PVK_RUN_SIZE(T, first, last) (offsetof(T, last) + sizeof(((T *)0)->last) - offsetof(T, first))
+#define PVK_RUN(sType, T, first, last, S, sfirst, slast)                                             \
+    { sType, offsetof(T, first), offsetof(S, sfirst),                                                \
+      PVK_RUN_SIZE(T, first, last) +                                                                 \
+          0 * sizeof(char[PVK_RUN_SIZE(T, first, last) == PVK_RUN_SIZE(S, sfirst, slast) ? 1 : -1]) }
+/* A feature run: the members have the same names in VkPhysicalDeviceVulkan1xFeatures v. */
+#define PVK_FRUN(sType, T, v, first, last) PVK_RUN(sType, T, first, last, struct pvk_features, v.first, v.last)
+/* A property run of members first..last, named v.vfirst..v.vlast in pvk_properties_1x. */
+#define PVK_PRUN(sType, T, first, last, v, vfirst, vlast) \
+    PVK_RUN(sType, T, first, last, struct pvk_properties_1x, v.vfirst, v.vlast)
+
+static const struct pvk_run pvk_feature_runs[] = {
+    PVK_RUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, VkPhysicalDeviceFeatures2, features, features,
+            struct pvk_features, core, core),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES, VkPhysicalDeviceVulkan11Features, v11,
+             storageBuffer16BitAccess, shaderDrawParameters),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, VkPhysicalDeviceVulkan12Features, v12,
+             samplerMirrorClampToEdge, subgroupBroadcastDynamicId),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, VkPhysicalDeviceVulkan13Features, v13,
+             robustImageAccess, maintenance4),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES, VkPhysicalDeviceVulkan14Features, v14,
+             globalPriorityQuery, pushDescriptor),
+    /* Vulkan 1.1 */
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES, VkPhysicalDevice16BitStorageFeatures, v11,
+             storageBuffer16BitAccess, storageInputOutput16),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES, VkPhysicalDeviceMultiviewFeatures, v11,
+             multiview, multiviewTessellationShader),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTERS_FEATURES, VkPhysicalDeviceVariablePointersFeatures,
+             v11, variablePointersStorageBuffer, variablePointers),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_FEATURES, VkPhysicalDeviceProtectedMemoryFeatures,
+             v11, protectedMemory, protectedMemory),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES,
+             VkPhysicalDeviceSamplerYcbcrConversionFeatures, v11, samplerYcbcrConversion, samplerYcbcrConversion),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES,
+             VkPhysicalDeviceShaderDrawParametersFeatures, v11, shaderDrawParameters, shaderDrawParameters),
+    /* Vulkan 1.2 */
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES, VkPhysicalDevice8BitStorageFeatures, v12,
+             storageBuffer8BitAccess, storagePushConstant8),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_INT64_FEATURES, VkPhysicalDeviceShaderAtomicInt64Features,
+             v12, shaderBufferInt64Atomics, shaderSharedInt64Atomics),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES, VkPhysicalDeviceShaderFloat16Int8Features,
+             v12, shaderFloat16, shaderInt8),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES, VkPhysicalDeviceDescriptorIndexingFeatures,
+             v12, shaderInputAttachmentArrayDynamicIndexing, runtimeDescriptorArray),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES, VkPhysicalDeviceScalarBlockLayoutFeatures,
+             v12, scalarBlockLayout, scalarBlockLayout),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES,
+             VkPhysicalDeviceImagelessFramebufferFeatures, v12, imagelessFramebuffer, imagelessFramebuffer),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFORM_BUFFER_STANDARD_LAYOUT_FEATURES,
+             VkPhysicalDeviceUniformBufferStandardLayoutFeatures, v12, uniformBufferStandardLayout,
+             uniformBufferStandardLayout),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SUBGROUP_EXTENDED_TYPES_FEATURES,
+             VkPhysicalDeviceShaderSubgroupExtendedTypesFeatures, v12, shaderSubgroupExtendedTypes,
+             shaderSubgroupExtendedTypes),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SEPARATE_DEPTH_STENCIL_LAYOUTS_FEATURES,
+             VkPhysicalDeviceSeparateDepthStencilLayoutsFeatures, v12, separateDepthStencilLayouts,
+             separateDepthStencilLayouts),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_QUERY_RESET_FEATURES, VkPhysicalDeviceHostQueryResetFeatures, v12,
+             hostQueryReset, hostQueryReset),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES, VkPhysicalDeviceTimelineSemaphoreFeatures,
+             v12, timelineSemaphore, timelineSemaphore),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES,
+             VkPhysicalDeviceBufferDeviceAddressFeatures, v12, bufferDeviceAddress, bufferDeviceAddressMultiDevice),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES, VkPhysicalDeviceVulkanMemoryModelFeatures,
+             v12, vulkanMemoryModel, vulkanMemoryModelAvailabilityVisibilityChains),
+    /* Vulkan 1.3 */
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_ROBUSTNESS_FEATURES, VkPhysicalDeviceImageRobustnessFeatures, v13,
+             robustImageAccess, robustImageAccess),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_FEATURES,
+             VkPhysicalDeviceInlineUniformBlockFeatures, v13, inlineUniformBlock,
+             descriptorBindingInlineUniformBlockUpdateAfterBind),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_CREATION_CACHE_CONTROL_FEATURES,
+             VkPhysicalDevicePipelineCreationCacheControlFeatures, v13, pipelineCreationCacheControl,
+             pipelineCreationCacheControl),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_FEATURES, VkPhysicalDevicePrivateDataFeatures, v13,
+             privateData, privateData),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DEMOTE_TO_HELPER_INVOCATION_FEATURES,
+             VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures, v13, shaderDemoteToHelperInvocation,
+             shaderDemoteToHelperInvocation),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_TERMINATE_INVOCATION_FEATURES,
+             VkPhysicalDeviceShaderTerminateInvocationFeatures, v13, shaderTerminateInvocation,
+             shaderTerminateInvocation),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES,
+             VkPhysicalDeviceSubgroupSizeControlFeatures, v13, subgroupSizeControl, computeFullSubgroups),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES, VkPhysicalDeviceSynchronization2Features,
+             v13, synchronization2, synchronization2),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXTURE_COMPRESSION_ASTC_HDR_FEATURES,
+             VkPhysicalDeviceTextureCompressionASTCHDRFeatures, v13, textureCompressionASTC_HDR,
+             textureCompressionASTC_HDR),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ZERO_INITIALIZE_WORKGROUP_MEMORY_FEATURES,
+             VkPhysicalDeviceZeroInitializeWorkgroupMemoryFeatures, v13, shaderZeroInitializeWorkgroupMemory,
+             shaderZeroInitializeWorkgroupMemory),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES, VkPhysicalDeviceDynamicRenderingFeatures,
+             v13, dynamicRendering, dynamicRendering),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES,
+             VkPhysicalDeviceShaderIntegerDotProductFeatures, v13, shaderIntegerDotProduct, shaderIntegerDotProduct),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES, VkPhysicalDeviceMaintenance4Features, v13,
+             maintenance4, maintenance4),
+    /* Vulkan 1.4 */
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GLOBAL_PRIORITY_QUERY_FEATURES,
+             VkPhysicalDeviceGlobalPriorityQueryFeatures, v14, globalPriorityQuery, globalPriorityQuery),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SUBGROUP_ROTATE_FEATURES,
+             VkPhysicalDeviceShaderSubgroupRotateFeatures, v14, shaderSubgroupRotate, shaderSubgroupRotateClustered),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT_CONTROLS_2_FEATURES,
+             VkPhysicalDeviceShaderFloatControls2Features, v14, shaderFloatControls2, shaderFloatControls2),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_EXPECT_ASSUME_FEATURES,
+             VkPhysicalDeviceShaderExpectAssumeFeatures, v14, shaderExpectAssume, shaderExpectAssume),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES, VkPhysicalDeviceLineRasterizationFeatures,
+             v14, rectangularLines, stippledSmoothLines),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES,
+             VkPhysicalDeviceVertexAttributeDivisorFeatures, v14, vertexAttributeInstanceRateDivisor,
+             vertexAttributeInstanceRateZeroDivisor),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INDEX_TYPE_UINT8_FEATURES, VkPhysicalDeviceIndexTypeUint8Features, v14,
+             indexTypeUint8, indexTypeUint8),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES,
+             VkPhysicalDeviceDynamicRenderingLocalReadFeatures, v14, dynamicRenderingLocalRead,
+             dynamicRenderingLocalRead),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES, VkPhysicalDeviceMaintenance5Features, v14,
+             maintenance5, maintenance5),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_6_FEATURES, VkPhysicalDeviceMaintenance6Features, v14,
+             maintenance6, maintenance6),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_PROTECTED_ACCESS_FEATURES,
+             VkPhysicalDevicePipelineProtectedAccessFeatures, v14, pipelineProtectedAccess, pipelineProtectedAccess),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_ROBUSTNESS_FEATURES,
+             VkPhysicalDevicePipelineRobustnessFeatures, v14, pipelineRobustness, pipelineRobustness),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES, VkPhysicalDeviceHostImageCopyFeatures, v14,
+             hostImageCopy, hostImageCopy),
+};
+
+static const struct pvk_run pvk_property_runs[] = {
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES, VkPhysicalDeviceVulkan11Properties, deviceUUID,
+             maxMemoryAllocationSize, v11, deviceUUID, maxMemoryAllocationSize),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES, VkPhysicalDeviceVulkan12Properties, driverID,
+             framebufferIntegerColorSampleCounts, v12, driverID, framebufferIntegerColorSampleCounts),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES, VkPhysicalDeviceVulkan13Properties,
+             minSubgroupSize, maxBufferSize, v13, minSubgroupSize, maxBufferSize),
+    /* VkPhysicalDeviceVulkan14Properties around its copy layout lists (filled
+     * by pvk_host_copy_layouts) */
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES, VkPhysicalDeviceVulkan14Properties,
+             lineSubPixelPrecisionBits, defaultRobustnessImages, v14, lineSubPixelPrecisionBits,
+             defaultRobustnessImages),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES, VkPhysicalDeviceVulkan14Properties,
+             optimalTilingLayoutUUID, identicalMemoryTypeRequirements, v14, optimalTilingLayoutUUID,
+             identicalMemoryTypeRequirements),
+    /* Vulkan 1.1 */
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES, VkPhysicalDeviceIDProperties, deviceUUID, deviceLUIDValid,
+             v11, deviceUUID, deviceLUIDValid),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES, VkPhysicalDeviceSubgroupProperties, subgroupSize,
+             quadOperationsInAllStages, v11, subgroupSize, subgroupQuadOperationsInAllStages),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_POINT_CLIPPING_PROPERTIES, VkPhysicalDevicePointClippingProperties,
+             pointClippingBehavior, pointClippingBehavior, v11, pointClippingBehavior, pointClippingBehavior),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES, VkPhysicalDeviceMultiviewProperties,
+             maxMultiviewViewCount, maxMultiviewInstanceIndex, v11, maxMultiviewViewCount, maxMultiviewInstanceIndex),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES, VkPhysicalDeviceProtectedMemoryProperties,
+             protectedNoFault, protectedNoFault, v11, protectedNoFault, protectedNoFault),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES, VkPhysicalDeviceMaintenance3Properties,
+             maxPerSetDescriptors, maxMemoryAllocationSize, v11, maxPerSetDescriptors, maxMemoryAllocationSize),
+    /* Vulkan 1.2 */
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES, VkPhysicalDeviceDriverProperties, driverID,
+             conformanceVersion, v12, driverID, conformanceVersion),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES, VkPhysicalDeviceFloatControlsProperties,
+             denormBehaviorIndependence, shaderRoundingModeRTZFloat64, v12, denormBehaviorIndependence,
+             shaderRoundingModeRTZFloat64),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES,
+             VkPhysicalDeviceDescriptorIndexingProperties, maxUpdateAfterBindDescriptorsInAllPools,
+             maxDescriptorSetUpdateAfterBindInputAttachments, v12, maxUpdateAfterBindDescriptorsInAllPools,
+             maxDescriptorSetUpdateAfterBindInputAttachments),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES,
+             VkPhysicalDeviceDepthStencilResolveProperties, supportedDepthResolveModes, independentResolve, v12,
+             supportedDepthResolveModes, independentResolve),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_FILTER_MINMAX_PROPERTIES,
+             VkPhysicalDeviceSamplerFilterMinmaxProperties, filterMinmaxSingleComponentFormats,
+             filterMinmaxImageComponentMapping, v12, filterMinmaxSingleComponentFormats,
+             filterMinmaxImageComponentMapping),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES,
+             VkPhysicalDeviceTimelineSemaphoreProperties, maxTimelineSemaphoreValueDifference,
+             maxTimelineSemaphoreValueDifference, v12, maxTimelineSemaphoreValueDifference,
+             maxTimelineSemaphoreValueDifference),
+    /* Vulkan 1.3 */
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES,
+             VkPhysicalDeviceSubgroupSizeControlProperties, minSubgroupSize, requiredSubgroupSizeStages, v13,
+             minSubgroupSize, requiredSubgroupSizeStages),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_PROPERTIES,
+             VkPhysicalDeviceInlineUniformBlockProperties, maxInlineUniformBlockSize,
+             maxDescriptorSetUpdateAfterBindInlineUniformBlocks, v13, maxInlineUniformBlockSize,
+             maxDescriptorSetUpdateAfterBindInlineUniformBlocks),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_PROPERTIES,
+             VkPhysicalDeviceShaderIntegerDotProductProperties, integerDotProduct8BitUnsignedAccelerated,
+             integerDotProductAccumulatingSaturating64BitMixedSignednessAccelerated, v13,
+             integerDotProduct8BitUnsignedAccelerated,
+             integerDotProductAccumulatingSaturating64BitMixedSignednessAccelerated),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXEL_BUFFER_ALIGNMENT_PROPERTIES,
+             VkPhysicalDeviceTexelBufferAlignmentProperties, storageTexelBufferOffsetAlignmentBytes,
+             uniformTexelBufferOffsetSingleTexelAlignment, v13, storageTexelBufferOffsetAlignmentBytes,
+             uniformTexelBufferOffsetSingleTexelAlignment),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES, VkPhysicalDeviceMaintenance4Properties,
+             maxBufferSize, maxBufferSize, v13, maxBufferSize, maxBufferSize),
+    /* Vulkan 1.4 */
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_PROPERTIES,
+             VkPhysicalDeviceLineRasterizationProperties, lineSubPixelPrecisionBits, lineSubPixelPrecisionBits, v14,
+             lineSubPixelPrecisionBits, lineSubPixelPrecisionBits),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_PROPERTIES,
+             VkPhysicalDeviceVertexAttributeDivisorProperties, maxVertexAttribDivisor, supportsNonZeroFirstInstance,
+             v14, maxVertexAttribDivisor, supportsNonZeroFirstInstance),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES, VkPhysicalDevicePushDescriptorProperties,
+             maxPushDescriptors, maxPushDescriptors, v14, maxPushDescriptors, maxPushDescriptors),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_PROPERTIES, VkPhysicalDeviceMaintenance5Properties,
+             earlyFragmentMultisampleCoverageAfterSampleCounting, nonStrictWideLinesUseParallelogram, v14,
+             earlyFragmentMultisampleCoverageAfterSampleCounting, nonStrictWideLinesUseParallelogram),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_6_PROPERTIES, VkPhysicalDeviceMaintenance6Properties,
+             blockTexelViewCompatibleMultipleLayers, fragmentShadingRateClampCombinerInputs, v14,
+             blockTexelViewCompatibleMultipleLayers, fragmentShadingRateClampCombinerInputs),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_ROBUSTNESS_PROPERTIES,
+             VkPhysicalDevicePipelineRobustnessProperties, defaultRobustnessStorageBuffers, defaultRobustnessImages,
+             v14, defaultRobustnessStorageBuffers, defaultRobustnessImages),
+    PVK_PRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES, VkPhysicalDeviceHostImageCopyProperties,
+             optimalTilingLayoutUUID, identicalMemoryTypeRequirements, v14, optimalTilingLayoutUUID,
+             identicalMemoryTypeRequirements),
+};
+
+/* Copies every run whose sType matches a struct of the chain. */
+static void pvk_fill_runs(const struct pvk_run *runs, size_t count, const void *source, void *chain)
+{
+    VkBaseOutStructure *s;
+    size_t i;
+    for (s = chain; s; s = s->pNext)
+        for (i = 0; i < count; i++)
+            if (runs[i].sType == s->sType)
+                memcpy((char *)s + runs[i].offset, (const char *)source + runs[i].source, runs[i].size);
+}
+
+/* Image layouts host image copies accept: every layout an image can be in at
+ * Vulkan 1.4 but UNDEFINED and PRESENT_SRC_KHR (swapchain images cannot be
+ * made with VK_IMAGE_USAGE_HOST_TRANSFER_BIT). Metal textures have no
+ * layouts, so they are all alike. */
+static const VkImageLayout pvk_host_copy_layout_list[] = {
+    VK_IMAGE_LAYOUT_GENERAL,
+    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    VK_IMAGE_LAYOUT_PREINITIALIZED,
+    VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL,
+    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL,
+    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+    VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,
+    VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL,
+    VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL,
+    VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL,
+    VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+    VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ,
+};
+
+/* pCopySrcLayouts / pCopyDstLayouts: NULL asks for the count; otherwise at
+ * most *count layouts are written and *count is set to the number written. */
+static void pvk_host_copy_layouts(uint32_t *count, VkImageLayout *layouts)
+{
+    uint32_t n = PVK_ARRAY_SIZE(pvk_host_copy_layout_list);
+    if (layouts) {
+        if (*count < n)
+            n = *count;
+        memcpy(layouts, pvk_host_copy_layout_list, n * sizeof(*layouts));
+    }
+    *count = n;
+}
+
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
                                                           VkPhysicalDeviceProperties2 *pProperties)
 {
-    /* TODO: fill pNext structures */
+    struct pvk_physical_device *pd = (struct pvk_physical_device *)physicalDevice;
+    VkBaseOutStructure *s;
+
     vkGetPhysicalDeviceProperties(physicalDevice, &pProperties->properties);
-    pvk_physical_device_memory_properties2((struct pvk_physical_device *)physicalDevice, pProperties->pNext);
+    pvk_fill_runs(pvk_property_runs, PVK_ARRAY_SIZE(pvk_property_runs), &pd->properties_1x, pProperties->pNext);
+    for (s = pProperties->pNext; s; s = s->pNext) {
+        if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES) {
+            VkPhysicalDeviceVulkan14Properties *p = (VkPhysicalDeviceVulkan14Properties *)(void *)s;
+            pvk_host_copy_layouts(&p->copySrcLayoutCount, p->pCopySrcLayouts);
+            pvk_host_copy_layouts(&p->copyDstLayoutCount, p->pCopyDstLayouts);
+        } else if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES) {
+            VkPhysicalDeviceHostImageCopyProperties *p = (VkPhysicalDeviceHostImageCopyProperties *)(void *)s;
+            pvk_host_copy_layouts(&p->copySrcLayoutCount, p->pCopySrcLayouts);
+            pvk_host_copy_layouts(&p->copyDstLayoutCount, p->pCopyDstLayouts);
+        }
+    }
 }
 
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceFeatures(VkPhysicalDevice physicalDevice,
                                                        VkPhysicalDeviceFeatures *pFeatures)
 {
-    (void)physicalDevice;
-    memset(pFeatures, 0, sizeof(*pFeatures)); /* TODO: report features as they land */
+    *pFeatures = ((struct pvk_physical_device *)physicalDevice)->features.core;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
                                                         VkPhysicalDeviceFeatures2 *pFeatures)
 {
-    /* TODO: fill pNext structures */
-    vkGetPhysicalDeviceFeatures(physicalDevice, &pFeatures->features);
+    struct pvk_physical_device *pd = (struct pvk_physical_device *)physicalDevice;
+    /* pFeatures itself is the VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 run. */
+    pvk_fill_runs(pvk_feature_runs, PVK_ARRAY_SIZE(pvk_feature_runs), &pd->features, pFeatures);
 }
 
 static const VkQueueFamilyProperties pvk_queue_family = {
@@ -31823,6 +32598,7 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceQueueFamilyProperties2(VkPhysicalD
                                                                      uint32_t *pQueueFamilyPropertyCount,
                                                                      VkQueueFamilyProperties2 *pQueueFamilyProperties)
 {
+    VkBaseOutStructure *s;
     (void)physicalDevice;
     if (!pQueueFamilyProperties) {
         *pQueueFamilyPropertyCount = 1;
@@ -31831,7 +32607,16 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceQueueFamilyProperties2(VkPhysicalD
     if (*pQueueFamilyPropertyCount == 0)
         return;
     *pQueueFamilyPropertyCount = 1;
-    pQueueFamilyProperties[0].queueFamilyProperties = pvk_queue_family; /* TODO: pNext */
+    pQueueFamilyProperties[0].queueFamilyProperties = pvk_queue_family;
+    for (s = pQueueFamilyProperties[0].pNext; s; s = s->pNext) {
+        if (s->sType == VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES) {
+            /* Metal queues have no priorities: one level, the default. */
+            VkQueueFamilyGlobalPriorityProperties *p = (VkQueueFamilyGlobalPriorityProperties *)(void *)s;
+            memset(p->priorities, 0, sizeof(p->priorities));
+            p->priorityCount = 1;
+            p->priorities[0] = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM;
+        }
+    }
 }
 
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceMemoryProperties(VkPhysicalDevice physicalDevice,
@@ -31843,8 +32628,17 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceMemoryProperties(VkPhysicalDevice 
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceMemoryProperties2(VkPhysicalDevice physicalDevice,
                                                                 VkPhysicalDeviceMemoryProperties2 *pMemoryProperties)
 {
-    /* TODO: VkPhysicalDeviceMemoryBudgetPropertiesEXT */
+    /* No struct of core 1.1-1.4 extends VkPhysicalDeviceMemoryProperties2
+     * (VK_EXT_memory_budget is not advertised). */
     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &pMemoryProperties->memoryProperties);
+}
+
+/* Whether a device extension is supported on physical devices of this
+ * instance: its instance extension dependency, if any, is enabled. */
+static bool pvk_device_extension_supported(const struct pvk_instance *instance, unsigned ext)
+{
+    int needs = pvk_device_extension_needs[ext];
+    return needs < 0 || instance->extensions[needs];
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice,
@@ -31852,11 +32646,16 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceExtensionProperties(VkPhysicalDe
                                                                     uint32_t *pPropertyCount,
                                                                     VkExtensionProperties *pProperties)
 {
-    (void)physicalDevice;
+    struct pvk_physical_device *pd = (struct pvk_physical_device *)physicalDevice;
+    VkExtensionProperties supported[PVK_DEVICE_EXTENSION_COUNT];
+    unsigned i, count = 0;
+
     if (pLayerName)
         return VK_ERROR_LAYER_NOT_PRESENT;
-    return pvk_enumerate(pvk_device_extensions, sizeof(VkExtensionProperties),
-                         PVK_DEVICE_EXTENSION_COUNT, pPropertyCount, pProperties);
+    for (i = 0; i < PVK_DEVICE_EXTENSION_COUNT; i++)
+        if (pvk_device_extension_supported(pd->instance, i))
+            supported[count++] = pvk_device_extensions[i];
+    return pvk_enumerate(supported, sizeof(supported[0]), count, pPropertyCount, pProperties);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceLayerProperties(VkPhysicalDevice physicalDevice,
@@ -31966,25 +32765,91 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEnumeratePhysicalDevices(VkInstance _instance,
                          pPhysicalDeviceCount, pPhysicalDevices);
 }
 
+/* One group holding the one physical device. The structs are written member
+ * by member: their sType and pNext belong to the application. */
+VKAPI_ATTR VkResult VKAPI_CALL vkEnumeratePhysicalDeviceGroups(VkInstance _instance,
+                                                               uint32_t *pPhysicalDeviceGroupCount,
+                                                               VkPhysicalDeviceGroupProperties *pPhysicalDeviceGroupProperties)
+{
+    struct pvk_instance *instance = (struct pvk_instance *)_instance;
+    uint32_t count = instance->physical_device ? 1 : 0;
+    VkPhysicalDeviceGroupProperties *group = pPhysicalDeviceGroupProperties;
+
+    if (!group) {
+        *pPhysicalDeviceGroupCount = count;
+        return VK_SUCCESS;
+    }
+    if (*pPhysicalDeviceGroupCount < count) {
+        *pPhysicalDeviceGroupCount = 0;
+        return VK_INCOMPLETE;
+    }
+    *pPhysicalDeviceGroupCount = count;
+    if (count) {
+        group->physicalDeviceCount = 1;
+        memset(group->physicalDevices, 0, sizeof(group->physicalDevices));
+        group->physicalDevices[0] = (VkPhysicalDevice)instance->physical_device;
+        group->subsetAllocation = VK_FALSE;
+    }
+    return VK_SUCCESS;
+}
+
 /* ==========================================================================
  * 9. Device and queues
  *
  * Each VkQueue is an MTL4CommandQueue.
  * ========================================================================== */
 
-/* VkPhysicalDeviceFeatures is a struct of VkBool32. */
-static bool pvk_features_supported(struct pvk_physical_device *pd, const VkPhysicalDeviceFeatures *wanted)
+/* Marks the wanted features of a run of VkBool32 enabled. Returns the index
+ * of the first wanted one that is not supported, or -1. */
+static long pvk_enable_features(const VkBool32 *wanted, const VkBool32 *supported, VkBool32 *enabled, size_t count)
 {
-    VkPhysicalDeviceFeatures have;
-    const VkBool32 *w = (const VkBool32 *)wanted;
-    const VkBool32 *h = (const VkBool32 *)&have;
     size_t i;
+    for (i = 0; i < count; i++) {
+        if (!wanted[i])
+            continue;
+        if (!supported[i])
+            return (long)i;
+        enabled[i] = VK_TRUE;
+    }
+    return -1;
+}
 
-    vkGetPhysicalDeviceFeatures((VkPhysicalDevice)pd, &have);
-    for (i = 0; i < sizeof(have) / sizeof(VkBool32); i++)
-        if (w[i] && !h[i])
-            return false;
-    return true;
+/* The features vkCreateDevice is asked for, through pEnabledFeatures and every
+ * feature struct section 7 reports (pvk_feature_runs), collected in
+ * *enabled. Devices and Queues > Device Creation: VK_ERROR_FEATURE_NOT_PRESENT
+ * if one is not supported. Other structs in the chain are ignored. */
+static VkResult pvk_device_features(const struct pvk_physical_device *pd, const VkDeviceCreateInfo *info,
+                                    struct pvk_features *enabled)
+{
+    const VkBaseInStructure *s;
+    size_t i;
+    long bad;
+
+    memset(enabled, 0, sizeof(*enabled));
+    if (info->pEnabledFeatures) {
+        bad = pvk_enable_features((const VkBool32 *)info->pEnabledFeatures, (const VkBool32 *)&pd->features.core,
+                                  (VkBool32 *)&enabled->core, sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32));
+        if (bad >= 0) {
+            pvk_log(PVK_LOG_WARN, "vkCreateDevice: VkPhysicalDeviceFeatures member %ld is not supported", bad);
+            return VK_ERROR_FEATURE_NOT_PRESENT;
+        }
+    }
+    for (s = info->pNext; s; s = s->pNext) {
+        for (i = 0; i < PVK_ARRAY_SIZE(pvk_feature_runs); i++) {
+            const struct pvk_run *run = &pvk_feature_runs[i];
+            if (run->sType != s->sType)
+                continue;
+            bad = pvk_enable_features((const VkBool32 *)((const char *)s + run->offset),
+                                      (const VkBool32 *)((const char *)&pd->features + run->source),
+                                      (VkBool32 *)((char *)enabled + run->source), run->size / sizeof(VkBool32));
+            if (bad >= 0) {
+                pvk_log(PVK_LOG_WARN, "vkCreateDevice: feature %ld of the struct with sType %d is not supported", bad,
+                        (int)s->sType);
+                return VK_ERROR_FEATURE_NOT_PRESENT;
+            }
+        }
+    }
+    return VK_SUCCESS;
 }
 
 static void pvk_device_free(struct pvk_device *device)
@@ -32045,19 +32910,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
 {
     struct pvk_physical_device *pd = (struct pvk_physical_device *)physicalDevice;
     const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_instance_alloc(pd->instance);
-    const VkBaseInStructure *ext;
+    struct pvk_features features;
     struct pvk_device *device;
     uint32_t i, j;
 
     /* Device layers are deprecated; enabledLayerCount is ignored. */
-    if (pCreateInfo->pEnabledFeatures && !pvk_features_supported(pd, pCreateInfo->pEnabledFeatures))
+    if (pvk_device_features(pd, pCreateInfo, &features) != VK_SUCCESS)
         return VK_ERROR_FEATURE_NOT_PRESENT;
-    for (ext = pCreateInfo->pNext; ext; ext = ext->pNext) {
-        if (ext->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 &&
-            !pvk_features_supported(pd, &((const VkPhysicalDeviceFeatures2 *)ext)->features))
-            return VK_ERROR_FEATURE_NOT_PRESENT;
-        /* TODO: validate the other feature structs */
-    }
 
     device = pvk_alloc(alloc, sizeof(*device), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
     if (!device)
@@ -32067,6 +32926,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
     device->physical_device = pd;
+    device->features = features;
     if (alloc) {
         device->alloc = *alloc;
         device->has_alloc = true;
@@ -32079,7 +32939,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
     for (i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
         const char *name = pCreateInfo->ppEnabledExtensionNames[i];
         int index = pvk_find_extension(pvk_device_extensions, PVK_DEVICE_EXTENSION_COUNT, name);
-        if (index < 0) {
+        if (index < 0 || !pvk_device_extension_supported(pd->instance, (unsigned)index)) {
             pvk_log(PVK_LOG_WARN, "unsupported device extension %s", name);
             pvk_device_free(device);
             return VK_ERROR_EXTENSION_NOT_PRESENT;
@@ -32536,7 +33396,8 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  *   MTLCompileOptions.mathMode = MTLMathModeSafe: fast math breaks the NaN,
  *   Inf and precision guarantees Vulkan gives. The kernel's name is
  *   result->entry_point; dispatch with result->workgroup_size threads per
- *   threadgroup.
+ *   threadgroup (declared with [[max_total_threads_per_threadgroup]], so the
+ *   compiler fits up to 1024).
  *
  * SUPPORTED (v1: GLCompute, as glslang and spirv-opt produce it)
  *   Types: bool, 8/16/32/64-bit ints, half, float (no double: Metal has none),
@@ -37463,6 +38324,7 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
         PVK_SPV_PUSH(ctx, params, nparams, cap, decl);
     }
     if (entry) {
+        uint64_t threads;
         uint32_t set;
         for (set = 0; set < PVK_MSL_MAX_SETS; set++)
             if (res->set_mask & (1u << set))
@@ -37491,6 +38353,9 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
                                          pvk_spv_based(ctx, x) ? "pvk_raw_" : "", x->msl,
                                          pvk_spv_builtin_attr(x->builtin)));
         }
+        threads = (uint64_t)res->workgroup_size[0] * res->workgroup_size[1] * res->workgroup_size[2];
+        if (threads <= 1024) /* the compiler must fit the workgroup (Metal's maximum is 1024) */
+            pvk_sb_printf(ctx, out, "[[max_total_threads_per_threadgroup(%u)]]\n", (uint32_t)threads);
         pvk_sb_printf(ctx, out, "kernel void %s(", fn->msl);
     } else {
         for (g = 0; g < ctx->nglobals; g++)
@@ -37878,8 +38743,8 @@ struct pvk_pipeline {
     uint32_t dispatch_base_offset; /* in the push-constant buffer */
 };
 
-/* Push-constant bytes the encoder tracks: at least maxPushConstantsSize. */
-#define PVK_MAX_PUSH_CONSTANTS_SIZE 4096u
+/* The encoder tracks PVK_MAX_PUSH_CONSTANTS_SIZE (section 7) bytes of push
+ * constants, the base workgroup of vkCmdDispatchBase after them. */
 
 /* ---- Pools and packet storage ---- */
 
@@ -40022,7 +40887,6 @@ VKAPI_ATTR void VKAPI_CALL vkDestroySampler(VkDevice device, VkSampler sampler, 
 VKAPI_ATTR void VKAPI_CALL vkDestroySamplerYcbcrConversion(VkDevice device, VkSamplerYcbcrConversion ycbcrConversion, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkEnumeratePhysicalDeviceGroups(VkInstance instance, uint32_t* pPhysicalDeviceGroupCount, VkPhysicalDeviceGroupProperties* pPhysicalDeviceGroupProperties) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkFreeDescriptorSets(VkDevice device, VkDescriptorPool descriptorPool, uint32_t descriptorSetCount, const VkDescriptorSet* pDescriptorSets) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkGetDescriptorSetLayoutSupport(VkDevice device, const VkDescriptorSetLayoutCreateInfo* pCreateInfo, VkDescriptorSetLayoutSupport* pSupport) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, uint32_t heapIndex, uint32_t localDeviceIndex, uint32_t remoteDeviceIndex, VkPeerMemoryFeatureFlags* pPeerMemoryFeatures) { PVK_UNIMPLEMENTED(); }
@@ -40079,10 +40943,24 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSets(VkDevice device, uint32_t desc
  * 16. Entry points
  *
  * Every command vkGetInstanceProcAddr / vkGetDeviceProcAddr can return,
- * with its scope. Keep it alphabetical (for readers; lookup is linear).
+ * with its scope, the core version that added it and the extension it
+ * belongs to. Keep it alphabetical (for readers; lookup is linear).
  * ========================================================================== */
 
+/* An entry's kind: its scope, OR'ed with PVK_CORE_1_x for commands added
+ * after Vulkan 1.0 (for an extension command: the core version it also
+ * depends on), and PVK_IEXT/PVK_DEXT for extension commands. */
 enum pvk_scope { PVK_SCOPE_GLOBAL, PVK_SCOPE_INSTANCE, PVK_SCOPE_DEVICE };
+#define PVK_SCOPE(kind) ((kind) & 3u)
+#define PVK_CORE_1_1 (1u << 2)
+#define PVK_CORE_1_2 (2u << 2)
+#define PVK_CORE_1_3 (3u << 2)
+#define PVK_CORE_1_4 (4u << 2)
+#define PVK_MINOR(kind) (((kind) >> 2) & 7u)
+#define PVK_IEXT(e) ((1u + (unsigned)(e)) << 5)  /* enum pvk_instance_extension */
+#define PVK_DEXT(e) ((1u + (unsigned)(e)) << 10) /* enum pvk_device_extension */
+#define PVK_KIND_IEXT(kind) ((int)(((kind) >> 5) & 31u) - 1)  /* -1: none */
+#define PVK_KIND_DEXT(kind) ((int)(((kind) >> 10) & 31u) - 1) /* -1: none */
 
 /* Defined after the table; declared here for VK_NO_PROTOTYPES builds. */
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char *pName);
@@ -40091,117 +40969,117 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice device, co
 static const struct pvk_entrypoint {
     const char *name;
     PFN_vkVoidFunction fn;
-    enum pvk_scope scope;
+    unsigned kind;
 } pvk_entrypoints[] = {
-    { "vkAcquireNextImage2KHR", (PFN_vkVoidFunction)vkAcquireNextImage2KHR, PVK_SCOPE_DEVICE },
-    { "vkAcquireNextImageKHR", (PFN_vkVoidFunction)vkAcquireNextImageKHR, PVK_SCOPE_DEVICE },
+    { "vkAcquireNextImage2KHR", (PFN_vkVoidFunction)vkAcquireNextImage2KHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) | PVK_CORE_1_1 },
+    { "vkAcquireNextImageKHR", (PFN_vkVoidFunction)vkAcquireNextImageKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) },
     { "vkAllocateCommandBuffers", (PFN_vkVoidFunction)vkAllocateCommandBuffers, PVK_SCOPE_DEVICE },
     { "vkAllocateDescriptorSets", (PFN_vkVoidFunction)vkAllocateDescriptorSets, PVK_SCOPE_DEVICE },
     { "vkAllocateMemory", (PFN_vkVoidFunction)vkAllocateMemory, PVK_SCOPE_DEVICE },
     { "vkBeginCommandBuffer", (PFN_vkVoidFunction)vkBeginCommandBuffer, PVK_SCOPE_DEVICE },
     { "vkBindBufferMemory", (PFN_vkVoidFunction)vkBindBufferMemory, PVK_SCOPE_DEVICE },
-    { "vkBindBufferMemory2", (PFN_vkVoidFunction)vkBindBufferMemory2, PVK_SCOPE_DEVICE },
+    { "vkBindBufferMemory2", (PFN_vkVoidFunction)vkBindBufferMemory2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkBindImageMemory", (PFN_vkVoidFunction)vkBindImageMemory, PVK_SCOPE_DEVICE },
-    { "vkBindImageMemory2", (PFN_vkVoidFunction)vkBindImageMemory2, PVK_SCOPE_DEVICE },
+    { "vkBindImageMemory2", (PFN_vkVoidFunction)vkBindImageMemory2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkCmdBeginQuery", (PFN_vkVoidFunction)vkCmdBeginQuery, PVK_SCOPE_DEVICE },
     { "vkCmdBeginRenderPass", (PFN_vkVoidFunction)vkCmdBeginRenderPass, PVK_SCOPE_DEVICE },
-    { "vkCmdBeginRenderPass2", (PFN_vkVoidFunction)vkCmdBeginRenderPass2, PVK_SCOPE_DEVICE },
-    { "vkCmdBeginRendering", (PFN_vkVoidFunction)vkCmdBeginRendering, PVK_SCOPE_DEVICE },
+    { "vkCmdBeginRenderPass2", (PFN_vkVoidFunction)vkCmdBeginRenderPass2, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkCmdBeginRendering", (PFN_vkVoidFunction)vkCmdBeginRendering, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdBindDescriptorSets", (PFN_vkVoidFunction)vkCmdBindDescriptorSets, PVK_SCOPE_DEVICE },
-    { "vkCmdBindDescriptorSets2", (PFN_vkVoidFunction)vkCmdBindDescriptorSets2, PVK_SCOPE_DEVICE },
+    { "vkCmdBindDescriptorSets2", (PFN_vkVoidFunction)vkCmdBindDescriptorSets2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkCmdBindIndexBuffer", (PFN_vkVoidFunction)vkCmdBindIndexBuffer, PVK_SCOPE_DEVICE },
-    { "vkCmdBindIndexBuffer2", (PFN_vkVoidFunction)vkCmdBindIndexBuffer2, PVK_SCOPE_DEVICE },
+    { "vkCmdBindIndexBuffer2", (PFN_vkVoidFunction)vkCmdBindIndexBuffer2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkCmdBindPipeline", (PFN_vkVoidFunction)vkCmdBindPipeline, PVK_SCOPE_DEVICE },
     { "vkCmdBindVertexBuffers", (PFN_vkVoidFunction)vkCmdBindVertexBuffers, PVK_SCOPE_DEVICE },
-    { "vkCmdBindVertexBuffers2", (PFN_vkVoidFunction)vkCmdBindVertexBuffers2, PVK_SCOPE_DEVICE },
+    { "vkCmdBindVertexBuffers2", (PFN_vkVoidFunction)vkCmdBindVertexBuffers2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdBlitImage", (PFN_vkVoidFunction)vkCmdBlitImage, PVK_SCOPE_DEVICE },
-    { "vkCmdBlitImage2", (PFN_vkVoidFunction)vkCmdBlitImage2, PVK_SCOPE_DEVICE },
+    { "vkCmdBlitImage2", (PFN_vkVoidFunction)vkCmdBlitImage2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdClearAttachments", (PFN_vkVoidFunction)vkCmdClearAttachments, PVK_SCOPE_DEVICE },
     { "vkCmdClearColorImage", (PFN_vkVoidFunction)vkCmdClearColorImage, PVK_SCOPE_DEVICE },
     { "vkCmdClearDepthStencilImage", (PFN_vkVoidFunction)vkCmdClearDepthStencilImage, PVK_SCOPE_DEVICE },
     { "vkCmdCopyBuffer", (PFN_vkVoidFunction)vkCmdCopyBuffer, PVK_SCOPE_DEVICE },
-    { "vkCmdCopyBuffer2", (PFN_vkVoidFunction)vkCmdCopyBuffer2, PVK_SCOPE_DEVICE },
+    { "vkCmdCopyBuffer2", (PFN_vkVoidFunction)vkCmdCopyBuffer2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdCopyBufferToImage", (PFN_vkVoidFunction)vkCmdCopyBufferToImage, PVK_SCOPE_DEVICE },
-    { "vkCmdCopyBufferToImage2", (PFN_vkVoidFunction)vkCmdCopyBufferToImage2, PVK_SCOPE_DEVICE },
+    { "vkCmdCopyBufferToImage2", (PFN_vkVoidFunction)vkCmdCopyBufferToImage2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdCopyImage", (PFN_vkVoidFunction)vkCmdCopyImage, PVK_SCOPE_DEVICE },
-    { "vkCmdCopyImage2", (PFN_vkVoidFunction)vkCmdCopyImage2, PVK_SCOPE_DEVICE },
+    { "vkCmdCopyImage2", (PFN_vkVoidFunction)vkCmdCopyImage2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdCopyImageToBuffer", (PFN_vkVoidFunction)vkCmdCopyImageToBuffer, PVK_SCOPE_DEVICE },
-    { "vkCmdCopyImageToBuffer2", (PFN_vkVoidFunction)vkCmdCopyImageToBuffer2, PVK_SCOPE_DEVICE },
+    { "vkCmdCopyImageToBuffer2", (PFN_vkVoidFunction)vkCmdCopyImageToBuffer2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdCopyQueryPoolResults", (PFN_vkVoidFunction)vkCmdCopyQueryPoolResults, PVK_SCOPE_DEVICE },
     { "vkCmdDispatch", (PFN_vkVoidFunction)vkCmdDispatch, PVK_SCOPE_DEVICE },
-    { "vkCmdDispatchBase", (PFN_vkVoidFunction)vkCmdDispatchBase, PVK_SCOPE_DEVICE },
+    { "vkCmdDispatchBase", (PFN_vkVoidFunction)vkCmdDispatchBase, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkCmdDispatchIndirect", (PFN_vkVoidFunction)vkCmdDispatchIndirect, PVK_SCOPE_DEVICE },
     { "vkCmdDraw", (PFN_vkVoidFunction)vkCmdDraw, PVK_SCOPE_DEVICE },
     { "vkCmdDrawIndexed", (PFN_vkVoidFunction)vkCmdDrawIndexed, PVK_SCOPE_DEVICE },
     { "vkCmdDrawIndexedIndirect", (PFN_vkVoidFunction)vkCmdDrawIndexedIndirect, PVK_SCOPE_DEVICE },
-    { "vkCmdDrawIndexedIndirectCount", (PFN_vkVoidFunction)vkCmdDrawIndexedIndirectCount, PVK_SCOPE_DEVICE },
+    { "vkCmdDrawIndexedIndirectCount", (PFN_vkVoidFunction)vkCmdDrawIndexedIndirectCount, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkCmdDrawIndirect", (PFN_vkVoidFunction)vkCmdDrawIndirect, PVK_SCOPE_DEVICE },
-    { "vkCmdDrawIndirectCount", (PFN_vkVoidFunction)vkCmdDrawIndirectCount, PVK_SCOPE_DEVICE },
+    { "vkCmdDrawIndirectCount", (PFN_vkVoidFunction)vkCmdDrawIndirectCount, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkCmdEndQuery", (PFN_vkVoidFunction)vkCmdEndQuery, PVK_SCOPE_DEVICE },
     { "vkCmdEndRenderPass", (PFN_vkVoidFunction)vkCmdEndRenderPass, PVK_SCOPE_DEVICE },
-    { "vkCmdEndRenderPass2", (PFN_vkVoidFunction)vkCmdEndRenderPass2, PVK_SCOPE_DEVICE },
-    { "vkCmdEndRendering", (PFN_vkVoidFunction)vkCmdEndRendering, PVK_SCOPE_DEVICE },
+    { "vkCmdEndRenderPass2", (PFN_vkVoidFunction)vkCmdEndRenderPass2, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkCmdEndRendering", (PFN_vkVoidFunction)vkCmdEndRendering, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdExecuteCommands", (PFN_vkVoidFunction)vkCmdExecuteCommands, PVK_SCOPE_DEVICE },
     { "vkCmdFillBuffer", (PFN_vkVoidFunction)vkCmdFillBuffer, PVK_SCOPE_DEVICE },
     { "vkCmdNextSubpass", (PFN_vkVoidFunction)vkCmdNextSubpass, PVK_SCOPE_DEVICE },
-    { "vkCmdNextSubpass2", (PFN_vkVoidFunction)vkCmdNextSubpass2, PVK_SCOPE_DEVICE },
+    { "vkCmdNextSubpass2", (PFN_vkVoidFunction)vkCmdNextSubpass2, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkCmdPipelineBarrier", (PFN_vkVoidFunction)vkCmdPipelineBarrier, PVK_SCOPE_DEVICE },
-    { "vkCmdPipelineBarrier2", (PFN_vkVoidFunction)vkCmdPipelineBarrier2, PVK_SCOPE_DEVICE },
+    { "vkCmdPipelineBarrier2", (PFN_vkVoidFunction)vkCmdPipelineBarrier2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdPushConstants", (PFN_vkVoidFunction)vkCmdPushConstants, PVK_SCOPE_DEVICE },
-    { "vkCmdPushConstants2", (PFN_vkVoidFunction)vkCmdPushConstants2, PVK_SCOPE_DEVICE },
-    { "vkCmdPushDescriptorSet", (PFN_vkVoidFunction)vkCmdPushDescriptorSet, PVK_SCOPE_DEVICE },
-    { "vkCmdPushDescriptorSet2", (PFN_vkVoidFunction)vkCmdPushDescriptorSet2, PVK_SCOPE_DEVICE },
-    { "vkCmdPushDescriptorSetWithTemplate", (PFN_vkVoidFunction)vkCmdPushDescriptorSetWithTemplate, PVK_SCOPE_DEVICE },
-    { "vkCmdPushDescriptorSetWithTemplate2", (PFN_vkVoidFunction)vkCmdPushDescriptorSetWithTemplate2, PVK_SCOPE_DEVICE },
+    { "vkCmdPushConstants2", (PFN_vkVoidFunction)vkCmdPushConstants2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCmdPushDescriptorSet", (PFN_vkVoidFunction)vkCmdPushDescriptorSet, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCmdPushDescriptorSet2", (PFN_vkVoidFunction)vkCmdPushDescriptorSet2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCmdPushDescriptorSetWithTemplate", (PFN_vkVoidFunction)vkCmdPushDescriptorSetWithTemplate, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCmdPushDescriptorSetWithTemplate2", (PFN_vkVoidFunction)vkCmdPushDescriptorSetWithTemplate2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkCmdResetEvent", (PFN_vkVoidFunction)vkCmdResetEvent, PVK_SCOPE_DEVICE },
-    { "vkCmdResetEvent2", (PFN_vkVoidFunction)vkCmdResetEvent2, PVK_SCOPE_DEVICE },
+    { "vkCmdResetEvent2", (PFN_vkVoidFunction)vkCmdResetEvent2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdResetQueryPool", (PFN_vkVoidFunction)vkCmdResetQueryPool, PVK_SCOPE_DEVICE },
     { "vkCmdResolveImage", (PFN_vkVoidFunction)vkCmdResolveImage, PVK_SCOPE_DEVICE },
-    { "vkCmdResolveImage2", (PFN_vkVoidFunction)vkCmdResolveImage2, PVK_SCOPE_DEVICE },
+    { "vkCmdResolveImage2", (PFN_vkVoidFunction)vkCmdResolveImage2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdSetBlendConstants", (PFN_vkVoidFunction)vkCmdSetBlendConstants, PVK_SCOPE_DEVICE },
-    { "vkCmdSetCullMode", (PFN_vkVoidFunction)vkCmdSetCullMode, PVK_SCOPE_DEVICE },
+    { "vkCmdSetCullMode", (PFN_vkVoidFunction)vkCmdSetCullMode, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdSetDepthBias", (PFN_vkVoidFunction)vkCmdSetDepthBias, PVK_SCOPE_DEVICE },
-    { "vkCmdSetDepthBiasEnable", (PFN_vkVoidFunction)vkCmdSetDepthBiasEnable, PVK_SCOPE_DEVICE },
+    { "vkCmdSetDepthBiasEnable", (PFN_vkVoidFunction)vkCmdSetDepthBiasEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdSetDepthBounds", (PFN_vkVoidFunction)vkCmdSetDepthBounds, PVK_SCOPE_DEVICE },
-    { "vkCmdSetDepthBoundsTestEnable", (PFN_vkVoidFunction)vkCmdSetDepthBoundsTestEnable, PVK_SCOPE_DEVICE },
-    { "vkCmdSetDepthCompareOp", (PFN_vkVoidFunction)vkCmdSetDepthCompareOp, PVK_SCOPE_DEVICE },
-    { "vkCmdSetDepthTestEnable", (PFN_vkVoidFunction)vkCmdSetDepthTestEnable, PVK_SCOPE_DEVICE },
-    { "vkCmdSetDepthWriteEnable", (PFN_vkVoidFunction)vkCmdSetDepthWriteEnable, PVK_SCOPE_DEVICE },
-    { "vkCmdSetDeviceMask", (PFN_vkVoidFunction)vkCmdSetDeviceMask, PVK_SCOPE_DEVICE },
+    { "vkCmdSetDepthBoundsTestEnable", (PFN_vkVoidFunction)vkCmdSetDepthBoundsTestEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetDepthCompareOp", (PFN_vkVoidFunction)vkCmdSetDepthCompareOp, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetDepthTestEnable", (PFN_vkVoidFunction)vkCmdSetDepthTestEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetDepthWriteEnable", (PFN_vkVoidFunction)vkCmdSetDepthWriteEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetDeviceMask", (PFN_vkVoidFunction)vkCmdSetDeviceMask, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkCmdSetEvent", (PFN_vkVoidFunction)vkCmdSetEvent, PVK_SCOPE_DEVICE },
-    { "vkCmdSetEvent2", (PFN_vkVoidFunction)vkCmdSetEvent2, PVK_SCOPE_DEVICE },
-    { "vkCmdSetFrontFace", (PFN_vkVoidFunction)vkCmdSetFrontFace, PVK_SCOPE_DEVICE },
-    { "vkCmdSetLineStipple", (PFN_vkVoidFunction)vkCmdSetLineStipple, PVK_SCOPE_DEVICE },
+    { "vkCmdSetEvent2", (PFN_vkVoidFunction)vkCmdSetEvent2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetFrontFace", (PFN_vkVoidFunction)vkCmdSetFrontFace, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetLineStipple", (PFN_vkVoidFunction)vkCmdSetLineStipple, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkCmdSetLineWidth", (PFN_vkVoidFunction)vkCmdSetLineWidth, PVK_SCOPE_DEVICE },
-    { "vkCmdSetPrimitiveRestartEnable", (PFN_vkVoidFunction)vkCmdSetPrimitiveRestartEnable, PVK_SCOPE_DEVICE },
-    { "vkCmdSetPrimitiveTopology", (PFN_vkVoidFunction)vkCmdSetPrimitiveTopology, PVK_SCOPE_DEVICE },
-    { "vkCmdSetRasterizerDiscardEnable", (PFN_vkVoidFunction)vkCmdSetRasterizerDiscardEnable, PVK_SCOPE_DEVICE },
-    { "vkCmdSetRenderingAttachmentLocations", (PFN_vkVoidFunction)vkCmdSetRenderingAttachmentLocations, PVK_SCOPE_DEVICE },
-    { "vkCmdSetRenderingInputAttachmentIndices", (PFN_vkVoidFunction)vkCmdSetRenderingInputAttachmentIndices, PVK_SCOPE_DEVICE },
+    { "vkCmdSetPrimitiveRestartEnable", (PFN_vkVoidFunction)vkCmdSetPrimitiveRestartEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetPrimitiveTopology", (PFN_vkVoidFunction)vkCmdSetPrimitiveTopology, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetRasterizerDiscardEnable", (PFN_vkVoidFunction)vkCmdSetRasterizerDiscardEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetRenderingAttachmentLocations", (PFN_vkVoidFunction)vkCmdSetRenderingAttachmentLocations, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCmdSetRenderingInputAttachmentIndices", (PFN_vkVoidFunction)vkCmdSetRenderingInputAttachmentIndices, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkCmdSetScissor", (PFN_vkVoidFunction)vkCmdSetScissor, PVK_SCOPE_DEVICE },
-    { "vkCmdSetScissorWithCount", (PFN_vkVoidFunction)vkCmdSetScissorWithCount, PVK_SCOPE_DEVICE },
+    { "vkCmdSetScissorWithCount", (PFN_vkVoidFunction)vkCmdSetScissorWithCount, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdSetStencilCompareMask", (PFN_vkVoidFunction)vkCmdSetStencilCompareMask, PVK_SCOPE_DEVICE },
-    { "vkCmdSetStencilOp", (PFN_vkVoidFunction)vkCmdSetStencilOp, PVK_SCOPE_DEVICE },
+    { "vkCmdSetStencilOp", (PFN_vkVoidFunction)vkCmdSetStencilOp, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdSetStencilReference", (PFN_vkVoidFunction)vkCmdSetStencilReference, PVK_SCOPE_DEVICE },
-    { "vkCmdSetStencilTestEnable", (PFN_vkVoidFunction)vkCmdSetStencilTestEnable, PVK_SCOPE_DEVICE },
+    { "vkCmdSetStencilTestEnable", (PFN_vkVoidFunction)vkCmdSetStencilTestEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdSetStencilWriteMask", (PFN_vkVoidFunction)vkCmdSetStencilWriteMask, PVK_SCOPE_DEVICE },
     { "vkCmdSetViewport", (PFN_vkVoidFunction)vkCmdSetViewport, PVK_SCOPE_DEVICE },
-    { "vkCmdSetViewportWithCount", (PFN_vkVoidFunction)vkCmdSetViewportWithCount, PVK_SCOPE_DEVICE },
+    { "vkCmdSetViewportWithCount", (PFN_vkVoidFunction)vkCmdSetViewportWithCount, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdUpdateBuffer", (PFN_vkVoidFunction)vkCmdUpdateBuffer, PVK_SCOPE_DEVICE },
     { "vkCmdWaitEvents", (PFN_vkVoidFunction)vkCmdWaitEvents, PVK_SCOPE_DEVICE },
-    { "vkCmdWaitEvents2", (PFN_vkVoidFunction)vkCmdWaitEvents2, PVK_SCOPE_DEVICE },
+    { "vkCmdWaitEvents2", (PFN_vkVoidFunction)vkCmdWaitEvents2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdWriteTimestamp", (PFN_vkVoidFunction)vkCmdWriteTimestamp, PVK_SCOPE_DEVICE },
-    { "vkCmdWriteTimestamp2", (PFN_vkVoidFunction)vkCmdWriteTimestamp2, PVK_SCOPE_DEVICE },
-    { "vkCopyImageToImage", (PFN_vkVoidFunction)vkCopyImageToImage, PVK_SCOPE_DEVICE },
-    { "vkCopyImageToMemory", (PFN_vkVoidFunction)vkCopyImageToMemory, PVK_SCOPE_DEVICE },
-    { "vkCopyMemoryToImage", (PFN_vkVoidFunction)vkCopyMemoryToImage, PVK_SCOPE_DEVICE },
+    { "vkCmdWriteTimestamp2", (PFN_vkVoidFunction)vkCmdWriteTimestamp2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCopyImageToImage", (PFN_vkVoidFunction)vkCopyImageToImage, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCopyImageToMemory", (PFN_vkVoidFunction)vkCopyImageToMemory, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCopyMemoryToImage", (PFN_vkVoidFunction)vkCopyMemoryToImage, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkCreateBuffer", (PFN_vkVoidFunction)vkCreateBuffer, PVK_SCOPE_DEVICE },
     { "vkCreateBufferView", (PFN_vkVoidFunction)vkCreateBufferView, PVK_SCOPE_DEVICE },
     { "vkCreateCommandPool", (PFN_vkVoidFunction)vkCreateCommandPool, PVK_SCOPE_DEVICE },
     { "vkCreateComputePipelines", (PFN_vkVoidFunction)vkCreateComputePipelines, PVK_SCOPE_DEVICE },
     { "vkCreateDescriptorPool", (PFN_vkVoidFunction)vkCreateDescriptorPool, PVK_SCOPE_DEVICE },
     { "vkCreateDescriptorSetLayout", (PFN_vkVoidFunction)vkCreateDescriptorSetLayout, PVK_SCOPE_DEVICE },
-    { "vkCreateDescriptorUpdateTemplate", (PFN_vkVoidFunction)vkCreateDescriptorUpdateTemplate, PVK_SCOPE_DEVICE },
+    { "vkCreateDescriptorUpdateTemplate", (PFN_vkVoidFunction)vkCreateDescriptorUpdateTemplate, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkCreateDevice", (PFN_vkVoidFunction)vkCreateDevice, PVK_SCOPE_INSTANCE },
     { "vkCreateEvent", (PFN_vkVoidFunction)vkCreateEvent, PVK_SCOPE_DEVICE },
     { "vkCreateFence", (PFN_vkVoidFunction)vkCreateFence, PVK_SCOPE_DEVICE },
@@ -40210,24 +41088,24 @@ static const struct pvk_entrypoint {
     { "vkCreateImage", (PFN_vkVoidFunction)vkCreateImage, PVK_SCOPE_DEVICE },
     { "vkCreateImageView", (PFN_vkVoidFunction)vkCreateImageView, PVK_SCOPE_DEVICE },
     { "vkCreateInstance", (PFN_vkVoidFunction)vkCreateInstance, PVK_SCOPE_GLOBAL },
-    { "vkCreateMetalSurfaceEXT", (PFN_vkVoidFunction)vkCreateMetalSurfaceEXT, PVK_SCOPE_INSTANCE },
+    { "vkCreateMetalSurfaceEXT", (PFN_vkVoidFunction)vkCreateMetalSurfaceEXT, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_metal_surface) },
     { "vkCreatePipelineCache", (PFN_vkVoidFunction)vkCreatePipelineCache, PVK_SCOPE_DEVICE },
     { "vkCreatePipelineLayout", (PFN_vkVoidFunction)vkCreatePipelineLayout, PVK_SCOPE_DEVICE },
-    { "vkCreatePrivateDataSlot", (PFN_vkVoidFunction)vkCreatePrivateDataSlot, PVK_SCOPE_DEVICE },
+    { "vkCreatePrivateDataSlot", (PFN_vkVoidFunction)vkCreatePrivateDataSlot, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCreateQueryPool", (PFN_vkVoidFunction)vkCreateQueryPool, PVK_SCOPE_DEVICE },
     { "vkCreateRenderPass", (PFN_vkVoidFunction)vkCreateRenderPass, PVK_SCOPE_DEVICE },
-    { "vkCreateRenderPass2", (PFN_vkVoidFunction)vkCreateRenderPass2, PVK_SCOPE_DEVICE },
+    { "vkCreateRenderPass2", (PFN_vkVoidFunction)vkCreateRenderPass2, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkCreateSampler", (PFN_vkVoidFunction)vkCreateSampler, PVK_SCOPE_DEVICE },
-    { "vkCreateSamplerYcbcrConversion", (PFN_vkVoidFunction)vkCreateSamplerYcbcrConversion, PVK_SCOPE_DEVICE },
+    { "vkCreateSamplerYcbcrConversion", (PFN_vkVoidFunction)vkCreateSamplerYcbcrConversion, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkCreateSemaphore", (PFN_vkVoidFunction)vkCreateSemaphore, PVK_SCOPE_DEVICE },
     { "vkCreateShaderModule", (PFN_vkVoidFunction)vkCreateShaderModule, PVK_SCOPE_DEVICE },
-    { "vkCreateSwapchainKHR", (PFN_vkVoidFunction)vkCreateSwapchainKHR, PVK_SCOPE_DEVICE },
+    { "vkCreateSwapchainKHR", (PFN_vkVoidFunction)vkCreateSwapchainKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) },
     { "vkDestroyBuffer", (PFN_vkVoidFunction)vkDestroyBuffer, PVK_SCOPE_DEVICE },
     { "vkDestroyBufferView", (PFN_vkVoidFunction)vkDestroyBufferView, PVK_SCOPE_DEVICE },
     { "vkDestroyCommandPool", (PFN_vkVoidFunction)vkDestroyCommandPool, PVK_SCOPE_DEVICE },
     { "vkDestroyDescriptorPool", (PFN_vkVoidFunction)vkDestroyDescriptorPool, PVK_SCOPE_DEVICE },
     { "vkDestroyDescriptorSetLayout", (PFN_vkVoidFunction)vkDestroyDescriptorSetLayout, PVK_SCOPE_DEVICE },
-    { "vkDestroyDescriptorUpdateTemplate", (PFN_vkVoidFunction)vkDestroyDescriptorUpdateTemplate, PVK_SCOPE_DEVICE },
+    { "vkDestroyDescriptorUpdateTemplate", (PFN_vkVoidFunction)vkDestroyDescriptorUpdateTemplate, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkDestroyDevice", (PFN_vkVoidFunction)vkDestroyDevice, PVK_SCOPE_DEVICE },
     { "vkDestroyEvent", (PFN_vkVoidFunction)vkDestroyEvent, PVK_SCOPE_DEVICE },
     { "vkDestroyFence", (PFN_vkVoidFunction)vkDestroyFence, PVK_SCOPE_DEVICE },
@@ -40238,110 +41116,110 @@ static const struct pvk_entrypoint {
     { "vkDestroyPipeline", (PFN_vkVoidFunction)vkDestroyPipeline, PVK_SCOPE_DEVICE },
     { "vkDestroyPipelineCache", (PFN_vkVoidFunction)vkDestroyPipelineCache, PVK_SCOPE_DEVICE },
     { "vkDestroyPipelineLayout", (PFN_vkVoidFunction)vkDestroyPipelineLayout, PVK_SCOPE_DEVICE },
-    { "vkDestroyPrivateDataSlot", (PFN_vkVoidFunction)vkDestroyPrivateDataSlot, PVK_SCOPE_DEVICE },
+    { "vkDestroyPrivateDataSlot", (PFN_vkVoidFunction)vkDestroyPrivateDataSlot, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkDestroyQueryPool", (PFN_vkVoidFunction)vkDestroyQueryPool, PVK_SCOPE_DEVICE },
     { "vkDestroyRenderPass", (PFN_vkVoidFunction)vkDestroyRenderPass, PVK_SCOPE_DEVICE },
     { "vkDestroySampler", (PFN_vkVoidFunction)vkDestroySampler, PVK_SCOPE_DEVICE },
-    { "vkDestroySamplerYcbcrConversion", (PFN_vkVoidFunction)vkDestroySamplerYcbcrConversion, PVK_SCOPE_DEVICE },
+    { "vkDestroySamplerYcbcrConversion", (PFN_vkVoidFunction)vkDestroySamplerYcbcrConversion, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkDestroySemaphore", (PFN_vkVoidFunction)vkDestroySemaphore, PVK_SCOPE_DEVICE },
     { "vkDestroyShaderModule", (PFN_vkVoidFunction)vkDestroyShaderModule, PVK_SCOPE_DEVICE },
-    { "vkDestroySurfaceKHR", (PFN_vkVoidFunction)vkDestroySurfaceKHR, PVK_SCOPE_INSTANCE },
-    { "vkDestroySwapchainKHR", (PFN_vkVoidFunction)vkDestroySwapchainKHR, PVK_SCOPE_DEVICE },
+    { "vkDestroySurfaceKHR", (PFN_vkVoidFunction)vkDestroySurfaceKHR, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_surface) },
+    { "vkDestroySwapchainKHR", (PFN_vkVoidFunction)vkDestroySwapchainKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) },
     { "vkDeviceWaitIdle", (PFN_vkVoidFunction)vkDeviceWaitIdle, PVK_SCOPE_DEVICE },
     { "vkEndCommandBuffer", (PFN_vkVoidFunction)vkEndCommandBuffer, PVK_SCOPE_DEVICE },
     { "vkEnumerateDeviceExtensionProperties", (PFN_vkVoidFunction)vkEnumerateDeviceExtensionProperties, PVK_SCOPE_INSTANCE },
     { "vkEnumerateDeviceLayerProperties", (PFN_vkVoidFunction)vkEnumerateDeviceLayerProperties, PVK_SCOPE_INSTANCE },
     { "vkEnumerateInstanceExtensionProperties", (PFN_vkVoidFunction)vkEnumerateInstanceExtensionProperties, PVK_SCOPE_GLOBAL },
     { "vkEnumerateInstanceLayerProperties", (PFN_vkVoidFunction)vkEnumerateInstanceLayerProperties, PVK_SCOPE_GLOBAL },
-    { "vkEnumerateInstanceVersion", (PFN_vkVoidFunction)vkEnumerateInstanceVersion, PVK_SCOPE_GLOBAL },
-    { "vkEnumeratePhysicalDeviceGroups", (PFN_vkVoidFunction)vkEnumeratePhysicalDeviceGroups, PVK_SCOPE_INSTANCE },
+    { "vkEnumerateInstanceVersion", (PFN_vkVoidFunction)vkEnumerateInstanceVersion, PVK_SCOPE_GLOBAL | PVK_CORE_1_1 },
+    { "vkEnumeratePhysicalDeviceGroups", (PFN_vkVoidFunction)vkEnumeratePhysicalDeviceGroups, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
     { "vkEnumeratePhysicalDevices", (PFN_vkVoidFunction)vkEnumeratePhysicalDevices, PVK_SCOPE_INSTANCE },
     { "vkFlushMappedMemoryRanges", (PFN_vkVoidFunction)vkFlushMappedMemoryRanges, PVK_SCOPE_DEVICE },
     { "vkFreeCommandBuffers", (PFN_vkVoidFunction)vkFreeCommandBuffers, PVK_SCOPE_DEVICE },
     { "vkFreeDescriptorSets", (PFN_vkVoidFunction)vkFreeDescriptorSets, PVK_SCOPE_DEVICE },
     { "vkFreeMemory", (PFN_vkVoidFunction)vkFreeMemory, PVK_SCOPE_DEVICE },
-    { "vkGetBufferDeviceAddress", (PFN_vkVoidFunction)vkGetBufferDeviceAddress, PVK_SCOPE_DEVICE },
+    { "vkGetBufferDeviceAddress", (PFN_vkVoidFunction)vkGetBufferDeviceAddress, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkGetBufferMemoryRequirements", (PFN_vkVoidFunction)vkGetBufferMemoryRequirements, PVK_SCOPE_DEVICE },
-    { "vkGetBufferMemoryRequirements2", (PFN_vkVoidFunction)vkGetBufferMemoryRequirements2, PVK_SCOPE_DEVICE },
-    { "vkGetBufferOpaqueCaptureAddress", (PFN_vkVoidFunction)vkGetBufferOpaqueCaptureAddress, PVK_SCOPE_DEVICE },
-    { "vkGetDescriptorSetLayoutSupport", (PFN_vkVoidFunction)vkGetDescriptorSetLayoutSupport, PVK_SCOPE_DEVICE },
-    { "vkGetDeviceBufferMemoryRequirements", (PFN_vkVoidFunction)vkGetDeviceBufferMemoryRequirements, PVK_SCOPE_DEVICE },
-    { "vkGetDeviceGroupPeerMemoryFeatures", (PFN_vkVoidFunction)vkGetDeviceGroupPeerMemoryFeatures, PVK_SCOPE_DEVICE },
-    { "vkGetDeviceGroupPresentCapabilitiesKHR", (PFN_vkVoidFunction)vkGetDeviceGroupPresentCapabilitiesKHR, PVK_SCOPE_DEVICE },
-    { "vkGetDeviceGroupSurfacePresentModesKHR", (PFN_vkVoidFunction)vkGetDeviceGroupSurfacePresentModesKHR, PVK_SCOPE_DEVICE },
-    { "vkGetDeviceImageMemoryRequirements", (PFN_vkVoidFunction)vkGetDeviceImageMemoryRequirements, PVK_SCOPE_DEVICE },
-    { "vkGetDeviceImageSparseMemoryRequirements", (PFN_vkVoidFunction)vkGetDeviceImageSparseMemoryRequirements, PVK_SCOPE_DEVICE },
-    { "vkGetDeviceImageSubresourceLayout", (PFN_vkVoidFunction)vkGetDeviceImageSubresourceLayout, PVK_SCOPE_DEVICE },
+    { "vkGetBufferMemoryRequirements2", (PFN_vkVoidFunction)vkGetBufferMemoryRequirements2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkGetBufferOpaqueCaptureAddress", (PFN_vkVoidFunction)vkGetBufferOpaqueCaptureAddress, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkGetDescriptorSetLayoutSupport", (PFN_vkVoidFunction)vkGetDescriptorSetLayoutSupport, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkGetDeviceBufferMemoryRequirements", (PFN_vkVoidFunction)vkGetDeviceBufferMemoryRequirements, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkGetDeviceGroupPeerMemoryFeatures", (PFN_vkVoidFunction)vkGetDeviceGroupPeerMemoryFeatures, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkGetDeviceGroupPresentCapabilitiesKHR", (PFN_vkVoidFunction)vkGetDeviceGroupPresentCapabilitiesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) | PVK_CORE_1_1 },
+    { "vkGetDeviceGroupSurfacePresentModesKHR", (PFN_vkVoidFunction)vkGetDeviceGroupSurfacePresentModesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) | PVK_CORE_1_1 },
+    { "vkGetDeviceImageMemoryRequirements", (PFN_vkVoidFunction)vkGetDeviceImageMemoryRequirements, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkGetDeviceImageSparseMemoryRequirements", (PFN_vkVoidFunction)vkGetDeviceImageSparseMemoryRequirements, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkGetDeviceImageSubresourceLayout", (PFN_vkVoidFunction)vkGetDeviceImageSubresourceLayout, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkGetDeviceMemoryCommitment", (PFN_vkVoidFunction)vkGetDeviceMemoryCommitment, PVK_SCOPE_DEVICE },
-    { "vkGetDeviceMemoryOpaqueCaptureAddress", (PFN_vkVoidFunction)vkGetDeviceMemoryOpaqueCaptureAddress, PVK_SCOPE_DEVICE },
+    { "vkGetDeviceMemoryOpaqueCaptureAddress", (PFN_vkVoidFunction)vkGetDeviceMemoryOpaqueCaptureAddress, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkGetDeviceProcAddr", (PFN_vkVoidFunction)vkGetDeviceProcAddr, PVK_SCOPE_DEVICE },
     { "vkGetDeviceQueue", (PFN_vkVoidFunction)vkGetDeviceQueue, PVK_SCOPE_DEVICE },
-    { "vkGetDeviceQueue2", (PFN_vkVoidFunction)vkGetDeviceQueue2, PVK_SCOPE_DEVICE },
+    { "vkGetDeviceQueue2", (PFN_vkVoidFunction)vkGetDeviceQueue2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkGetEventStatus", (PFN_vkVoidFunction)vkGetEventStatus, PVK_SCOPE_DEVICE },
     { "vkGetFenceStatus", (PFN_vkVoidFunction)vkGetFenceStatus, PVK_SCOPE_DEVICE },
     { "vkGetImageMemoryRequirements", (PFN_vkVoidFunction)vkGetImageMemoryRequirements, PVK_SCOPE_DEVICE },
-    { "vkGetImageMemoryRequirements2", (PFN_vkVoidFunction)vkGetImageMemoryRequirements2, PVK_SCOPE_DEVICE },
+    { "vkGetImageMemoryRequirements2", (PFN_vkVoidFunction)vkGetImageMemoryRequirements2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkGetImageSparseMemoryRequirements", (PFN_vkVoidFunction)vkGetImageSparseMemoryRequirements, PVK_SCOPE_DEVICE },
-    { "vkGetImageSparseMemoryRequirements2", (PFN_vkVoidFunction)vkGetImageSparseMemoryRequirements2, PVK_SCOPE_DEVICE },
+    { "vkGetImageSparseMemoryRequirements2", (PFN_vkVoidFunction)vkGetImageSparseMemoryRequirements2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkGetImageSubresourceLayout", (PFN_vkVoidFunction)vkGetImageSubresourceLayout, PVK_SCOPE_DEVICE },
-    { "vkGetImageSubresourceLayout2", (PFN_vkVoidFunction)vkGetImageSubresourceLayout2, PVK_SCOPE_DEVICE },
+    { "vkGetImageSubresourceLayout2", (PFN_vkVoidFunction)vkGetImageSubresourceLayout2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkGetInstanceProcAddr", (PFN_vkVoidFunction)vkGetInstanceProcAddr, PVK_SCOPE_GLOBAL },
-    { "vkGetPhysicalDeviceExternalBufferProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalBufferProperties, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDeviceExternalFenceProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalFenceProperties, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDeviceExternalSemaphoreProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalSemaphoreProperties, PVK_SCOPE_INSTANCE },
+    { "vkGetPhysicalDeviceExternalBufferProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalBufferProperties, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkGetPhysicalDeviceExternalFenceProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalFenceProperties, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkGetPhysicalDeviceExternalSemaphoreProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalSemaphoreProperties, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
     { "vkGetPhysicalDeviceFeatures", (PFN_vkVoidFunction)vkGetPhysicalDeviceFeatures, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDeviceFeatures2", (PFN_vkVoidFunction)vkGetPhysicalDeviceFeatures2, PVK_SCOPE_INSTANCE },
+    { "vkGetPhysicalDeviceFeatures2", (PFN_vkVoidFunction)vkGetPhysicalDeviceFeatures2, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
     { "vkGetPhysicalDeviceFormatProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceFormatProperties, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDeviceFormatProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceFormatProperties2, PVK_SCOPE_INSTANCE },
+    { "vkGetPhysicalDeviceFormatProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceFormatProperties2, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
     { "vkGetPhysicalDeviceImageFormatProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceImageFormatProperties, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDeviceImageFormatProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceImageFormatProperties2, PVK_SCOPE_INSTANCE },
+    { "vkGetPhysicalDeviceImageFormatProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceImageFormatProperties2, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
     { "vkGetPhysicalDeviceMemoryProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceMemoryProperties, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDeviceMemoryProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceMemoryProperties2, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDevicePresentRectanglesKHR", (PFN_vkVoidFunction)vkGetPhysicalDevicePresentRectanglesKHR, PVK_SCOPE_INSTANCE },
+    { "vkGetPhysicalDeviceMemoryProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceMemoryProperties2, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkGetPhysicalDevicePresentRectanglesKHR", (PFN_vkVoidFunction)vkGetPhysicalDevicePresentRectanglesKHR, PVK_SCOPE_INSTANCE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) | PVK_CORE_1_1 },
     { "vkGetPhysicalDeviceProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceProperties, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDeviceProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceProperties2, PVK_SCOPE_INSTANCE },
+    { "vkGetPhysicalDeviceProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceProperties2, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
     { "vkGetPhysicalDeviceQueueFamilyProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceQueueFamilyProperties, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDeviceQueueFamilyProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceQueueFamilyProperties2, PVK_SCOPE_INSTANCE },
+    { "vkGetPhysicalDeviceQueueFamilyProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceQueueFamilyProperties2, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
     { "vkGetPhysicalDeviceSparseImageFormatProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceSparseImageFormatProperties, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDeviceSparseImageFormatProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceSparseImageFormatProperties2, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDeviceSurfaceCapabilitiesKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceSurfaceCapabilitiesKHR, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDeviceSurfaceFormatsKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceSurfaceFormatsKHR, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDeviceSurfacePresentModesKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceSurfacePresentModesKHR, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDeviceSurfaceSupportKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceSurfaceSupportKHR, PVK_SCOPE_INSTANCE },
-    { "vkGetPhysicalDeviceToolProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceToolProperties, PVK_SCOPE_INSTANCE },
+    { "vkGetPhysicalDeviceSparseImageFormatProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceSparseImageFormatProperties2, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkGetPhysicalDeviceSurfaceCapabilitiesKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceSurfaceCapabilitiesKHR, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_surface) },
+    { "vkGetPhysicalDeviceSurfaceFormatsKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceSurfaceFormatsKHR, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_surface) },
+    { "vkGetPhysicalDeviceSurfacePresentModesKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceSurfacePresentModesKHR, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_surface) },
+    { "vkGetPhysicalDeviceSurfaceSupportKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceSurfaceSupportKHR, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_surface) },
+    { "vkGetPhysicalDeviceToolProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceToolProperties, PVK_SCOPE_INSTANCE | PVK_CORE_1_3 },
     { "vkGetPipelineCacheData", (PFN_vkVoidFunction)vkGetPipelineCacheData, PVK_SCOPE_DEVICE },
-    { "vkGetPrivateData", (PFN_vkVoidFunction)vkGetPrivateData, PVK_SCOPE_DEVICE },
+    { "vkGetPrivateData", (PFN_vkVoidFunction)vkGetPrivateData, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkGetQueryPoolResults", (PFN_vkVoidFunction)vkGetQueryPoolResults, PVK_SCOPE_DEVICE },
     { "vkGetRenderAreaGranularity", (PFN_vkVoidFunction)vkGetRenderAreaGranularity, PVK_SCOPE_DEVICE },
-    { "vkGetRenderingAreaGranularity", (PFN_vkVoidFunction)vkGetRenderingAreaGranularity, PVK_SCOPE_DEVICE },
-    { "vkGetSemaphoreCounterValue", (PFN_vkVoidFunction)vkGetSemaphoreCounterValue, PVK_SCOPE_DEVICE },
-    { "vkGetSwapchainImagesKHR", (PFN_vkVoidFunction)vkGetSwapchainImagesKHR, PVK_SCOPE_DEVICE },
+    { "vkGetRenderingAreaGranularity", (PFN_vkVoidFunction)vkGetRenderingAreaGranularity, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkGetSemaphoreCounterValue", (PFN_vkVoidFunction)vkGetSemaphoreCounterValue, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkGetSwapchainImagesKHR", (PFN_vkVoidFunction)vkGetSwapchainImagesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) },
     { "vkInvalidateMappedMemoryRanges", (PFN_vkVoidFunction)vkInvalidateMappedMemoryRanges, PVK_SCOPE_DEVICE },
     { "vkMapMemory", (PFN_vkVoidFunction)vkMapMemory, PVK_SCOPE_DEVICE },
-    { "vkMapMemory2", (PFN_vkVoidFunction)vkMapMemory2, PVK_SCOPE_DEVICE },
+    { "vkMapMemory2", (PFN_vkVoidFunction)vkMapMemory2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkMergePipelineCaches", (PFN_vkVoidFunction)vkMergePipelineCaches, PVK_SCOPE_DEVICE },
     { "vkQueueBindSparse", (PFN_vkVoidFunction)vkQueueBindSparse, PVK_SCOPE_DEVICE },
-    { "vkQueuePresentKHR", (PFN_vkVoidFunction)vkQueuePresentKHR, PVK_SCOPE_DEVICE },
+    { "vkQueuePresentKHR", (PFN_vkVoidFunction)vkQueuePresentKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) },
     { "vkQueueSubmit", (PFN_vkVoidFunction)vkQueueSubmit, PVK_SCOPE_DEVICE },
-    { "vkQueueSubmit2", (PFN_vkVoidFunction)vkQueueSubmit2, PVK_SCOPE_DEVICE },
+    { "vkQueueSubmit2", (PFN_vkVoidFunction)vkQueueSubmit2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkQueueWaitIdle", (PFN_vkVoidFunction)vkQueueWaitIdle, PVK_SCOPE_DEVICE },
     { "vkResetCommandBuffer", (PFN_vkVoidFunction)vkResetCommandBuffer, PVK_SCOPE_DEVICE },
     { "vkResetCommandPool", (PFN_vkVoidFunction)vkResetCommandPool, PVK_SCOPE_DEVICE },
     { "vkResetDescriptorPool", (PFN_vkVoidFunction)vkResetDescriptorPool, PVK_SCOPE_DEVICE },
     { "vkResetEvent", (PFN_vkVoidFunction)vkResetEvent, PVK_SCOPE_DEVICE },
     { "vkResetFences", (PFN_vkVoidFunction)vkResetFences, PVK_SCOPE_DEVICE },
-    { "vkResetQueryPool", (PFN_vkVoidFunction)vkResetQueryPool, PVK_SCOPE_DEVICE },
+    { "vkResetQueryPool", (PFN_vkVoidFunction)vkResetQueryPool, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkSetEvent", (PFN_vkVoidFunction)vkSetEvent, PVK_SCOPE_DEVICE },
-    { "vkSetPrivateData", (PFN_vkVoidFunction)vkSetPrivateData, PVK_SCOPE_DEVICE },
-    { "vkSignalSemaphore", (PFN_vkVoidFunction)vkSignalSemaphore, PVK_SCOPE_DEVICE },
-    { "vkTransitionImageLayout", (PFN_vkVoidFunction)vkTransitionImageLayout, PVK_SCOPE_DEVICE },
-    { "vkTrimCommandPool", (PFN_vkVoidFunction)vkTrimCommandPool, PVK_SCOPE_DEVICE },
+    { "vkSetPrivateData", (PFN_vkVoidFunction)vkSetPrivateData, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkSignalSemaphore", (PFN_vkVoidFunction)vkSignalSemaphore, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkTransitionImageLayout", (PFN_vkVoidFunction)vkTransitionImageLayout, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkTrimCommandPool", (PFN_vkVoidFunction)vkTrimCommandPool, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkUnmapMemory", (PFN_vkVoidFunction)vkUnmapMemory, PVK_SCOPE_DEVICE },
-    { "vkUnmapMemory2", (PFN_vkVoidFunction)vkUnmapMemory2, PVK_SCOPE_DEVICE },
-    { "vkUpdateDescriptorSetWithTemplate", (PFN_vkVoidFunction)vkUpdateDescriptorSetWithTemplate, PVK_SCOPE_DEVICE },
+    { "vkUnmapMemory2", (PFN_vkVoidFunction)vkUnmapMemory2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkUpdateDescriptorSetWithTemplate", (PFN_vkVoidFunction)vkUpdateDescriptorSetWithTemplate, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkUpdateDescriptorSets", (PFN_vkVoidFunction)vkUpdateDescriptorSets, PVK_SCOPE_DEVICE },
     { "vkWaitForFences", (PFN_vkVoidFunction)vkWaitForFences, PVK_SCOPE_DEVICE },
-    { "vkWaitSemaphores", (PFN_vkVoidFunction)vkWaitSemaphores, PVK_SCOPE_DEVICE },
+    { "vkWaitSemaphores", (PFN_vkVoidFunction)vkWaitSemaphores, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
 };
 
 static const struct pvk_entrypoint *pvk_entrypoint_find(const char *name)
@@ -40353,22 +41231,64 @@ static const struct pvk_entrypoint *pvk_entrypoint_find(const char *name)
     return NULL;
 }
 
-/* TODO: return NULL for commands of extensions the instance/device did not
- * enable and of core versions above the requested apiVersion. */
-
-VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char *pName)
+/* Initialization > Command Function Pointers, the vkGetInstanceProcAddr
+ * table: with a NULL instance, the global commands and vkGetInstanceProcAddr
+ * itself; with an instance, vkGetInstanceProcAddr, every core dispatchable
+ * command, the commands of the instance extensions it enabled and those of
+ * the device extensions available on its physical device (section 6's
+ * dependencies hold). Anything else, including a global command with an
+ * instance, is NULL. */
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance _instance, const char *pName)
 {
+    const struct pvk_instance *instance = (const struct pvk_instance *)_instance;
     const struct pvk_entrypoint *e = pvk_entrypoint_find(pName);
-    if (!e || (!instance && e->scope != PVK_SCOPE_GLOBAL))
+    int iext, dext;
+
+    if (!e)
+        return NULL;
+    if (e->fn == (PFN_vkVoidFunction)vkGetInstanceProcAddr)
+        return e->fn;
+    if (!instance)
+        return PVK_SCOPE(e->kind) == PVK_SCOPE_GLOBAL ? e->fn : NULL;
+    if (PVK_SCOPE(e->kind) == PVK_SCOPE_GLOBAL)
+        return NULL;
+    iext = PVK_KIND_IEXT(e->kind);
+    if (iext >= 0 && !instance->extensions[iext])
+        return NULL;
+    dext = PVK_KIND_DEXT(e->kind);
+    if (dext >= 0 && !(instance->physical_device && pvk_device_extension_supported(instance, (unsigned)dext)))
         return NULL;
     return e->fn;
 }
 
-VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice device, const char *pName)
+/* The vkGetDeviceProcAddr table: device-level commands (no instance- or
+ * physical-device-level ones) of the core version the application requested
+ * in VkApplicationInfo::apiVersion, and of the extensions enabled on the
+ * device (or, for device-level commands of instance extensions, on its
+ * instance). For core commands beyond the requested version the table lets
+ * an implementation return NULL, and requires it with maintenance5 enabled;
+ * PlasmaVK always does, as Mesa's drivers do. The same holds for extension
+ * commands that also need a newer core version (VK_KHR_swapchain's device
+ * group commands need 1.1). */
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice _device, const char *pName)
 {
+    const struct pvk_device *device = (const struct pvk_device *)_device;
     const struct pvk_entrypoint *e = pvk_entrypoint_find(pName);
-    (void)device;
-    if (!e || e->scope != PVK_SCOPE_DEVICE)
+    const struct pvk_instance *instance;
+    unsigned requested;
+    int iext, dext;
+
+    if (!e || !device || PVK_SCOPE(e->kind) != PVK_SCOPE_DEVICE)
+        return NULL;
+    instance = device->physical_device->instance;
+    requested = VK_API_VERSION_MAJOR(instance->api_version) > 1 ? 7u : VK_API_VERSION_MINOR(instance->api_version);
+    if (PVK_MINOR(e->kind) > requested)
+        return NULL;
+    iext = PVK_KIND_IEXT(e->kind);
+    if (iext >= 0 && !instance->extensions[iext])
+        return NULL;
+    dext = PVK_KIND_DEXT(e->kind);
+    if (dext >= 0 && !device->extensions[dext])
         return NULL;
     return e->fn;
 }

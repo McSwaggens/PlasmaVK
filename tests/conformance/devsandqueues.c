@@ -1455,6 +1455,298 @@ CT_TEST(create_device_unsupported_feature_chain,
     ct_env_fini(&e);
 }
 
+/* The feature structs of the extensions promoted to Vulkan 1.1-1.4, with
+ * their first and last VkBool32 member and the version from which a feature
+ * chain may include them. */
+struct promoted_features {
+    const char *name;
+    VkStructureType type;
+    size_t first, last;
+    uint32_t version;
+};
+
+#define PROMOTED(T, type, first, last, v) { #T, type, offsetof(T, first), offsetof(T, last), v }
+
+static const struct promoted_features promoted_features[] = {
+    PROMOTED(VkPhysicalDevice16BitStorageFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
+             storageBuffer16BitAccess, storageInputOutput16, VK_API_VERSION_1_1),
+    PROMOTED(VkPhysicalDeviceMultiviewFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES, multiview,
+             multiviewTessellationShader, VK_API_VERSION_1_1),
+    PROMOTED(VkPhysicalDeviceVariablePointersFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTERS_FEATURES,
+             variablePointersStorageBuffer, variablePointers, VK_API_VERSION_1_1),
+    PROMOTED(VkPhysicalDeviceProtectedMemoryFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_FEATURES,
+             protectedMemory, protectedMemory, VK_API_VERSION_1_1),
+    PROMOTED(VkPhysicalDeviceSamplerYcbcrConversionFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES, samplerYcbcrConversion,
+             samplerYcbcrConversion, VK_API_VERSION_1_1),
+    PROMOTED(VkPhysicalDeviceShaderDrawParametersFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES, shaderDrawParameters,
+             shaderDrawParameters, VK_API_VERSION_1_1),
+    PROMOTED(VkPhysicalDevice8BitStorageFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES,
+             storageBuffer8BitAccess, storagePushConstant8, VK_API_VERSION_1_2),
+    PROMOTED(VkPhysicalDeviceShaderAtomicInt64Features, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_INT64_FEATURES,
+             shaderBufferInt64Atomics, shaderSharedInt64Atomics, VK_API_VERSION_1_2),
+    PROMOTED(VkPhysicalDeviceShaderFloat16Int8Features, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES,
+             shaderFloat16, shaderInt8, VK_API_VERSION_1_2),
+    PROMOTED(VkPhysicalDeviceDescriptorIndexingFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES, shaderInputAttachmentArrayDynamicIndexing,
+             runtimeDescriptorArray, VK_API_VERSION_1_2),
+    PROMOTED(VkPhysicalDeviceScalarBlockLayoutFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES,
+             scalarBlockLayout, scalarBlockLayout, VK_API_VERSION_1_2),
+    PROMOTED(VkPhysicalDeviceImagelessFramebufferFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES, imagelessFramebuffer,
+             imagelessFramebuffer, VK_API_VERSION_1_2),
+    PROMOTED(VkPhysicalDeviceUniformBufferStandardLayoutFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFORM_BUFFER_STANDARD_LAYOUT_FEATURES, uniformBufferStandardLayout,
+             uniformBufferStandardLayout, VK_API_VERSION_1_2),
+    PROMOTED(VkPhysicalDeviceShaderSubgroupExtendedTypesFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SUBGROUP_EXTENDED_TYPES_FEATURES, shaderSubgroupExtendedTypes,
+             shaderSubgroupExtendedTypes, VK_API_VERSION_1_2),
+    PROMOTED(VkPhysicalDeviceSeparateDepthStencilLayoutsFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SEPARATE_DEPTH_STENCIL_LAYOUTS_FEATURES, separateDepthStencilLayouts,
+             separateDepthStencilLayouts, VK_API_VERSION_1_2),
+    PROMOTED(VkPhysicalDeviceHostQueryResetFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_QUERY_RESET_FEATURES,
+             hostQueryReset, hostQueryReset, VK_API_VERSION_1_2),
+    PROMOTED(VkPhysicalDeviceTimelineSemaphoreFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES,
+             timelineSemaphore, timelineSemaphore, VK_API_VERSION_1_2),
+    PROMOTED(VkPhysicalDeviceBufferDeviceAddressFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES, bufferDeviceAddress,
+             bufferDeviceAddressMultiDevice, VK_API_VERSION_1_2),
+    PROMOTED(VkPhysicalDeviceVulkanMemoryModelFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES,
+             vulkanMemoryModel, vulkanMemoryModelAvailabilityVisibilityChains, VK_API_VERSION_1_2),
+    PROMOTED(VkPhysicalDeviceImageRobustnessFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_ROBUSTNESS_FEATURES,
+             robustImageAccess, robustImageAccess, VK_API_VERSION_1_3),
+    PROMOTED(VkPhysicalDeviceInlineUniformBlockFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_FEATURES, inlineUniformBlock,
+             descriptorBindingInlineUniformBlockUpdateAfterBind, VK_API_VERSION_1_3),
+    PROMOTED(VkPhysicalDevicePipelineCreationCacheControlFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_CREATION_CACHE_CONTROL_FEATURES, pipelineCreationCacheControl,
+             pipelineCreationCacheControl, VK_API_VERSION_1_3),
+    PROMOTED(VkPhysicalDevicePrivateDataFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_FEATURES, privateData,
+             privateData, VK_API_VERSION_1_3),
+    PROMOTED(VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DEMOTE_TO_HELPER_INVOCATION_FEATURES,
+             shaderDemoteToHelperInvocation, shaderDemoteToHelperInvocation, VK_API_VERSION_1_3),
+    PROMOTED(VkPhysicalDeviceShaderTerminateInvocationFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_TERMINATE_INVOCATION_FEATURES, shaderTerminateInvocation,
+             shaderTerminateInvocation, VK_API_VERSION_1_3),
+    PROMOTED(VkPhysicalDeviceSubgroupSizeControlFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES, subgroupSizeControl,
+             computeFullSubgroups, VK_API_VERSION_1_3),
+    PROMOTED(VkPhysicalDeviceSynchronization2Features, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES,
+             synchronization2, synchronization2, VK_API_VERSION_1_3),
+    PROMOTED(VkPhysicalDeviceTextureCompressionASTCHDRFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXTURE_COMPRESSION_ASTC_HDR_FEATURES, textureCompressionASTC_HDR,
+             textureCompressionASTC_HDR, VK_API_VERSION_1_3),
+    PROMOTED(VkPhysicalDeviceZeroInitializeWorkgroupMemoryFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ZERO_INITIALIZE_WORKGROUP_MEMORY_FEATURES,
+             shaderZeroInitializeWorkgroupMemory, shaderZeroInitializeWorkgroupMemory, VK_API_VERSION_1_3),
+    PROMOTED(VkPhysicalDeviceDynamicRenderingFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES,
+             dynamicRendering, dynamicRendering, VK_API_VERSION_1_3),
+    PROMOTED(VkPhysicalDeviceShaderIntegerDotProductFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES, shaderIntegerDotProduct,
+             shaderIntegerDotProduct, VK_API_VERSION_1_3),
+    PROMOTED(VkPhysicalDeviceMaintenance4Features, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES,
+             maintenance4, maintenance4, VK_API_VERSION_1_3),
+    PROMOTED(VkPhysicalDeviceGlobalPriorityQueryFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GLOBAL_PRIORITY_QUERY_FEATURES, globalPriorityQuery,
+             globalPriorityQuery, VK_API_VERSION_1_4),
+    PROMOTED(VkPhysicalDeviceShaderSubgroupRotateFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SUBGROUP_ROTATE_FEATURES, shaderSubgroupRotate,
+             shaderSubgroupRotateClustered, VK_API_VERSION_1_4),
+    PROMOTED(VkPhysicalDeviceShaderFloatControls2Features,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT_CONTROLS_2_FEATURES, shaderFloatControls2,
+             shaderFloatControls2, VK_API_VERSION_1_4),
+    PROMOTED(VkPhysicalDeviceShaderExpectAssumeFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_EXPECT_ASSUME_FEATURES, shaderExpectAssume, shaderExpectAssume,
+             VK_API_VERSION_1_4),
+    PROMOTED(VkPhysicalDeviceLineRasterizationFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES, rectangularLines, stippledSmoothLines,
+             VK_API_VERSION_1_4),
+    PROMOTED(VkPhysicalDeviceVertexAttributeDivisorFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES, vertexAttributeInstanceRateDivisor,
+             vertexAttributeInstanceRateZeroDivisor, VK_API_VERSION_1_4),
+    PROMOTED(VkPhysicalDeviceIndexTypeUint8Features, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INDEX_TYPE_UINT8_FEATURES,
+             indexTypeUint8, indexTypeUint8, VK_API_VERSION_1_4),
+    PROMOTED(VkPhysicalDeviceDynamicRenderingLocalReadFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES, dynamicRenderingLocalRead,
+             dynamicRenderingLocalRead, VK_API_VERSION_1_4),
+    PROMOTED(VkPhysicalDeviceMaintenance5Features, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES,
+             maintenance5, maintenance5, VK_API_VERSION_1_4),
+    PROMOTED(VkPhysicalDeviceMaintenance6Features, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_6_FEATURES,
+             maintenance6, maintenance6, VK_API_VERSION_1_4),
+    PROMOTED(VkPhysicalDevicePipelineProtectedAccessFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_PROTECTED_ACCESS_FEATURES, pipelineProtectedAccess,
+             pipelineProtectedAccess, VK_API_VERSION_1_4),
+    PROMOTED(VkPhysicalDevicePipelineRobustnessFeatures,
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_ROBUSTNESS_FEATURES, pipelineRobustness, pipelineRobustness,
+             VK_API_VERSION_1_4),
+    PROMOTED(VkPhysicalDeviceHostImageCopyFeatures, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES,
+             hostImageCopy, hostImageCopy, VK_API_VERSION_1_4),
+};
+
+CT_TEST(create_device_unsupported_promoted_feature,
+        "Devices and Queues > Device Creation: if any requested feature is not supported, vkCreateDevice must "
+        "return VK_ERROR_FEATURE_NOT_PRESENT (each unsupported member of the feature structs of extensions "
+        "promoted to Vulkan 1.1-1.4, each struct alone in the pNext chain)",
+        "vkCreateDevice vkGetPhysicalDeviceFeatures2")
+{
+    struct ct_env e;
+    float priority = 1.0f;
+    VkDeviceQueueCreateInfo q = one_queue(0, &priority);
+    size_t s, i, tested = 0;
+
+    ct_env_init(t, &e);
+    require_version(t, &e, VK_API_VERSION_1_1, "vkGetPhysicalDeviceFeatures2");
+    for (s = 0; s < CT_ARRAY_SIZE(promoted_features); s++) {
+        const struct promoted_features *p = &promoted_features[s];
+        size_t size = p->last + sizeof(VkBool32), count = (p->last - p->first) / sizeof(VkBool32) + 1;
+        union {
+            VkBaseOutStructure base;
+            unsigned char bytes[256];
+        } have, want;
+        if (e.version < p->version)
+            continue;
+        query_feature(&e, &have, size, p->type, 0);
+        for (i = 0; i < count; i++) {
+            VkDevice device = VK_NULL_HANDLE;
+            VkResult r;
+            if (*(const VkBool32 *)(have.bytes + p->first + i * sizeof(VkBool32)))
+                continue;
+            tested++;
+            memset(&want, 0, sizeof(want));
+            want.base.sType = p->type;
+            *(VkBool32 *)(want.bytes + p->first + i * sizeof(VkBool32)) = VK_TRUE;
+            /* Valid usage: multiview{Geometry,Tessellation}Shader need multiview,
+             * variablePointers needs variablePointersStorageBuffer (the first
+             * member of each struct). */
+            if ((p->type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES ||
+                 p->type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTERS_FEATURES) && i > 0)
+                *(VkBool32 *)(want.bytes + p->first) = VK_TRUE;
+            r = create_device(&e, &q, 1, &want, NULL, NULL, 0, NULL, &device);
+            CT_CHECKF(t, r == VK_ERROR_FEATURE_NOT_PRESENT, "%s member %zu: %s", p->name, i, ct_result_name(r));
+            if (r == VK_SUCCESS)
+                vkDestroyDevice(device, NULL);
+        }
+    }
+    if (!tested)
+        ct_skip(t, "every feature of the promoted feature structs is supported");
+    ct_env_fini(&e);
+}
+
+CT_TEST(create_device_all_features,
+        "Devices and Queues > Device Creation: vkCreateDevice succeeds when every feature "
+        "vkGetPhysicalDeviceFeatures2 reports (VkPhysicalDeviceFeatures2 and VkPhysicalDeviceVulkan11-14Features) "
+        "is enabled: requested features are verified to be supported, and supported ones can be enabled",
+        "vkCreateDevice vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFeatures vkDestroyDevice vkGetDeviceQueue")
+{
+    struct ct_env e;
+    struct ct_features f;
+
+    ct_env_init(t, &e);
+    ct_get_features(&e, &f, 0);
+    if (e.version < VK_API_VERSION_1_1) {
+        VkPhysicalDeviceFeatures2 *f2 = &f.f2;
+        /* No VkPhysicalDeviceFeatures2 below 1.1: use pEnabledFeatures. */
+        float priority = 1.0f;
+        VkDeviceQueueCreateInfo q = one_queue(0, &priority);
+        VkDevice device = VK_NULL_HANDLE;
+        CT_REQUIRE_VK(t, create_device(&e, &q, 1, NULL, &f2->features, NULL, 0, NULL, &device));
+        vkDestroyDevice(device, NULL);
+    } else {
+        ct_env_device(t, &e, &f.f2);
+    }
+    ct_env_fini(&e);
+}
+
+CT_TEST(host_image_copy_layouts,
+        "Devices and Queues > VkPhysicalDeviceHostImageCopyProperties: with pCopySrcLayouts / pCopyDstLayouts "
+        "NULL the number of layouts is returned in copySrcLayoutCount / copyDstLayoutCount; otherwise the count is "
+        "the array's size on input and the number of layouts written on output; VkPhysicalDeviceVulkan14Properties "
+        "reports the same lists",
+        "vkGetPhysicalDeviceProperties2")
+{
+    struct ct_env e;
+    int which;
+
+    ct_env_init(t, &e);
+    require_version(t, &e, VK_API_VERSION_1_4, "VkPhysicalDeviceHostImageCopyProperties");
+    for (which = 0; which < 2; which++) { /* source, then destination layouts */
+        VkImageLayout full[257], part[257], v14[257];
+        uint32_t total, n, k, i, j;
+        VkPhysicalDeviceHostImageCopyProperties hic;
+        VkPhysicalDeviceVulkan14Properties p14;
+        VkPhysicalDeviceProperties2 p2;
+        uint32_t *count = which ? &hic.copyDstLayoutCount : &hic.copySrcLayoutCount;
+        VkImageLayout **layouts = which ? &hic.pCopyDstLayouts : &hic.pCopySrcLayouts;
+        const char *what = which ? "copyDstLayoutCount" : "copySrcLayoutCount";
+
+        memset(&hic, 0, sizeof(hic));
+        hic.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES;
+        memset(&p2, 0, sizeof(p2));
+        p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        p2.pNext = &hic;
+        vkGetPhysicalDeviceProperties2(e.pd, &p2);
+        total = *count;
+        CT_REQUIRE(t, total <= 256);
+        if (!total)
+            continue;
+
+        /* Room for all, and one more. */
+        memset(full, 0xA5, sizeof(full));
+        *count = total + 1;
+        *layouts = full;
+        vkGetPhysicalDeviceProperties2(e.pd, &p2);
+        CT_CHECKF(t, *count == total, "%s: room for %u of %u, %u returned", what, total + 1, total, *count);
+        CT_CHECKF(t, ct_all_bytes(&full[total], sizeof(full[0]), 0xA5), "%s: wrote past the last layout", what);
+        for (i = 0; i < total; i++)
+            CT_CHECKF(t, !ct_all_bytes(&full[i], sizeof(full[i]), 0xA5), "%s: layout %u is not written", what, i);
+
+        /* Fewer slots: that many written, nothing past them. */
+        for (k = 0; k < total; k++) {
+            memset(part, 0xA5, sizeof(part));
+            *count = k;
+            *layouts = part;
+            vkGetPhysicalDeviceProperties2(e.pd, &p2);
+            CT_CHECKF(t, *count == k, "%s: room for %u of %u, %u returned", what, k, total, *count);
+            CT_CHECKF(t, ct_all_bytes(&part[k], sizeof(part[0]), 0xA5), "%s: room for %u, wrote layout %u", what, k,
+                      k);
+            for (i = 0; i < k; i++) {
+                int found = 0;
+                for (j = 0; j < total; j++)
+                    found |= part[i] == full[j];
+                CT_CHECKF(t, found, "%s: room for %u, layout %u (%d) is not in the full list", what, k, i,
+                          (int)part[i]);
+            }
+        }
+
+        /* The same list through VkPhysicalDeviceVulkan14Properties. */
+        memset(&p14, 0, sizeof(p14));
+        p14.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES;
+        memset(v14, 0xA5, sizeof(v14));
+        if (which) {
+            p14.copyDstLayoutCount = 256;
+            p14.pCopyDstLayouts = v14;
+        } else {
+            p14.copySrcLayoutCount = 256;
+            p14.pCopySrcLayouts = v14;
+        }
+        p2.pNext = &p14;
+        vkGetPhysicalDeviceProperties2(e.pd, &p2);
+        n = which ? p14.copyDstLayoutCount : p14.copySrcLayoutCount;
+        CT_CHECKF(t, n == total, "%s: %u in VkPhysicalDeviceVulkan14Properties, %u in "
+                  "VkPhysicalDeviceHostImageCopyProperties", what, n, total);
+        for (i = 0; i < n && i < total; i++) {
+            int found = 0;
+            for (j = 0; j < total; j++)
+                found |= v14[i] == full[j];
+            CT_CHECKF(t, found, "%s: VkPhysicalDeviceVulkan14Properties lists layout %d, "
+                      "VkPhysicalDeviceHostImageCopyProperties does not", what, (int)v14[i]);
+        }
+    }
+    ct_env_fini(&e);
+}
+
 CT_TEST(create_device_unsupported_extension,
         "Devices and Queues > Device Creation: if any requested extension is not supported, vkCreateDevice must "
         "return VK_ERROR_EXTENSION_NOT_PRESENT",
@@ -1574,6 +1866,9 @@ static const struct ct_test *const tests[] = {
     CT_REF(destroy_device_null),
     CT_REF(create_device_unsupported_core_feature),
     CT_REF(create_device_unsupported_feature_chain),
+    CT_REF(create_device_unsupported_promoted_feature),
+    CT_REF(create_device_all_features),
+    CT_REF(host_image_copy_layouts),
     CT_REF(create_device_unsupported_extension),
     CT_REF(device_allocation_callbacks),
     CT_REF(device_allocation_failure),
