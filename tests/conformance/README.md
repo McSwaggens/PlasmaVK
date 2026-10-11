@@ -33,6 +33,7 @@ One file per chapter of the Vulkan specification:
 | `queries.c` | Queries: pools, host and device resets, timestamp availability, order and period, `vkCmdWriteTimestamp2`, secondaries, results layout with every flag, waiting, unavailable occlusion queries with PARTIAL, `vkCmdCopyQueryPoolResults` (later submission, same command buffer, WAIT) | 15 |
 | `synchronization.c` | Synchronization and Cache Control > Events: host and device state, the host seeing a device signal, device waits on host and device signals (same command buffer, batch, earlier submission, several events, synchronization2, device-only events) | 7 |
 | `privatedata.c` | Private Data: slots, data on objects of many types, data of new objects and slots, many objects, reserved slots, allocation callbacks | 7 |
+| `wsi.c` | Window System Integration: Metal surfaces, surface queries (support, capabilities, formats, present modes, present rectangles, device group modes), swapchains (images, allocation callbacks, `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`, recreation with `oldSwapchain`, aliasing a swapchain image), acquire and present (semaphores, fences, timeouts, two swapchains in one present), swapchain images as transfer source and destination | 20 |
 
 Framework: `ct.h` (test macros, helpers), `ct.c` (runner, helpers),
 `commands.c` (every Vulkan 1.4 core command and the commands of PlasmaVK's
@@ -143,8 +144,14 @@ of the file (an unlisted test is an unused static and breaks the build).
 
 `ct -c` reports which commands the selected tests call, against every Vulkan
 1.4 core command plus those of VK_KHR_surface, VK_EXT_metal_surface,
-VK_KHR_portability_enumeration and VK_KHR_swapchain, and lists the rest. When
-PlasmaVK advertises another extension, add its commands to `commands.c`.
+VK_KHR_portability_enumeration and VK_KHR_swapchain, and lists the rest
+(VK_EXT_swapchain_colorspace has no commands). When PlasmaVK advertises
+another extension, add its commands to `commands.c`.
+
+`wsi.c` makes its CAMetalLayers through the Objective-C runtime (plain C,
+`.linker_option` for QuartzCore and libobjc, so neither build needs link
+flags). The layers are in no window: CAMetalLayer vends drawables all the
+same, so the chapter runs headless.
 
 ## Known deviations of other implementations
 
@@ -194,6 +201,15 @@ against the specification; the tests are right:
   private data was destroyed, at the same address, reads that data.
   vkGetPrivateData: "0 will be written in the absence of a previous call to
   vkSetPrivateData using the object specified by objectHandle".
+
+- `wsi.native_window_in_use_other_surface`: with a swapchain on one
+  VkSurfaceKHR of a CAMetalLayer, MoltenVK creates a second swapchain for
+  another VkSurfaceKHR of the same layer (it refuses one for the same
+  surface). vkCreateSwapchainKHR: "If oldSwapchain is VK_NULL_HANDLE, and the
+  native window referred to by pCreateInfo->surface is already associated with
+  a Vulkan swapchain, VK_ERROR_NATIVE_WINDOW_IN_USE_KHR must be returned"; on
+  the Metal platform the native window is the layer, which both surfaces refer
+  to.
 
 `baseline-moltenvk.txt` lists every other test, which passes on MoltenVK;
 `make conformance-mvk` fails if one of those regresses.

@@ -88,6 +88,7 @@ void ct_suite_descriptorsets(struct ct_registry *r);
 void ct_suite_queries(struct ct_registry *r);
 void ct_suite_synchronization(struct ct_registry *r);
 void ct_suite_privatedata(struct ct_registry *r);
+void ct_suite_wsi(struct ct_registry *r);
 
 static void ct_register_all(struct ct_registry *r)
 {
@@ -107,6 +108,7 @@ static void ct_register_all(struct ct_registry *r)
     ct_suite_queries(r);
     ct_suite_synchronization(r);
     ct_suite_privatedata(r);
+    ct_suite_wsi(r);
 }
 
 /* ==========================================================================
@@ -194,6 +196,10 @@ const char *ct_result_name(VkResult r)
     CT_RESULT(VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS)
     CT_RESULT(VK_PIPELINE_COMPILE_REQUIRED)
     CT_RESULT(VK_ERROR_NOT_PERMITTED)
+    CT_RESULT(VK_SUBOPTIMAL_KHR)
+    CT_RESULT(VK_ERROR_OUT_OF_DATE_KHR)
+    CT_RESULT(VK_ERROR_SURFACE_LOST_KHR)
+    CT_RESULT(VK_ERROR_NATIVE_WINDOW_IN_USE_KHR)
 #undef CT_RESULT
     default:
         break;
