@@ -2137,6 +2137,481 @@ static void test_occlusion(void)
     free_img(&target);
 }
 
+/* ==========================================================================
+ * Draws
+ * ========================================================================== */
+
+/* NDC of a pixel center, or (corner) of a pixel's top-left corner, of a W x H target. */
+static float ndc_x(float x)
+{
+    return x * 2.0f / W - 1.0f;
+}
+
+static float ndc_y(float y)
+{
+    return y * 2.0f / H - 1.0f;
+}
+
+struct uvec4 {
+    uint32_t v[4];
+};
+
+/* Draw parameters (gl_InstanceIndex, gl_BaseVertex, gl_BaseInstance,
+ * gl_DrawID, each + 1) of points drawn by every kind of draw, the indirect
+ * ones with and without count buffers. */
+static void test_draw_kinds(void)
+{
+    static const VkVertexInputBindingDescription binding = { 0, 8, VK_VERTEX_INPUT_RATE_VERTEX };
+    static const VkVertexInputAttributeDescription attr = { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 };
+    static const float zero[4] = { 0, 0, 0, 0 };
+    struct expect {
+        uint32_t x, y, v[4];
+    } want[] = {
+        { 1, 3, { 4, 2, 4, 1 } },   { 2, 3, { 4, 2, 4, 1 } },     { 1, 4, { 5, 2, 4, 1 } }, { 2, 4, { 5, 2, 4, 1 } },
+        { 7, 0, { 1, 3, 1, 1 } },   { 8, 0, { 1, 3, 1, 1 } },     { 10, 6, { 7, 11, 7, 1 } },
+        { 12, 7, { 8, 10, 8, 1 } }, { 13, 8, { 9, 14, 9, 1 } },  { 14, 11, { 12, 12, 12, 1 } },
+    };
+    VkPipelineVertexInputStateCreateInfo vi;
+    struct img target = make_img(VK_FORMAT_R32G32B32A32_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 16), vb = make_buf(16 * 8), ib = make_buf(16), ind = make_buf(256),
+               cnt = make_buf(16);
+    uint32_t *u, i, x, y;
+    float *f;
+    struct pipe p;
+    VkPipeline pipeline;
+    VkCommandBuffer cb;
+    VkDeviceSize zero_offset = 0;
+    int bad = 0;
+
+    memset(&vi, 0, sizeof(vi));
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount = 1;
+    vi.pVertexBindingDescriptions = &binding;
+    vi.vertexAttributeDescriptionCount = 1;
+    vi.pVertexAttributeDescriptions = &attr;
+    pipe_init(&p, spv_params_vs, sizeof(spv_params_vs), spv_params_fs, sizeof(spv_params_fs));
+    p.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+    p.color_formats[0] = VK_FORMAT_R32G32B32A32_UINT;
+    p.vertex = &vi;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    f = (float *)vb.data;
+    for (i = 0; i < 16; i++) { /* vertex i: pixel (i, 0) */
+        f[2 * i] = ndc_x((float)i + 0.5f);
+        f[2 * i + 1] = ndc_y(0.5f);
+    }
+    u = (uint32_t *)ib.data;
+    u[0] = 5;
+    u[1] = 6;
+    u[2] = 3;
+    u = (uint32_t *)ind.data;
+    /* 0: VkDrawIndirectCommand */
+    u[0] = 1, u[1] = 1, u[2] = 10, u[3] = 6;
+    /* 16: VkDrawIndexedIndirectCommand */
+    u[4] = 1, u[5] = 1, u[6] = 2, u[7] = 9, u[8] = 7;
+    /* 64: two VkDrawIndirectCommands, count 1 */
+    u[16] = 1, u[17] = 1, u[18] = 13, u[19] = 8;
+    u[20] = 1, u[21] = 1, u[22] = 14, u[23] = 9;
+    /* 128: VkDrawIndexedIndirectCommand, count 0 */
+    u[32] = 1, u[33] = 1, u[34] = 0, u[35] = 15, u[36] = 10;
+    /* 192: VkDrawIndexedIndirectCommand, count 1 */
+    u[48] = 1, u[49] = 1, u[50] = 2, u[51] = 11, u[52] = 11;
+    u = (uint32_t *)cnt.data;
+    u[0] = 1;
+    u[1] = 0;
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, zero, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindVertexBuffers(cb, 0, 1, &vb.buffer, &zero_offset);
+    vkCmdBindIndexBuffer(cb, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdDraw(cb, 2, 2, 1, 3);
+    vkCmdDrawIndexed(cb, 2, 1, 0, 2, 0);
+    vkCmdDrawIndirect(cb, ind.buffer, 0, 1, 16);
+    vkCmdDrawIndexedIndirect(cb, ind.buffer, 16, 1, 20);
+    vkCmdDrawIndirectCount(cb, ind.buffer, 64, cnt.buffer, 0, 2, 16);
+    vkCmdDrawIndexedIndirectCount(cb, ind.buffer, 128, cnt.buffer, 4, 1, 20);
+    vkCmdDrawIndexedIndirectCount(cb, ind.buffer, 192, cnt.buffer, 0, 1, 20);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            const uint32_t *got = (const uint32_t *)out.data + 4 * (y * W + x);
+            uint32_t e[4] = { 0, 0, 0, 0 };
+            for (i = 0; i < PVK_ARRAY_SIZE(want); i++)
+                if (want[i].x == x && want[i].y == y)
+                    memcpy(e, want[i].v, sizeof(e));
+            if (memcmp(got, e, sizeof(e)) != 0) {
+                if (bad < 6)
+                    fprintf(stderr, "draw kinds: pixel (%u, %u) is (%u %u %u %u), expected (%u %u %u %u)\n", x, y, got[0],
+                            got[1], got[2], got[3], e[0], e[1], e[2], e[3]);
+                bad++;
+            }
+        }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_buf(&vb);
+    free_buf(&ib);
+    free_buf(&ind);
+    free_buf(&cnt);
+    free_img(&target);
+}
+
+/* Vertices of spv_basic_vs: position (R32G32_SFLOAT) and color
+ * (R8G8B8A8_UNORM) interleaved, 12 bytes apart. */
+struct vtx {
+    float x, y;
+    uint32_t rgba;
+};
+
+static void quad_vertices(struct vtx *v, uint32_t first, uint32_t c0, uint32_t r0, uint32_t c1, uint32_t r1,
+                          uint32_t rgba, bool fan)
+{
+    /* strip order TL, TR, BL, BR; fan order TL, TR, BR, BL */
+    v[first].x = ndc_x((float)c0), v[first].y = ndc_y((float)r0);
+    v[first + 1].x = ndc_x((float)c1), v[first + 1].y = ndc_y((float)r0);
+    v[first + 2].x = ndc_x((float)(fan ? c1 : c0)), v[first + 2].y = ndc_y((float)r1);
+    v[first + 3].x = ndc_x((float)(fan ? c0 : c1)), v[first + 3].y = ndc_y((float)r1);
+    v[first].rgba = v[first + 1].rgba = v[first + 2].rgba = v[first + 3].rgba = rgba;
+}
+
+static void set_vertex(struct vtx *v, uint32_t i, uint32_t c, uint32_t r, uint32_t rgba)
+{
+    v[i].x = ndc_x((float)c);
+    v[i].y = ndc_y((float)r);
+    v[i].rgba = rgba;
+}
+
+static uint32_t expect_indices(uint32_t x, uint32_t y)
+{
+    uint32_t band = y / 4, cell = x / 4;
+    switch (band) {
+    case 0: /* 16-bit strip with restart: two quads, nothing between */
+        return cell == 0 || cell == 2 ? RED : BLACK;
+    case 1: /* 8-bit strip with restart (0xFF) */
+        return cell == 0 || cell == 2 ? GREEN : BLACK;
+    case 2: /* 16-bit strip without restart (0xFFFF a vertex), and a non-indexed fan */
+        return cell == 0 ? BLUE : cell == 2 ? WHITE : BLACK;
+    default: /* 32-bit fans with restart, and a 16-bit list without restart with 0xFFFE/0xFFFF */
+        return cell == 0 || cell == 2 ? RGBA(255, 255, 0, 255) : cell == 3 ? RGBA(0, 255, 255, 255) : BLACK;
+    }
+}
+
+/* Index types (8-bit too), primitive restart on and off (dynamic), strips,
+ * lists and triangle fans, indexed and not. */
+static void test_indices(void)
+{
+    static const VkVertexInputBindingDescription binding = { 0, sizeof(struct vtx), VK_VERTEX_INPUT_RATE_VERTEX };
+    static const VkVertexInputAttributeDescription attrs[2] = {
+        { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 },
+        { 1, 0, VK_FORMAT_R8G8B8A8_UNORM, 8 },
+    };
+    static const VkDynamicState states[] = { VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY, VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE };
+    static const float black[4] = { 0, 0, 0, 1 };
+    static const uint16_t strip16[] = { 0, 1, 2, 3, 0xffff, 4, 5, 6, 7 };
+    static const uint8_t strip8[] = { 8, 9, 10, 11, 0xff, 12, 13, 14, 15 };
+    static const uint16_t strip16_norestart[] = { 16, 17, 0xffff, 19 };
+    static const uint32_t fan32[] = { 24, 25, 26, 27, 0xffffffffu, 28, 29, 30, 31 };
+    static const uint16_t list16[] = { 32, 33, 0xfffe, 33, 0xffff, 0xfffe };
+    VkPipelineVertexInputStateCreateInfo vi;
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4), vb = make_buf((65536 + 128) * sizeof(struct vtx)), ib = make_buf(256);
+    struct vtx *v = (struct vtx *)vb.data;
+    struct pipe p;
+    VkPipeline pipeline;
+    VkCommandBuffer cb;
+    VkDeviceSize zero_offset = 0;
+
+    memset(&vi, 0, sizeof(vi));
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount = 1;
+    vi.pVertexBindingDescriptions = &binding;
+    vi.vertexAttributeDescriptionCount = 2;
+    vi.pVertexAttributeDescriptions = attrs;
+    pipe_init(&p, spv_basic_vs, sizeof(spv_basic_vs), spv_basic_fs, sizeof(spv_basic_fs));
+    p.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    p.vertex = &vi;
+    p.dynamic = states;
+    p.dynamic_count = 2;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    quad_vertices(v, 0, 0, 0, 4, 4, RED, false);
+    quad_vertices(v, 4, 8, 0, 12, 4, RED, false);
+    quad_vertices(v, 8, 0, 4, 4, 8, GREEN, false);
+    quad_vertices(v, 12, 8, 4, 12, 8, GREEN, false);
+    set_vertex(v, 116, 0, 8, BLUE); /* indices 16, 17, 0xffff, 19 + vertexOffset 100 */
+    set_vertex(v, 117, 4, 8, BLUE);
+    set_vertex(v, 0xffff + 100, 0, 12, BLUE);
+    set_vertex(v, 119, 4, 12, BLUE);
+    quad_vertices(v, 20, 8, 8, 12, 12, WHITE, true);
+    quad_vertices(v, 24, 0, 12, 4, 16, RGBA(255, 255, 0, 255), true);
+    quad_vertices(v, 28, 8, 12, 12, 16, RGBA(255, 255, 0, 255), true);
+    set_vertex(v, 32, 12, 12, RGBA(0, 255, 255, 255));
+    set_vertex(v, 33, 16, 12, RGBA(0, 255, 255, 255));
+    set_vertex(v, 0xfffe, 12, 16, RGBA(0, 255, 255, 255));
+    set_vertex(v, 0xffff, 16, 16, RGBA(0, 255, 255, 255));
+    memcpy(ib.data, strip16, sizeof(strip16));
+    memcpy(ib.data + 32, strip8, sizeof(strip8));
+    memcpy(ib.data + 64, strip16_norestart, sizeof(strip16_norestart));
+    memcpy(ib.data + 96, fan32, sizeof(fan32));
+    memcpy(ib.data + 160, list16, sizeof(list16));
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindVertexBuffers(cb, 0, 1, &vb.buffer, &zero_offset);
+    vkCmdSetPrimitiveTopology(cb, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
+    vkCmdSetPrimitiveRestartEnable(cb, VK_TRUE);
+    vkCmdBindIndexBuffer(cb, ib.buffer, 0, VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexed(cb, 9, 1, 0, 0, 0);
+    vkCmdBindIndexBuffer(cb, ib.buffer, 32, VK_INDEX_TYPE_UINT8);
+    vkCmdDrawIndexed(cb, 9, 1, 0, 0, 0);
+    vkCmdSetPrimitiveRestartEnable(cb, VK_FALSE);
+    vkCmdBindIndexBuffer(cb, ib.buffer, 64, VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexed(cb, 4, 1, 0, 100, 0);
+    vkCmdSetPrimitiveTopology(cb, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
+    vkCmdDraw(cb, 4, 1, 20, 0);
+    vkCmdSetPrimitiveRestartEnable(cb, VK_TRUE);
+    vkCmdBindIndexBuffer(cb, ib.buffer, 96, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexed(cb, 9, 1, 0, 0, 0);
+    vkCmdSetPrimitiveRestartEnable(cb, VK_FALSE);
+    vkCmdSetPrimitiveTopology(cb, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    vkCmdBindIndexBuffer(cb, ib.buffer, 160, VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexed(cb, 6, 1, 0, 0, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    CHECK(count_bad(&out, expect_indices, "indices") == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_buf(&vb);
+    free_buf(&ib);
+    free_img(&target);
+}
+
+/* Vertex input: interleaved attributes at odd offsets, an instance-rate
+ * binding with a divisor (2), and dynamic strides. Instances 0-1 read
+ * instance element 0 (row 0, color x 0.25), 2-3 element 1 (row 1, x 0.5). */
+static void test_vertex_input(void)
+{
+    static const VkVertexInputBindingDescription bindings[2] = {
+        { 0, 20, VK_VERTEX_INPUT_RATE_VERTEX },
+        { 1, 16, VK_VERTEX_INPUT_RATE_INSTANCE },
+    };
+    static const VkVertexInputAttributeDescription attrs[3] = {
+        { 0, 0, VK_FORMAT_R32G32_SFLOAT, 4 },
+        { 1, 0, VK_FORMAT_R8G8B8A8_UNORM, 13 },
+        { 2, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0 },
+    };
+    static const VkVertexInputBindingDivisorDescription divisor = { 1, 2 };
+    static const VkDynamicState stride_state = VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE;
+    static const float black[4] = { 0, 0, 0, 1 };
+    VkPipelineVertexInputDivisorStateCreateInfo di;
+    VkPipelineVertexInputStateCreateInfo vi;
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4), vb = make_buf(1024), inst = make_buf(256);
+    struct pipe p;
+    VkPipeline pipelines[2];
+    VkCommandBuffer cb;
+    VkBuffer buffers[2];
+    VkDeviceSize offsets[2] = { 0, 0 }, strides[2] = { 20, 16 };
+    uint32_t i, k, x, y;
+
+    memset(&di, 0, sizeof(di));
+    di.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO;
+    di.vertexBindingDivisorCount = 1;
+    di.pVertexBindingDivisors = &divisor;
+    memset(&vi, 0, sizeof(vi));
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.pNext = &di;
+    vi.vertexBindingDescriptionCount = 2;
+    vi.pVertexBindingDescriptions = bindings;
+    vi.vertexAttributeDescriptionCount = 3;
+    vi.pVertexAttributeDescriptions = attrs;
+    pipe_init(&p, spv_vfmt_vs, sizeof(spv_vfmt_vs), spv_basic_fs, sizeof(spv_basic_fs));
+    p.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+    p.vertex = &vi;
+    pipelines[0] = make_pipe(&p);
+    p.dynamic = &stride_state;
+    p.dynamic_count = 1;
+    pipelines[1] = make_pipe(&p);
+    REQUIRE(pipelines[0] && pipelines[1]);
+    for (i = 0; i < 4; i++) { /* vertex i: pixel (i, 0), red i * 64 */
+        float xy[2];
+        uint32_t rgba = RGBA(i * 64, 255, 0, 255);
+        xy[0] = ndc_x((float)i + 0.5f);
+        xy[1] = ndc_y(0.5f);
+        memcpy(vb.data + 20 * i + 4, xy, 8);
+        memcpy(vb.data + 20 * i + 13, &rgba, 4);
+    }
+    for (i = 0; i < 2; i++) {
+        float e[4];
+        e[0] = 0;
+        e[1] = i ? 2.0f / H : 0.0f;
+        e[2] = i ? 0.5f : 0.25f;
+        e[3] = 0;
+        memcpy(inst.data + 16 * i, e, 16);
+    }
+    buffers[0] = vb.buffer;
+    buffers[1] = inst.buffer;
+    for (k = 0; k < 2; k++) {
+        int bad = 0;
+        cb = begin_cmd();
+        begin_rendering(cb, &target, 1, black, NULL);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[k]);
+        if (k)
+            vkCmdBindVertexBuffers2(cb, 0, 2, buffers, offsets, NULL, strides);
+        else
+            vkCmdBindVertexBuffers(cb, 0, 2, buffers, offsets);
+        vkCmdDraw(cb, 4, 4, 0, 0);
+        vkCmdEndRendering(cb);
+        download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++) {
+                uint32_t want = BLACK;
+                if (x < 4 && y < 2) {
+                    float s = y ? 0.5f : 0.25f;
+                    uint32_t c = (uint32_t)(255.0f * s + 0.5f);
+                    want = RGBA((uint32_t)((float)(x * 64) * s + 0.5f), c, 0, c);
+                }
+                if (!near(px(&out, x, y), want, 1)) {
+                    if (bad < 4)
+                        fprintf(stderr, "vertex input %u: pixel (%u, %u) is %08x, expected %08x\n", k, x, y,
+                                px(&out, x, y), want);
+                    bad++;
+                }
+            }
+        CHECK(bad == 0);
+    }
+    vkDestroyPipeline(device, pipelines[0], NULL);
+    vkDestroyPipeline(device, pipelines[1], NULL);
+    free_buf(&out);
+    free_buf(&vb);
+    free_buf(&inst);
+    free_img(&target);
+}
+
+static uint32_t expect_clears(uint32_t x, uint32_t y)
+{
+    if (x >= 2 && x < 6 && y >= 2 && y < 6)
+        return RED; /* color cleared after the draw */
+    if (x >= 8 && y >= 8)
+        return BLACK; /* depth cleared to 0: the draw fails LESS */
+    return GREEN;
+}
+
+/* vkCmdClearAttachments: a color rectangle, depth in another (seen by a
+ * later depth test), an integer attachment, and layers of a layered pass. */
+static void test_clear_attachments(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    struct img targets[2], ds = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img layered = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 2, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4), iout = make_buf(W * H * 16), lout[2];
+    VkClearAttachment ca[2];
+    VkClearRect rects[2];
+    VkRenderingAttachmentInfo att;
+    VkRenderingInfo info;
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t x, y, i;
+    int bad = 0;
+
+    targets[0] = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    targets[1] = make_img(VK_FORMAT_R32G32B32A32_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    lout[0] = make_buf(W * H * 4);
+    lout[1] = make_buf(W * H * 4);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.colors = 2;
+    p.color_formats[1] = VK_FORMAT_R32G32B32A32_UINT;
+    p.depth_format = VK_FORMAT_D32_SFLOAT;
+    p.has_ds = true;
+    p.ds.depthTestEnable = VK_TRUE;
+    p.ds.depthWriteEnable = VK_TRUE;
+    p.ds.depthCompareOp = VK_COMPARE_OP_LESS;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    memset(ca, 0, sizeof(ca));
+    memset(rects, 0, sizeof(rects));
+    cb = begin_cmd();
+    begin_rendering(cb, targets, 2, black, &ds);
+    ca[0].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    ca[0].clearValue.depthStencil.depth = 0.0f;
+    rects[0].rect.offset.x = rects[0].rect.offset.y = 8;
+    rects[0].rect.extent.width = rects[0].rect.extent.height = 8;
+    rects[0].layerCount = 1;
+    vkCmdClearAttachments(cb, 1, ca, 1, rects);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -1, -1, 1, 1, 0, 1, 0, 1, 0.5f);
+    ca[0].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ca[0].colorAttachment = 0;
+    ca[0].clearValue.color.float32[0] = 1.0f;
+    ca[0].clearValue.color.float32[3] = 1.0f;
+    ca[1].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ca[1].colorAttachment = 1;
+    ca[1].clearValue.color.uint32[0] = 1;
+    ca[1].clearValue.color.uint32[1] = 2;
+    ca[1].clearValue.color.uint32[2] = 3;
+    ca[1].clearValue.color.uint32[3] = 0xdeadbeef;
+    rects[0].rect.offset.x = rects[0].rect.offset.y = 2;
+    rects[0].rect.extent.width = rects[0].rect.extent.height = 4;
+    vkCmdClearAttachments(cb, 2, ca, 1, rects);
+    vkCmdEndRendering(cb);
+    download(cb, &targets[0], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    download(cb, &targets[1], 0, VK_IMAGE_ASPECT_COLOR_BIT, &iout);
+    /* a layered pass: clear layer 1's left half */
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = layered.view;
+    att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    att.clearValue.color.float32[3] = 1.0f;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 2;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &att;
+    vkCmdBeginRendering(cb, &info);
+    ca[0].colorAttachment = 0;
+    ca[0].clearValue.color.float32[0] = 0.0f;
+    ca[0].clearValue.color.float32[2] = 1.0f;
+    rects[0].rect.offset.x = rects[0].rect.offset.y = 0;
+    rects[0].rect.extent.width = W / 2;
+    rects[0].rect.extent.height = H;
+    rects[0].baseArrayLayer = 1;
+    rects[0].layerCount = 1;
+    vkCmdClearAttachments(cb, 1, ca, 1, rects);
+    vkCmdEndRendering(cb);
+    download(cb, &layered, 0, VK_IMAGE_ASPECT_COLOR_BIT, &lout[0]);
+    download(cb, &layered, 1, VK_IMAGE_ASPECT_COLOR_BIT, &lout[1]);
+    submit(cb);
+    CHECK(count_bad(&out, expect_clears, "clear attachments") == 0);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            const uint32_t *v = (const uint32_t *)iout.data + 4 * (y * W + x);
+            if (x >= 2 && x < 6 && y >= 2 && y < 6) /* the shader does not write attachment 1: only the clear counts */
+                bad += v[0] != 1 || v[1] != 2 || v[2] != 3 || v[3] != 0xdeadbeef;
+            bad += px(&lout[0], x, y) != BLACK;
+            bad += px(&lout[1], x, y) != (x < W / 2 ? BLUE : BLACK);
+        }
+    CHECK(bad == 0);
+    (void)i;
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_buf(&iout);
+    free_buf(&lout[0]);
+    free_buf(&lout[1]);
+    free_img(&targets[0]);
+    free_img(&targets[1]);
+    free_img(&ds);
+    free_img(&layered);
+}
+
 int main(void)
 {
     setup();
@@ -2151,6 +2626,10 @@ int main(void)
     RUN(test_viewports_layers);
     RUN(test_multiview);
     RUN(test_occlusion);
+    RUN(test_draw_kinds);
+    RUN(test_indices);
+    RUN(test_vertex_input);
+    RUN(test_clear_attachments);
     teardown();
     return TEST_RESULT();
 }
