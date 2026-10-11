@@ -31592,6 +31592,7 @@ static inline void pvk_MTLStencilDescriptor_setDepthFailureOperation(id self, pv
 static inline void pvk_MTLStencilDescriptor_setDepthStencilPassOperation(id self, pvk_MTLStencilOperation depthStencilPassOperation) { PVK_SEL_CACHE("setDepthStencilPassOperation:"); PVK_MSG(void, (id, SEL, pvk_MTLStencilOperation))(self, pvk_sel_, depthStencilPassOperation); }
 static inline void pvk_MTLStencilDescriptor_setReadMask(id self, uint32_t readMask) { PVK_SEL_CACHE("setReadMask:"); PVK_MSG(void, (id, SEL, uint32_t))(self, pvk_sel_, readMask); }
 static inline void pvk_MTLStencilDescriptor_setWriteMask(id self, uint32_t writeMask) { PVK_SEL_CACHE("setWriteMask:"); PVK_MSG(void, (id, SEL, uint32_t))(self, pvk_sel_, writeMask); }
+static inline void pvk_MTL4RenderCommandEncoder_writeTimestampWithGranularity_afterStage_intoHeap_atIndex(id self, pvk_MTL4TimestampGranularity granularity, pvk_MTLRenderStages stage, id counterHeap, unsigned long index) { PVK_SEL_CACHE("writeTimestampWithGranularity:afterStage:intoHeap:atIndex:"); PVK_MSG(void, (id, SEL, pvk_MTL4TimestampGranularity, pvk_MTLRenderStages, id, unsigned long))(self, pvk_sel_, granularity, stage, counterHeap, index); }
 static inline bool pvk_NSObject_respondsToSelector(id self, SEL aSelector) { PVK_SEL_CACHE("respondsToSelector:"); return PVK_MSG(bool, (id, SEL, SEL))(self, pvk_sel_, aSelector); }
 static inline pvk_CGRect pvk_CALayer_bounds(id self) { PVK_SEL_CACHE("bounds"); return PVK_MSG(pvk_CGRect, (id, SEL))(self, pvk_sel_); }
 static inline pvk_CGFloat pvk_CALayer_contentsScale(id self) { PVK_SEL_CACHE("contentsScale"); return PVK_MSG(pvk_CGFloat, (id, SEL))(self, pvk_sel_); }
@@ -32560,6 +32561,8 @@ static void pvk_physical_device_init_descriptor_features(struct pvk_physical_dev
 
 /* Graphics features beyond what Vulkan 1.4 requires (sections 15-17):
  *   multiViewport          FST: 16 viewports and scissor rectangles
+ *   occlusionQueryPrecise  MTLVisibilityResultModeCounting
+ *   inheritedQueries       secondaries are encoded where they execute (section 15)
  *   alphaToOne             MTL4AlphaToOneState
  *   dualSrcBlend           MSL [[color(0), index(1)]] and the Source1 blend factors
  *   shaderDrawParameters   BaseVertex, BaseInstance and DrawIndex (section 13);
@@ -32580,6 +32583,8 @@ static void pvk_physical_device_init_graphics_features(struct pvk_physical_devic
     VkPhysicalDeviceFeatures *c = &pd->features.core;
     c->multiViewport = VK_TRUE;
     c->alphaToOne = VK_TRUE;
+    c->occlusionQueryPrecise = VK_TRUE; /* visibility results count samples exactly */
+    c->inheritedQueries = VK_TRUE;      /* secondaries run in the primary's render encoder */
     c->dualSrcBlend = VK_TRUE;
     pd->features.v11.shaderDrawParameters = VK_TRUE;
     pd->features.v12.drawIndirectCount = VK_TRUE;
@@ -47188,7 +47193,8 @@ struct pvk_cb_render {
     uint32_t count, capacity;           /* attachments */
     struct pvk_image_view **views;      /* capacity of them */
     VkClearValue *clears;               /* capacity */
-    /* dynamic rendering */
+    bool active;                        /* inside a render pass instance */
+    /* dynamic rendering (view_mask: also of a secondary's inherited subpass) */
     uint32_t flags;                     /* VkRenderingFlags */
     uint32_t color_count, view_mask;
     bool depth, stencil;
@@ -47244,8 +47250,15 @@ static void pvk_cb_inherit_render(struct pvk_command_buffer *cb, const VkCommand
     for (s = info->pNext; s; s = s->pNext)
         if (s->sType == VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO)
             break;
-    if (!s || !(r = pvk_cb_render_get(cb, 0)))
+    if ((!s && !info->renderPass) || !(r = pvk_cb_render_get(cb, 0)))
         return;
+    r->active = true;
+    if (info->renderPass) { /* a subpass: only its view mask matters here (queries) */
+        const struct pvk_render_pass *rp = (const struct pvk_render_pass *)info->renderPass;
+        r->pass = NULL;
+        r->view_mask = info->subpass < rp->subpass_count ? rp->subpasses[info->subpass].view_mask : 0;
+        return;
+    }
     {
         const VkCommandBufferInheritanceRenderingInfo *ri = (const VkCommandBufferInheritanceRenderingInfo *)s;
         r->pass = NULL;
@@ -47483,6 +47496,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass2(VkCommandBuffer commandBuffer, 
             imageless = (const VkRenderPassAttachmentBeginInfo *)s;
     r->pass = pass;
     r->subpass = 0;
+    r->active = true;
     r->area = pRenderPassBegin->renderArea;
     r->width = fb->width;
     r->height = fb->height;
@@ -47546,8 +47560,10 @@ VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass2(VkCommandBuffer commandBuffer, co
     struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
     (void)pSubpassEndInfo;
     pvk_cmd_end_pass(cb, 0);
-    if (cb->render)
+    if (cb->render) {
         cb->render->pass = NULL;
+        cb->render->active = false;
+    }
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass(VkCommandBuffer commandBuffer)
@@ -47570,6 +47586,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
         return;
     pvk_cmd_zero(c, sizeof(*c));
     r->pass = NULL;
+    r->active = true;
     r->area = info->renderArea;
     r->layers = info->layerCount;
     r->flags = info->flags;
@@ -47620,6 +47637,18 @@ VKAPI_ATTR void VKAPI_CALL vkCmdEndRendering(VkCommandBuffer commandBuffer)
 {
     struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
     pvk_cmd_end_pass(cb, cb->render ? cb->render->flags & VK_RENDERING_SUSPENDING_BIT : 0);
+    if (cb->render)
+        cb->render->active = false;
+}
+
+static uint32_t pvk_cb_query_views(const struct pvk_command_buffer *cb)
+{
+    const struct pvk_cb_render *r = cb->render;
+    uint32_t mask;
+    if (!r || !r->active)
+        return 1;
+    mask = r->pass ? r->pass->subpasses[r->subpass].view_mask : r->view_mask;
+    return mask ? (uint32_t)__builtin_popcount(mask) : 1;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdSetRenderingAttachmentLocations(VkCommandBuffer commandBuffer,
@@ -48046,7 +48075,13 @@ struct pvk_event {
     uint64_t *state; /* its contents: 0 reset, else set */
 };
 
-enum pvk_query_op { PVK_QUERY_RESET, PVK_QUERY_TIMESTAMP, PVK_QUERY_COPY };
+enum pvk_query_op {
+    PVK_QUERY_RESET,
+    PVK_QUERY_TIMESTAMP,
+    PVK_QUERY_COPY,
+    PVK_QUERY_BEGIN, /* occlusion (section 16's "Graphics"); count: the queries a multiview pass uses */
+    PVK_QUERY_END
+};
 
 struct pvk_cmd_query {
     struct pvk_cmd hdr;
@@ -48116,6 +48151,27 @@ VKAPI_ATTR void VKAPI_CALL vkCmdCopyQueryPoolResults(VkCommandBuffer commandBuff
     c->flags = flags;
     c->dst = buffer->gpu_address + dstOffset;
     c->stride = stride;
+}
+
+static uint32_t pvk_cb_query_views(const struct pvk_command_buffer *cb);
+
+/* Occlusion queries (encoded in section 16's "Graphics"). In a multiview
+ * render pass a query uses one index per view: the first gets the total,
+ * the others 0 (Queries > Multiview: "the implementation may ... write
+ * zero"). Precise or not, Metal counts samples exactly. */
+VKAPI_ATTR void VKAPI_CALL vkCmdBeginQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t query,
+                                           VkQueryControlFlags flags)
+{
+    struct pvk_cmd_query *c = pvk_cmd_query(commandBuffer, PVK_QUERY_BEGIN, queryPool, query,
+                                            pvk_cb_query_views((struct pvk_command_buffer *)commandBuffer));
+    if (c)
+        c->flags = flags;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdEndQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t query)
+{
+    pvk_cmd_query(commandBuffer, PVK_QUERY_END, queryPool, query,
+                  pvk_cb_query_views((struct pvk_command_buffer *)commandBuffer));
 }
 
 static void pvk_cmd_event(VkCommandBuffer cb, VkEvent event, uint64_t value)
@@ -48499,6 +48555,13 @@ struct pvk_draw_track {
     uint64_t index_address, index_size;
     uint32_t index_type; /* VkIndexType */
     uint32_t samples;    /* the first graphics pipeline's (passes without attachments) */
+    struct pvk_query_pool *vis_pool; /* the first occlusion query's pool */
+};
+
+/* Queries a render encoder makes available once it ends. */
+struct pvk_render_query {
+    struct pvk_query_pool *pool;
+    uint32_t first, count;
 };
 
 struct pvk_render {
@@ -48530,6 +48593,11 @@ struct pvk_render {
     uint8_t map_set[PVK_MAX_COLOR_ATTACHMENTS]; /* the color attachment map set */
     bool map_valid;
     uint32_t amplification; /* vertex amplification count set (0: never set) */
+    /* Occlusion queries: the pass's visibility result buffer is vis_pool's */
+    struct pvk_query_pool *vis_pool;
+    bool counting;          /* visibility counting is on */
+    struct pvk_render_query pending[64];
+    uint32_t pending_count;
 };
 
 /* Position in a batch's primary command buffers. */
@@ -48556,6 +48624,8 @@ struct pvk_encoder {
     bool waits;            /* the batch waits for semaphores */
     bool consumer_barrier; /* against earlier encoders: issued */
     struct pvk_render render;   /* graphics */
+    struct pvk_query_pool *occ_pool; /* the active occlusion query, NULL: none */
+    uint32_t occ_query;
     struct pvk_cursor cursor;   /* after the packet being encoded (primaries) */
     struct pvk_pp_result *pp;   /* draw preprocessing results of the render pass, in draw order */
     uint32_t pp_count, pp_next, pp_capacity;
@@ -49934,6 +50004,12 @@ static bool pvk_scan_packet(struct pvk_encoder *e, struct pvk_draw_track *t, con
             pvk_scan_cb(e, t, (const struct pvk_command_buffer *)list[i], depth + 1);
         break;
     }
+    case PVK_CMD_QUERY: {
+        const struct pvk_cmd_query *q = (const struct pvk_cmd_query *)c;
+        if (q->op == PVK_QUERY_BEGIN && q->pool->type == VK_QUERY_TYPE_OCCLUSION && !t->vis_pool)
+            t->vis_pool = q->pool;
+        break;
+    }
     case PVK_CMD_END_PASS:
         return !(((const struct pvk_cmd_end_pass *)c)->flags & VK_RENDERING_SUSPENDING_BIT);
     default:
@@ -50150,6 +50226,7 @@ static void pvk_clear_value_bits(const struct pvk_format *f, const VkClearColorV
 }
 
 static void pvk_render_set_map(struct pvk_encoder *e, const uint8_t *map);
+static void pvk_render_counting(struct pvk_encoder *e, bool on);
 
 /* Clears color slots `colors` (values[slot]), depth and/or stencil in the
  * rectangles by drawing; restores what it changes on the next draw. */
@@ -50197,6 +50274,7 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
     for (s = 0; r->view_mask >> s; s++)
         if (r->view_mask & (1u << s))
             view_layers[views++] = s;
+    pvk_render_counting(e, false); /* clears are not counted by occlusion queries */
     pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
     pvk_render_set_map(e, map);
     pvk_MTL4RenderCommandEncoder_setDepthStencilState(enc, ds);
@@ -50265,20 +50343,93 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
                                                            PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
     r->ds_state = NULL;
     r->dirty = PVK_RD_ALL;
+    pvk_render_counting(e, true);
 }
 
 /* ---- Render passes ---- */
 
+static void pvk_encoder_query_available(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t first,
+                                        uint32_t count);
+
 static void pvk_render_end(struct pvk_encoder *e)
 {
     struct pvk_render *r = &e->render;
+    uint32_t i;
     if (r->enc) {
         pvk_MTL4CommandEncoder_endEncoding(r->enc);
         pvk_release(r->enc);
         r->enc = NULL;
     }
     r->suspended = false;
+    r->counting = false;
+    r->vis_pool = NULL;
     e->pp_count = e->pp_next = 0;
+    for (i = 0; i < r->pending_count; i++) /* now that the pass's counts and timestamps are written */
+        pvk_encoder_query_available(e, r->pending[i].pool, r->pending[i].first, r->pending[i].count);
+    r->pending_count = 0;
+}
+
+/* Queries the render encoder makes available when it ends. */
+static void pvk_render_pending(struct pvk_render *r, struct pvk_query_pool *pool, uint32_t first, uint32_t count)
+{
+    struct pvk_render_query *q = r->pending_count ? &r->pending[r->pending_count - 1] : NULL;
+    if (q && q->pool == pool && q->first + q->count == first) {
+        q->count += count;
+    } else if (r->pending_count < PVK_ARRAY_SIZE(r->pending)) {
+        q = &r->pending[r->pending_count++];
+        q->pool = pool;
+        q->first = first;
+        q->count = count;
+    } else {
+        static int warned;
+        if (!warned++)
+            pvk_log(PVK_LOG_WARN, "more than %u query ranges in a render pass: some never become available",
+                    (unsigned)PVK_ARRAY_SIZE(r->pending));
+    }
+}
+
+static void pvk_render_counting(struct pvk_encoder *e, bool on)
+{
+    struct pvk_render *r = &e->render;
+    on = on && e->occ_pool && e->occ_pool == r->vis_pool;
+    if (!r->enc || on == r->counting)
+        return;
+    pvk_MTL4RenderCommandEncoder_setVisibilityResultMode_offset(
+        r->enc, on ? PVK_MTLVisibilityResultModeCounting : PVK_MTLVisibilityResultModeDisabled, on ? 8ul * e->occ_query : 0);
+    r->counting = on;
+}
+
+/* Occlusion queries (section 14's OCCLUSION): counted into the pool's
+ * results by the render encoders that run while they are active. */
+static void pvk_encode_occlusion(struct pvk_encoder *e, const struct pvk_cmd_query *c)
+{
+    struct pvk_render *r = &e->render;
+    if (c->op == PVK_QUERY_BEGIN) {
+        e->occ_pool = c->pool;
+        e->occ_query = c->first;
+        if (r->enc && r->vis_pool != c->pool) {
+            static int warned;
+            if (!warned++)
+                pvk_log(PVK_LOG_WARN, "occlusion queries of two pools in one render pass: the second pool's are not counted");
+        }
+        pvk_render_counting(e, true);
+        return;
+    }
+    pvk_render_counting(e, false);
+    e->occ_pool = NULL;
+    if (r->enc)
+        pvk_render_pending(r, c->pool, c->first, c->count);
+    else
+        pvk_encoder_query_available(e, c->pool, c->first, c->count);
+}
+
+/* A timestamp inside a render pass: written by the render encoder after its
+ * fragment work so far, made available when it ends. */
+static void pvk_render_timestamp(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t query)
+{
+    pvk_MTL4RenderCommandEncoder_writeTimestampWithGranularity_afterStage_intoHeap_atIndex(
+        e->render.enc, PVK_MTL4TimestampGranularityPrecise, PVK_MTLRenderStageFragment, pool->heap, query);
+    pvk_render_pending(&e->render, pool, query, 1);
 }
 
 /* The encoder's view of a draw's preprocessing state. */
@@ -50385,6 +50536,11 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     }
     if (c->layers)
         pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, c->layers);
+    r->vis_pool = e->occ_pool ? e->occ_pool : track.vis_pool;
+    if (r->vis_pool) { /* queries add up across render passes */
+        pvk_MTL4RenderPassDescriptor_setVisibilityResultBuffer(pass, r->vis_pool->buffer);
+        pvk_MTL4RenderPassDescriptor_setVisibilityResultType(pass, PVK_MTLVisibilityResultTypeAccumulate);
+    }
     if (!samples) { /* no attachments */
         width = c->width;
         height = c->height;
@@ -50424,6 +50580,8 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     r->ds_state = NULL;
     r->map_valid = false;
     r->amplification = 0;
+    r->counting = false;
+    r->pending_count = 0;
     e->push_bound = 0; /* the render stages have not seen the push constants */
     memset(e->sets_bound, 0, sizeof(e->sets_bound));
     if (clears || (c->depth.clear_in_area || c->stencil.clear_in_area)) {
@@ -50435,6 +50593,7 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
                          c->depth.clear.depthStencil.depth, c->stencil.clear_in_area != 0,
                          c->stencil.clear.depthStencil.stencil, &rect, 1);
     }
+    pvk_render_counting(e, true); /* a query active since before the pass */
 }
 
 static void pvk_encode_subpass(struct pvk_encoder *e, const struct pvk_cmd_subpass *c)
@@ -51153,10 +51312,17 @@ static void pvk_encode_query(struct pvk_encoder *e, const struct pvk_cmd_query *
         pvk_encode_query_reset(e, c);
         break;
     case PVK_QUERY_TIMESTAMP:
-        pvk_encode_timestamp(e, c->pool, c->first);
+        if (e->render.enc) /* in a render pass (section 16's "Graphics") */
+            pvk_render_timestamp(e, c->pool, c->first);
+        else
+            pvk_encode_timestamp(e, c->pool, c->first);
         break;
     case PVK_QUERY_COPY:
         pvk_encode_query_copy(e, c);
+        break;
+    case PVK_QUERY_BEGIN:
+    case PVK_QUERY_END:
+        pvk_encode_occlusion(e, c);
         break;
     }
 }
@@ -54762,8 +54928,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue _queue, const VkPresent
 #pragma clang diagnostic ignored "-Wunused-parameter"
 #endif
 
-VKAPI_ATTR void VKAPI_CALL vkCmdBeginQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t query, VkQueryControlFlags flags) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdEndQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t query) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSamplerYcbcrConversion(VkDevice device, const VkSamplerYcbcrConversionCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSamplerYcbcrConversion* pYcbcrConversion) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkDestroySamplerYcbcrConversion(VkDevice device, VkSamplerYcbcrConversion ycbcrConversion, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 

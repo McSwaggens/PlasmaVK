@@ -1,8 +1,6 @@
 /* Every Vulkan 1.4 core command, plus the commands of the extensions PlasmaVK
  * advertises: VK_KHR_surface, VK_EXT_metal_surface, VK_KHR_portability_enumeration
- * (which has none), VK_KHR_swapchain and VK_KHR_draw_indirect_count (aliases of
- * core 1.2 commands; extensions without commands are not listed). Each entry
- * names the core version or
+ * (which has none) and VK_KHR_swapchain. Each entry names the core version or
  * extension that introduced the command and its dispatch level (global,
  * instance, physical device or device; see Initialization > Command Function
  * Pointers). Used for coverage and by the vkGet*ProcAddr tests.
@@ -262,8 +260,6 @@ const struct ct_command ct_commands[] = {
     { "vkGetDeviceGroupSurfacePresentModesKHR", "VK_KHR_swapchain", CT_LEVEL_DEVICE },
     { "vkGetPhysicalDevicePresentRectanglesKHR", "VK_KHR_swapchain", CT_LEVEL_PHYSICAL },
     { "vkAcquireNextImage2KHR", "VK_KHR_swapchain", CT_LEVEL_DEVICE },
-    { "vkCmdDrawIndirectCountKHR", "VK_KHR_draw_indirect_count", CT_LEVEL_DEVICE },
-    { "vkCmdDrawIndexedIndirectCountKHR", "VK_KHR_draw_indirect_count", CT_LEVEL_DEVICE },
 };
 
 const size_t ct_command_count = sizeof(ct_commands) / sizeof(ct_commands[0]);
