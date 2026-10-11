@@ -32535,7 +32535,6 @@ static void pvk_physical_device_init_descriptor_features(struct pvk_physical_dev
 
 /* Graphics features beyond what Vulkan 1.4 requires (sections 15-17):
  *   multiViewport          FST: 16 viewports and scissor rectangles
- *   depthBounds            -[MTL4RenderCommandEncoder setDepthTestMinBound:maxBound:]
  *   alphaToOne             MTL4AlphaToOneState
  *   dualSrcBlend           MSL [[color(0), index(1)]] and the Source1 blend factors
  *   shaderDrawParameters   BaseVertex, BaseInstance and DrawIndex (section 13);
@@ -32547,12 +32546,14 @@ static void pvk_physical_device_init_descriptor_features(struct pvk_physical_dev
  * multiDrawIndirect is not reported: Metal draws indirect records one by one,
  * which works, but DrawIndex would need the translator to read it per draw.
  * fillModeNonSolid needs points too (Metal fills triangles or lines only),
- * wideLines and logicOp have no Metal equivalent. */
+ * wideLines and logicOp have no Metal equivalent. depthBounds is not
+ * reported: Metal 4 encoders have setDepthTestMinBound:maxBound:, but on
+ * Apple9 (M4 Max, macOS 27.2) the driver traps in it; draws only use it on
+ * devices that enable the feature. */
 static void pvk_physical_device_init_graphics_features(struct pvk_physical_device *pd)
 {
     VkPhysicalDeviceFeatures *c = &pd->features.core;
     c->multiViewport = VK_TRUE;
-    c->depthBounds = VK_TRUE;
     c->alphaToOne = VK_TRUE;
     c->dualSrcBlend = VK_TRUE;
     pd->features.v11.shaderDrawParameters = VK_TRUE;
@@ -49408,7 +49409,8 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
     pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(enc, 0.0f, 0.0f, 0.0f);
     pvk_MTL4RenderCommandEncoder_setDepthClipMode(enc, PVK_MTLDepthClipModeClip);
     pvk_MTL4RenderCommandEncoder_setTriangleFillMode(enc, PVK_MTLTriangleFillModeFill);
-    pvk_MTL4RenderCommandEncoder_setDepthTestMinBound_maxBound(enc, 0.0f, 1.0f);
+    if (e->device->features.core.depthBounds)
+        pvk_MTL4RenderCommandEncoder_setDepthTestMinBound_maxBound(enc, 0.0f, 1.0f);
     if (r->amplification > 1) {
         pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, 1, NULL);
         r->amplification = 1;
@@ -49475,6 +49477,7 @@ static void pvk_render_end(struct pvk_encoder *e)
     struct pvk_render *r = &e->render;
     if (r->enc) {
         pvk_MTL4CommandEncoder_endEncoding(r->enc);
+        pvk_release(r->enc);
         r->enc = NULL;
     }
     r->suspended = false;
@@ -49594,7 +49597,8 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
         pvk_MTL4RenderPassDescriptor_setDefaultRasterSampleCount(pass, samples);
     }
     pvk_MTL4RenderPassDescriptor_setSupportColorAttachmentMapping(pass, true);
-    enc = pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass);
+    /* autoreleased: kept until pvk_render_end */
+    enc = pvk_retain(pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass));
     pvk_release(pass);
     objc_autoreleasePoolPop(pool);
     if (!enc) {
@@ -49924,7 +49928,7 @@ static bool pvk_render_flush(struct pvk_encoder *e)
     if (dirty & PVK_RD_BLEND)
         pvk_MTL4RenderCommandEncoder_setBlendColorRed_green_blue_alpha(enc, d->blend_constants[0], d->blend_constants[1],
                                                                        d->blend_constants[2], d->blend_constants[3]);
-    if (dirty & PVK_RD_DEPTH_BOUNDS) {
+    if ((dirty & PVK_RD_DEPTH_BOUNDS) && e->device->features.core.depthBounds) {
         float lo = 0.0f, hi = 1.0f;
         r->skip_bounds = false;
         if (d->depth_bounds_test && r->depth) {
@@ -51778,7 +51782,10 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
     pvk_key_add(&key, &options.dispatch_base, sizeof(options.dispatch_base));
     pvk_key_add(&key, &options.dispatch_base_offset, sizeof(options.dispatch_base_offset));
     hit = pvk_cache_lookup(cache, &key, &ci, entry, msl, &pso, alloc);
-    if (!hit && (flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)) {
+    if (hit != 2 && (flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)) {
+        /* only a pipeline state made in this process needs no compiler */
+        pvk_free(alloc, msl[0]);
+        pvk_free(alloc, msl[1]);
         pvk_free(alloc, bindings);
         return VK_PIPELINE_COMPILE_REQUIRED;
     }
@@ -52747,7 +52754,10 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
                     sizeof(VkVertexInputBindingDivisorDescription) * divisors->vertexBindingDivisorCount);
     pvk_key_add(&key, &d, sizeof(d));
     hit = pvk_cache_lookup(cache, &key, &ci, entry, msl, &pso, alloc);
-    if (!hit && (flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)) {
+    if (hit != 2 && (flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)) {
+        /* only a pipeline state made in this process needs no compiler */
+        pvk_free(alloc, msl[0]);
+        pvk_free(alloc, msl[1]);
         pvk_free(alloc, bindings);
         return VK_PIPELINE_COMPILE_REQUIRED;
     }
