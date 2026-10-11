@@ -218,7 +218,7 @@ static inline bool mr_render(const struct mr_pass *pass, const struct mr_draw *d
     void *pool;
     id rp, atts, cb, enc;
     struct mt_buffer sets[2 * PVK_MSL_MAX_SETS * MR_MAX_DRAWS];
-    uint32_t i, k, nsets = 0;
+    uint32_t i, k, k2, nsets = 0;
     unsigned long status, w = 0, h = 0;
     bool ok = true;
 
@@ -329,6 +329,11 @@ static inline bool mr_render(const struct mr_pass *pass, const struct mr_draw *d
                                                                            d->bindings[i].texture,
                                                                            PVK_MTLResourceUsageRead | PVK_MTLResourceUsageWrite,
                                                                            stages);
+            for (k2 = 0; k2 < 2; k2++) /* Y'CbCr planes */
+                if (d->bindings[i].planes[k2])
+                    PVK_MSG(void, (id, SEL, id, unsigned long, unsigned long))(
+                        enc, sel_registerName("useResource:usage:stages:"), d->bindings[i].planes[k2],
+                        PVK_MTLResourceUsageRead, stages);
         }
         if (d->amplification)
             PVK_MSG(void, (id, SEL, unsigned long, const pvk_MTLVertexAmplificationViewMapping *))(

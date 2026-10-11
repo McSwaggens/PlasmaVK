@@ -817,11 +817,223 @@ CT_TEST(host_image_copy,
     ct_env_fini(&e);
 }
 
+/* ---- Multi-planar images ---- */
+
+/* The 8-bit multi-planar formats: planes, chroma subsampling and the bytes
+ * of each plane's texels (Formats > Plane Format Compatibility). */
+static const struct {
+    VkFormat format;
+    uint32_t planes, xs, ys, bytes[3];
+} planar[] = {
+    { VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM, 3, 1, 1, { 1, 1, 1 } },
+    { VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, 2, 1, 1, { 1, 2, 0 } },
+    { VK_FORMAT_G8_B8_R8_3PLANE_422_UNORM, 3, 1, 0, { 1, 1, 1 } },
+    { VK_FORMAT_G8_B8R8_2PLANE_422_UNORM, 2, 1, 0, { 1, 2, 0 } },
+    { VK_FORMAT_G8_B8_R8_3PLANE_444_UNORM, 3, 0, 0, { 1, 1, 1 } },
+};
+
+static const VkImageAspectFlagBits plane_bits[3] = { VK_IMAGE_ASPECT_PLANE_0_BIT, VK_IMAGE_ASPECT_PLANE_1_BIT,
+                                                     VK_IMAGE_ASPECT_PLANE_2_BIT };
+
+CT_TEST(copy_buffer_image_planes,
+        "Copy Commands > Copying Data Between Buffers and Images: a plane of a multi-planar image "
+        "(VK_IMAGE_ASPECT_PLANE_n_BIT) is copied in the plane's own texels and format (Formats > Plane Format "
+        "Compatibility: chroma planes subsampled, B8R8 planes of 2 bytes), both ways, with bufferRowLength; every "
+        "8-bit multi-planar format with TRANSFER_SRC and TRANSFER_DST (required for the 4:2:0 ones with "
+        "samplerYcbcrConversion)",
+        "vkCmdCopyBufferToImage vkCmdCopyImageToBuffer vkCmdPipelineBarrier vkCreateImage vkDestroyImage "
+        "vkGetImageMemoryRequirements vkAllocateMemory vkBindImageMemory vkFreeMemory vkCreateBuffer vkDestroyBuffer "
+        "vkGetBufferMemoryRequirements vkBindBufferMemory vkMapMemory vkGetPhysicalDeviceFeatures2 "
+        "vkGetPhysicalDeviceFormatProperties vkGetPhysicalDeviceFormatProperties2")
+{
+    enum { W = 24, H = 12, PAD = 4 };
+    struct ct_env e;
+    unsigned f, p, y, tested = 0;
+
+    ct_env_init(t, &e);
+    ct_env_device_ycbcr(t, &e);
+    for (f = 0; f < CT_ARRAY_SIZE(planar); f++) {
+        VkFormatFeatureFlags2 need = VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
+        VkImageCreateInfo info;
+        struct ct_image m;
+        struct ct_buffer in, out;
+        VkBufferImageCopy up[3], down[3];
+        VkDeviceSize in_at = 0, out_at = 0;
+        VkCommandBuffer cb;
+        uint32_t bad = 0;
+        if ((ct_format_features(&e, planar[f].format, 0) & need) != need) {
+            CT_CHECKF(t, f >= 2, "format %d: no TRANSFER_SRC/DST", (int)planar[f].format);
+            continue;
+        }
+        info = ct_image_info(VK_IMAGE_TYPE_2D, planar[f].format, W, H, 1, 1, 1, XFER);
+        ct_image(t, &e, &info, 0, &m);
+        memset(up, 0, sizeof(up));
+        for (p = 0; p < planar[f].planes; p++) {
+            uint32_t pw = p ? W >> planar[f].xs : W, ph = p ? H >> planar[f].ys : H;
+            up[p].bufferOffset = in_at;
+            up[p].bufferRowLength = pw + PAD; /* padded rows in the source */
+            up[p].imageSubresource.aspectMask = plane_bits[p];
+            up[p].imageSubresource.layerCount = 1;
+            up[p].imageExtent.width = pw;
+            up[p].imageExtent.height = ph;
+            up[p].imageExtent.depth = 1;
+            down[p] = up[p];
+            down[p].bufferOffset = out_at;
+            down[p].bufferRowLength = 0;
+            in_at += (VkDeviceSize)(pw + PAD) * ph * planar[f].bytes[p];
+            out_at += (VkDeviceSize)pw * ph * planar[f].bytes[p];
+            in_at = (in_at + 15) & ~(VkDeviceSize)15;
+            out_at = (out_at + 15) & ~(VkDeviceSize)15;
+        }
+        ct_host_buffer(t, &e, in_at, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &in);
+        ct_host_buffer(t, &e, out_at, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &out);
+        ct_fill_pattern(in.data, (size_t)in_at, (unsigned)f + 3);
+        cb = ct_begin_commands(t, &e);
+        ct_image_barrier(cb, m.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, DST);
+        vkCmdCopyBufferToImage(cb, in.buffer, m.image, DST, planar[f].planes, up);
+        ct_image_barrier(cb, m.image, VK_IMAGE_ASPECT_COLOR_BIT, DST, SRC);
+        vkCmdCopyImageToBuffer(cb, m.image, SRC, out.buffer, planar[f].planes, down);
+        ct_host_read_barrier(cb);
+        ct_submit_and_wait(t, &e, cb);
+        for (p = 0; p < planar[f].planes; p++) {
+            uint32_t pw = up[p].imageExtent.width, b = planar[f].bytes[p];
+            for (y = 0; y < up[p].imageExtent.height; y++)
+                if (memcmp(out.data + down[p].bufferOffset + (VkDeviceSize)y * pw * b,
+                           in.data + up[p].bufferOffset + (VkDeviceSize)y * (pw + PAD) * b, (size_t)pw * b))
+                    bad++;
+        }
+        CT_CHECKF(t, bad == 0, "format %d: %u plane rows differ", (int)planar[f].format, bad);
+        tested++;
+        ct_buffer_fini(&e, &in);
+        ct_buffer_fini(&e, &out);
+        ct_image_fini(&e, &m);
+    }
+    CT_CHECK(t, tested >= 2);
+    ct_env_fini(&e);
+}
+
+CT_TEST(copy_image_planes,
+        "Copy Commands > Copying Data Between Images: a plane of a multi-planar image is copied to and from "
+        "single-plane images of a compatible format (R8_UNORM for 8-bit planes, R8G8_UNORM for B8R8 planes: Formats "
+        "> Plane Format Compatibility), and between planes of two multi-planar images, the extent in the plane's "
+        "texels",
+        "vkCmdCopyImage vkCmdCopyBufferToImage vkCmdCopyImageToBuffer vkCmdPipelineBarrier vkCreateImage "
+        "vkDestroyImage vkGetImageMemoryRequirements vkAllocateMemory vkBindImageMemory vkFreeMemory vkCreateBuffer "
+        "vkDestroyBuffer vkGetBufferMemoryRequirements vkBindBufferMemory vkMapMemory vkGetPhysicalDeviceFeatures2 "
+        "vkGetPhysicalDeviceFormatProperties vkGetPhysicalDeviceFormatProperties2")
+{
+    enum { W = 32, H = 16, CW = W / 2, CH = H / 2 };
+    VkFormatFeatureFlags2 need = VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
+    struct ct_env e;
+    VkImageCreateInfo info;
+    struct ct_image a, b, c, r8, rg8;
+    struct ct_buffer in, out;
+    VkBufferImageCopy up[5], down[3];
+    VkImageCopy cp;
+    VkCommandBuffer cb;
+    unsigned p;
+    /* in: a's planes (W x H, CW x CH, CW x CH), then c's (W x H, CW x CH x 2) */
+    const VkDeviceSize a1 = W * H, a2 = a1 + CW * CH, c0 = a2 + CW * CH, c1 = c0 + W * H, in_size = c1 + CW * CH * 2;
+
+    ct_env_init(t, &e);
+    ct_env_device_ycbcr(t, &e);
+    if ((ct_format_features(&e, VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM, 0) & need) != need ||
+        (ct_format_features(&e, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, 0) & need) != need)
+        CT_REQUIREF(t, 0, "the 4:2:0 multi-planar formats lack TRANSFER_SRC/DST");
+    info = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM, W, H, 1, 1, 1, XFER);
+    ct_image(t, &e, &info, 0, &a);
+    ct_image(t, &e, &info, 0, &b);
+    info.format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+    ct_image(t, &e, &info, 0, &c);
+    info = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8_UNORM, CW, CH, 1, 1, 1, XFER);
+    ct_image(t, &e, &info, 0, &r8);
+    info.format = VK_FORMAT_R8G8_UNORM;
+    ct_image(t, &e, &info, 0, &rg8);
+    ct_host_buffer(t, &e, in_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &in);
+    ct_host_buffer(t, &e, W * H + CW * CH * 3, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &out);
+    ct_fill_pattern(in.data, (size_t)in_size, 11);
+
+    memset(up, 0, sizeof(up));
+    for (p = 0; p < 5; p++) {
+        up[p].imageSubresource.aspectMask = plane_bits[p < 3 ? p : p - 3];
+        up[p].imageSubresource.layerCount = 1;
+        up[p].imageExtent.width = (p == 0 || p == 3) ? W : CW;
+        up[p].imageExtent.height = (p == 0 || p == 3) ? H : CH;
+        up[p].imageExtent.depth = 1;
+    }
+    up[1].bufferOffset = a1;
+    up[2].bufferOffset = a2;
+    up[3].bufferOffset = c0;
+    up[4].bufferOffset = c1;
+    cb = ct_begin_commands(t, &e);
+    ct_image_barrier(cb, a.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, DST);
+    ct_image_barrier(cb, c.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, DST);
+    vkCmdCopyBufferToImage(cb, in.buffer, a.image, DST, 3, up);
+    vkCmdCopyBufferToImage(cb, in.buffer, c.image, DST, 2, up + 3);
+    ct_image_barrier(cb, a.image, VK_IMAGE_ASPECT_COLOR_BIT, DST, SRC);
+    ct_image_barrier(cb, c.image, VK_IMAGE_ASPECT_COLOR_BIT, DST, SRC);
+    ct_image_barrier(cb, b.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, DST);
+    ct_image_barrier(cb, r8.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, DST);
+    ct_image_barrier(cb, rg8.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, DST);
+    /* a.plane 1 -> r8; c.plane 1 -> rg8; a.plane 0 -> b.plane 0 */
+    memset(&cp, 0, sizeof(cp));
+    cp.srcSubresource.layerCount = cp.dstSubresource.layerCount = 1;
+    cp.srcSubresource.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT;
+    cp.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    cp.extent.width = CW;
+    cp.extent.height = CH;
+    cp.extent.depth = 1;
+    vkCmdCopyImage(cb, a.image, SRC, r8.image, DST, 1, &cp);
+    vkCmdCopyImage(cb, c.image, SRC, rg8.image, DST, 1, &cp);
+    cp.srcSubresource.aspectMask = cp.dstSubresource.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT;
+    cp.extent.width = W;
+    cp.extent.height = H;
+    vkCmdCopyImage(cb, a.image, SRC, b.image, DST, 1, &cp);
+    ct_image_barrier(cb, r8.image, VK_IMAGE_ASPECT_COLOR_BIT, DST, SRC);
+    /* r8 -> b.plane 2 */
+    cp.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    cp.dstSubresource.aspectMask = VK_IMAGE_ASPECT_PLANE_2_BIT;
+    cp.extent.width = CW;
+    cp.extent.height = CH;
+    vkCmdCopyImage(cb, r8.image, SRC, b.image, DST, 1, &cp);
+    ct_image_barrier(cb, b.image, VK_IMAGE_ASPECT_COLOR_BIT, DST, SRC);
+    ct_image_barrier(cb, rg8.image, VK_IMAGE_ASPECT_COLOR_BIT, DST, SRC);
+    memset(down, 0, sizeof(down));
+    for (p = 0; p < 3; p++) {
+        down[p].imageSubresource.layerCount = 1;
+        down[p].imageExtent.width = p ? CW : W;
+        down[p].imageExtent.height = p ? CH : H;
+        down[p].imageExtent.depth = 1;
+    }
+    down[0].imageSubresource.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT; /* b.plane 0 at 0 */
+    down[1].imageSubresource.aspectMask = VK_IMAGE_ASPECT_PLANE_2_BIT; /* b.plane 2 */
+    down[1].bufferOffset = W * H;
+    down[2].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; /* rg8 */
+    down[2].bufferOffset = W * H + CW * CH;
+    vkCmdCopyImageToBuffer(cb, b.image, SRC, out.buffer, 2, down);
+    vkCmdCopyImageToBuffer(cb, rg8.image, SRC, out.buffer, 1, &down[2]);
+    ct_host_read_barrier(cb);
+    ct_submit_and_wait(t, &e, cb);
+    CT_CHECKF(t, memcmp(out.data, in.data, W * H) == 0, "plane 0 copied between multi-planar images differs");
+    CT_CHECKF(t, memcmp(out.data + W * H, in.data + a1, CW * CH) == 0,
+              "plane 1 copied through an R8_UNORM image into plane 2 differs");
+    CT_CHECKF(t, memcmp(out.data + W * H + CW * CH, in.data + c1, CW * CH * 2) == 0,
+              "a B8R8 plane copied to an R8G8_UNORM image differs");
+    ct_buffer_fini(&e, &in);
+    ct_buffer_fini(&e, &out);
+    ct_image_fini(&e, &a);
+    ct_image_fini(&e, &b);
+    ct_image_fini(&e, &c);
+    ct_image_fini(&e, &r8);
+    ct_image_fini(&e, &rg8);
+    ct_env_fini(&e);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(copy_buffer_image),    CT_REF(copy_buffer_image_depth_stencil), CT_REF(copy_buffer_image_compressed),
     CT_REF(copy_image),           CT_REF(copy_image_compressed),           CT_REF(copy_image_3d_layers),
     CT_REF(blit_image),           CT_REF(blit_image_integer),              CT_REF(resolve_image),
-    CT_REF(host_image_copy),
+    CT_REF(host_image_copy),      CT_REF(copy_buffer_image_planes),        CT_REF(copy_image_planes),
 };
 
 CT_SUITE(copies, tests)

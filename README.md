@@ -20,7 +20,9 @@ their copies), private data, and compute pipelines (SPIR-V translated to MSL,
 push constants and buffer device addresses) work. Formats (every core format
 Metal can hold, compressed BC/ETC2/ASTC included), images, image and buffer
 views, samplers, image copies, blits, clears and resolves, and host image
-copies work. Descriptor sets work: every descriptor type, dynamic offsets,
+copies work, as does sampler Y'CbCr conversion (8-bit multi-planar and
+packed 4:2:2 formats, disjoint planes, every model, range, chroma location
+and filter, done in the shader). Descriptor sets work: every descriptor type, dynamic offsets,
 inline uniform blocks, push descriptors, update templates and descriptor
 indexing (update after bind, partially bound, variable-count and runtime
 arrays, non-uniform indexing). Window system integration works:

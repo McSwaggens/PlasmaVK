@@ -253,8 +253,9 @@ static inline id mt_sampler(const struct mt_sampler_desc *s)
 
 /* One descriptor: element `index` of (set, binding). Buffers are buf +
  * offset with `range` bytes (0: to the end); textures and samplers are
- * Metal objects (both for a combined image sampler); inline uniform blocks
- * copy `bytes` to the binding's offset + index. */
+ * Metal objects (both for a combined image sampler; planes 1 and 2 of a
+ * multi-planar Y'CbCr image in planes, for 32-byte descriptors); inline
+ * uniform blocks copy `bytes` to the binding's offset + index. */
 struct mt_binding {
     uint32_t set, binding, index;
     struct mt_buffer *buf;
@@ -262,6 +263,7 @@ struct mt_binding {
     id texture, sampler;
     const void *bytes;
     size_t nbytes;
+    id planes[2];
 };
 
 static inline const struct pvk_msl_resource *mt_resource(const struct pvk_msl_result *res, uint32_t set, uint32_t binding)
@@ -322,8 +324,15 @@ static inline void mt_fill_sets(const struct pvk_msl_result *res, const struct m
         }
         case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
             pvk_MTLResourceID t = pvk_MTLTexture_gpuResourceID(b->texture), sm = pvk_MTLSamplerState_gpuResourceID(b->sampler);
+            unsigned k;
             memcpy(p, &t, 8);
             memcpy(p + 8, &sm, 8);
+            for (k = 0; k < 2 && r->stride >= 32; k++) { /* Y'CbCr: { plane 0, sampler, plane 1, plane 2 } */
+                pvk_MTLResourceID pl = { 0 };
+                if (b->planes[k])
+                    pl = pvk_MTLTexture_gpuResourceID(b->planes[k]);
+                memcpy(p + 16 + 8 * k, &pl, 8);
+            }
             break;
         }
         case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK:
@@ -370,6 +379,10 @@ static inline bool mt_dispatch(id pipeline, const struct pvk_msl_result *res, co
         if (bindings[i].texture)
             PVK_MSG(void, (id, SEL, id, unsigned long))(enc, sel_registerName("useResource:usage:"), bindings[i].texture,
                                                         PVK_MTLResourceUsageRead | PVK_MTLResourceUsageWrite);
+        for (s = 0; s < 2; s++)
+            if (bindings[i].planes[s])
+                PVK_MSG(void, (id, SEL, id, unsigned long))(enc, sel_registerName("useResource:usage:"),
+                                                            bindings[i].planes[s], PVK_MTLResourceUsageRead);
     }
     groups.width = gx;
     groups.height = gy;
