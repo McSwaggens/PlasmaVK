@@ -2612,6 +2612,870 @@ static void test_clear_attachments(void)
     free_img(&layered);
 }
 
+/* ==========================================================================
+ * Render pass features
+ * ========================================================================== */
+
+static uint32_t expect_left_blue_right_green(uint32_t x, uint32_t y)
+{
+    (void)y;
+    return x < W / 2 ? BLUE : GREEN;
+}
+
+static uint32_t expect_left_red_right_green(uint32_t x, uint32_t y)
+{
+    (void)y;
+    return x < W / 2 ? RED : GREEN;
+}
+
+/* A descriptor set with an input attachment descriptor (shaders read input
+ * attachments by framebuffer fetch, but valid usage wants it bound). */
+static VkDescriptorSet input_set(VkDescriptorPool *pool, VkImageView view, VkImageLayout layout)
+{
+    VkDescriptorPoolSize size = { VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1 };
+    VkDescriptorPoolCreateInfo pi;
+    VkDescriptorSetAllocateInfo ai;
+    VkDescriptorImageInfo ii;
+    VkWriteDescriptorSet w;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    memset(&pi, 0, sizeof(pi));
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes = &size;
+    vkCreateDescriptorPool(device, &pi, NULL, pool);
+    memset(&ai, 0, sizeof(ai));
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = *pool;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &input_set_layout;
+    vkAllocateDescriptorSets(device, &ai, &set);
+    memset(&ii, 0, sizeof(ii));
+    ii.imageView = view;
+    ii.imageLayout = layout;
+    memset(&w, 0, sizeof(w));
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = set;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    w.pImageInfo = &ii;
+    vkUpdateDescriptorSets(device, 1, &w, 0, NULL);
+    return set;
+}
+
+/* Two subpasses: the first renders A, the second reads A as an input
+ * attachment (swizzled .bgra) into B. With A transient (lazily allocated,
+ * memoryless) A only ever lives in tile memory, so this only works when
+ * both subpasses share one Metal render pass. */
+static void subpass_case(bool transient)
+{
+    VkAttachmentDescription a[2];
+    VkAttachmentReference ra = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+    VkAttachmentReference rin = { 0, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    VkAttachmentReference rb = { 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+    VkSubpassDescription sp[2];
+    VkSubpassDependency dep;
+    VkRenderPassCreateInfo info;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    struct img ia, ib = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkImageView views[2];
+    VkFramebuffer fb;
+    VkDescriptorPool dpool = VK_NULL_HANDLE;
+    VkDescriptorSet set;
+    VkClearValue clears[2];
+    VkPipeline p0, p1;
+    struct pipe p;
+    VkCommandBuffer cb;
+
+    if (transient)
+        ia = make_img_mem(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT,
+                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
+                              VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+                          lazy_type);
+    else
+        ia = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    memset(a, 0, sizeof(a));
+    a[0].format = a[1].format = VK_FORMAT_R8G8B8A8_UNORM;
+    a[0].samples = a[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    a[0].loadOp = a[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    a[0].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    a[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    a[0].stencilLoadOp = a[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    a[0].stencilStoreOp = a[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    a[0].initialLayout = a[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    a[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    a[1].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    memset(sp, 0, sizeof(sp));
+    sp[0].pipelineBindPoint = sp[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp[0].colorAttachmentCount = 1;
+    sp[0].pColorAttachments = &ra;
+    sp[1].inputAttachmentCount = 1;
+    sp[1].pInputAttachments = &rin;
+    sp[1].colorAttachmentCount = 1;
+    sp[1].pColorAttachments = &rb;
+    memset(&dep, 0, sizeof(dep));
+    dep.srcSubpass = 0;
+    dep.dstSubpass = 1;
+    dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+    dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    info.attachmentCount = 2;
+    info.pAttachments = a;
+    info.subpassCount = 2;
+    info.pSubpasses = sp;
+    info.dependencyCount = 1;
+    info.pDependencies = &dep;
+    CHECK_VK(vkCreateRenderPass(device, &info, NULL, &rp), VK_SUCCESS);
+    views[0] = ia.view;
+    views[1] = ib.view;
+    fb = make_fb(rp, views, 2, W, H, 1);
+    set = input_set(&dpool, ia.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.rp = rp;
+    p0 = make_pipe(&p);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_input_fs, sizeof(spv_input_fs));
+    p.layout = input_layout;
+    p.rp = rp;
+    p.subpass = 1;
+    p1 = make_pipe(&p);
+    REQUIRE(p0 && p1);
+    memset(clears, 0, sizeof(clears));
+    clears[0].color.float32[3] = clears[1].color.float32[3] = 1.0f;
+    cb = begin_cmd();
+    begin_pass(cb, rp, fb, 0, 0, W, H, clears, 2);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p0);
+    rect(cb, -1, -1, 0, 1, 1, 0, 0, 1, 0);
+    rect(cb, 0, -1, 1, 1, 0, 1, 0, 1, 0);
+    vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p1);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, input_layout, 0, 1, &set, 0, NULL);
+    vkCmdPushConstants(cb, input_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16,
+                       (const float[4]){ -1, -1, 1, 1 });
+    vkCmdDraw(cb, 4, 1, 0, 0);
+    vkCmdEndRenderPass(cb);
+    download(cb, &ib, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    CHECK(count_bad(&out, expect_left_blue_right_green, transient ? "transient input attachment" : "input attachment") ==
+          0);
+    vkDestroyPipeline(device, p0, NULL);
+    vkDestroyPipeline(device, p1, NULL);
+    vkDestroyDescriptorPool(device, dpool, NULL);
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+    free_buf(&out);
+    free_img(&ia);
+    free_img(&ib);
+}
+
+static void test_subpasses(void)
+{
+    subpass_case(false);
+    subpass_case(true);
+}
+
+/* Dynamic rendering local read: draw into attachment 0, then map location 0
+ * to attachment 1 and read attachment 0 as input attachment 0. */
+static void test_local_read(void)
+{
+    static const uint32_t locations[2] = { VK_ATTACHMENT_UNUSED, 0 };
+    static const uint32_t inputs[2] = { 0, VK_ATTACHMENT_UNUSED };
+    static const float black[4] = { 0, 0, 0, 1 };
+    VkRenderingAttachmentLocationInfo loc;
+    VkRenderingInputAttachmentIndexInfo idx;
+    struct img targets[2];
+    struct buf out[2];
+    VkDescriptorPool dpool = VK_NULL_HANDLE;
+    VkDescriptorSet set;
+    VkMemoryBarrier2 mb;
+    VkDependencyInfo dep;
+    VkPipeline p0, p1;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t i;
+
+    for (i = 0; i < 2; i++) {
+        targets[i] = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+        out[i] = make_buf(W * H * 4);
+    }
+    memset(&loc, 0, sizeof(loc));
+    loc.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_LOCATION_INFO;
+    loc.colorAttachmentCount = 2;
+    loc.pColorAttachmentLocations = locations;
+    memset(&idx, 0, sizeof(idx));
+    idx.sType = VK_STRUCTURE_TYPE_RENDERING_INPUT_ATTACHMENT_INDEX_INFO;
+    idx.pNext = &loc;
+    idx.colorAttachmentCount = 2;
+    idx.pColorAttachmentInputIndices = inputs;
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.colors = 2;
+    p.color_formats[1] = VK_FORMAT_R8G8B8A8_UNORM;
+    p0 = make_pipe(&p);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_input_fs, sizeof(spv_input_fs));
+    p.layout = input_layout;
+    p.colors = 2;
+    p.color_formats[1] = VK_FORMAT_R8G8B8A8_UNORM;
+    p.next = &idx;
+    p1 = make_pipe(&p);
+    REQUIRE(p0 && p1);
+    set = input_set(&dpool, targets[0].view, VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ);
+    memset(&mb, 0, sizeof(mb));
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
+    memset(&dep, 0, sizeof(dep));
+    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers = &mb;
+    cb = begin_cmd();
+    begin_rendering(cb, targets, 2, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p0);
+    rect(cb, -1, -1, 0, 1, 1, 0, 0, 1, 0);
+    rect(cb, 0, -1, 1, 1, 0, 1, 0, 1, 0);
+    vkCmdPipelineBarrier2(cb, &dep);
+    vkCmdSetRenderingAttachmentLocations(cb, &loc);
+    vkCmdSetRenderingInputAttachmentIndices(cb, &idx);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p1);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, input_layout, 0, 1, &set, 0, NULL);
+    vkCmdPushConstants(cb, input_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16,
+                       (const float[4]){ -1, -1, 1, 1 });
+    vkCmdDraw(cb, 4, 1, 0, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &targets[0], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out[0]);
+    download(cb, &targets[1], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out[1]);
+    submit(cb);
+    CHECK(count_bad(&out[0], expect_left_red_right_green, "local read source") == 0);
+    CHECK(count_bad(&out[1], expect_left_blue_right_green, "local read") == 0);
+    vkDestroyPipeline(device, p0, NULL);
+    vkDestroyPipeline(device, p1, NULL);
+    vkDestroyDescriptorPool(device, dpool, NULL);
+    for (i = 0; i < 2; i++) {
+        free_buf(&out[i]);
+        free_img(&targets[i]);
+    }
+}
+
+static uint32_t expect_msaa(uint32_t x, uint32_t y)
+{
+    if (y < H / 2)
+        return x < W / 2 ? RED : BLACK;
+    return x < W / 2 ? RGBA(64, 0, 0, 255) : BLACK; /* sample shading: sample 0 of 4 red */
+}
+
+/* 4x multisampling: dynamic rendering with a resolve, sample shading
+ * (gl_SampleID), transient multisampled images, and render pass color and
+ * depth resolves (SAMPLE_ZERO). */
+static void test_msaa(void)
+{
+    struct img ms = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img ms_transient = make_img_mem(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT,
+                                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+                                           lazy_type);
+    struct img resolved = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img msd = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4), dout = make_buf(W * H * 4);
+    VkRenderingAttachmentInfo att;
+    VkRenderingInfo info;
+    VkPipeline pipe, shading, rp_pipe;
+    struct pipe p;
+    VkCommandBuffer cb;
+    VkAttachmentDescription2 a[4];
+    VkAttachmentReference2 refs[4];
+    VkSubpassDescriptionDepthStencilResolve dsr;
+    VkSubpassDescription2 sp;
+    VkRenderPassCreateInfo2 rpi;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    VkImageView views[4];
+    VkFramebuffer fb;
+    VkClearValue clears[4];
+    uint32_t i, k, x, y;
+    int bad = 0;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    pipe = make_pipe(&p);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_sample_fs, sizeof(spv_sample_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.sample_shading = VK_TRUE;
+    p.min_sample_shading = 1.0f;
+    shading = make_pipe(&p);
+    REQUIRE(pipe && shading);
+    for (k = 0; k < 2; k++) {
+        memset(&att, 0, sizeof(att));
+        att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView = k ? ms_transient.view : ms.view;
+        att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att.storeOp = k ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
+        att.clearValue.color.float32[3] = 1.0f;
+        att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        att.resolveImageView = resolved.view;
+        att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        info.renderArea.extent.width = W;
+        info.renderArea.extent.height = H;
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &att;
+        cb = begin_cmd();
+        vkCmdBeginRendering(cb, &info);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+        rect(cb, -1, -1, 0, 0, 1, 0, 0, 1, 0);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, shading);
+        rect(cb, -1, 0, 0, 1, 0, 0, 0, 0, 0);
+        vkCmdEndRendering(cb);
+        download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        CHECK(count_far(&out, expect_msaa, 1, k ? "transient msaa" : "msaa") == 0);
+    }
+
+    /* render pass: color resolve and depth resolve (sample 0) */
+    memset(a, 0, sizeof(a));
+    memset(refs, 0, sizeof(refs));
+    for (i = 0; i < 4; i++) {
+        a[i].sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2;
+        a[i].format = i & 1 ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
+        a[i].samples = i < 2 ? VK_SAMPLE_COUNT_4_BIT : VK_SAMPLE_COUNT_1_BIT;
+        a[i].loadOp = i < 2 ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        a[i].storeOp = i < 2 ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
+        a[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        a[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        a[i].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        a[i].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        refs[i].sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2;
+        refs[i].attachment = i;
+        refs[i].layout = VK_IMAGE_LAYOUT_GENERAL;
+        refs[i].aspectMask = i & 1 ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    }
+    memset(&dsr, 0, sizeof(dsr));
+    dsr.sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE;
+    dsr.depthResolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+    dsr.stencilResolveMode = VK_RESOLVE_MODE_NONE;
+    dsr.pDepthStencilResolveAttachment = &refs[3];
+    memset(&sp, 0, sizeof(sp));
+    sp.sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2;
+    sp.pNext = &dsr;
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &refs[0];
+    sp.pResolveAttachments = &refs[2];
+    sp.pDepthStencilAttachment = &refs[1];
+    memset(&rpi, 0, sizeof(rpi));
+    rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2;
+    rpi.attachmentCount = 4;
+    rpi.pAttachments = a;
+    rpi.subpassCount = 1;
+    rpi.pSubpasses = &sp;
+    CHECK_VK(vkCreateRenderPass2(device, &rpi, NULL, &rp), VK_SUCCESS);
+    views[0] = ms.view;
+    views[1] = msd.view;
+    views[2] = resolved.view;
+    views[3] = depth.view;
+    fb = make_fb(rp, views, 4, W, H, 1);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.rp = rp;
+    p.has_ds = true;
+    p.ds.depthTestEnable = VK_TRUE;
+    p.ds.depthWriteEnable = VK_TRUE;
+    p.ds.depthCompareOp = VK_COMPARE_OP_LESS;
+    rp_pipe = make_pipe(&p);
+    REQUIRE(rp_pipe);
+    memset(clears, 0, sizeof(clears));
+    clears[0].color.float32[3] = 1.0f;
+    clears[1].depthStencil.depth = 1.0f;
+    cb = begin_cmd();
+    begin_pass(cb, rp, fb, 0, 0, W, H, clears, 2);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, rp_pipe);
+    rect(cb, -1, -1, 0, 0, 1, 0, 0, 1, 0.25f);
+    vkCmdEndRenderPass(cb);
+    download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    download(cb, &depth, 0, VK_IMAGE_ASPECT_DEPTH_BIT, &dout);
+    submit(cb);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            bool in = x < W / 2 && y < H / 2;
+            float d;
+            memcpy(&d, dout.data + 4 * (y * W + x), 4);
+            bad += px(&out, x, y) != (in ? RED : BLACK);
+            bad += d != (in ? 0.25f : 1.0f);
+        }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipe, NULL);
+    vkDestroyPipeline(device, shading, NULL);
+    vkDestroyPipeline(device, rp_pipe, NULL);
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+    free_buf(&out);
+    free_buf(&dout);
+    free_img(&ms);
+    free_img(&ms_transient);
+    free_img(&resolved);
+    free_img(&msd);
+    free_img(&depth);
+}
+
+/* Suspending and resuming dynamic render pass instances across command
+ * buffers of one batch, and secondaries continuing render passes (a
+ * subpass, and dynamic rendering). */
+static void test_suspend_secondary(void)
+{
+    static const VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkRenderingAttachmentInfo att;
+    VkRenderingInfo info;
+    VkCommandBufferInheritanceRenderingInfo inh_rendering;
+    VkCommandBufferInheritanceInfo inh;
+    VkCommandBufferBeginInfo begin;
+    VkCommandBufferAllocateInfo alloc;
+    VkCommandBuffer cbs[2], sec;
+    VkSubmitInfo si;
+    VkRenderPass rp = make_simple_pass(format, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE);
+    VkFramebuffer fb = make_fb(rp, &target.view, 1, W, H, 1);
+    VkRenderPassBeginInfo rbi;
+    VkClearValue clear;
+    VkPipeline pipeline, rp_pipe;
+    struct pipe p;
+    uint32_t i;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    pipeline = make_pipe(&p);
+    p.rp = rp;
+    rp_pipe = make_pipe(&p);
+    REQUIRE(pipeline && rp_pipe);
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = target.view;
+    att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    att.clearValue.color.float32[3] = 1.0f;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &att;
+    for (i = 0; i < 2; i++) {
+        cbs[i] = begin_cmd();
+        info.flags = i ? VK_RENDERING_RESUMING_BIT : VK_RENDERING_SUSPENDING_BIT;
+        vkCmdBeginRendering(cbs[i], &info);
+        vkCmdBindPipeline(cbs[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        if (i)
+            rect(cbs[i], 0, -1, 1, 1, 0, 1, 0, 1, 0);
+        else
+            rect(cbs[i], -1, -1, 0, 1, 1, 0, 0, 1, 0);
+        vkCmdEndRendering(cbs[i]);
+        if (i)
+            download(cbs[i], &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        vkEndCommandBuffer(cbs[i]);
+    }
+    memset(&si, 0, sizeof(si));
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 2;
+    si.pCommandBuffers = cbs;
+    CHECK_VK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE), VK_SUCCESS);
+    CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+    vkFreeCommandBuffers(device, cmd_pool, 2, cbs);
+    CHECK(count_bad(&out, expect_left_red_right_green, "suspend/resume") == 0);
+
+    /* secondaries: a subpass (left half), then dynamic rendering (right half) */
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc.commandPool = cmd_pool;
+    alloc.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+    alloc.commandBufferCount = 1;
+    for (i = 0; i < 2; i++) {
+        VkCommandBuffer primary;
+        memset(&inh, 0, sizeof(inh));
+        inh.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+        memset(&inh_rendering, 0, sizeof(inh_rendering));
+        inh_rendering.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO;
+        inh_rendering.colorAttachmentCount = 1;
+        inh_rendering.pColorAttachmentFormats = &format;
+        inh_rendering.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        if (i) {
+            inh.pNext = &inh_rendering;
+        } else {
+            inh.renderPass = rp;
+            inh.framebuffer = fb;
+        }
+        memset(&begin, 0, sizeof(begin));
+        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT | VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        begin.pInheritanceInfo = &inh;
+        vkAllocateCommandBuffers(device, &alloc, &sec);
+        vkBeginCommandBuffer(sec, &begin);
+        vkCmdBindPipeline(sec, VK_PIPELINE_BIND_POINT_GRAPHICS, i ? pipeline : rp_pipe);
+        if (i)
+            rect(sec, 0, -1, 1, 1, 0, 0, 1, 1, 0);
+        else
+            rect(sec, -1, -1, 0, 1, 0, 0, 1, 1, 0);
+        vkEndCommandBuffer(sec);
+        primary = begin_cmd();
+        if (i) {
+            info.flags = VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT;
+            att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            vkCmdBeginRendering(primary, &info);
+        } else {
+            memset(&rbi, 0, sizeof(rbi));
+            memset(&clear, 0, sizeof(clear));
+            clear.color.float32[1] = clear.color.float32[3] = 1.0f;
+            rbi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            rbi.renderPass = rp;
+            rbi.framebuffer = fb;
+            rbi.renderArea.extent.width = W;
+            rbi.renderArea.extent.height = H;
+            rbi.clearValueCount = 1;
+            rbi.pClearValues = &clear;
+            vkCmdBeginRenderPass(primary, &rbi, VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
+        }
+        vkCmdExecuteCommands(primary, 1, &sec);
+        if (i)
+            vkCmdEndRendering(primary);
+        else
+            vkCmdEndRenderPass(primary);
+        if (i)
+            download(primary, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(primary);
+        vkFreeCommandBuffers(device, cmd_pool, 1, &sec);
+    }
+    {
+        uint32_t x, y;
+        int bad = 0;
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++)
+                bad += px(&out, x, y) != BLUE;
+        CHECK(bad == 0);
+    }
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyPipeline(device, rp_pipe, NULL);
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+    free_buf(&out);
+    free_img(&target);
+}
+
+/* An imageless framebuffer, and a render pass without attachments counting
+ * samples with an occlusion query. */
+static void test_imageless_noattachment(void)
+{
+    static const VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkRenderPass rp = make_simple_pass(format, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE);
+    VkFramebufferAttachmentImageInfo fai;
+    VkFramebufferAttachmentsCreateInfo fac;
+    VkFramebufferCreateInfo fci;
+    VkRenderPassAttachmentBeginInfo rab;
+    VkRenderPassBeginInfo rbi;
+    VkFramebuffer fb = VK_NULL_HANDLE, empty_fb = VK_NULL_HANDLE;
+    VkSubpassDescription sp;
+    VkRenderPassCreateInfo rpi;
+    VkRenderPass empty = VK_NULL_HANDLE;
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool pool = VK_NULL_HANDLE;
+    VkClearValue clear;
+    VkPipeline pipeline, counter;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint64_t samples = 0;
+
+    memset(&fai, 0, sizeof(fai));
+    fai.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO;
+    fai.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | ATTACHMENT_USAGE;
+    fai.width = W;
+    fai.height = H;
+    fai.layerCount = 1;
+    fai.viewFormatCount = 1;
+    fai.pViewFormats = &format;
+    memset(&fac, 0, sizeof(fac));
+    fac.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENTS_CREATE_INFO;
+    fac.attachmentImageInfoCount = 1;
+    fac.pAttachmentImageInfos = &fai;
+    memset(&fci, 0, sizeof(fci));
+    fci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fci.pNext = &fac;
+    fci.flags = VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT;
+    fci.renderPass = rp;
+    fci.attachmentCount = 1;
+    fci.width = W;
+    fci.height = H;
+    fci.layers = 1;
+    CHECK_VK(vkCreateFramebuffer(device, &fci, NULL, &fb), VK_SUCCESS);
+    memset(&sp, 0, sizeof(sp));
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    memset(&rpi, 0, sizeof(rpi));
+    rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpi.subpassCount = 1;
+    rpi.pSubpasses = &sp;
+    CHECK_VK(vkCreateRenderPass(device, &rpi, NULL, &empty), VK_SUCCESS);
+    empty_fb = make_fb(empty, NULL, 0, W, H, 1);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.rp = rp;
+    pipeline = make_pipe(&p);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), NULL, 0);
+    p.rp = empty;
+    p.colors = 0;
+    counter = make_pipe(&p);
+    REQUIRE(pipeline && counter);
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_OCCLUSION;
+    qi.queryCount = 1;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &pool));
+
+    memset(&rab, 0, sizeof(rab));
+    rab.sType = VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO;
+    rab.attachmentCount = 1;
+    rab.pAttachments = &target.view;
+    memset(&clear, 0, sizeof(clear));
+    clear.color.float32[1] = clear.color.float32[3] = 1.0f;
+    memset(&rbi, 0, sizeof(rbi));
+    rbi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rbi.pNext = &rab;
+    rbi.renderPass = rp;
+    rbi.framebuffer = fb;
+    rbi.renderArea.extent.width = W;
+    rbi.renderArea.extent.height = H;
+    rbi.clearValueCount = 1;
+    rbi.pClearValues = &clear;
+    cb = begin_cmd();
+    vkCmdResetQueryPool(cb, pool, 0, 1);
+    vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -1, -1, 0, 1, 1, 0, 0, 1, 0);
+    vkCmdEndRenderPass(cb);
+    begin_pass(cb, empty, empty_fb, 0, 0, W, H, NULL, 0);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, counter);
+    vkCmdBeginQuery(cb, pool, 0, VK_QUERY_CONTROL_PRECISE_BIT);
+    rect(cb, -1, -1, 0, 0, 0, 0, 0, 0, 0); /* 8 x 8 */
+    vkCmdEndQuery(cb, pool, 0);
+    vkCmdEndRenderPass(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    CHECK(count_bad(&out, expect_left_red_right_green, "imageless framebuffer") == 0);
+    CHECK_VK(vkGetQueryPoolResults(device, pool, 0, 1, sizeof(samples), &samples, 8,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+             VK_SUCCESS);
+    CHECK(samples == 64);
+    vkDestroyQueryPool(device, pool, NULL);
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyPipeline(device, counter, NULL);
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyFramebuffer(device, empty_fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+    vkDestroyRenderPass(device, empty, NULL);
+    free_buf(&out);
+    free_img(&target);
+}
+
+static uint32_t expect_dual(uint32_t x, uint32_t y)
+{
+    (void)y;
+    return x < W / 2 ? RGBA(128, 64, 255, 255) : BLACK;
+}
+
+/* Dual-source blending: color x the second output. */
+static void test_dual_source(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+
+    if (!features.dualSrcBlend) {
+        fprintf(stderr, "dualSrcBlend is not supported: skipped\n");
+        free_buf(&out);
+        free_img(&target);
+        return;
+    }
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_dual_fs, sizeof(spv_dual_fs));
+    p.has_blend = true;
+    memset(p.blend, 0, sizeof(p.blend));
+    p.blend[0].blendEnable = VK_TRUE;
+    p.blend[0].colorWriteMask = 0xf;
+    p.blend[0].srcColorBlendFactor = VK_BLEND_FACTOR_SRC1_COLOR;
+    p.blend[0].dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+    p.blend[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    p.blend[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -1, -1, 0, 1, 1, 1, 1, 1, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    CHECK(count_far(&out, expect_dual, 1, "dual source") == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&target);
+}
+
+/* Alpha to coverage (alpha 0.5 covers about half the samples) and alpha to
+ * one, resolved. */
+static void test_alpha_coverage(void)
+{
+    struct img ms = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img resolved = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkRenderingAttachmentInfo att;
+    VkRenderingInfo info;
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t x, y;
+    int bad = 0;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.alpha_to_coverage = VK_TRUE;
+    p.alpha_to_one = features.alphaToOne;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = ms.view;
+    att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+    att.resolveImageView = resolved.view;
+    att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &att;
+    cb = begin_cmd();
+    vkCmdBeginRendering(cb, &info);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -1, -1, 1, 1, 1, 1, 1, 0.5f, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            uint32_t v = px(&out, x, y), r = v & 0xff, a = v >> 24;
+            bad += r < 64 || r > 192; /* partly covered */
+            if (features.alphaToOne)
+                bad += a != r; /* covered samples have alpha 1, the others 0 (the clear) */
+        }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&ms);
+    free_img(&resolved);
+}
+
+/* Pipeline caches: a second creation from the same cache needs no compiler
+ * (FAIL_ON_PIPELINE_COMPILE_REQUIRED succeeds, feedback reports a hit), the
+ * data round-trips into a new cache (valid header, a hit), merging works,
+ * and data of another implementation is ignored. */
+static void test_pipeline_cache(void)
+{
+    VkPipelineCacheCreateInfo ci;
+    VkPipelineCache cache = VK_NULL_HANDLE, loaded = VK_NULL_HANDLE, merged = VK_NULL_HANDLE, bogus = VK_NULL_HANDLE;
+    VkPipelineCreationFeedback fb;
+    VkPipelineCreationFeedbackCreateInfo fbi;
+    VkPhysicalDeviceProperties props;
+    VkPipelineCacheHeaderVersionOne header;
+    VkPipeline a = VK_NULL_HANDLE, b = VK_NULL_HANDLE;
+    struct pipe p;
+    size_t size = 0, small;
+    unsigned char *data;
+
+    vkGetPhysicalDeviceProperties(pd, &props);
+    memset(&ci, 0, sizeof(ci));
+    ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    REQUIRE_VK(vkCreatePipelineCache(device, &ci, NULL, &cache));
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.cache = cache;
+    p.flags = VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
+    CHECK_VK(make_pipe_result(&p, &a), VK_PIPELINE_COMPILE_REQUIRED);
+    CHECK(a == VK_NULL_HANDLE);
+    p.flags = 0;
+    CHECK_VK(make_pipe_result(&p, &a), VK_SUCCESS);
+    p.flags = VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
+    CHECK_VK(make_pipe_result(&p, &b), VK_SUCCESS);
+    vkDestroyPipeline(device, b, NULL);
+
+    CHECK_VK(vkGetPipelineCacheData(device, cache, &size, NULL), VK_SUCCESS);
+    REQUIRE(size > sizeof(header));
+    data = malloc(size);
+    REQUIRE(data);
+    CHECK_VK(vkGetPipelineCacheData(device, cache, &size, data), VK_SUCCESS);
+    memcpy(&header, data, sizeof(header));
+    CHECK(header.headerSize == 32 && header.headerVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE);
+    CHECK(header.vendorID == props.vendorID && header.deviceID == props.deviceID);
+    CHECK(memcmp(header.pipelineCacheUUID, props.pipelineCacheUUID, VK_UUID_SIZE) == 0);
+    {
+        unsigned char partial[sizeof(header) + 4];
+        small = sizeof(partial);
+        CHECK_VK(vkGetPipelineCacheData(device, cache, &small, partial), VK_INCOMPLETE); /* no entry fits */
+        CHECK(small == sizeof(partial) && memcmp(partial, data, sizeof(header)) == 0);
+    }
+
+    ci.initialDataSize = size;
+    ci.pInitialData = data;
+    CHECK_VK(vkCreatePipelineCache(device, &ci, NULL, &loaded), VK_SUCCESS);
+    memset(&fb, 0, sizeof(fb));
+    memset(&fbi, 0, sizeof(fbi));
+    fbi.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO;
+    fbi.pPipelineCreationFeedback = &fb;
+    p.next = &fbi;
+    p.cache = loaded;
+    p.flags = 0;
+    b = VK_NULL_HANDLE;
+    CHECK_VK(make_pipe_result(&p, &b), VK_SUCCESS);
+    CHECK((fb.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT) != 0);
+    CHECK((fb.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT) != 0);
+    vkDestroyPipeline(device, b, NULL);
+
+    ci.initialDataSize = 0;
+    ci.pInitialData = NULL;
+    CHECK_VK(vkCreatePipelineCache(device, &ci, NULL, &merged), VK_SUCCESS);
+    CHECK_VK(vkMergePipelineCaches(device, merged, 1, &cache), VK_SUCCESS);
+    p.next = NULL;
+    p.cache = merged;
+    p.flags = VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
+    b = VK_NULL_HANDLE;
+    CHECK_VK(make_pipe_result(&p, &b), VK_SUCCESS); /* the merged entry has the pipeline state */
+    vkDestroyPipeline(device, b, NULL);
+
+    data[16] ^= 0xff; /* another UUID: ignored */
+    ci.initialDataSize = size;
+    ci.pInitialData = data;
+    CHECK_VK(vkCreatePipelineCache(device, &ci, NULL, &bogus), VK_SUCCESS);
+    small = 0;
+    CHECK_VK(vkGetPipelineCacheData(device, bogus, &small, NULL), VK_SUCCESS);
+    CHECK(small == sizeof(header) + 4);
+
+    free(data);
+    vkDestroyPipeline(device, a, NULL);
+    vkDestroyPipelineCache(device, cache, NULL);
+    vkDestroyPipelineCache(device, loaded, NULL);
+    vkDestroyPipelineCache(device, merged, NULL);
+    vkDestroyPipelineCache(device, bogus, NULL);
+}
+
 int main(void)
 {
     setup();
@@ -2630,6 +3494,14 @@ int main(void)
     RUN(test_indices);
     RUN(test_vertex_input);
     RUN(test_clear_attachments);
+    RUN(test_subpasses);
+    RUN(test_local_read);
+    RUN(test_msaa);
+    RUN(test_suspend_secondary);
+    RUN(test_imageless_noattachment);
+    RUN(test_dual_source);
+    RUN(test_alpha_coverage);
+    RUN(test_pipeline_cache);
     teardown();
     return TEST_RESULT();
 }

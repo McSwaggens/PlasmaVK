@@ -48812,12 +48812,15 @@ static void pvk_encode_barrier(struct pvk_encoder *e, const struct pvk_cmd_barri
     if (!pvk_barrier_stages(c->src_stages, true) || !pvk_barrier_stages(c->dst_stages, false))
         return;
     e->queue->ordered = true;
-    if (e->render.enc) { /* in a render pass (self-dependency, local read): between its draws */
-        pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
-            e->render.enc, PVK_MTLStageVertex | PVK_MTLStageFragment, PVK_MTLStageVertex | PVK_MTLStageFragment,
-            PVK_MTL4VisibilityOptionDevice);
+    /* In a render pass (subpass self-dependencies, local read) nothing is
+     * encoded: Metal render encoders take barriers after vertex work only
+     * (validation layer, macOS 27.2), no vertex stage writes memory here
+     * (vertexPipelineStoresAndAtomics is not reported), and attachment
+     * writes are visible to later fragments of the pixel, framebuffer
+     * fetch included (tile memory, raster order), which is all
+     * VK_DEPENDENCY_BY_REGION_BIT asks within a render pass. */
+    if (e->render.enc)
         return;
-    }
     if (!e->enc) /* the next encoder waits for everything before it */
         return;
     if (!e->consumer_barrier) {
