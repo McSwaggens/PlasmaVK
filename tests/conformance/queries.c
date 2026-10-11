@@ -769,12 +769,90 @@ CT_TEST(copy_results_wait,
     copy_results_mode(t, 0);
 }
 
+CT_TEST(occlusion_query_samples,
+        "Queries > Occlusion Queries: an occlusion query counts the samples that pass the per-fragment tests "
+        "between vkCmdBeginQuery and vkCmdEndQuery, over all its draws: exactly with "
+        "VK_QUERY_CONTROL_PRECISE_BIT (occlusionQueryPrecise), otherwise non-zero; samples failing the depth test "
+        "do not count, so a query whose samples all fail (or with no draws) is zero; vkGetQueryPoolResults and "
+        "vkCmdCopyQueryPoolResults return the counts",
+        CT_RENDER_COMMANDS "vkCmdBindPipeline vkCmdDraw vkCmdBeginRendering vkCmdEndRendering vkCreateQueryPool "
+                           "vkDestroyQueryPool vkCmdResetQueryPool vkCmdBeginQuery vkCmdEndQuery "
+                           "vkGetQueryPoolResults vkCmdCopyQueryPoolResults")
+{
+    struct ct_scene s;
+    struct ct_target c, d;
+    struct ct_gfx g;
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool pool = VK_NULL_HANDLE;
+    VkPipeline pipe;
+    VkCommandBuffer cb;
+    VkQueryControlFlags precise;
+    uint64_t got[3], copied[3];
+    uint32_t i;
+
+    ct_scene_init(t, &s);
+    precise = s.f.f2.features.occlusionQueryPrecise ? VK_QUERY_CONTROL_PRECISE_BIT : 0;
+    ct_scene_color(t, &s, &c);
+    ct_target(t, &s.e, VK_FORMAT_D16_UNORM, CT_SIZE, CT_SIZE, 1, VK_SAMPLE_COUNT_1_BIT,
+              VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, &d);
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_OCCLUSION;
+    qi.queryCount = 3;
+    CT_REQUIRE_VK(t, vkCreateQueryPool(s.e.device, &qi, NULL, &pool));
+    ct_gfx_init(&g, s.vs, s.fs, s.layout, CT_SIZE, CT_SIZE);
+    g.rendering.depthAttachmentFormat = VK_FORMAT_D16_UNORM;
+    g.ds.depthTestEnable = g.ds.depthWriteEnable = VK_TRUE;
+    g.ds.depthCompareOp = VK_COMPARE_OP_LESS;
+    pipe = ct_gfx_pipeline(t, &s.e, &g);
+    cb = ct_begin_commands(t, &s.e);
+    vkCmdResetQueryPool(cb, pool, 0, 3);
+    ct_begin_rendering(cb, &c, 1, ct_black, &d, 0.5f);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    /* query 0: two draws of 32 pixels (4 x 8), both passing */
+    vkCmdBeginQuery(cb, pool, 0, precise);
+    ct_draw_rect(cb, s.layout, -1.0f, -1.0f, -0.5f, 0.0f, ct_red, 0.25f);
+    ct_draw_rect(cb, s.layout, -0.5f, -1.0f, 0.0f, 0.0f, ct_red, 0.25f);
+    vkCmdEndQuery(cb, pool, 0);
+    /* query 1: the same pixels behind them: no sample passes */
+    vkCmdBeginQuery(cb, pool, 1, precise);
+    ct_draw_rect(cb, s.layout, -1.0f, -1.0f, 0.0f, 0.0f, ct_green, 0.4f);
+    vkCmdEndQuery(cb, pool, 1);
+    /* query 2: no draws */
+    vkCmdBeginQuery(cb, pool, 2, precise);
+    vkCmdEndQuery(cb, pool, 2);
+    vkCmdEndRendering(cb);
+    vkCmdCopyQueryPoolResults(cb, pool, 0, 3, s.out.buffer, 0, 8, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+    ct_host_read_barrier(cb);
+    ct_submit_and_wait(t, &s.e, cb);
+    memset(got, 0xab, sizeof(got));
+    CT_CHECK_VK(t, vkGetQueryPoolResults(s.e.device, pool, 0, 3, sizeof(got), got, 8,
+                                         VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+                VK_SUCCESS);
+    memcpy(copied, s.out.data, sizeof(copied));
+    if (precise)
+        CT_CHECKF(t, got[0] == 64, "query 0 (precise): %llu samples, expected 64", (unsigned long long)got[0]);
+    else
+        CT_CHECKF(t, got[0] != 0, "query 0: 0 samples, expected non-zero");
+    CT_CHECKF(t, got[1] == 0, "query 1 (occluded): %llu samples, expected 0", (unsigned long long)got[1]);
+    CT_CHECKF(t, got[2] == 0, "query 2 (no draws): %llu samples, expected 0", (unsigned long long)got[2]);
+    for (i = 0; i < 3; i++)
+        CT_CHECKF(t, copied[i] == got[i], "query %u: vkCmdCopyQueryPoolResults wrote %llu, vkGetQueryPoolResults %llu",
+                  i, (unsigned long long)copied[i], (unsigned long long)got[i]);
+    vkDestroyPipeline(s.e.device, pipe, NULL);
+    vkDestroyQueryPool(s.e.device, pool, NULL);
+    ct_target_fini(&s.e, &d);
+    ct_target_fini(&s.e, &c);
+    ct_scene_fini(&s);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(create_query_pools),     CT_REF(host_reset_unavailable), CT_REF(cmd_reset_unavailable),
     CT_REF(occlusion_partial_unavailable), CT_REF(timestamp_available), CT_REF(timestamp_order),
     CT_REF(timestamp_period),       CT_REF(timestamp_write2),       CT_REF(timestamp_secondary),
     CT_REF(timestamp_rewrite),      CT_REF(results_layout),         CT_REF(results_wait),
     CT_REF(copy_results),           CT_REF(copy_results_same_commands), CT_REF(copy_results_wait),
+    CT_REF(occlusion_query_samples),
 };
 
 CT_SUITE(queries, tests)

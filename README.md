@@ -28,8 +28,15 @@ indexing (update after bind, partially bound, variable-count and runtime
 arrays, non-uniform indexing). Window system integration works:
 VK_EXT_metal_surface surfaces on a CAMetalLayer, VK_KHR_swapchain (FIFO and
 immediate presentation, sRGB and, with VK_EXT_swapchain_colorspace, extended
-and HDR color spaces). Graphics is next; every other Vulkan 1.4
-command exists but logs "not implemented". The target is full Vulkan 1.4 plus
+and HDR color spaces). Graphics works: render passes (subpasses merged into
+Metal passes, input attachments through framebuffer fetch, resolves,
+multiview), dynamic rendering with local read, graphics pipelines with every
+core dynamic state and pipeline caches, every draw command (indirect counts,
+8-bit indices and triangle fans emulated), occlusion queries and
+VK_KHR_shader_draw_parameters, VK_KHR_draw_indirect_count and
+VK_EXT_shader_viewport_index_layer; not yet: sample masks, depth bounds,
+depth/stencil input attachments and multi-draw indirect. Every other Vulkan
+1.4 command exists but logs "not implemented". The target is full Vulkan 1.4 plus
 the Roadmap 2026 profile, measured by the Khronos conformance suite.
 
 ## Requirements

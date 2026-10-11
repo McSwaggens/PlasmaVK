@@ -89,6 +89,12 @@ void ct_suite_queries(struct ct_registry *r);
 void ct_suite_synchronization(struct ct_registry *r);
 void ct_suite_privatedata(struct ct_registry *r);
 void ct_suite_wsi(struct ct_registry *r);
+void ct_suite_renderpass(struct ct_registry *r);
+void ct_suite_pipelines(struct ct_registry *r);
+void ct_suite_drawing(struct ct_registry *r);
+void ct_suite_rasterization(struct ct_registry *r);
+void ct_suite_fragops(struct ct_registry *r);
+void ct_suite_framebuffer(struct ct_registry *r);
 
 static void ct_register_all(struct ct_registry *r)
 {
@@ -109,6 +115,12 @@ static void ct_register_all(struct ct_registry *r)
     ct_suite_synchronization(r);
     ct_suite_privatedata(r);
     ct_suite_wsi(r);
+    ct_suite_renderpass(r);
+    ct_suite_pipelines(r);
+    ct_suite_drawing(r);
+    ct_suite_rasterization(r);
+    ct_suite_fragops(r);
+    ct_suite_framebuffer(r);
 }
 
 /* ==========================================================================
@@ -835,6 +847,500 @@ uint32_t ct_command_version(const struct ct_command *c)
     if (c->origin[0] < '0' || c->origin[0] > '9')
         return 0;
     return VK_MAKE_API_VERSION(0, (uint32_t)(c->origin[0] - '0'), (uint32_t)(c->origin[2] - '0'), 0);
+}
+
+/* ==========================================================================
+ * Rendering
+ * ========================================================================== */
+
+/* Shaders: GLSL in the comments, compiled with
+ *   glslangValidator -V --target-env vulkan1.3 -x */
+/*
+ * #version 450
+ * // A rectangle (x0, y0, x1, y1 in NDC) at a depth, as a 4-vertex strip.
+ * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
+ * void main()
+ * {
+ *     vec2 c = vec2((gl_VertexIndex & 1) != 0 ? pc.rect.z : pc.rect.x,
+ *                   (gl_VertexIndex & 2) != 0 ? pc.rect.w : pc.rect.y);
+ *     gl_Position = vec4(c, pc.depth, 1.0);
+ * }
+ */
+const uint32_t ct_rect_vert[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000042, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0008000f, 0x00000000, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000c, 0x0000001a, 0x00000038,
+    0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005,
+    0x00000009, 0x00000063, 0x00060005, 0x0000000c, 0x565f6c67, 0x65747265, 0x646e4978, 0x00007865,
+    0x00030005, 0x00000018, 0x00000050, 0x00050006, 0x00000018, 0x00000000, 0x74636572, 0x00000000,
+    0x00050006, 0x00000018, 0x00000001, 0x6f6c6f63, 0x00000072, 0x00050006, 0x00000018, 0x00000002,
+    0x74706564, 0x00000068, 0x00050006, 0x00000018, 0x00000003, 0x6579616c, 0x00000072, 0x00060006,
+    0x00000018, 0x00000004, 0x77656976, 0x74726f70, 0x00000000, 0x00030005, 0x0000001a, 0x00006370,
+    0x00060005, 0x00000036, 0x505f6c67, 0x65567265, 0x78657472, 0x00000000, 0x00060006, 0x00000036,
+    0x00000000, 0x505f6c67, 0x7469736f, 0x006e6f69, 0x00070006, 0x00000036, 0x00000001, 0x505f6c67,
+    0x746e696f, 0x657a6953, 0x00000000, 0x00070006, 0x00000036, 0x00000002, 0x435f6c67, 0x4470696c,
+    0x61747369, 0x0065636e, 0x00070006, 0x00000036, 0x00000003, 0x435f6c67, 0x446c6c75, 0x61747369,
+    0x0065636e, 0x00030005, 0x00000038, 0x00000000, 0x00040047, 0x0000000c, 0x0000000b, 0x0000002a,
+    0x00030047, 0x00000018, 0x00000002, 0x00050048, 0x00000018, 0x00000000, 0x00000023, 0x00000000,
+    0x00050048, 0x00000018, 0x00000001, 0x00000023, 0x00000010, 0x00050048, 0x00000018, 0x00000002,
+    0x00000023, 0x00000020, 0x00050048, 0x00000018, 0x00000003, 0x00000023, 0x00000024, 0x00050048,
+    0x00000018, 0x00000004, 0x00000023, 0x00000028, 0x00030047, 0x00000036, 0x00000002, 0x00050048,
+    0x00000036, 0x00000000, 0x0000000b, 0x00000000, 0x00050048, 0x00000036, 0x00000001, 0x0000000b,
+    0x00000001, 0x00050048, 0x00000036, 0x00000002, 0x0000000b, 0x00000003, 0x00050048, 0x00000036,
+    0x00000003, 0x0000000b, 0x00000004, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002,
+    0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000002, 0x00040020,
+    0x00000008, 0x00000007, 0x00000007, 0x00040015, 0x0000000a, 0x00000020, 0x00000001, 0x00040020,
+    0x0000000b, 0x00000001, 0x0000000a, 0x0004003b, 0x0000000b, 0x0000000c, 0x00000001, 0x0004002b,
+    0x0000000a, 0x0000000e, 0x00000001, 0x0004002b, 0x0000000a, 0x00000010, 0x00000000, 0x00020014,
+    0x00000011, 0x00040020, 0x00000013, 0x00000007, 0x00000006, 0x00040017, 0x00000017, 0x00000006,
+    0x00000004, 0x0007001e, 0x00000018, 0x00000017, 0x00000017, 0x00000006, 0x0000000a, 0x0000000a,
+    0x00040020, 0x00000019, 0x00000009, 0x00000018, 0x0004003b, 0x00000019, 0x0000001a, 0x00000009,
+    0x00040015, 0x0000001b, 0x00000020, 0x00000000, 0x0004002b, 0x0000001b, 0x0000001c, 0x00000002,
+    0x00040020, 0x0000001d, 0x00000009, 0x00000006, 0x0004002b, 0x0000001b, 0x00000021, 0x00000000,
+    0x0004002b, 0x0000000a, 0x00000026, 0x00000002, 0x0004002b, 0x0000001b, 0x0000002c, 0x00000003,
+    0x0004002b, 0x0000001b, 0x00000030, 0x00000001, 0x0004001c, 0x00000035, 0x00000006, 0x00000030,
+    0x0006001e, 0x00000036, 0x00000017, 0x00000006, 0x00000035, 0x00000035, 0x00040020, 0x00000037,
+    0x00000003, 0x00000036, 0x0004003b, 0x00000037, 0x00000038, 0x00000003, 0x0004002b, 0x00000006,
+    0x0000003c, 0x3f800000, 0x00040020, 0x00000040, 0x00000003, 0x00000017, 0x00050036, 0x00000002,
+    0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003b, 0x00000008, 0x00000009,
+    0x00000007, 0x0004003b, 0x00000013, 0x00000014, 0x00000007, 0x0004003b, 0x00000013, 0x00000029,
+    0x00000007, 0x0004003d, 0x0000000a, 0x0000000d, 0x0000000c, 0x000500c7, 0x0000000a, 0x0000000f,
+    0x0000000d, 0x0000000e, 0x000500ab, 0x00000011, 0x00000012, 0x0000000f, 0x00000010, 0x000300f7,
+    0x00000016, 0x00000000, 0x000400fa, 0x00000012, 0x00000015, 0x00000020, 0x000200f8, 0x00000015,
+    0x00060041, 0x0000001d, 0x0000001e, 0x0000001a, 0x00000010, 0x0000001c, 0x0004003d, 0x00000006,
+    0x0000001f, 0x0000001e, 0x0003003e, 0x00000014, 0x0000001f, 0x000200f9, 0x00000016, 0x000200f8,
+    0x00000020, 0x00060041, 0x0000001d, 0x00000022, 0x0000001a, 0x00000010, 0x00000021, 0x0004003d,
+    0x00000006, 0x00000023, 0x00000022, 0x0003003e, 0x00000014, 0x00000023, 0x000200f9, 0x00000016,
+    0x000200f8, 0x00000016, 0x0004003d, 0x00000006, 0x00000024, 0x00000014, 0x0004003d, 0x0000000a,
+    0x00000025, 0x0000000c, 0x000500c7, 0x0000000a, 0x00000027, 0x00000025, 0x00000026, 0x000500ab,
+    0x00000011, 0x00000028, 0x00000027, 0x00000010, 0x000300f7, 0x0000002b, 0x00000000, 0x000400fa,
+    0x00000028, 0x0000002a, 0x0000002f, 0x000200f8, 0x0000002a, 0x00060041, 0x0000001d, 0x0000002d,
+    0x0000001a, 0x00000010, 0x0000002c, 0x0004003d, 0x00000006, 0x0000002e, 0x0000002d, 0x0003003e,
+    0x00000029, 0x0000002e, 0x000200f9, 0x0000002b, 0x000200f8, 0x0000002f, 0x00060041, 0x0000001d,
+    0x00000031, 0x0000001a, 0x00000010, 0x00000030, 0x0004003d, 0x00000006, 0x00000032, 0x00000031,
+    0x0003003e, 0x00000029, 0x00000032, 0x000200f9, 0x0000002b, 0x000200f8, 0x0000002b, 0x0004003d,
+    0x00000006, 0x00000033, 0x00000029, 0x00050050, 0x00000007, 0x00000034, 0x00000024, 0x00000033,
+    0x0003003e, 0x00000009, 0x00000034, 0x0004003d, 0x00000007, 0x00000039, 0x00000009, 0x00050041,
+    0x0000001d, 0x0000003a, 0x0000001a, 0x00000026, 0x0004003d, 0x00000006, 0x0000003b, 0x0000003a,
+    0x00050051, 0x00000006, 0x0000003d, 0x00000039, 0x00000000, 0x00050051, 0x00000006, 0x0000003e,
+    0x00000039, 0x00000001, 0x00070050, 0x00000017, 0x0000003f, 0x0000003d, 0x0000003e, 0x0000003b,
+    0x0000003c, 0x00050041, 0x00000040, 0x00000041, 0x00000038, 0x00000010, 0x0003003e, 0x00000041,
+    0x0000003f, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 450
+ * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = pc.color;
+ * }
+ */
+const uint32_t ct_color_frag[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000012, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0007000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000d, 0x00030010,
+    0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d,
+    0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c, 0x00030005, 0x0000000b, 0x00000050,
+    0x00050006, 0x0000000b, 0x00000000, 0x74636572, 0x00000000, 0x00050006, 0x0000000b, 0x00000001,
+    0x6f6c6f63, 0x00000072, 0x00050006, 0x0000000b, 0x00000002, 0x74706564, 0x00000068, 0x00050006,
+    0x0000000b, 0x00000003, 0x6579616c, 0x00000072, 0x00060006, 0x0000000b, 0x00000004, 0x77656976,
+    0x74726f70, 0x00000000, 0x00030005, 0x0000000d, 0x00006370, 0x00040047, 0x00000009, 0x0000001e,
+    0x00000000, 0x00030047, 0x0000000b, 0x00000002, 0x00050048, 0x0000000b, 0x00000000, 0x00000023,
+    0x00000000, 0x00050048, 0x0000000b, 0x00000001, 0x00000023, 0x00000010, 0x00050048, 0x0000000b,
+    0x00000002, 0x00000023, 0x00000020, 0x00050048, 0x0000000b, 0x00000003, 0x00000023, 0x00000024,
+    0x00050048, 0x0000000b, 0x00000004, 0x00000023, 0x00000028, 0x00020013, 0x00000002, 0x00030021,
+    0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006,
+    0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008, 0x00000009,
+    0x00000003, 0x00040015, 0x0000000a, 0x00000020, 0x00000001, 0x0007001e, 0x0000000b, 0x00000007,
+    0x00000007, 0x00000006, 0x0000000a, 0x0000000a, 0x00040020, 0x0000000c, 0x00000009, 0x0000000b,
+    0x0004003b, 0x0000000c, 0x0000000d, 0x00000009, 0x0004002b, 0x0000000a, 0x0000000e, 0x00000001,
+    0x00040020, 0x0000000f, 0x00000009, 0x00000007, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200f8, 0x00000005, 0x00050041, 0x0000000f, 0x00000010, 0x0000000d, 0x0000000e,
+    0x0004003d, 0x00000007, 0x00000011, 0x00000010, 0x0003003e, 0x00000009, 0x00000011, 0x000100fd,
+    0x00010038,
+};
+const size_t ct_rect_vert_size = sizeof(ct_rect_vert);
+const size_t ct_color_frag_size = sizeof(ct_color_frag);
+
+void ct_env_render(struct ct *t, struct ct_env *e, struct ct_features *f)
+{
+    ct_env_init(t, e);
+    if (e->version < VK_API_VERSION_1_3)
+        ct_skip(t, "needs Vulkan 1.3 (dynamic rendering)");
+    if (!e->graphics)
+        ct_skip(t, "no queue family supports graphics");
+    ct_get_features(e, f, 0);
+    ct_env_device(t, e, &f->f2);
+}
+
+void ct_target(struct ct *t, struct ct_env *e, VkFormat format, uint32_t w, uint32_t h, uint32_t layers,
+               VkSampleCountFlagBits samples, VkImageUsageFlags usage, struct ct_target *out)
+{
+    VkImageCreateInfo info = ct_image_info(VK_IMAGE_TYPE_2D, format, w, h, 1, 1, layers,
+                                           usage | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    VkImageViewCreateInfo view;
+    VkCommandBuffer cb;
+
+    memset(out, 0, sizeof(*out));
+    info.samples = samples;
+    switch (format) {
+    case VK_FORMAT_D16_UNORM:
+    case VK_FORMAT_X8_D24_UNORM_PACK32:
+    case VK_FORMAT_D32_SFLOAT:
+        out->aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+        break;
+    case VK_FORMAT_S8_UINT:
+        out->aspect = VK_IMAGE_ASPECT_STENCIL_BIT;
+        break;
+    case VK_FORMAT_D16_UNORM_S8_UINT:
+    case VK_FORMAT_D24_UNORM_S8_UINT:
+    case VK_FORMAT_D32_SFLOAT_S8_UINT:
+        out->aspect = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+        break;
+    default:
+        out->aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        break;
+    }
+    out->format = format;
+    out->w = w;
+    out->h = h;
+    out->layers = layers;
+    out->samples = samples;
+    ct_image(t, e, &info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &out->image);
+    memset(&view, 0, sizeof(view));
+    view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view.image = out->image.image;
+    view.viewType = layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+    view.format = format;
+    view.subresourceRange.aspectMask = out->aspect;
+    view.subresourceRange.levelCount = 1;
+    view.subresourceRange.layerCount = layers;
+    CT_REQUIRE_VK(t, vkCreateImageView(e->device, &view, NULL, &out->view));
+    cb = ct_begin_commands(t, e);
+    ct_image_barrier(cb, out->image.image, out->aspect, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    ct_submit_and_wait(t, e, cb);
+}
+
+void ct_target_fini(struct ct_env *e, struct ct_target *m)
+{
+    if (m->view)
+        vkDestroyImageView(e->device, m->view, NULL);
+    ct_image_fini(e, &m->image);
+    memset(m, 0, sizeof(*m));
+}
+
+void ct_target_read(VkCommandBuffer cb, const struct ct_target *m, uint32_t layer, VkImageAspectFlags aspect,
+                    VkBuffer buffer, VkDeviceSize offset)
+{
+    VkBufferImageCopy r;
+    ct_image_barrier(cb, VK_NULL_HANDLE, 0, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
+    memset(&r, 0, sizeof(r));
+    r.bufferOffset = offset;
+    r.imageSubresource.aspectMask = aspect;
+    r.imageSubresource.baseArrayLayer = layer;
+    r.imageSubresource.layerCount = 1;
+    r.imageExtent.width = m->w;
+    r.imageExtent.height = m->h;
+    r.imageExtent.depth = 1;
+    vkCmdCopyImageToBuffer(cb, m->image.image, VK_IMAGE_LAYOUT_GENERAL, buffer, 1, &r);
+    ct_image_barrier(cb, VK_NULL_HANDLE, 0, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
+}
+
+VkShaderModule ct_shader_module(struct ct *t, struct ct_env *e, const uint32_t *code, size_t size)
+{
+    VkShaderModuleCreateInfo info;
+    VkShaderModule m = VK_NULL_HANDLE;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    info.codeSize = size;
+    info.pCode = code;
+    CT_REQUIRE_VK(t, vkCreateShaderModule(e->device, &info, NULL, &m));
+    return m;
+}
+
+VkPipelineLayout ct_pipeline_layout(struct ct *t, struct ct_env *e, const VkDescriptorSetLayout *sets,
+                                    uint32_t set_count, uint32_t push_size)
+{
+    VkPipelineLayoutCreateInfo info;
+    VkPushConstantRange range;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    memset(&range, 0, sizeof(range));
+    range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    range.size = push_size;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    info.setLayoutCount = set_count;
+    info.pSetLayouts = sets;
+    info.pushConstantRangeCount = push_size ? 1 : 0;
+    info.pPushConstantRanges = &range;
+    CT_REQUIRE_VK(t, vkCreatePipelineLayout(e->device, &info, NULL, &layout));
+    return layout;
+}
+
+void ct_gfx_init(struct ct_gfx *g, VkShaderModule vs, VkShaderModule fs, VkPipelineLayout layout, uint32_t w,
+                 uint32_t h)
+{
+    uint32_t i;
+    memset(g, 0, sizeof(*g));
+    g->vs = vs;
+    g->fs = fs;
+    g->layout = layout;
+    g->ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    g->ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+    g->viewports[0].width = (float)w;
+    g->viewports[0].height = (float)h;
+    g->viewports[0].maxDepth = 1.0f;
+    g->scissors[0].extent.width = w;
+    g->scissors[0].extent.height = h;
+    g->viewport_count = 1;
+    g->rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    g->rs.polygonMode = VK_POLYGON_MODE_FILL;
+    g->rs.cullMode = VK_CULL_MODE_NONE;
+    g->rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    g->rs.lineWidth = 1.0f;
+    g->ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    g->ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    g->ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    g->ds.maxDepthBounds = 1.0f;
+    g->cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    for (i = 0; i < 8; i++) {
+        g->blend[i].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                                     VK_COLOR_COMPONENT_A_BIT;
+        g->color_formats[i] = VK_FORMAT_R8G8B8A8_UNORM;
+    }
+    g->colors = 1;
+    g->rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+}
+
+VkResult ct_gfx_create(struct ct_env *e, struct ct_gfx *g, VkPipeline *out)
+{
+    VkGraphicsPipelineCreateInfo info;
+    VkPipelineShaderStageCreateInfo stages[2];
+    VkPipelineVertexInputStateCreateInfo vertex;
+    VkPipelineViewportStateCreateInfo vp;
+    VkPipelineDynamicStateCreateInfo dyn;
+    uint32_t n = 0;
+
+    memset(stages, 0, sizeof(stages));
+    stages[n].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[n].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[n].module = g->vs;
+    stages[n].pName = "main";
+    stages[n++].pSpecializationInfo = g->vs_spec;
+    if (g->fs) {
+        stages[n].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[n].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[n].module = g->fs;
+        stages[n].pName = "main";
+        stages[n++].pSpecializationInfo = g->fs_spec;
+    }
+    memset(&vertex, 0, sizeof(vertex));
+    vertex.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    memset(&vp, 0, sizeof(vp));
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = vp.scissorCount = g->viewport_count;
+    vp.pViewports = g->viewports;
+    vp.pScissors = g->scissors;
+    memset(&dyn, 0, sizeof(dyn));
+    dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dyn.dynamicStateCount = g->dynamic_count;
+    dyn.pDynamicStates = g->dynamic;
+    g->cb.attachmentCount = g->colors;
+    g->cb.pAttachments = g->blend;
+    g->rendering.pNext = g->next;
+    g->rendering.colorAttachmentCount = g->colors;
+    g->rendering.pColorAttachmentFormats = g->color_formats;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    info.pNext = g->render_pass ? g->next : &g->rendering;
+    info.flags = g->flags;
+    info.stageCount = n;
+    info.pStages = stages;
+    info.pVertexInputState = g->vertex ? g->vertex : &vertex;
+    info.pInputAssemblyState = &g->ia;
+    info.pViewportState = g->rs.rasterizerDiscardEnable ? NULL : &vp;
+    info.pRasterizationState = &g->rs;
+    info.pMultisampleState = g->rs.rasterizerDiscardEnable ? NULL : &g->ms;
+    info.pDepthStencilState = g->rs.rasterizerDiscardEnable ? NULL : &g->ds;
+    info.pColorBlendState = g->rs.rasterizerDiscardEnable ? NULL : &g->cb;
+    info.pDynamicState = &dyn;
+    info.layout = g->layout;
+    info.renderPass = g->render_pass;
+    info.subpass = g->subpass;
+    info.basePipelineIndex = -1;
+    *out = VK_NULL_HANDLE;
+    return vkCreateGraphicsPipelines(e->device, g->cache, 1, &info, NULL, out);
+}
+
+VkPipeline ct_gfx_pipeline(struct ct *t, struct ct_env *e, struct ct_gfx *g)
+{
+    VkPipeline p;
+    CT_REQUIRE_VK(t, ct_gfx_create(e, g, &p));
+    return p;
+}
+
+void ct_draw_rect(VkCommandBuffer cb, VkPipelineLayout layout, float x0, float y0, float x1, float y1,
+                  const float color[4], float depth)
+{
+    struct ct_rect_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    pc.rect[0] = x0;
+    pc.rect[1] = y0;
+    pc.rect[2] = x1;
+    pc.rect[3] = y1;
+    if (color)
+        memcpy(pc.color, color, sizeof(pc.color));
+    pc.depth = depth;
+    vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cb, 4, 1, 0, 0);
+}
+
+void ct_begin_rendering(VkCommandBuffer cb, const struct ct_target *colors, uint32_t n, const float clear[4],
+                        const struct ct_target *depth, float depth_clear)
+{
+    VkRenderingAttachmentInfo att[8], d;
+    VkRenderingInfo info;
+    uint32_t i;
+    memset(att, 0, sizeof(att));
+    for (i = 0; i < n && i < 8; i++) {
+        att[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att[i].imageView = colors[i].view;
+        att[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att[i].loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        att[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        if (clear)
+            memcpy(att[i].clearValue.color.float32, clear, 4 * sizeof(float));
+    }
+    memset(&d, 0, sizeof(d));
+    if (depth) {
+        d.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        d.imageView = depth->view;
+        d.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        d.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        d.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        d.clearValue.depthStencil.depth = depth_clear;
+    }
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = n ? colors[0].w : depth->w;
+    info.renderArea.extent.height = n ? colors[0].h : depth->h;
+    info.layerCount = 1;
+    info.colorAttachmentCount = n;
+    info.pColorAttachments = att;
+    info.pDepthAttachment = depth && (depth->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) ? &d : NULL;
+    info.pStencilAttachment = depth && (depth->aspect & VK_IMAGE_ASPECT_STENCIL_BIT) ? &d : NULL;
+    vkCmdBeginRendering(cb, &info);
+}
+
+uint32_t ct_texel32(const unsigned char *p, uint32_t w, uint32_t x, uint32_t y)
+{
+    uint32_t v;
+    memcpy(&v, p + 4 * ((size_t)y * w + x), 4);
+    return v;
+}
+
+int ct_check_rgba8(struct ct *t, const unsigned char *p, uint32_t w, uint32_t h, ct_expect_fn expect,
+                   const void *ctx, int tolerance, const char *what)
+{
+    uint32_t x, y, c;
+    int bad = 0;
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++) {
+            uint32_t got = ct_texel32(p, w, x, y), want = expect(x, y, ctx);
+            int off = 0;
+            for (c = 0; c < 4; c++) {
+                int d = (int)((got >> (8 * c)) & 0xff) - (int)((want >> (8 * c)) & 0xff);
+                if (d > tolerance || d < -tolerance)
+                    off = 1;
+            }
+            if (!off)
+                continue;
+            if (bad++ < 4)
+                ct_fail(t, __FILE__, __LINE__, "%s: texel (%u, %u) is %08x (ABGR), expected %08x", what, x, y, got,
+                        want);
+        }
+    if (bad > 4)
+        ct_fail(t, __FILE__, __LINE__, "%s: %d texels differ in all", what, bad);
+    return bad;
+}
+
+const float ct_red[4] = { 1.0f, 0.0f, 0.0f, 1.0f };
+const float ct_green[4] = { 0.0f, 1.0f, 0.0f, 1.0f };
+const float ct_blue[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
+const float ct_black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+const float ct_white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+
+void ct_scene_init(struct ct *t, struct ct_scene *s)
+{
+    memset(s, 0, sizeof(*s));
+    ct_env_render(t, &s->e, &s->f);
+    s->vs = ct_shader_module(t, &s->e, ct_rect_vert, ct_rect_vert_size);
+    s->fs = ct_shader_module(t, &s->e, ct_color_frag, ct_color_frag_size);
+    s->layout = ct_pipeline_layout(t, &s->e, NULL, 0, sizeof(struct ct_rect_pc));
+    ct_host_buffer(t, &s->e, 4 * CT_SIZE * CT_SIZE * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &s->out);
+}
+
+void ct_scene_fini(struct ct_scene *s)
+{
+    vkDestroyPipelineLayout(s->e.device, s->layout, NULL);
+    vkDestroyShaderModule(s->e.device, s->vs, NULL);
+    vkDestroyShaderModule(s->e.device, s->fs, NULL);
+    ct_buffer_fini(&s->e, &s->out);
+    ct_env_fini(&s->e);
+}
+
+void ct_scene_color(struct ct *t, struct ct_scene *s, struct ct_target *c)
+{
+    ct_target(t, &s->e, VK_FORMAT_R8G8B8A8_UNORM, CT_SIZE, CT_SIZE, 1, VK_SAMPLE_COUNT_1_BIT,
+              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, c);
+}
+
+void ct_scene_read(struct ct *t, struct ct_scene *s, VkCommandBuffer cb, const struct ct_target *c)
+{
+    ct_target_read(cb, c, 0, VK_IMAGE_ASPECT_COLOR_BIT, s->out.buffer, 0);
+    ct_submit_and_wait(t, &s->e, cb);
+}
+
+uint32_t ct_expect_box(uint32_t x, uint32_t y, const void *ctx)
+{
+    const struct ct_box *b = ctx;
+    return x >= b->x0 && x < b->x1 && y >= b->y0 && y < b->y1 ? b->in : b->out;
+}
+
+uint32_t ct_expect_quadrants(uint32_t x, uint32_t y, const void *ctx)
+{
+    const uint32_t *q = ctx;
+    return q[(x >= CT_SIZE / 2 ? 1 : 0) + (y >= CT_SIZE / 2 ? 2 : 0)];
+}
+
+int ct_check_d16(struct ct *t, const unsigned char *p, uint32_t w, uint32_t h, uint16_t (*want)(uint32_t x, uint32_t y),
+                 const char *what)
+{
+    uint32_t x, y;
+    int bad = 0;
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++) {
+            uint16_t v, expected = want(x, y);
+            memcpy(&v, p + 2 * ((size_t)y * w + x), 2);
+            if (v + 1 < expected || v > expected + 1) {
+                if (bad < 4)
+                    ct_fail(t, __FILE__, __LINE__, "%s: depth texel (%u, %u) is %u, expected %u", what, x, y, v,
+                            expected);
+                bad++;
+            }
+        }
+    if (bad > 4)
+        ct_fail(t, __FILE__, __LINE__, "%s: %d texels differ in all", what, bad);
+    return bad;
+}
+
+VkFormat ct_depth_stencil_format(const struct ct_env *e)
+{
+    if (ct_format_features(e, VK_FORMAT_D32_SFLOAT_S8_UINT, 0) & VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT)
+        return VK_FORMAT_D32_SFLOAT_S8_UINT;
+    return VK_FORMAT_D24_UNORM_S8_UINT;
 }
 
 /* ==========================================================================

@@ -269,11 +269,136 @@ CT_TEST(clear_depth_stencil_image,
     ct_env_fini(&e);
 }
 
+static uint32_t expect_cleared_rect(uint32_t x, uint32_t y, const void *ctx)
+{
+    (void)ctx;
+    return x >= 2 && x < 6 && y >= 2 && y < 6 ? CT_RGBA(255, 0, 0, 255) : CT_RGBA(0, 0, 255, 255);
+}
+
+static uint16_t expect_depth_rect(uint32_t x, uint32_t y)
+{
+    return x >= 8 && x < 12 && y >= 8 && y < 12 ? 16384 : 65535; /* 0.25 in the rectangle, else 1 */
+}
+
+CT_TEST(clear_attachments,
+        "Clear Commands > Clearing Attachments: inside a render pass instance, vkCmdClearAttachments sets the "
+        "pixels of the rectangles, in the layers baseArrayLayer .. baseArrayLayer + layerCount - 1, of the "
+        "named color attachment and of the depth attachment to the clear values; other pixels and layers keep "
+        "their values (a layered framebuffer of 2 layers)",
+        CT_RENDER_COMMANDS "vkCreateRenderPass vkDestroyRenderPass vkCreateFramebuffer vkDestroyFramebuffer "
+                           "vkCmdBeginRenderPass vkCmdEndRenderPass vkCmdClearAttachments")
+{
+    struct ct_scene s;
+    struct ct_target c, d;
+    VkAttachmentDescription a[2];
+    VkAttachmentReference color_ref = { 0, VK_IMAGE_LAYOUT_GENERAL }, depth_ref = { 1, VK_IMAGE_LAYOUT_GENERAL };
+    VkSubpassDescription sp;
+    VkRenderPassCreateInfo rpi;
+    VkFramebufferCreateInfo fbi;
+    VkRenderPassBeginInfo begin;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    VkFramebuffer fb = VK_NULL_HANDLE;
+    VkImageView views[2];
+    VkClearValue clears[2];
+    VkClearAttachment atts[2];
+    VkClearRect rects[2];
+    VkCommandBuffer cb;
+    struct ct_box layer0 = { 0, 0, 0, 0, CT_RGBA(0, 0, 255, 255), CT_RGBA(0, 0, 255, 255) };
+    uint32_t i;
+
+    ct_scene_init(t, &s);
+    ct_target(t, &s.e, VK_FORMAT_R8G8B8A8_UNORM, CT_SIZE, CT_SIZE, 2, VK_SAMPLE_COUNT_1_BIT,
+              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &c);
+    ct_target(t, &s.e, VK_FORMAT_D16_UNORM, CT_SIZE, CT_SIZE, 2, VK_SAMPLE_COUNT_1_BIT,
+              VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, &d);
+    memset(a, 0, sizeof(a));
+    for (i = 0; i < 2; i++) {
+        a[i].format = i ? VK_FORMAT_D16_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
+        a[i].samples = VK_SAMPLE_COUNT_1_BIT;
+        a[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        a[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        a[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        a[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        a[i].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+        a[i].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    memset(&sp, 0, sizeof(sp));
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &color_ref;
+    sp.pDepthStencilAttachment = &depth_ref;
+    memset(&rpi, 0, sizeof(rpi));
+    rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpi.attachmentCount = 2;
+    rpi.pAttachments = a;
+    rpi.subpassCount = 1;
+    rpi.pSubpasses = &sp;
+    CT_REQUIRE_VK(t, vkCreateRenderPass(s.e.device, &rpi, NULL, &rp));
+    views[0] = c.view;
+    views[1] = d.view;
+    memset(&fbi, 0, sizeof(fbi));
+    fbi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbi.renderPass = rp;
+    fbi.attachmentCount = 2;
+    fbi.pAttachments = views;
+    fbi.width = CT_SIZE;
+    fbi.height = CT_SIZE;
+    fbi.layers = 2;
+    CT_REQUIRE_VK(t, vkCreateFramebuffer(s.e.device, &fbi, NULL, &fb));
+    memset(clears, 0, sizeof(clears));
+    memcpy(clears[0].color.float32, ct_blue, sizeof(ct_blue));
+    clears[1].depthStencil.depth = 1.0f;
+    memset(&begin, 0, sizeof(begin));
+    begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    begin.renderPass = rp;
+    begin.framebuffer = fb;
+    begin.renderArea.extent.width = CT_SIZE;
+    begin.renderArea.extent.height = CT_SIZE;
+    begin.clearValueCount = 2;
+    begin.pClearValues = clears;
+    memset(atts, 0, sizeof(atts));
+    atts[0].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    atts[0].colorAttachment = 0;
+    memcpy(atts[0].clearValue.color.float32, ct_red, sizeof(ct_red));
+    atts[1].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    atts[1].clearValue.depthStencil.depth = 0.25f;
+    memset(rects, 0, sizeof(rects));
+    rects[0].rect.offset.x = rects[0].rect.offset.y = 2;
+    rects[0].rect.extent.width = rects[0].rect.extent.height = 4;
+    rects[0].baseArrayLayer = 1;
+    rects[0].layerCount = 1;
+    rects[1].rect.offset.x = rects[1].rect.offset.y = 8;
+    rects[1].rect.extent.width = rects[1].rect.extent.height = 4;
+    rects[1].baseArrayLayer = 0;
+    rects[1].layerCount = 2;
+    cb = ct_begin_commands(t, &s.e);
+    vkCmdBeginRenderPass(cb, &begin, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdClearAttachments(cb, 1, &atts[0], 1, &rects[0]); /* color: layer 1 only */
+    vkCmdClearAttachments(cb, 1, &atts[1], 1, &rects[1]); /* depth: both layers */
+    vkCmdEndRenderPass(cb);
+    for (i = 0; i < 2; i++) {
+        ct_target_read(cb, &c, i, VK_IMAGE_ASPECT_COLOR_BIT, s.out.buffer, i * CT_SIZE * CT_SIZE * 4);
+        ct_target_read(cb, &d, i, VK_IMAGE_ASPECT_DEPTH_BIT, s.out.buffer, (2 + i) * CT_SIZE * CT_SIZE * 4);
+    }
+    ct_submit_and_wait(t, &s.e, cb);
+    ct_check_rgba8(t, s.out.data, CT_SIZE, CT_SIZE, ct_expect_box, &layer0, 0, "color layer 0 (not cleared)");
+    ct_check_rgba8(t, s.out.data + CT_SIZE * CT_SIZE * 4, CT_SIZE, CT_SIZE, expect_cleared_rect, NULL, 0,
+                   "color layer 1");
+    ct_check_d16(t, s.out.data + 2 * CT_SIZE * CT_SIZE * 4, CT_SIZE, CT_SIZE, expect_depth_rect, "depth layer 0");
+    ct_check_d16(t, s.out.data + 3 * CT_SIZE * CT_SIZE * 4, CT_SIZE, CT_SIZE, expect_depth_rect, "depth layer 1");
+    vkDestroyFramebuffer(s.e.device, fb, NULL);
+    vkDestroyRenderPass(s.e.device, rp, NULL);
+    ct_target_fini(&s.e, &c);
+    ct_target_fini(&s.e, &d);
+    ct_scene_fini(&s);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(clear_color_image),
     CT_REF(clear_color_image_integer),
     CT_REF(clear_color_image_3d),
     CT_REF(clear_depth_stencil_image),
+    CT_REF(clear_attachments),
 };
 
 CT_SUITE(clears, tests)

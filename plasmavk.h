@@ -56403,8 +56403,13 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         for (i = 0; i < info->pDynamicState->dynamicStateCount; i++)
             dynamic |= pvk_dynamic_bits(info->pDynamicState->pDynamicStates[i]);
     discard = rs && rs->rasterizerDiscardEnable && !(dynamic & PVK_DYN_BIT(RASTERIZER_DISCARD_ENABLE));
-    if (discard) /* nothing rasterizes: the fragment state may be anything */
+    if (discard) { /* nothing rasterizes: the fragment states are ignored (and may be invalid pointers) */
         fs = NULL;
+        vp = NULL;
+        ms = NULL;
+        ds = NULL;
+        cb = NULL;
+    }
     pvk_stage_code(vs, &vs_code, &vs_words);
     if (fs)
         pvk_stage_code(fs, &fs_code, &fs_words);
@@ -56527,7 +56532,9 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
                 pvk_log(PVK_LOG_WARN, "vkCreateGraphicsPipelines: sample masks are not supported (all samples are written)");
         }
     }
-    d.rasterization = !discard;
+    /* Rasterizer discard skips the draws (pvk_render_discards): a Metal
+     * pipeline without rasterization needs a vertex function returning void */
+    d.rasterization = 1;
     d.amplification = (uint32_t)__builtin_popcount(view_mask);
     d.topology_class = pvk_topology_class(gfx.state.topology);
     d.view_mask = view_mask;

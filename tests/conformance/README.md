@@ -28,14 +28,22 @@ One file per chapter of the Vulkan specification:
 | `capabilities.c` | Additional Capabilities: image format properties (extents, mip levels, layers, sample counts, monotonicity, host image copy, Y'CbCr descriptor counts), sparse image formats | 7 |
 | `samplers.c` | Samplers: creation with every parameter, maxSamplerAllocationCount, sampler Y'CbCr conversions (creation, sampling texel by texel) | 8 |
 | `copies.c` | Copy Commands: buffer/image and image/image copies (also of multi-planar image planes), blits, resolves, host image copies, texel by texel | 12 |
-| `clears.c` | Clear Commands: color and depth/stencil image clears, texel by texel | 4 |
+| `clears.c` | Clear Commands: color and depth/stencil image clears, texel by texel; `vkCmdClearAttachments` (rectangles, layers of a layered framebuffer) | 5 |
 | `descriptorsets.c` | Resource Descriptors > Descriptor Sets: set layouts and support queries, pools and allocation, writes, copies, inline uniform blocks, update templates, dynamic offsets, push descriptors, update after bind, variable-count and partially bound bindings, every descriptor type read by a compute shader | 19 |
-| `queries.c` | Queries: pools, host and device resets, timestamp availability, order and period, `vkCmdWriteTimestamp2`, secondaries, results layout with every flag, waiting, unavailable occlusion queries with PARTIAL, `vkCmdCopyQueryPoolResults` (later submission, same command buffer, WAIT) | 15 |
+| `queries.c` | Queries: pools, host and device resets, timestamp availability, order and period, `vkCmdWriteTimestamp2`, secondaries, results layout with every flag, waiting, unavailable occlusion queries with PARTIAL, `vkCmdCopyQueryPoolResults` (later submission, same command buffer, WAIT), occlusion query counts (precise, occluded, no draws, several draws) | 16 |
 | `synchronization.c` | Synchronization and Cache Control > Events: host and device state, the host seeing a device signal, device waits on host and device signals (same command buffer, batch, earlier submission, several events, synchronization2, device-only events) | 7 |
 | `privatedata.c` | Private Data: slots, data on objects of many types, data of new objects and slots, many objects, reserved slots, allocation callbacks | 7 |
+| `renderpass.c` | Render Pass: load and store operations, render areas, subpasses with an input attachment and a dependency (`vkCreateRenderPass2`, `vkCmdNextSubpass2`), color and depth resolves (multisampled attachments stored or not), multiview, imageless framebuffers, render area granularity; dynamic rendering: color and depth, resolves, suspending and resuming across command buffers, multiview, local read (attachment locations, input attachment indices) | 13 |
+| `pipelines.c` | Pipelines: no fragment shader, specialization constants, a uniform buffer through a descriptor set; dynamic state (viewports and scissors with and without counts, cull mode, front face, topology, depth and stencil state, rasterizer discard, depth bias); pipeline caches (header, `VK_INCOMPLETE`, partial data, round trip, merging), `FAIL_ON_PIPELINE_COMPILE_REQUIRED` with `EARLY_RETURN_ON_FAILURE`, creation feedback | 12 |
+| `drawing.c` | Drawing Commands and Fixed-Function Vertex Processing: vertex and instance numbering of direct, indexed (UINT16, UINT32, UINT8) and indirect draws, draw counts, primitive restart (static and dynamic), every primitive topology, draw parameters (BaseVertex, BaseInstance, DrawIndex), vertex attribute formats, offsets and instance rates, divisors, dynamic binding strides | 12 |
+| `rasterization.c` | Fixed-Function Vertex Post-Processing and Rasterization: viewport transform (offsets, negative heights, depth ranges), clipping and depth clamping, ViewportIndex and Layer from the vertex shader, culling, rasterizer discard, coverage at the standard sample locations, sample shading, wide points, flat and smooth interpolation | 11 |
+| `fragops.c` | Fragment Operations: scissor test, every depth compare op, every stencil op (clamping, wrapping, fail and depth-fail ops, write and compare masks), depth bounds, sample mask, alpha to one | 6 |
+| `framebuffer.c` | The Framebuffer: blend factors and operations (constants static and dynamic), color write masks, independent blending, dual-source blending, sRGB blending in linear space, logic operations | 6 |
 | `wsi.c` | Window System Integration: Metal surfaces, surface queries (support, capabilities, formats, present modes, present rectangles, device group modes), swapchains (images, allocation callbacks, `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`, recreation with `oldSwapchain`, aliasing a swapchain image), acquire and present (semaphores, fences, timeouts, two swapchains in one present), swapchain images as transfer source and destination | 20 |
 
-Framework: `ct.h` (test macros, helpers), `ct.c` (runner, helpers),
+Framework: `ct.h` (test macros, helpers; for the graphics chapters
+offscreen render targets, a pipeline description with defaults, rectangle
+shaders and texel checks), `ct.c` (runner, helpers),
 `commands.c` (every Vulkan 1.4 core command and the commands of PlasmaVK's
 advertised extensions, for coverage and the `vkGet*ProcAddr` tests),
 `baseline.txt` (tests PlasmaVK passes), `baseline-moltenvk.txt` (tests MoltenVK passes).
@@ -210,6 +218,17 @@ against the specification; the tests are right:
   a Vulkan swapchain, VK_ERROR_NATIVE_WINDOW_IN_USE_KHR must be returned"; on
   the Metal platform the native window is the layer, which both surfaces refer
   to.
+- `drawing.primitive_restart`: with primitive restart disabled (dynamically,
+  `vkCmdSetPrimitiveRestartEnable(VK_FALSE)`), index 0xFFFF of a
+  `VK_INDEX_TYPE_UINT16` triangle strip still restarts the strip instead of
+  naming vertex 65535 (Metal always restarts strips on the maximum index).
+  VkPipelineInputAssemblyStateCreateInfo: "primitiveRestartEnable controls
+  whether a special vertex index value is treated as restarting the assembly
+  of primitives". With restart enabled the test passes.
+
+The graphics chapters' tests also skip on MoltenVK where it lacks a feature
+(`drawIndirectCount`, `depthBounds`, `logicOp`), and draw no triangle fans on
+it (`VK_KHR_portability_subset`, whose `triangleFans` may be off).
 
 `baseline-moltenvk.txt` lists every other test, which passes on MoltenVK;
 `make conformance-mvk` fails if one of those regresses.
@@ -231,8 +250,18 @@ a required behaviour.
 | `resources.buffer_capture_replay` | Metal cannot place a resource at a requested GPU address, so `bufferDeviceAddressCaptureReplay` is unsupported. |
 | `extensions.instance_layer_extensions` | No layers: PlasmaVK is linked directly, without a loader. |
 | `features.shaderInt64` | Required only with 64-bit shader atomics, which Apple7/Apple8 GPUs lack. |
-| `features.shaderDrawParameters`, `features.drawIndirectCount`, `features.shaderOutputViewportIndex`, `features.shaderOutputLayer` | Required only with their extensions, which need graphics pipelines (not implemented yet). |
+| `drawing.draw_index_multi_draw` | `multiDrawIndirect` is not supported (Metal draws indirect records one at a time and the translator has no per-draw DrawIndex), so `maxDrawIndirectCount` is 1 and no multi-draw has a DrawIndex other than 0. |
+| `fragops.depth_bounds_test` | `depthBounds` is not reported: Metal 4's `setDepthTestMinBound:maxBound:` traps in the Apple9 (M4) driver. |
+| `framebuffer.logic_op` | Metal has no logic operations. |
 | `features.samplerFilterMinmax`, `formats.filter_minmax_formats`, `samplers.create_sampler_reduction` | Required only with VK_EXT_sampler_filter_minmax, which PlasmaVK offers from Apple10 (M5, A19): Metal's `MTLSamplerDescriptor.reductionMode` is an Apple10 feature (FST "Sampler minimum and maximum reduction"), and on Apple9 (M4 Max) it is accepted and ignored, minimum and maximum sampling as the weighted average. A shader cannot emulate it: a sampler descriptor is only its MTLResourceID. |
+
+## Tests PlasmaVK fails
+
+Not in `baseline.txt` until fixed:
+
+| Test | Why |
+|---|---|
+| `fragops.sample_mask_test` | `VkPipelineMultisampleStateCreateInfo::pSampleMask` is ignored (with a warning): Metal applies a sample mask only as a fragment function's `[[sample_mask]]` output, which the SPIR-V translator does not emit yet. |
 
 Running under the validation layer on MoltenVK reports no valid usage errors
 from the tests. Image view and sampler tests avoid component swizzles, format

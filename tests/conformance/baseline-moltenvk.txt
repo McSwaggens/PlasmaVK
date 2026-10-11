@@ -17,6 +17,8 @@
 #   privatedata.private_data_slot_destroy_null       crashes on VK_NULL_HANDLE
 #   privatedata.private_data_new_objects             a new object at a destroyed one's
 #                                                    address reads its private data
+#   drawing.primitive_restart                        with primitive restart off, 0xFFFF
+#                                                    still restarts a strip
 
 initialization.enumerate_instance_version
 initialization.gipa_global_commands_null_instance
@@ -462,6 +464,7 @@ clears.clear_color_image
 clears.clear_color_image_integer
 clears.clear_color_image_3d
 clears.clear_depth_stencil_image
+clears.clear_attachments
 
 descriptorsets.set_layout_types
 descriptorsets.set_layout_empty
@@ -495,6 +498,7 @@ queries.timestamp_rewrite
 queries.results_layout
 queries.results_wait
 queries.copy_results
+queries.occlusion_query_samples
 synchronization.event_host_state
 synchronization.event_device_state2
 synchronization.event_device_signal_host_sees
@@ -525,3 +529,65 @@ wsi.swapchain_recreate
 wsi.present_two_swapchains
 wsi.swapchain_image_transfers
 wsi.swapchain_image_alias
+
+renderpass.render_pass_clear_store
+renderpass.render_pass_load_and_render_area
+renderpass.render_pass_input_attachment
+renderpass.render_pass_resolves
+renderpass.render_pass_multiview
+renderpass.imageless_framebuffer
+renderpass.render_area_granularity
+renderpass.dynamic_rendering_color_depth
+renderpass.dynamic_rendering_resolves
+renderpass.dynamic_rendering_suspend_resume
+renderpass.dynamic_rendering_multiview
+renderpass.local_read_attachment_locations
+renderpass.local_read_input_attachment
+
+pipelines.pipeline_without_fragment_shader
+pipelines.pipeline_specialization
+pipelines.pipeline_uniform_buffer
+pipelines.dynamic_viewport_scissor
+pipelines.dynamic_cull_front_face_topology
+pipelines.dynamic_depth_stencil_state
+pipelines.dynamic_rasterizer_discard_depth_bias
+pipelines.pipeline_cache_data
+pipelines.pipeline_cache_round_trip
+pipelines.pipeline_cache_partial_data
+pipelines.pipeline_compile_required
+pipelines.pipeline_creation_feedback
+
+drawing.draw_vertex_instance_index
+drawing.draw_indexed
+drawing.draw_indexed_uint8
+drawing.primitive_topologies
+drawing.draw_indirect
+drawing.draw_parameters
+drawing.draw_index_multi_draw
+drawing.vertex_attributes
+drawing.vertex_attribute_divisor
+drawing.vertex_binding_stride_dynamic
+
+rasterization.viewport_transform
+rasterization.viewport_depth_range
+rasterization.clipping_depth_clamp
+rasterization.viewport_index_output
+rasterization.layer_output
+rasterization.polygon_culling
+rasterization.rasterizer_discard
+rasterization.multisample_coverage
+rasterization.sample_shading
+rasterization.wide_points
+rasterization.interpolation_flat_smooth
+
+fragops.scissor_test
+fragops.depth_compare_ops
+fragops.stencil_ops
+fragops.sample_mask_test
+fragops.alpha_to_one
+
+framebuffer.blend_equations
+framebuffer.color_write_mask
+framebuffer.independent_blend
+framebuffer.dual_source_blend
+framebuffer.srgb_blending

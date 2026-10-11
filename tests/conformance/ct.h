@@ -299,6 +299,161 @@ uint32_t ct_ycbcr_planes(VkFormat format);
 /* The ones of core Vulkan 1.4, n of them in out[] (at most max). */
 size_t ct_ycbcr_formats(VkFormat *out, size_t max);
 
+/* ---- Rendering (the graphics chapters) ----
+ *
+ * Small offscreen render targets, kept in VK_IMAGE_LAYOUT_GENERAL, pipelines
+ * described by struct ct_gfx, and the rectangle shaders most tests draw
+ * with: ct_rect_vert draws the push constants' rectangle (NDC, a 4-vertex
+ * triangle strip) at their depth, ct_color_frag writes their color. */
+
+/* Every command the helpers below call, for a test's command list. */
+#define CT_RENDER_COMMANDS                                                                                         \
+    "vkCreateImage vkDestroyImage vkGetImageMemoryRequirements vkAllocateMemory vkFreeMemory vkBindImageMemory "    \
+    "vkCreateImageView vkDestroyImageView vkCreateBuffer vkDestroyBuffer vkGetBufferMemoryRequirements "            \
+    "vkBindBufferMemory vkMapMemory vkCreateShaderModule vkDestroyShaderModule vkCreatePipelineLayout "             \
+    "vkDestroyPipelineLayout vkCreateGraphicsPipelines vkDestroyPipeline vkCmdPipelineBarrier "                     \
+    "vkCmdCopyImageToBuffer vkCmdPushConstants vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFormatProperties2 "
+
+/* ct_env_init, then (Vulkan 1.3 and a graphics queue, else the test skips)
+ * a device with every feature the physical device reports in the core
+ * feature structures; f receives them. */
+void ct_env_render(struct ct *t, struct ct_env *e, struct ct_features *f);
+
+/* The push constants of ct_rect_vert and ct_color_frag (48 bytes, both stages). */
+struct ct_rect_pc {
+    float rect[4]; /* x0, y0, x1, y1 in NDC */
+    float color[4];
+    float depth;
+    int32_t layer, viewport, pad;
+};
+extern const uint32_t ct_rect_vert[];
+extern const size_t ct_rect_vert_size;
+extern const uint32_t ct_color_frag[];
+extern const size_t ct_color_frag_size;
+
+/* A 2D image (array when layers > 1) of w x h, in device-local memory, with
+ * TRANSFER_SRC and TRANSFER_DST added to usage, a view of all its layers
+ * and aspects, and every subresource in VK_IMAGE_LAYOUT_GENERAL. */
+struct ct_target {
+    struct ct_image image;
+    VkImageView view;
+    VkFormat format;
+    VkImageAspectFlags aspect;
+    uint32_t w, h, layers;
+    VkSampleCountFlagBits samples;
+};
+void ct_target(struct ct *t, struct ct_env *e, VkFormat format, uint32_t w, uint32_t h, uint32_t layers,
+               VkSampleCountFlagBits samples, VkImageUsageFlags usage, struct ct_target *out);
+void ct_target_fini(struct ct_env *e, struct ct_target *m);
+/* Records, after all earlier commands, a copy of one aspect of a layer to
+ * buffer at offset (texels tightly packed), visible to the host after the
+ * submission. */
+void ct_target_read(VkCommandBuffer cb, const struct ct_target *m, uint32_t layer, VkImageAspectFlags aspect,
+                    VkBuffer buffer, VkDeviceSize offset);
+
+VkShaderModule ct_shader_module(struct ct *t, struct ct_env *e, const uint32_t *code, size_t size);
+/* Push constants of push_size bytes for the vertex and fragment stages
+ * (none when 0), after the set layouts. */
+VkPipelineLayout ct_pipeline_layout(struct ct *t, struct ct_env *e, const VkDescriptorSetLayout *sets,
+                                    uint32_t set_count, uint32_t push_size);
+
+/* A graphics pipeline. ct_gfx_init sets: a triangle strip, one viewport and
+ * scissor covering w x h (depth 0..1), fill mode, no culling, counter-
+ * clockwise front faces, line width 1, one sample, depth and stencil tests
+ * off, one color attachment (R8G8B8A8_UNORM for dynamic rendering) written
+ * fully without blending, no vertex input, no dynamic state. Change members
+ * before ct_gfx_create, which points the create info's members at them. */
+struct ct_gfx {
+    VkShaderModule vs, fs; /* fs VK_NULL_HANDLE: no fragment shader */
+    const VkSpecializationInfo *vs_spec, *fs_spec;
+    VkPipelineLayout layout;
+    VkRenderPass render_pass; /* VK_NULL_HANDLE: dynamic rendering (rendering below) */
+    uint32_t subpass;
+    VkPipelineCreateFlags flags;
+    VkPipelineCache cache;
+    const void *next; /* chained to VkGraphicsPipelineCreateInfo (after rendering) */
+    const VkPipelineVertexInputStateCreateInfo *vertex; /* NULL: no vertex input */
+    VkPipelineInputAssemblyStateCreateInfo ia;
+    VkViewport viewports[16];
+    VkRect2D scissors[16];
+    uint32_t viewport_count;
+    VkPipelineRasterizationStateCreateInfo rs;
+    VkPipelineMultisampleStateCreateInfo ms;
+    VkPipelineDepthStencilStateCreateInfo ds;
+    VkPipelineColorBlendStateCreateInfo cb;
+    VkPipelineColorBlendAttachmentState blend[8];
+    uint32_t colors; /* color attachments (blend states, formats) */
+    VkDynamicState dynamic[64];
+    uint32_t dynamic_count;
+    VkPipelineRenderingCreateInfo rendering;
+    VkFormat color_formats[8];
+};
+void ct_gfx_init(struct ct_gfx *g, VkShaderModule vs, VkShaderModule fs, VkPipelineLayout layout, uint32_t w,
+                 uint32_t h);
+VkResult ct_gfx_create(struct ct_env *e, struct ct_gfx *g, VkPipeline *out);
+/* ct_gfx_create, ending the test unless it succeeds. */
+VkPipeline ct_gfx_pipeline(struct ct *t, struct ct_env *e, struct ct_gfx *g);
+
+/* Push constants for ct_rect_vert / ct_color_frag, then a 4-vertex draw. */
+void ct_draw_rect(VkCommandBuffer cb, VkPipelineLayout layout, float x0, float y0, float x1, float y1,
+                  const float color[4], float depth);
+/* vkCmdBeginRendering over a whole target: colors (n of them) cleared to
+ * clear (NULL: loaded), depth (NULL: none) cleared to depth_clear, its
+ * stencil aspect to 0, everything stored. */
+void ct_begin_rendering(VkCommandBuffer cb, const struct ct_target *colors, uint32_t n, const float clear[4],
+                        const struct ct_target *depth, float depth_clear);
+
+#define CT_RGBA(r, g, b, a) ((uint32_t)(r) | ((uint32_t)(g) << 8) | ((uint32_t)(b) << 16) | ((uint32_t)(a) << 24))
+#define CT_RED CT_RGBA(255, 0, 0, 255)
+#define CT_GREEN CT_RGBA(0, 255, 0, 255)
+#define CT_BLUE CT_RGBA(0, 0, 255, 255)
+#define CT_BLACK CT_RGBA(0, 0, 0, 255)
+#define CT_WHITE CT_RGBA(255, 255, 255, 255)
+extern const float ct_red[4], ct_green[4], ct_blue[4], ct_black[4], ct_white[4];
+
+/* What most rendering tests share: a device (ct_env_render), the
+ * rectangle shaders and a pipeline layout with their push constants, and a
+ * host buffer (4 KiB per CT_SIZE x CT_SIZE RGBA8 image, 4 of them) for reading
+ * targets back. */
+#define CT_SIZE 16
+struct ct_scene {
+    struct ct_env e;
+    struct ct_features f;
+    VkShaderModule vs, fs;
+    VkPipelineLayout layout;
+    struct ct_buffer out;
+};
+void ct_scene_init(struct ct *t, struct ct_scene *s);
+void ct_scene_fini(struct ct_scene *s);
+/* A CT_SIZE x CT_SIZE R8G8B8A8_UNORM color attachment. */
+void ct_scene_color(struct ct *t, struct ct_scene *s, struct ct_target *c);
+/* Reads a color target into s->out at 0, then submits cb and waits. */
+void ct_scene_read(struct ct *t, struct ct_scene *s, VkCommandBuffer cb, const struct ct_target *c);
+
+/* Expectations for ct_check_rgba8: `in` inside [x0, x1) x [y0, y1), `out`
+ * elsewhere; and the four quadrants of a CT_SIZE x CT_SIZE image (ctx: uint32_t[4],
+ * top left, top right, bottom left, bottom right). */
+struct ct_box {
+    uint32_t x0, y0, x1, y1, in, out;
+};
+uint32_t ct_expect_box(uint32_t x, uint32_t y, const void *ctx);
+uint32_t ct_expect_quadrants(uint32_t x, uint32_t y, const void *ctx);
+/* Compares the D16_UNORM texels of a w x h image at p with want(x, y),
+ * within 1, like ct_check_rgba8. */
+int ct_check_d16(struct ct *t, const unsigned char *p, uint32_t w, uint32_t h, uint16_t (*want)(uint32_t x, uint32_t y),
+                 const char *what);
+/* D32_SFLOAT_S8_UINT if it is a depth/stencil attachment format, else
+ * D24_UNORM_S8_UINT (one of them is required to be). */
+VkFormat ct_depth_stencil_format(const struct ct_env *e);
+/* The 32-bit texel (x, y) of a w-wide tightly packed image at p. */
+uint32_t ct_texel32(const unsigned char *p, uint32_t w, uint32_t x, uint32_t y);
+/* Compares the R8G8B8A8 texels of a w x h image at p with expect(x, y,
+ * ctx), each channel within tolerance: records a failure naming what and
+ * the first few differences; returns the number of texels that differ. */
+typedef uint32_t (*ct_expect_fn)(uint32_t x, uint32_t y, const void *ctx);
+int ct_check_rgba8(struct ct *t, const unsigned char *p, uint32_t w, uint32_t h, ct_expect_fn expect,
+                   const void *ctx, int tolerance, const char *what);
+
 /* ---- Vulkan commands (commands.c), for coverage ---- */
 
 enum ct_level { CT_LEVEL_GLOBAL, CT_LEVEL_INSTANCE, CT_LEVEL_PHYSICAL, CT_LEVEL_DEVICE };
