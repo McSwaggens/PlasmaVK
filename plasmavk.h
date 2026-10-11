@@ -41628,7 +41628,8 @@ enum {
     PVK_SPV_H_SRGB = 1u << 8,
     PVK_SPV_H_BALLOT = 1u << 9,
     PVK_SPV_H_SG_SCAN = 1u << 10,
-    PVK_SPV_H_INB = 1u << 11
+    PVK_SPV_H_INB = 1u << 11,
+    PVK_SPV_H_F16_RTZ = 1u << 12
 };
 
 static const char *pvk_spv_helper(struct pvk_spv *ctx, uint32_t bit, const char *name)
@@ -42185,6 +42186,16 @@ static const char *const pvk_spv_helper_text[] = {
     "template <typename D, typename A>\ninline bool pvk_inb(D d, A addr, ulong n)\n{\n"
     "    ulong o = ulong(addr) - reinterpret_cast<ulong>(d.p);\n"
     "    return o < d.size && n <= d.size - o;\n}\n\n",
+    "/* float -> half rounded toward zero (FPRoundingMode RTZ): Metal rounds to\n"
+    " * nearest even, then one step toward zero where that rounded away. */\n"
+    "inline half pvk_f16_rtz(float f)\n{\n"
+    "    half h = half(f);\n"
+    "    return isnan(f) || abs(float(h)) <= abs(f) ? h : as_type<half>(ushort(as_type<ushort>(h) - 1u));\n}\n\n"
+    "template <int N>\ninline vec<half, N> pvk_f16_rtz(vec<float, N> f)\n{\n"
+    "    vec<half, N> r;\n"
+    "    for (int i = 0; i < N; i++)\n"
+    "        r[i] = pvk_f16_rtz(f[i]);\n"
+    "    return r;\n}\n\n",
 };
 
 static void pvk_spv_interpolate_at(struct pvk_spv *ctx, const struct pvk_spv_insn *in);
@@ -44606,7 +44617,19 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
                                           pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 4), sg)));
         return;
     }
-    case PVK_SPV_OpConvertFToU: case PVK_SPV_OpConvertFToS: case PVK_SPV_OpFConvert:
+    case PVK_SPV_OpFConvert:
+        if (pvk_spv_get(ctx, rid)->fp_round > 1) { /* FPRoundingMode (16-bit storage conversions) */
+            struct pvk_spv_type *s = pvk_spv_scalar_of(ctx, r);
+            if (pvk_spv_get(ctx, rid)->fp_round != 2)
+                pvk_spv_fail(ctx, "Vulkan allows only the RTE and RTZ rounding modes");
+            if (s && s->width == 16) {
+                pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", pvk_spv_helper(ctx, PVK_SPV_H_F16_RTZ, "pvk_f16_rtz"),
+                                                  pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3))));
+                return;
+            }
+        }
+        /* fall through */
+    case PVK_SPV_OpConvertFToU: case PVK_SPV_OpConvertFToS:
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", r->msl, pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3))));
         return;
     case PVK_SPV_OpConvertSToF: case PVK_SPV_OpSConvert:
