@@ -5,7 +5,8 @@
  * set tables are filled in the section 11 format from the translator's
  * reflection; buffers and textures reached only through them are made
  * resident with useResource:usage:. Textures are shared-storage (CPU
- * writable), samplers support argument buffers. */
+ * writable), samplers support argument buffers. Functions are static inline
+ * so tests may use any subset (pvk_msl_render.h builds on them). */
 #ifndef PVK_MSL_TEST_H
 #define PVK_MSL_TEST_H
 
@@ -14,7 +15,7 @@
 
 static id mt_device, mt_queue;
 
-static bool mt_init(void)
+static inline bool mt_init(void)
 {
     mt_device = pvk_MTLCreateSystemDefaultDevice();
     if (!mt_device)
@@ -23,24 +24,24 @@ static bool mt_init(void)
     return mt_queue != NULL;
 }
 
-static void mt_shutdown(void)
+static inline void mt_shutdown(void)
 {
     pvk_release(mt_queue);
     pvk_release(mt_device);
 }
 
-static id mt_string(const char *s)
+static inline id mt_string(const char *s)
 {
     return PVK_MSG(id, (id, SEL, const char *))((id)objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"),
                                                 s);
 }
 
-static const char *mt_error_text(id error)
+static inline const char *mt_error_text(id error)
 {
     return error ? pvk_ns_utf8(PVK_MSG(id, (id, SEL))(error, sel_registerName("localizedDescription"))) : "(no error)";
 }
 
-static void mt_print_numbered(const char *src)
+static inline void mt_print_numbered(const char *src)
 {
     int line = 1;
     fprintf(stderr, "%4d  ", line);
@@ -53,8 +54,8 @@ static void mt_print_numbered(const char *src)
 }
 
 /* Translates SPIR-V; prints the error on failure. */
-static bool mt_translate(const uint32_t *words, size_t count, const struct pvk_msl_options *options,
-                         struct pvk_msl_result *res)
+static inline bool mt_translate(const uint32_t *words, size_t count, const struct pvk_msl_options *options,
+                                struct pvk_msl_result *res)
 {
     VkResult r = pvk_spirv_to_msl(words, count, NULL, options, res);
     if (r != VK_SUCCESS) {
@@ -67,7 +68,7 @@ static bool mt_translate(const uint32_t *words, size_t count, const struct pvk_m
 /* Compiles the MSL as section 16 does (MSL 3.2, safe math) and builds a
  * compute pipeline (retained), NULL on failure after printing the compiler
  * error and the numbered source. */
-static id mt_pipeline(const struct pvk_msl_result *res)
+static inline id mt_pipeline(const struct pvk_msl_result *res)
 {
     void *pool = objc_autoreleasePoolPush();
     id options, library, function, pipeline = NULL, error = NULL;
@@ -108,7 +109,7 @@ struct mt_buffer {
 };
 
 /* A shared-storage buffer, zero-filled, then initialized from init (if any). */
-static struct mt_buffer mt_buffer(size_t size, const void *init, size_t init_size)
+static inline struct mt_buffer mt_buffer(size_t size, const void *init, size_t init_size)
 {
     struct mt_buffer b;
     memset(&b, 0, sizeof(b));
@@ -125,7 +126,7 @@ static struct mt_buffer mt_buffer(size_t size, const void *init, size_t init_siz
     return b;
 }
 
-static void mt_buffer_free(struct mt_buffer *b)
+static inline void mt_buffer_free(struct mt_buffer *b)
 {
     pvk_release(b->buffer);
     memset(b, 0, sizeof(*b));
@@ -135,8 +136,8 @@ static void mt_buffer_free(struct mt_buffer *b)
 
 /* A shared-storage texture: type, format, width/height/depth, array length
  * (cube arrays: cubes), mip levels, sample count. */
-static id mt_texture(pvk_MTLTextureType type, pvk_MTLPixelFormat format, unsigned long w, unsigned long h,
-                     unsigned long d, unsigned long layers, unsigned long mips, unsigned long samples)
+static inline id mt_texture(pvk_MTLTextureType type, pvk_MTLPixelFormat format, unsigned long w, unsigned long h,
+                            unsigned long d, unsigned long layers, unsigned long mips, unsigned long samples)
 {
     id desc = PVK_MSG(id, (id, SEL))((id)objc_getClass("MTLTextureDescriptor"), sel_registerName("new")), tex;
     PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setTextureType:"), type);
@@ -161,8 +162,8 @@ static id mt_texture(pvk_MTLTextureType type, pvk_MTLPixelFormat format, unsigne
 }
 
 /* Uploads one image (w x h x d texels of `bpp` bytes) to mip level / slice. */
-static void mt_upload(id tex, unsigned long level, unsigned long slice, unsigned long w, unsigned long h,
-                      unsigned long d, unsigned long bpp, const void *data)
+static inline void mt_upload(id tex, unsigned long level, unsigned long slice, unsigned long w, unsigned long h,
+                             unsigned long d, unsigned long bpp, const void *data)
 {
     pvk_MTLRegion r;
     memset(&r, 0, sizeof(r));
@@ -174,8 +175,8 @@ static void mt_upload(id tex, unsigned long level, unsigned long slice, unsigned
         data, w * bpp, w * h * bpp);
 }
 
-static void mt_download(id tex, unsigned long level, unsigned long slice, unsigned long w, unsigned long h,
-                        unsigned long d, unsigned long bpp, void *data)
+static inline void mt_download(id tex, unsigned long level, unsigned long slice, unsigned long w, unsigned long h,
+                               unsigned long d, unsigned long bpp, void *data)
 {
     pvk_MTLRegion r;
     memset(&r, 0, sizeof(r));
@@ -188,7 +189,7 @@ static void mt_download(id tex, unsigned long level, unsigned long slice, unsign
 }
 
 /* A texture buffer over buf (offset 0), width texels. */
-static id mt_texture_buffer(struct mt_buffer *buf, pvk_MTLPixelFormat format, unsigned long width, unsigned long bpp)
+static inline id mt_texture_buffer(struct mt_buffer *buf, pvk_MTLPixelFormat format, unsigned long width, unsigned long bpp)
 {
     id desc = PVK_MSG(id, (id, SEL, unsigned long, unsigned long, unsigned long, unsigned long))(
         (id)objc_getClass("MTLTextureDescriptor"),
@@ -201,7 +202,7 @@ static id mt_texture_buffer(struct mt_buffer *buf, pvk_MTLPixelFormat format, un
 }
 
 /* Fills every sample of a multisampled color texture with a clear color. */
-static void mt_clear(id tex, double r, double g, double b, double a)
+static inline void mt_clear(id tex, double r, double g, double b, double a)
 {
     void *pool = objc_autoreleasePoolPush();
     id rp = PVK_MSG(id, (id, SEL))((id)objc_getClass("MTLRenderPassDescriptor"), sel_registerName("renderPassDescriptor"));
@@ -230,7 +231,7 @@ struct mt_sampler_desc {
     pvk_MTLCompareFunction compare;     /* 0 (never): no comparison */
 };
 
-static id mt_sampler(const struct mt_sampler_desc *s)
+static inline id mt_sampler(const struct mt_sampler_desc *s)
 {
     id desc = PVK_MSG(id, (id, SEL))((id)objc_getClass("MTLSamplerDescriptor"), sel_registerName("new")), smp;
     PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setMinFilter:"), s->filter);
@@ -263,7 +264,7 @@ struct mt_binding {
     size_t nbytes;
 };
 
-static const struct pvk_msl_resource *mt_resource(const struct pvk_msl_result *res, uint32_t set, uint32_t binding)
+static inline const struct pvk_msl_resource *mt_resource(const struct pvk_msl_result *res, uint32_t set, uint32_t binding)
 {
     uint32_t i;
     for (i = 0; i < res->resource_count; i++)
@@ -272,20 +273,14 @@ static const struct pvk_msl_resource *mt_resource(const struct pvk_msl_result *r
     return NULL;
 }
 
-/* Fills the set tables from the reflection, binds everything and runs
- * groups[0..2] threadgroups of res->workgroup_size threads. */
-static bool mt_dispatch(id pipeline, const struct pvk_msl_result *res, const struct mt_binding *bindings,
-                        uint32_t nbindings, const void *push, size_t push_size, uint32_t gx, uint32_t gy, uint32_t gz)
+/* Creates and fills the set tables (sets[N] for each set N the shader uses)
+ * from the reflection. Free them with mt_buffer_free. */
+static inline void mt_fill_sets(const struct pvk_msl_result *res, const struct mt_binding *bindings, uint32_t nbindings,
+                                struct mt_buffer sets[PVK_MSL_MAX_SETS])
 {
-    struct mt_buffer sets[PVK_MSL_MAX_SETS];
-    void *pool = objc_autoreleasePoolPush();
-    id cb, enc;
-    pvk_MTLSize groups, threads;
     uint32_t s, i;
-    unsigned long status;
-    bool ok = true;
 
-    memset(sets, 0, sizeof(sets));
+    memset(sets, 0, sizeof(struct mt_buffer) * PVK_MSL_MAX_SETS);
     for (s = 0; s < PVK_MSL_MAX_SETS; s++) {
         size_t size = 16;
         if (!(res->set_mask & (1u << s)))
@@ -341,7 +336,23 @@ static bool mt_dispatch(id pipeline, const struct pvk_msl_result *res, const str
         }
         }
     }
+}
 
+/* Fills the set tables from the reflection, binds everything and runs
+ * groups[0..2] threadgroups of res->workgroup_size threads. */
+static inline bool mt_dispatch(id pipeline, const struct pvk_msl_result *res, const struct mt_binding *bindings,
+                               uint32_t nbindings, const void *push, size_t push_size, uint32_t gx, uint32_t gy,
+                               uint32_t gz)
+{
+    struct mt_buffer sets[PVK_MSL_MAX_SETS];
+    void *pool = objc_autoreleasePoolPush();
+    id cb, enc;
+    pvk_MTLSize groups, threads;
+    uint32_t s, i;
+    unsigned long status;
+    bool ok = true;
+
+    mt_fill_sets(res, bindings, nbindings, sets);
     cb = PVK_MSG(id, (id, SEL))(mt_queue, sel_registerName("commandBuffer"));
     enc = PVK_MSG(id, (id, SEL))(cb, sel_registerName("computeCommandEncoder"));
     PVK_MSG(void, (id, SEL, id))(enc, sel_registerName("setComputePipelineState:"), pipeline);
@@ -392,7 +403,7 @@ static bool mt_dispatch(id pipeline, const struct pvk_msl_result *res, const str
         REQUIRE((pipeline) != NULL);                                                 \
     } while (0)
 
-static bool mt_near(double got, double want, double tolerance)
+static inline bool mt_near(double got, double want, double tolerance)
 {
     double d = got - want, m = want < 0 ? -want : want;
     if (d < 0)

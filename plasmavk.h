@@ -36253,12 +36253,27 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *                             struct pvk_msl_result *result);
  *   void pvk_msl_result_free(struct pvk_msl_result *result);
  *
- *   entry_point selects the OpEntryPoint by name (NULL: the first one);
- *   options may be NULL. Returns VK_SUCCESS, VK_ERROR_OUT_OF_HOST_MEMORY, or
+ *   entry_point selects the OpEntryPoint by name (NULL: the first one) and
+ *   options->stage by stage (0: any); options may be NULL. Returns
+ *   VK_SUCCESS, VK_ERROR_OUT_OF_HOST_MEMORY, or
  *   VK_ERROR_INITIALIZATION_FAILED for malformed or unsupported SPIR-V, with
  *   a message in result->error. Call pvk_msl_result_free in every case.
  *   Bad input never crashes or reads outside words[0, word_count), and the
  *   output only depends on the input (deterministic).
+ *
+ *   VkResult pvk_spirv_to_msl_graphics(vs words, count, entry, options,
+ *                                      fs words, count, entry, options,
+ *                                      struct pvk_msl_result *vs,
+ *                                      struct pvk_msl_result *fs);
+ *
+ *   A graphics pipeline's vertex and fragment shaders (possibly from
+ *   different modules; fragment word count 0: none): the vertex stage, then
+ *   the fragment stage linked to the vertex stage's outputs (options.linked,
+ *   STAGE INTERFACE), each into its own MSL source whose function is
+ *   result->entry_point (compile them as two libraries: names may repeat).
+ *   On failure both results are empty and the message is in either error.
+ *   Vertex and fragment shaders take the options of both kinds; stage is
+ *   set by the call.
  *
  * BINDING MODEL (decided in pvk_spv_assign_resources and pvk_spv_emit_sets)
  *   A descriptor set is a table in GPU memory in the format at the top of
@@ -36311,6 +36326,100 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   workgroup size in the result are final. result->spec_constants lists
  *   them with their default and final values.
  *
+ *   Buffer indices: set N at N, the vertex buffer table at 29
+ *   (PVK_MSL_VERTEX_TABLE_BUFFER, options->vertex_table_buffer), push
+ *   constants at 30. Graphics stages bind theirs separately (Metal has
+ *   per-stage tables), with the same indices.
+ *
+ * STAGE INTERFACE (vertex and fragment shaders; pvk_spv_emit_stage)
+ *   The SPIR-V entry point becomes an ordinary helper function, and the
+ *   vertex or fragment function result->entry_point wraps it: it declares
+ *   the entry point's Input, Output and Private variables as locals, fills
+ *   the inputs, calls the helper and returns the outputs:
+ *       vertex <ep>_out <ep>(vertex buffer table, [[vertex_id]] ..., sets, push constants)
+ *       fragment <ep>_out <ep>(<ep>_in pvk_in [[stage_in]], [[position]] ..., sets, ...)
+ *   Varyings: each location is one 4-vector member [[user(locnN)]] in
+ *   <ep>_out and <ep>_in, float4, or uint4 for integers and locations mixing
+ *   types (ints and halves converted, float bits reinterpreted). Variables
+ *   are flattened by Location and Component (blocks, structs, arrays,
+ *   matrices: a location per element and column). result->outputs (vertex)
+ *   and result->inputs (fragment) list the locations. The vertex function
+ *   outputs every location its entry point declares (written or not), so
+ *   any input Vulkan allows the fragment shader is there; a linked fragment
+ *   shader (options->linked + vertex_outputs) reads 0 from locations the
+ *   vertex stage lacks and takes each location's type from it. Fragment
+ *   inputs carry Metal's interpolation: Flat -> flat, NoPerspective ->
+ *   *_no_perspective, Centroid -> centroid_*, Sample -> sample_*, else
+ *   center_perspective; integer locations are flat; with sample shading
+ *   (options->sample_shading) the rest are sample_*.
+ *   Clip space: Vulkan's NDC y points down, Metal's up, so the vertex
+ *   function negates Position.y. With Metal's y-down viewport transform the
+ *   image, the winding and FragCoord come out as in Vulkan: the pipeline
+ *   passes VkViewport (negative heights too) and frontFace through
+ *   unchanged (CLOCKWISE -> MTLWindingClockwise). Depth is [0, 1] in both.
+ *   Built-ins (result->builtins, PVK_MSL_BUILTIN_*):
+ *     Position, PointSize [[point_size]] (options->point_size: 1.0 when not
+ *     written), ClipDistance [[clip_distance]][n] (result->clip_distances),
+ *     Layer [[render_target_array_index]] and ViewportIndex
+ *     [[viewport_array_index]] (result->layered: the pipeline must set
+ *     inputPrimitiveTopology), only what the shader writes (gl_PerVertex
+ *     members it accesses). CullDistance writes fail: Metal has none.
+ *     VertexIndex [[vertex_id]] and InstanceIndex [[instance_id]] (Metal's
+ *     include the base vertex / vertexStart and the base instance, as
+ *     Vulkan's do), BaseVertex [[base_vertex]] (vertexStart for non-indexed
+ *     draws), BaseInstance [[base_instance]], DrawIndex 0 (one draw per
+ *     command), ViewIndex (multiview by vertex amplification: the
+ *     options->view_mask bit of [[amplification_id]], 0 without multiview).
+ *     FragCoord [[position]] (origin top left, centers at .5, w = 1/w; at
+ *     the sample with sample shading), FrontFacing, SampleId, SamplePosition
+ *     (get_sample_position), SampleMask in (only the invocation's sample
+ *     with sample shading) and out [[sample_mask]], FragDepth
+ *     [[depth(any|greater|less)]], HelperInvocation (simd_is_helper_thread(),
+ *     read at each load), PointCoord (origin top left), Layer, ViewportIndex,
+ *     ViewIndex and PrimitiveId in fragment shaders.
+ *   Fragment outputs: location n is [[color(n)]] (Index 1: [[color(0),
+ *   index(1)]] for dual-source blending) of float4, int4 or uint4 like the
+ *   variable; result->outputs. Metal rejects outputs a pipeline has no
+ *   attachment of that type for: options->color_attachments(_types) drops
+ *   them. No outputs: `fragment void`.
+ *   Fragment execution: EarlyFragmentTests -> [[early_fragment_tests]];
+ *   result->sample_shading when Metal runs it per sample (SampleId,
+ *   SamplePosition, Sample inputs, options->sample_shading); result->discards
+ *   for OpKill/OpTerminateInvocation (discard_fragment(); return: discarded
+ *   fragments write nothing, callers go on as helpers) and
+ *   OpDemoteToHelperInvocation (discard_fragment(), which demotes in Metal).
+ *   Input attachments: framebuffer fetch. A subpassInput variable is the
+ *   color [[color(c)]] of the attachment it maps to, a value (no descriptor
+ *   is read, so it has no binding in the sets): input attachment index i
+ *   reads color attachment options->input_attachment_colors[i] (identity
+ *   without it, as dynamic rendering local read defaults to). The render
+ *   pass must keep that image bound as color attachment c. subpassInputMS
+ *   reads the current sample (the shader should run per sample).
+ *   result->input_attachments / color_fetches.
+ *
+ * VERTEX INPUT (pvk_spv_vertex_fetch)
+ *   Attributes are pulled by the vertex function, not fetched by a Metal
+ *   vertex descriptor: Metal's stage_in needs 4-byte aligned strides and
+ *   offsets and has no bounds checks, while Vulkan allows 1-byte alignment
+ *   for small formats and robustBufferAccess covers vertex input. Apple GPUs
+ *   fetch vertices in the shader either way. The pipeline passes its
+ *   VkVertexInputAttributeDescription, VkVertexInputBindingDescription and
+ *   divisor arrays in the options; formats are decoded in the shader
+ *   (8/16/32-bit UNORM, SNORM, USCALED, SSCALED, UINT, SINT, SRGB, SFLOAT
+ *   with 1-4 components, BGR(A) orders, A8B8G8R8, A2R10G10B10 and
+ *   A2B10G10R10 in all six types, B10G11R11 and E5B9G9R9; no 64-bit),
+ *   missing components read (0, 0, 0, 1). Bindings come from the vertex
+ *   buffer table, `constant pvk_vertex_buffer* [[buffer(29)]]` with one
+ *   struct pvk_msl_vertex_buffer per binding number (bind entries up to the
+ *   highest binding in result->vertex_bindings): the binding's address and
+ *   size, and its stride with options->dynamic_vertex_strides
+ *   (VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE; else the description's,
+ *   compiled in). Element index: vertex rate VertexIndex; instance rate
+ *   InstanceIndex, (InstanceIndex - firstInstance) / divisor + firstInstance,
+ *   or firstInstance for divisor 0. options->robust_vertex_input reads
+ *   (0, 0, 0, 1) for attributes past the binding's size. An input location
+ *   without an attribute reads (0, 0, 0, 1).
+ *
  * COMPILING THE OUTPUT
  *   Needs MSL 3.2 or newer (atomic_thread_fence, texture atomics). Compile with
  *   MTLCompileOptions.mathMode = MTLMathModeSafe: fast math breaks the NaN,
@@ -36319,7 +36428,7 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   threadgroup (declared with [[max_total_threads_per_threadgroup]], so the
  *   compiler fits up to 1024).
  *
- * SUPPORTED (v1: GLCompute, as glslang and spirv-opt produce it)
+ * SUPPORTED (GLCompute, Vertex and Fragment, as glslang and spirv-opt produce them)
  *   Types: bool, 8/16/32/64-bit ints, half, float (no double: Metal has none),
  *   vectors, matrices, arrays, runtime arrays, structs. Explicit layouts
  *   (Offset/ArrayStride/MatrixStride, std140/std430, row- and column-major)
@@ -36327,10 +36436,10 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   pvk_padded<T, P> slots; matrices whose stride Metal cannot express are
  *   stored as arrays of lines and converted on access. Arrays are values
  *   (pvk_array<T, N>), so they load, store, copy and return like SPIR-V's.
- *   Storage: StorageBuffer, Uniform, PushConstant, Workgroup, Private,
- *   Function, Input (compute builtins), UniformConstant (images, samplers),
- *   Image (texel pointers), PhysicalStorageBuffer (buffer device addresses,
- *   below). Descriptor arrays of every descriptor type, also runtime-sized
+ *   Storage: StorageBuffer, Uniform, PushConstant, Workgroup (compute),
+ *   Private, Function, Input and Output (STAGE INTERFACE), UniformConstant
+ *   (images, samplers, input attachments), Image (texel pointers),
+ *   PhysicalStorageBuffer (buffer device addresses, below). Descriptor arrays of every descriptor type, also runtime-sized
  *   (RuntimeDescriptorArray), indexed dynamically and non-uniformly (Metal
  *   needs nothing for NonUniform: descriptors are per-thread data).
  *   Instructions: arithmetic, bit, logical, relational, conversion,
@@ -36358,7 +36467,10 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   between an image and its sampled image reinterprets the texture, as
  *   glslang emits for separate shadow samplers); explicit-LOD sampling with
  *   Lod or Grad, ConstOffset or Offset (not on cubes), MinLod, Proj and Dref
- *   variants; OpImageFetch (Lod, Sample, offsets); OpImageGather and
+ *   variants; in fragment shaders implicit-LOD sampling (Bias, MinLod, the
+ *   same variants) and OpImageQueryLod (calculate_clamped/unclamped_lod),
+ *   derivatives (OpDPdx/y and Fwidth: Metal has no fine/coarse choice, its
+ *   dfdx/dfdy serve both); OpImageFetch (Lod, Sample, offsets); OpImageGather and
  *   OpImageDrefGather (ConstOffsets: four gathers); OpImageRead/Write with a
  *   known or Unknown format (Metal converts from the texture's pixel format);
  *   OpImageQuerySize(Lod)/Levels/Samples; OpImageTexelPointer with 32-bit
@@ -36369,17 +36481,23 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   storage image's access (read, write, read_write) is what the variables
  *   of its type allow; read_write writes are followed by fence(), so the
  *   invocation's own later reads see them.
- *   Not supported: implicit LOD and derivatives (compute has none), sparse
- *   residency, atomics on cube images (not on Apple GPUs up to M4) and on
- *   float or 64-bit images, image atomic min/max of the other signedness
- *   than the image, writes to multisampled images, input attachments. A
+ *   Not supported: implicit LOD and derivatives outside fragment shaders,
+ *   sparse residency, atomics on cube images (not on Apple GPUs up to M4)
+ *   and on float or 64-bit images, image atomic min/max of the other
+ *   signedness than the image, writes to multisampled images; tessellation,
+ *   geometry and mesh shaders, transform feedback; CullDistance (Metal has
+ *   none), 64-bit and 8-bit stage inputs and outputs, input attachments that
+ *   are not color attachments (depth/stencil: Metal has no depth fetch). A
  *   texture1d has one mip level (image_1d_as_2d for mipmapped 1D images).
- *   Not yet: other stages, subgroup ops, 64-bit atomics, variable pointers,
- *   OpCopyMemorySized, scalar-layout corner cases Metal cannot express,
- *   robust image access (out-of-bounds texels are whatever Metal does).
+ *   Not yet: subgroup ops, 64-bit atomics, variable pointers,
+ *   OpCopyMemorySized, interpolateAt* (Metal's interpolant<>), scalar-layout
+ *   corner cases Metal cannot express, robust image access (out-of-bounds
+ *   texels are whatever Metal does).
  *   Semantics to know: atomics are memory_order_relaxed (barriers carry the
  *   ordering); signed integer overflow is undefined in MSL where SPIR-V
- *   wraps; NoContraction is ignored.
+ *   wraps; NoContraction and Invariant are ignored (Metal's invariance needs
+ *   a compile option); derivatives after a discard (OpKill/Terminate) are
+ *   undefined, as in Vulkan.
  *
  * HOW IT WORKS
  *   One pass records every instruction and id; then types get MSL spellings
@@ -36391,14 +36509,26 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   Structured control flow is emitted recursively from the merge
  *   information: selections become if/else, OpSwitch a switch, loops
  *   for (;;) with the continue construct inlined at each continue edge, and
- *   phis become copies on the incoming edges. Errors longjmp out; all
- *   memory comes from an arena freed at the end.
+ *   phis become copies on the incoming edges. A vertex or fragment entry
+ *   point is emitted like any helper, then wrapped by the stage function
+ *   (STAGE INTERFACE). Errors longjmp out; all memory comes from an arena
+ *   freed at the end.
  * ========================================================================== */
 
 #include <setjmp.h>
 
 #define PVK_MSL_PUSH_CONSTANT_BUFFER 30u
+#define PVK_MSL_VERTEX_TABLE_BUFFER 29u
 #define PVK_MSL_MAX_SETS 30u
+#define PVK_MSL_MAX_LOCATIONS 32u /* stage input/output locations */
+
+/* One binding's entry in the vertex buffer table (VERTEX INPUT), 24 bytes. */
+struct pvk_msl_vertex_buffer {
+    uint64_t address; /* GPU address of the binding's data (buffer address + offset) */
+    uint64_t size;    /* bytes there (robust_vertex_input: attributes past it read 0) */
+    uint32_t stride;  /* bytes between elements, read with dynamic_vertex_strides */
+    uint32_t reserved;
+};
 
 /* One binding of a descriptor set layout: where its descriptors sit in the
  * set's table (format: section 11). */
@@ -36416,6 +36546,31 @@ struct pvk_msl_set_layout {
     uint32_t binding_count;
 };
 
+enum pvk_msl_scalar_type {
+    PVK_MSL_SCALAR_BOOL,
+    PVK_MSL_SCALAR_INT,
+    PVK_MSL_SCALAR_UINT,
+    PVK_MSL_SCALAR_FLOAT
+};
+
+/* pvk_msl_varying.interpolation */
+#define PVK_MSL_INTERP_FLAT 0x1u
+#define PVK_MSL_INTERP_NO_PERSPECTIVE 0x2u
+#define PVK_MSL_INTERP_CENTROID 0x4u
+#define PVK_MSL_INTERP_SAMPLE 0x8u
+
+/* A stage input or output location (STAGE INTERFACE). */
+struct pvk_msl_varying {
+    uint32_t location;
+    uint32_t index;      /* fragment outputs: 1 for the second dual-source color */
+    uint32_t components; /* bit c: component c is read or written */
+    /* The location's MSL type: 4 x this. Varyings are float, or uint for
+     * integers (and locations mixing types); vertex inputs and fragment
+     * outputs keep the shader's int/uint. */
+    enum pvk_msl_scalar_type type;
+    uint32_t interpolation; /* fragment inputs: PVK_MSL_INTERP_* */
+};
+
 struct pvk_msl_options {
     const VkSpecializationInfo *specialization;
     /* Descriptor set layouts indexed by set number (the pipeline layout's);
@@ -36429,6 +36584,45 @@ struct pvk_msl_options {
      * the end of the push constants). */
     bool dispatch_base;
     uint32_t dispatch_base_offset;
+
+    /* The entry point's stage (0: any; entry points are found by name). */
+    VkShaderStageFlagBits stage;
+
+    /* Vertex shaders (VERTEX INPUT): the pipeline's vertex input state. */
+    const VkVertexInputAttributeDescription *vertex_attributes;
+    uint32_t vertex_attribute_count;
+    const VkVertexInputBindingDescription *vertex_bindings;
+    uint32_t vertex_binding_count;
+    const VkVertexInputBindingDivisorDescription *vertex_divisors; /* instance-rate divisors other than 1 */
+    uint32_t vertex_divisor_count;
+    bool dynamic_vertex_strides; /* strides come from the vertex buffer table */
+    bool robust_vertex_input;    /* attributes outside a binding's size read (0, 0, 0, 1) */
+    uint32_t vertex_table_buffer; /* 0: PVK_MSL_VERTEX_TABLE_BUFFER */
+    bool point_size;             /* point topology: output a point size (1.0 unless the shader writes one) */
+    /* Multiview (VK_KHR_multiview): the view mask. ViewIndex for vertex
+     * amplification id n is the mask's n-th set bit; 0: ViewIndex is 0. */
+    uint32_t view_mask;
+
+    /* Fragment shaders */
+    /* The vertex stage's outputs (pvk_spirv_to_msl_graphics fills these):
+     * inputs at other locations read 0, and each input takes the type of
+     * the output it reads. Without them, inputs take their own types. */
+    bool linked;
+    const struct pvk_msl_varying *vertex_outputs;
+    uint32_t vertex_output_count;
+    /* Input attachment index i reads color attachment
+     * input_attachment_colors[i] by framebuffer fetch; NULL: color
+     * attachment i. */
+    const uint32_t *input_attachment_colors;
+    uint32_t input_attachment_color_count;
+    /* The color attachments (bit n: location n) and their numeric types
+     * (FLOAT for float, unorm and snorm formats): outputs without an
+     * attachment of their type are dropped, as Metal rejects them. Ignored
+     * when color_attachments_valid is false. */
+    bool color_attachments_valid;
+    uint32_t color_attachments;
+    enum pvk_msl_scalar_type color_attachment_types[8];
+    bool sample_shading; /* sampleShadingEnable: run once per sample */
 };
 
 struct pvk_msl_resource {
@@ -36442,13 +36636,6 @@ struct pvk_msl_resource {
     bool writable; /* storage buffer or image the shader may write */
 };
 
-enum pvk_msl_scalar_type {
-    PVK_MSL_SCALAR_BOOL,
-    PVK_MSL_SCALAR_INT,
-    PVK_MSL_SCALAR_UINT,
-    PVK_MSL_SCALAR_FLOAT
-};
-
 struct pvk_msl_spec_constant {
     uint32_t id; /* SpecId */
     enum pvk_msl_scalar_type type;
@@ -36457,10 +36644,34 @@ struct pvk_msl_spec_constant {
     uint64_t value;         /* after options->specialization */
 };
 
+/* pvk_msl_result.builtins: the built-ins a stage reads or writes. */
+#define PVK_MSL_BUILTIN_POSITION (1u << 0)
+#define PVK_MSL_BUILTIN_POINT_SIZE (1u << 1)
+#define PVK_MSL_BUILTIN_CLIP_DISTANCE (1u << 2)
+#define PVK_MSL_BUILTIN_VERTEX_INDEX (1u << 3)
+#define PVK_MSL_BUILTIN_INSTANCE_INDEX (1u << 4)
+#define PVK_MSL_BUILTIN_BASE_VERTEX (1u << 5)
+#define PVK_MSL_BUILTIN_BASE_INSTANCE (1u << 6)
+#define PVK_MSL_BUILTIN_DRAW_INDEX (1u << 7)
+#define PVK_MSL_BUILTIN_LAYER (1u << 8)
+#define PVK_MSL_BUILTIN_VIEWPORT_INDEX (1u << 9)
+#define PVK_MSL_BUILTIN_VIEW_INDEX (1u << 10)
+#define PVK_MSL_BUILTIN_FRAG_COORD (1u << 11)
+#define PVK_MSL_BUILTIN_FRONT_FACING (1u << 12)
+#define PVK_MSL_BUILTIN_SAMPLE_ID (1u << 13)
+#define PVK_MSL_BUILTIN_SAMPLE_POSITION (1u << 14)
+#define PVK_MSL_BUILTIN_SAMPLE_MASK_IN (1u << 15)
+#define PVK_MSL_BUILTIN_SAMPLE_MASK (1u << 16) /* written */
+#define PVK_MSL_BUILTIN_FRAG_DEPTH (1u << 17)
+#define PVK_MSL_BUILTIN_HELPER_INVOCATION (1u << 18)
+#define PVK_MSL_BUILTIN_POINT_COORD (1u << 19)
+#define PVK_MSL_BUILTIN_PRIMITIVE_ID (1u << 20)
+
 struct pvk_msl_result {
     char *msl; /* NUL-terminated MSL source */
     size_t msl_length;
-    char entry_point[64]; /* name of the kernel function in msl */
+    char entry_point[64]; /* name of the kernel, vertex or fragment function in msl */
+    VkShaderStageFlagBits stage;
     uint32_t workgroup_size[3];
     uint32_t set_mask; /* bit N: kernel parameter setN at [[buffer(N)]] */
     struct pvk_msl_resource *resources;
@@ -36474,12 +36685,41 @@ struct pvk_msl_result {
     struct pvk_msl_spec_constant *spec_constants;
     uint32_t spec_constant_count;
     uint32_t threadgroup_memory_size; /* static threadgroup memory, bytes */
+
+    /* Graphics stages (STAGE INTERFACE) */
+    struct pvk_msl_varying *inputs;  /* vertex: attributes read; fragment: varyings read */
+    uint32_t input_count;
+    struct pvk_msl_varying *outputs; /* vertex: varyings; fragment: color outputs */
+    uint32_t output_count;
+    uint32_t builtins;               /* PVK_MSL_BUILTIN_* */
+    uint32_t clip_distances;         /* ClipDistance array size written */
+    /* vertex */
+    uint32_t vertex_input_count;     /* attributes pulled: bind the vertex buffer table */
+    uint32_t vertex_table_buffer;    /* its buffer index */
+    uint32_t vertex_bindings;        /* bit b: binding b is read */
+    bool layered;                    /* writes Layer or ViewportIndex: set inputPrimitiveTopology */
+    /* fragment */
+    bool early_fragment_tests;
+    bool depth_replacing;            /* writes FragDepth */
+    bool sample_shading;             /* runs per sample (SampleId, SamplePosition, Sample inputs, options) */
+    bool discards;                   /* may kill or demote */
+    uint32_t input_attachments;      /* bit i: input attachment index i is read */
+    uint32_t color_fetches;          /* bit n: color attachment n is read by framebuffer fetch */
     char error[256];
 };
 
 static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const char *entry_point,
                                  const struct pvk_msl_options *options, struct pvk_msl_result *result);
 static void pvk_msl_result_free(struct pvk_msl_result *result);
+
+/* A vertex and a fragment shader (fragment word count 0: none) translated
+ * together, the fragment stage linked to the vertex stage's outputs.
+ * (Unused until graphics pipelines land in section 16.) */
+static VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_t vs_word_count, const char *vs_entry,
+                                          const struct pvk_msl_options *vs_options, const uint32_t *fs_words,
+                                          size_t fs_word_count, const char *fs_entry,
+                                          const struct pvk_msl_options *fs_options, struct pvk_msl_result *vs,
+                                          struct pvk_msl_result *fs) __attribute__((unused));
 
 /* ---- SPIR-V constants (from the SPIR-V specification; only what we use) ---- */
 
@@ -36655,6 +36895,15 @@ enum {
     PVK_SPV_OpBitFieldUExtract = 203,
     PVK_SPV_OpBitReverse = 204,
     PVK_SPV_OpBitCount = 205,
+    PVK_SPV_OpDPdx = 207,
+    PVK_SPV_OpDPdy = 208,
+    PVK_SPV_OpFwidth = 209,
+    PVK_SPV_OpDPdxFine = 210,
+    PVK_SPV_OpDPdyFine = 211,
+    PVK_SPV_OpFwidthFine = 212,
+    PVK_SPV_OpDPdxCoarse = 213,
+    PVK_SPV_OpDPdyCoarse = 214,
+    PVK_SPV_OpFwidthCoarse = 215,
     PVK_SPV_OpControlBarrier = 224,
     PVK_SPV_OpMemoryBarrier = 225,
     PVK_SPV_OpAtomicLoad = 227,
@@ -36690,6 +36939,8 @@ enum {
     PVK_SPV_OpDecorateId = 332,
     PVK_SPV_OpCopyLogical = 400,
     PVK_SPV_OpTerminateInvocation = 4416,
+    PVK_SPV_OpDemoteToHelperInvocation = 5380,
+    PVK_SPV_OpIsHelperInvocationEXT = 5381,
     PVK_SPV_OpDecorateString = 5632,
     PVK_SPV_OpMemberDecorateString = 5633,
     PVK_SPV_OpAtomicFAddEXT = 6035
@@ -36720,11 +36971,23 @@ enum {
     PVK_SPV_DecoArrayStride = 6,
     PVK_SPV_DecoMatrixStride = 7,
     PVK_SPV_DecoBuiltIn = 11,
+    PVK_SPV_DecoNoPerspective = 13,
+    PVK_SPV_DecoFlat = 14,
+    PVK_SPV_DecoPatch = 15,
+    PVK_SPV_DecoCentroid = 16,
+    PVK_SPV_DecoSample = 17,
     PVK_SPV_DecoNonWritable = 24,
     PVK_SPV_DecoNonReadable = 25,
+    PVK_SPV_DecoLocation = 30,
+    PVK_SPV_DecoComponent = 31,
+    PVK_SPV_DecoIndex = 32,
     PVK_SPV_DecoBinding = 33,
     PVK_SPV_DecoDescriptorSet = 34,
-    PVK_SPV_DecoOffset = 35
+    PVK_SPV_DecoOffset = 35,
+    PVK_SPV_DecoXfbBuffer = 36,
+    PVK_SPV_DecoInputAttachmentIndex = 43,
+    PVK_SPV_DecoPerPrimitive = 5271,
+    PVK_SPV_DecoPerVertex = 5285
 };
 
 /* OpTypeImage Dim */
@@ -36759,15 +37022,43 @@ enum {
 };
 
 enum {
+    PVK_SPV_BuiltInPosition = 0,
+    PVK_SPV_BuiltInPointSize = 1,
+    PVK_SPV_BuiltInClipDistance = 3,
+    PVK_SPV_BuiltInCullDistance = 4,
+    PVK_SPV_BuiltInPrimitiveId = 7,
+    PVK_SPV_BuiltInLayer = 9,
+    PVK_SPV_BuiltInViewportIndex = 10,
+    PVK_SPV_BuiltInFragCoord = 15,
+    PVK_SPV_BuiltInPointCoord = 16,
+    PVK_SPV_BuiltInFrontFacing = 17,
+    PVK_SPV_BuiltInSampleId = 18,
+    PVK_SPV_BuiltInSamplePosition = 19,
+    PVK_SPV_BuiltInSampleMask = 20,
+    PVK_SPV_BuiltInFragDepth = 22,
+    PVK_SPV_BuiltInHelperInvocation = 23,
     PVK_SPV_BuiltInNumWorkgroups = 24,
     PVK_SPV_BuiltInWorkgroupSize = 25,
     PVK_SPV_BuiltInWorkgroupId = 26,
     PVK_SPV_BuiltInLocalInvocationId = 27,
     PVK_SPV_BuiltInGlobalInvocationId = 28,
-    PVK_SPV_BuiltInLocalInvocationIndex = 29
+    PVK_SPV_BuiltInLocalInvocationIndex = 29,
+    PVK_SPV_BuiltInVertexIndex = 42,
+    PVK_SPV_BuiltInInstanceIndex = 43,
+    PVK_SPV_BuiltInBaseVertex = 4424,
+    PVK_SPV_BuiltInBaseInstance = 4425,
+    PVK_SPV_BuiltInDrawIndex = 4426,
+    PVK_SPV_BuiltInViewIndex = 4440
 };
 
+#define PVK_SPV_ExecutionModelVertex 0u
+#define PVK_SPV_ExecutionModelFragment 4u
 #define PVK_SPV_ExecutionModelGLCompute 5u
+#define PVK_SPV_ExecutionModeOriginUpperLeft 7u
+#define PVK_SPV_ExecutionModeEarlyFragmentTests 9u
+#define PVK_SPV_ExecutionModeDepthReplacing 12u
+#define PVK_SPV_ExecutionModeDepthGreater 14u
+#define PVK_SPV_ExecutionModeDepthLess 15u
 #define PVK_SPV_ExecutionModeLocalSize 17u
 #define PVK_SPV_ExecutionModeLocalSizeId 38u
 #define PVK_SPV_ScopeDevice 1u
@@ -36835,10 +37126,19 @@ enum pvk_spv_kind {
 #define PVK_SPV_F_PHI 0x100u
 #define PVK_SPV_F_CROSS_BLOCK 0x200u /* value used outside its defining block */
 #define PVK_SPV_F_NON_READABLE 0x400u
+#define PVK_SPV_F_LOCATION 0x800u
+#define PVK_SPV_F_COMPONENT 0x1000u
+#define PVK_SPV_F_INDEX 0x2000u
+#define PVK_SPV_F_IA_INDEX 0x4000u /* InputAttachmentIndex */
+#define PVK_SPV_F_EXPR 0x8000u     /* global whose p->expr is an rvalue available anywhere (not passed) */
+#define PVK_SPV_F_UNSUPPORTED 0x10000u /* Patch, PerPrimitive, PerVertexKHR, XfbBuffer */
 /* member flags */
 #define PVK_SPV_M_OFFSET 0x1u
 #define PVK_SPV_M_ROW_MAJOR 0x2u
 #define PVK_SPV_M_NON_WRITABLE 0x4u
+#define PVK_SPV_M_BUILTIN 0x8u
+#define PVK_SPV_M_LOCATION 0x10u
+#define PVK_SPV_M_COMPONENT 0x20u
 
 struct pvk_spv_node;
 
@@ -36853,6 +37153,7 @@ struct pvk_spv_member {
     const struct pvk_spv_node *node; /* storage differs from the value type */
     uint32_t pad_before;
     bool runtime; /* runtime array: declared as decl msl[1] */
+    uint32_t builtin, location, component, interp; /* stage interface blocks */
 };
 
 struct pvk_spv_type {
@@ -36925,6 +37226,7 @@ struct pvk_spv_ptr {
     const char *texel_image;
     const char *texel_args;
     uint32_t texel_type; /* image type */
+    bool value; /* an input attachment variable: a value like an Input, not a descriptor */
 };
 
 struct pvk_spv_id {
@@ -36934,6 +37236,7 @@ struct pvk_spv_id {
     uint32_t type;  /* result type */
     uint32_t insn;  /* word offset of the defining instruction */
     uint32_t set, binding, spec_id, builtin, array_stride;
+    uint32_t location, component, index, ia_index, interp; /* stage interface */
     uint32_t func;  /* owning function index + 1, 0 at module scope */
     uint32_t block; /* labels: block index; values: defining block index */
     uint32_t global; /* global variables: index in ctx->globals */
@@ -37023,6 +37326,9 @@ struct pvk_spv {
     uint32_t entry_fid;
     const char *entry_name;
     bool entry_found;
+    uint32_t model;      /* the entry point's execution model */
+    uint32_t entry_insn; /* word offset of its OpEntryPoint (interface list) */
+    bool graphics;       /* vertex or fragment: the entry function is a helper behind a wrapper */
     uint32_t *modes; /* word offsets of OpExecutionMode(Id) */
     uint32_t nmodes, cap_modes;
     uint32_t *member_insns; /* OpMemberName / OpMemberDecorate */
@@ -37319,6 +37625,16 @@ static bool pvk_spv_is_scalar(const struct pvk_spv_type *t)
 static bool pvk_spv_is_psb(const struct pvk_spv_type *t)
 {
     return t->op == PVK_SPV_OpTypePointer && t->storage == PVK_SPV_StoragePhysicalStorageBuffer;
+}
+
+/* An input attachment image type, or an array of them. */
+static bool pvk_spv_is_subpass(struct pvk_spv *ctx, uint32_t tid)
+{
+    struct pvk_spv_type *t = pvk_spv_type(ctx, tid);
+    uint32_t depth = 0;
+    while ((t->op == PVK_SPV_OpTypeArray || t->op == PVK_SPV_OpTypeRuntimeArray) && depth++ < PVK_SPV_MAX_TYPE_DEPTH)
+        t = pvk_spv_type(ctx, t->elem);
+    return t->op == PVK_SPV_OpTypeImage && t->img.dim == PVK_SPV_DimSubpassData;
 }
 
 /* Scalar type of a scalar or vector type, NULL otherwise. */
@@ -37906,6 +38222,7 @@ static int pvk_spv_shape(uint32_t op)
     case PVK_SPV_OpModuleProcessed: case PVK_SPV_OpExecutionModeId: case PVK_SPV_OpDecorateId:
     case PVK_SPV_OpTerminateInvocation: case PVK_SPV_OpDecorateString: case PVK_SPV_OpMemberDecorateString:
     case PVK_SPV_OpFunctionEnd: case PVK_SPV_OpTypeForwardPointer: case PVK_SPV_OpImageWrite:
+    case PVK_SPV_OpDemoteToHelperInvocation:
         return 0;
     case PVK_SPV_OpString: case PVK_SPV_OpExtInstImport: case PVK_SPV_OpLabel: case PVK_SPV_OpDecorationGroup:
         return 1;
@@ -37916,11 +38233,13 @@ static int pvk_spv_shape(uint32_t op)
     case PVK_SPV_OpPtrAccessChain: case PVK_SPV_OpConvertPtrToU: case PVK_SPV_OpConvertUToPtr:
     case PVK_SPV_OpImageTexelPointer: case PVK_SPV_OpImage: case PVK_SPV_OpImageQuerySizeLod:
     case PVK_SPV_OpImageQuerySize: case PVK_SPV_OpImageQueryLod: case PVK_SPV_OpImageQueryLevels:
-    case PVK_SPV_OpImageQuerySamples:
+    case PVK_SPV_OpImageQuerySamples: case PVK_SPV_OpIsHelperInvocationEXT:
         return 2;
     default:
         break;
     }
+    if (op >= PVK_SPV_OpDPdx && op <= PVK_SPV_OpFwidthCoarse)
+        return 2;
     if (op >= PVK_SPV_OpSampledImage && op <= PVK_SPV_OpImageRead)
         return 2;
     if (op >= PVK_SPV_OpTypeVoid && op <= 38) /* OpType* */
@@ -38049,8 +38368,17 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         t->img.sampled = pvk_spv_arg(ctx, in, 7);
         t->img.format = pvk_spv_arg(ctx, in, 8);
         t->opaque = true;
-        if (t->img.dim == PVK_SPV_DimSubpassData)
-            pvk_spv_fail(ctx, "input attachments are only available in fragment shaders");
+        if (t->img.dim == PVK_SPV_DimSubpassData) {
+            /* An input attachment: the color read by framebuffer fetch, a
+             * value (STAGE INTERFACE), not a descriptor. */
+            if (ctx->entry_found && ctx->model != PVK_SPV_ExecutionModelFragment)
+                pvk_spv_fail(ctx, "input attachments are only available in fragment shaders");
+            if (t->img.sampled != 2 || t->img.arrayed || t->img.depth == 1 || t->img.ms > 1 || in->wc > 9 ||
+                (e->op != PVK_SPV_OpTypeInt && e->op != PVK_SPV_OpTypeFloat) || e->width != 32)
+                pvk_spv_fail(ctx, "malformed input attachment type");
+            t->opaque = false;
+            break;
+        }
         if (t->img.dim == PVK_SPV_DimRect)
             pvk_spv_fail(ctx, "rectangle images are not supported (Vulkan has none)");
         if (t->img.dim > PVK_SPV_DimBuffer)
@@ -38139,8 +38467,42 @@ static void pvk_spv_decorate(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         x->flags |= PVK_SPV_F_SET;
         x->set = pvk_spv_arg(ctx, in, 3);
         break;
+    case PVK_SPV_DecoLocation:
+        x->flags |= PVK_SPV_F_LOCATION;
+        x->location = pvk_spv_arg(ctx, in, 3);
+        break;
+    case PVK_SPV_DecoComponent:
+        x->flags |= PVK_SPV_F_COMPONENT;
+        x->component = pvk_spv_arg(ctx, in, 3);
+        break;
+    case PVK_SPV_DecoIndex:
+        x->flags |= PVK_SPV_F_INDEX;
+        x->index = pvk_spv_arg(ctx, in, 3);
+        break;
+    case PVK_SPV_DecoInputAttachmentIndex:
+        x->flags |= PVK_SPV_F_IA_INDEX;
+        x->ia_index = pvk_spv_arg(ctx, in, 3);
+        break;
+    case PVK_SPV_DecoFlat:
+        x->interp |= PVK_MSL_INTERP_FLAT;
+        break;
+    case PVK_SPV_DecoNoPerspective:
+        x->interp |= PVK_MSL_INTERP_NO_PERSPECTIVE;
+        break;
+    case PVK_SPV_DecoCentroid:
+        x->interp |= PVK_MSL_INTERP_CENTROID;
+        break;
+    case PVK_SPV_DecoSample:
+        x->interp |= PVK_MSL_INTERP_SAMPLE;
+        break;
+    case PVK_SPV_DecoPatch:
+    case PVK_SPV_DecoPerPrimitive:
+    case PVK_SPV_DecoPerVertex:
+    case PVK_SPV_DecoXfbBuffer:
+        x->flags |= PVK_SPV_F_UNSUPPORTED;
+        break;
     default:
-        break; /* precision, aliasing and interpolation hints */
+        break; /* precision, aliasing and invariance hints */
     }
 }
 
@@ -38178,7 +38540,37 @@ static void pvk_spv_apply_member_insns(struct pvk_spv *ctx)
             mb->flags |= PVK_SPV_M_NON_WRITABLE;
             break;
         case PVK_SPV_DecoBuiltIn:
-            pvk_spv_fail(ctx, "built-in struct members are not supported in compute shaders");
+            if (!ctx->graphics)
+                pvk_spv_fail(ctx, "built-in struct members are not supported in compute shaders");
+            mb->flags |= PVK_SPV_M_BUILTIN;
+            mb->builtin = pvk_spv_arg(ctx, &in, 4);
+            break;
+        case PVK_SPV_DecoLocation:
+            mb->flags |= PVK_SPV_M_LOCATION;
+            mb->location = pvk_spv_arg(ctx, &in, 4);
+            break;
+        case PVK_SPV_DecoComponent:
+            mb->flags |= PVK_SPV_M_COMPONENT;
+            mb->component = pvk_spv_arg(ctx, &in, 4);
+            break;
+        case PVK_SPV_DecoFlat:
+            mb->interp |= PVK_MSL_INTERP_FLAT;
+            break;
+        case PVK_SPV_DecoNoPerspective:
+            mb->interp |= PVK_MSL_INTERP_NO_PERSPECTIVE;
+            break;
+        case PVK_SPV_DecoCentroid:
+            mb->interp |= PVK_MSL_INTERP_CENTROID;
+            break;
+        case PVK_SPV_DecoSample:
+            mb->interp |= PVK_MSL_INTERP_SAMPLE;
+            break;
+        case PVK_SPV_DecoPatch:
+        case PVK_SPV_DecoPerPrimitive:
+        case PVK_SPV_DecoPerVertex:
+        case PVK_SPV_DecoXfbBuffer:
+            pvk_spv_fail(ctx, "unsupported member decoration %u (tessellation, mesh or transform feedback)",
+                         in.w[3]);
         default:
             break;
         }
@@ -38205,20 +38597,31 @@ static void pvk_spv_capability(struct pvk_spv *ctx, uint32_t cap)
     case 5345: case 5346: /* VulkanMemoryModel */
     case 5347: /* PhysicalStorageBufferAddresses */
     case 6033: /* AtomicFloat32AddEXT */
+    /* graphics: what each needs is checked against the entry point's stage */
+    case 32: case 33: case 35: /* ClipDistance, CullDistance, SampleRateShading */
+    case 40: case 5303: case 5310: /* InputAttachment (+ array indexing) */
+    case 51: /* DerivativeControl */
+    case 57: case 69: case 70: case 5254: /* MultiViewport, ShaderLayer, ShaderViewportIndex(LayerEXT) */
+    case 4427: case 4439: /* DrawParameters, MultiView */
+    case 4436: /* StorageInputOutput16 */
+    case 2: /* Geometry: glslang declares it for fragment Layer, ViewportIndex and PrimitiveId inputs */
+    case 5379: /* DemoteToHelperInvocation */
         return;
-    case 2: case 3: case 6:
-        pvk_spv_fail(ctx, "only compute shaders are supported");
+    case 3: case 6: case 23: case 24:
+        pvk_spv_fail(ctx, "only vertex, fragment and compute shaders are supported (no tessellation or geometry)");
+    case 53: case 54:
+        pvk_spv_fail(ctx, "transform feedback is not supported");
+    case 52:
+        pvk_spv_fail(ctx, "interpolateAt* functions are not supported yet");
     case 61: case 62: case 63: case 64: case 65: case 66: case 67: case 68: case 4423:
         pvk_spv_fail(ctx, "subgroup operations are not supported yet");
     case 4441: case 4442:
         pvk_spv_fail(ctx, "variable pointers are not supported");
-    case 40: case 5303: case 5310:
-        pvk_spv_fail(ctx, "input attachments are only available in fragment shaders");
     case 41:
         pvk_spv_fail(ctx, "sparse residency is not supported");
     case 36: case 37:
         pvk_spv_fail(ctx, "rectangle images are not supported (Vulkan has none)");
-    case 51: case 5288: case 5350:
+    case 5288: case 5350:
         pvk_spv_fail(ctx, "derivatives (and implicit-LOD sampling) are not supported in compute shaders");
     default:
         pvk_spv_fail(ctx, "unsupported SPIR-V capability %u", cap);
@@ -38284,16 +38687,25 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         break;
     case PVK_SPV_OpEntryPoint: {
         uint32_t model = pvk_spv_arg(ctx, in, 1), fid = pvk_spv_arg(ctx, in, 2);
+        VkShaderStageFlagBits want = ctx->options ? ctx->options->stage : (VkShaderStageFlagBits)0;
+        VkShaderStageFlagBits stage = model == PVK_SPV_ExecutionModelVertex     ? VK_SHADER_STAGE_VERTEX_BIT
+                                      : model == PVK_SPV_ExecutionModelFragment ? VK_SHADER_STAGE_FRAGMENT_BIT
+                                      : model == PVK_SPV_ExecutionModelGLCompute ? VK_SHADER_STAGE_COMPUTE_BIT
+                                                                                 : (VkShaderStageFlagBits)0;
         s = pvk_spv_string(ctx, in, 3, NULL);
-        if (ctx->entry_found || (ctx->want_entry && strcmp(ctx->want_entry, s) != 0))
+        if (ctx->entry_found || (ctx->want_entry && strcmp(ctx->want_entry, s) != 0) || (want && stage && want != stage))
             break;
-        if (model != PVK_SPV_ExecutionModelGLCompute)
-            pvk_spv_fail(ctx, "entry point \"%.64s\": only compute shaders are supported", s);
+        if (!stage)
+            pvk_spv_fail(ctx, "entry point \"%.64s\": only vertex, fragment and compute shaders are supported", s);
         if (fid == 0 || fid >= ctx->bound)
             pvk_spv_fail(ctx, "entry point names invalid function %u", fid);
         ctx->entry_found = true;
         ctx->entry_fid = fid;
         ctx->entry_name = s;
+        ctx->model = model;
+        ctx->entry_insn = in->off;
+        ctx->graphics = model != PVK_SPV_ExecutionModelGLCompute;
+        ctx->result->stage = stage;
         break;
     }
     case PVK_SPV_OpExecutionMode:
@@ -38355,19 +38767,22 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         case PVK_SPV_StorageUniformConstant:
             break;
         case PVK_SPV_StorageOutput:
-            pvk_spv_fail(ctx, "output variables are not supported in compute shaders");
+            if (ctx->entry_found && !ctx->graphics) /* (else "no entry point" follows) */
+                pvk_spv_fail(ctx, "output variables are not supported in compute shaders");
+            break;
         default:
             pvk_spv_fail(ctx, "unsupported storage class %u", storage);
         }
         pvk_spv_new_ptr(ctx, x, rid, in->w[1], rid);
         if (x->p->storage != storage)
             pvk_spv_fail(ctx, "variable %u: storage class mismatch", rid);
-        if ((storage == PVK_SPV_StorageUniformConstant) != pvk_spv_type(ctx, x->p->type)->opaque)
+        x->p->value = storage == PVK_SPV_StorageUniformConstant && pvk_spv_is_subpass(ctx, x->p->type);
+        if ((storage == PVK_SPV_StorageUniformConstant) != (pvk_spv_type(ctx, x->p->type)->opaque || x->p->value))
             pvk_spv_fail(ctx, "variable %u: images and samplers must be UniformConstant variables (and only they)", rid);
         if (in->wc > 4) {
             pvk_spv_const(ctx, in->w[4]);
-            if (storage != PVK_SPV_StoragePrivate)
-                pvk_spv_fail(ctx, "variable %u: initializers are only supported for Private variables", rid);
+            if (storage != PVK_SPV_StoragePrivate && storage != PVK_SPV_StorageOutput)
+                pvk_spv_fail(ctx, "variable %u: initializers are only supported for Private and Output variables", rid);
         }
         x->kind = PVK_SPV_K_VAR;
         x->global = ctx->nglobals;
@@ -38423,8 +38838,10 @@ static void pvk_spv_parse_body(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         if (fn->nblocks || fn->nparams >= ft->count || ft->params[fn->nparams] != in->w[1])
             pvk_spv_fail(ctx, "function %u: unexpected OpFunctionParameter", fn->fid);
         x->kind = PVK_SPV_K_PARAM;
-        if (pvk_spv_type(ctx, in->w[1])->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(pvk_spv_type(ctx, in->w[1])))
+        if (pvk_spv_type(ctx, in->w[1])->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(pvk_spv_type(ctx, in->w[1]))) {
             pvk_spv_new_ptr(ctx, x, in->w[2], in->w[1], in->w[2]);
+            x->p->value = x->p->storage == PVK_SPV_StorageUniformConstant && pvk_spv_is_subpass(ctx, x->p->type);
+        }
         PVK_SPV_PUSH(ctx, fn->params, fn->nparams, fn->cap_params, in->w[2]);
         return;
     }
@@ -38527,7 +38944,7 @@ static void pvk_spv_parse_body(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         pvk_spv_fail(ctx, "unexpected instruction (opcode %u) in a function", in->op);
     } else if (in->op != PVK_SPV_OpStore && in->op != PVK_SPV_OpCopyMemory && in->op != PVK_SPV_OpControlBarrier &&
                in->op != PVK_SPV_OpMemoryBarrier && in->op != PVK_SPV_OpAtomicStore && in->op != PVK_SPV_OpNop &&
-               in->op != PVK_SPV_OpImageWrite) {
+               in->op != PVK_SPV_OpImageWrite && in->op != PVK_SPV_OpDemoteToHelperInvocation) {
         pvk_spv_fail(ctx, "unexpected instruction (opcode %u) in a function", in->op);
     }
 }
@@ -38902,6 +39319,11 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
                 pvk_spv_psb_layout(ctx, t);
             break;
         case PVK_SPV_OpTypeImage:
+            if (t->img.dim == PVK_SPV_DimSubpassData) { /* the fetched color */
+                t->msl = pvk_spv_fmt(ctx, "%s4", pvk_spv_type(ctx, t->elem)->msl);
+                t->size = t->align = 16;
+                break;
+            }
             t->msl = pvk_spv_image_msl(ctx, t, t->img.depth == 1);
             t->size = t->align = 8; /* an MTLResourceID in a set */
             break;
@@ -39432,11 +39854,19 @@ static void pvk_spv_call_graph(struct pvk_spv *ctx)
 
 /* ---- Resources (the binding model) ---- */
 
-/* A descriptor variable: buffer blocks, images, samplers (or arrays of them). */
+/* A descriptor variable: buffer blocks, images, samplers (or arrays of
+ * them). Input attachments are values (STAGE INTERFACE). */
 static bool pvk_spv_is_resource(const struct pvk_spv_ptr *p)
 {
-    return p->storage == PVK_SPV_StorageStorageBuffer || p->storage == PVK_SPV_StorageUniform ||
-           p->storage == PVK_SPV_StorageUniformConstant;
+    return (p->storage == PVK_SPV_StorageStorageBuffer || p->storage == PVK_SPV_StorageUniform ||
+            p->storage == PVK_SPV_StorageUniformConstant) && !p->value;
+}
+
+/* A global helper functions take as a parameter: not a descriptor (those
+ * come through their sets) and not an expression (HelperInvocation). */
+static bool pvk_spv_passed(const struct pvk_spv_id *x)
+{
+    return !pvk_spv_is_resource(x->p) && !(x->flags & PVK_SPV_F_EXPR);
 }
 
 /* The block struct of a buffer variable (below its descriptor arrays). */
@@ -39762,6 +40192,8 @@ static void pvk_spv_assign_resources(struct pvk_spv *ctx)
             struct pvk_spv_binding b;
             uint32_t obj;
             bool arr;
+            if (x->p->value)
+                break; /* input attachments: framebuffer fetch (STAGE INTERFACE) */
             pvk_spv_resource_kind(ctx, var, &obj);
             pvk_spv_desc_count(ctx, var, &arr);
             if ((x->flags & (PVK_SPV_F_SET | PVK_SPV_F_BINDING)) != (PVK_SPV_F_SET | PVK_SPV_F_BINDING))
@@ -39794,12 +40226,16 @@ static void pvk_spv_assign_resources(struct pvk_spv *ctx)
             res->push_constant_size = t->end - res->push_constant_offset;
             break;
         case PVK_SPV_StorageWorkgroup:
+            if (ctx->graphics)
+                pvk_spv_fail(ctx, "workgroup variables are only available in compute shaders");
             t = pvk_spv_type(ctx, x->p->type);
             res->threadgroup_memory_size += t->size;
             break;
         case PVK_SPV_StorageInput: {
             struct pvk_spv_type *pt = pvk_spv_type(ctx, x->p->type);
             struct pvk_spv_type *sc = pvk_spv_scalar_of(ctx, pt);
+            if (ctx->graphics)
+                break; /* the stage interface (pvk_spv_emit_stage) */
             if (!(x->flags & PVK_SPV_F_BUILTIN))
                 pvk_spv_fail(ctx, "input variable %u is not a built-in", var);
             switch (x->builtin) {
@@ -40333,7 +40769,8 @@ enum {
     PVK_SPV_H_FIND_UMSB = 1u << 4,
     PVK_SPV_H_FIND_SMSB = 1u << 5,
     PVK_SPV_H_INVERSE = 1u << 6,
-    PVK_SPV_H_REFRACT = 1u << 7
+    PVK_SPV_H_REFRACT = 1u << 7,
+    PVK_SPV_H_SRGB = 1u << 8
 };
 
 static const char *const pvk_spv_helper_text[] = {
@@ -40372,6 +40809,8 @@ static const char *const pvk_spv_helper_text[] = {
     "                  a31 * b01 - a30 * b03 - a32 * b00, a20 * b03 - a21 * b01 + a22 * b00) * d);\n}\n\n",
     "template <typename T>\ninline T pvk_refract(T i, T n, T eta)\n{\n    T d = n * i;\n"
     "    T k = T(1) - eta * eta * (T(1) - d * d);\n    return k < T(0) ? T(0) : eta * i - (eta * d + sqrt(k)) * n;\n}\n\n",
+    "inline float pvk_srgb_to_linear(float c)\n{\n"
+    "    return c <= 0.04045f ? c / 12.92f : pow((c + 0.055f) / 1.055f, 2.4f);\n}\n\n",
 };
 
 static const char *pvk_spv_helper(struct pvk_spv *ctx, uint32_t bit, const char *name)
@@ -41004,7 +41443,7 @@ static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     }
     /* Globals the callee uses: descriptors through their sets. */
     for (g = 0; g < ctx->nglobals; g++)
-        if (pvk_spv_bit(callee->globals, g) && !pvk_spv_is_resource(ctx->ids[ctx->globals[g]].p))
+        if (pvk_spv_bit(callee->globals, g) && pvk_spv_passed(&ctx->ids[ctx->globals[g]]))
             list[n++] = ctx->ids[ctx->globals[g]].msl;
     sets = pvk_spv_func_sets(ctx, callee);
     for (g = 0; g < PVK_MSL_MAX_SETS; g++)
@@ -41047,7 +41486,7 @@ static const char *pvk_spv_binary_op(uint32_t op)
 
 struct pvk_spv_imgops {
     uint32_t mask;
-    uint32_t lod, dx, dy, const_offset, offset, const_offsets, sample, min_lod;
+    uint32_t bias, lod, dx, dy, const_offset, offset, const_offsets, sample, min_lod;
 };
 
 /* Image Operands starting at word `at` (absent when at == wc). */
@@ -41059,13 +41498,15 @@ static void pvk_spv_image_operands(struct pvk_spv *ctx, const struct pvk_spv_ins
     if (at >= in->wc)
         return;
     m = o->mask = in->w[at];
-    if (m & PVK_SPV_ImgBias)
-        pvk_spv_fail(ctx, "Bias needs implicit-LOD sampling, which compute shaders do not have");
-    if (m & ~(uint32_t)(PVK_SPV_ImgLod | PVK_SPV_ImgGrad | PVK_SPV_ImgConstOffset | PVK_SPV_ImgOffset |
+    if ((m & PVK_SPV_ImgBias) && ctx->model != PVK_SPV_ExecutionModelFragment)
+        pvk_spv_fail(ctx, "Bias needs implicit-LOD sampling, which only fragment shaders have");
+    if (m & ~(uint32_t)(PVK_SPV_ImgBias | PVK_SPV_ImgLod | PVK_SPV_ImgGrad | PVK_SPV_ImgConstOffset | PVK_SPV_ImgOffset |
                         PVK_SPV_ImgConstOffsets | PVK_SPV_ImgSample | PVK_SPV_ImgMinLod | PVK_SPV_ImgMakeTexelAvailable |
                         PVK_SPV_ImgMakeTexelVisible | PVK_SPV_ImgNonPrivateTexel | PVK_SPV_ImgVolatileTexel |
                         PVK_SPV_ImgSignExtend | PVK_SPV_ImgZeroExtend | PVK_SPV_ImgNontemporal))
         pvk_spv_fail(ctx, "unsupported image operands 0x%x", m);
+    if (m & PVK_SPV_ImgBias)
+        o->bias = pvk_spv_arg(ctx, in, i++);
     if (m & PVK_SPV_ImgLod)
         o->lod = pvk_spv_arg(ctx, in, i++);
     if (m & PVK_SPV_ImgGrad) {
@@ -41227,12 +41668,16 @@ static const char *pvk_spv_offset_arg(struct pvk_spv *ctx, const struct pvk_spv_
     return pvk_spv_fmt(ctx, n == 1 ? "int(%s)" : n == 2 ? "int2(%s)" : "int3(%s)", pvk_spv_val(ctx, off));
 }
 
-/* OpImageSample*ExplicitLod (Dref, Proj). */
+/* OpImageSample*Lod (Dref, Proj; implicit LOD in fragment shaders). */
 static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     uint32_t op = in->op, rid = in->w[2], si = pvk_spv_arg(ctx, in, 3), coord = pvk_spv_arg(ctx, in, 4);
-    bool dref = op == PVK_SPV_OpImageSampleDrefExplicitLod || op == PVK_SPV_OpImageSampleProjDrefExplicitLod;
-    bool proj = op == PVK_SPV_OpImageSampleProjExplicitLod || op == PVK_SPV_OpImageSampleProjDrefExplicitLod;
+    bool dref = op == PVK_SPV_OpImageSampleDrefExplicitLod || op == PVK_SPV_OpImageSampleProjDrefExplicitLod ||
+                op == PVK_SPV_OpImageSampleDrefImplicitLod || op == PVK_SPV_OpImageSampleProjDrefImplicitLod;
+    bool proj = op == PVK_SPV_OpImageSampleProjExplicitLod || op == PVK_SPV_OpImageSampleProjDrefExplicitLod ||
+                op == PVK_SPV_OpImageSampleProjImplicitLod || op == PVK_SPV_OpImageSampleProjDrefImplicitLod;
+    bool implicit = op == PVK_SPV_OpImageSampleImplicitLod || op == PVK_SPV_OpImageSampleDrefImplicitLod ||
+                    op == PVK_SPV_OpImageSampleProjImplicitLod || op == PVK_SPV_OpImageSampleProjDrefImplicitLod;
     struct pvk_spv_type *it = pvk_spv_image_type(ctx, si, true);
     struct pvk_spv_imgops o;
     const char *tex = pvk_spv_fmt(ctx, "%s.t", pvk_spv_val(ctx, si)), *smp = pvk_spv_fmt(ctx, "%s.s", pvk_spv_val(ctx, si));
@@ -41240,11 +41685,19 @@ static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn 
     bool native_1d = it->img.dim == PVK_SPV_Dim1D && !pvk_spv_image_as_2d(ctx, it);
     uint32_t n = pvk_spv_sample_dims(it);
 
+    if (implicit && ctx->model != PVK_SPV_ExecutionModelFragment)
+        pvk_spv_fail(ctx, "implicit-LOD sampling needs derivatives, which only fragment shaders have");
     pvk_spv_image_operands(ctx, in, dref ? 6 : 5, &o);
-    if (!(o.mask & (PVK_SPV_ImgLod | PVK_SPV_ImgGrad)))
-        pvk_spv_fail(ctx, "explicit-LOD sampling without Lod or Grad");
+    if (implicit ? (o.mask & (PVK_SPV_ImgLod | PVK_SPV_ImgGrad)) != 0 : !(o.mask & (PVK_SPV_ImgLod | PVK_SPV_ImgGrad)))
+        pvk_spv_fail(ctx, implicit ? "implicit-LOD sampling with Lod or Grad" : "explicit-LOD sampling without Lod or Grad");
     if (o.mask & (PVK_SPV_ImgSample | PVK_SPV_ImgConstOffsets))
         pvk_spv_fail(ctx, "unsupported image operands for sampling");
+    if (implicit) { /* bias(b), min_lod_clamp(m): the hardware computes the LOD */
+        if (o.bias)
+            opt = pvk_spv_fmt(ctx, "bias(%s)", pvk_spv_val(ctx, o.bias));
+        if (o.min_lod)
+            opt = pvk_spv_fmt(ctx, "%s%smin_lod_clamp(%s)", opt ? opt : "", opt ? ", " : "", pvk_spv_val(ctx, o.min_lod));
+    }
     if (it->img.ms)
         pvk_spv_fail(ctx, "multisampled images cannot be sampled");
     c = pvk_spv_sample_coord(ctx, it, tex, coord, proj, &layer, &q);
@@ -41256,7 +41709,9 @@ static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn 
             d = pvk_spv_fmt(ctx, "(%s / %s)", d, q);
         tex = pvk_spv_as_depth(ctx, it, tex);
     }
-    if (o.lod) {
+    if (implicit) {
+        /* (options set above) */
+    } else if (o.lod) {
         const char *l = pvk_spv_val(ctx, o.lod);
         if (o.min_lod)
             l = pvk_spv_fmt(ctx, "max(%s, %s)", l, pvk_spv_val(ctx, o.min_lod));
@@ -41321,7 +41776,7 @@ static void pvk_spv_image_gather(struct pvk_spv *ctx, const struct pvk_spv_insn 
     pvk_spv_image_operands(ctx, in, 6, &o);
     if ((it->img.dim != PVK_SPV_Dim2D && !cube) || it->img.ms)
         pvk_spv_fail(ctx, "gather needs a 2D or cube image");
-    if (o.mask & (PVK_SPV_ImgLod | PVK_SPV_ImgGrad | PVK_SPV_ImgSample | PVK_SPV_ImgMinLod))
+    if (o.mask & (PVK_SPV_ImgBias | PVK_SPV_ImgLod | PVK_SPV_ImgGrad | PVK_SPV_ImgSample | PVK_SPV_ImgMinLod))
         pvk_spv_fail(ctx, "unsupported image operands for gather");
     c = pvk_spv_sample_coord(ctx, it, tex, coord, false, &layer, &q);
     if (dref) {
@@ -41378,8 +41833,17 @@ static void pvk_spv_image_read(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     const char *tex = pvk_spv_val(ctx, img), *args, *e;
 
     pvk_spv_image_operands(ctx, in, 5, &o);
-    if (o.mask & (PVK_SPV_ImgGrad | PVK_SPV_ImgConstOffsets | PVK_SPV_ImgMinLod))
+    if (o.mask & (PVK_SPV_ImgBias | PVK_SPV_ImgGrad | PVK_SPV_ImgConstOffsets | PVK_SPV_ImgMinLod))
         pvk_spv_fail(ctx, "unsupported image operands for a texel read");
+    if (it->img.dim == PVK_SPV_DimSubpassData) {
+        /* subpassLoad: the image value is the framebuffer-fetched color. The
+         * coordinate is (0, 0) by rule; a Sample operand reads the current
+         * sample (multisampled input attachments need per-sample shading). */
+        if (fetch || o.lod || o.const_offset || o.offset || (it->img.ms != 0) != (o.sample != 0))
+            pvk_spv_fail(ctx, "malformed input attachment read");
+        pvk_spv_texel_result(ctx, rid, tex, 4, it);
+        return;
+    }
     if (fetch && it->img.sampled != 1)
         pvk_spv_fail(ctx, "OpImageFetch needs a sampled image");
     if (!fetch && (it->img.sampled != 2 || !(it->img.access & PVK_SPV_ACCESS_READ)))
@@ -41409,7 +41873,7 @@ static void pvk_spv_image_write(struct pvk_spv *ctx, const struct pvk_spv_insn *
     const char *tex = pvk_spv_val(ctx, img), *v = pvk_spv_val(ctx, texel);
 
     pvk_spv_image_operands(ctx, in, 4, &o);
-    if (o.mask & (PVK_SPV_ImgLod | PVK_SPV_ImgGrad | PVK_SPV_ImgConstOffset | PVK_SPV_ImgOffset |
+    if (o.mask & (PVK_SPV_ImgBias | PVK_SPV_ImgLod | PVK_SPV_ImgGrad | PVK_SPV_ImgConstOffset | PVK_SPV_ImgOffset |
                   PVK_SPV_ImgConstOffsets | PVK_SPV_ImgMinLod | PVK_SPV_ImgSample))
         pvk_spv_fail(ctx, "unsupported image operands for OpImageWrite");
     if (it->img.sampled != 2 || !(it->img.access & PVK_SPV_ACCESS_WRITE))
@@ -41543,12 +42007,29 @@ static void pvk_spv_image_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     }
     case PVK_SPV_OpImageSampleExplicitLod: case PVK_SPV_OpImageSampleDrefExplicitLod:
     case PVK_SPV_OpImageSampleProjExplicitLod: case PVK_SPV_OpImageSampleProjDrefExplicitLod:
-        pvk_spv_image_sample(ctx, in);
-        return;
     case PVK_SPV_OpImageSampleImplicitLod: case PVK_SPV_OpImageSampleDrefImplicitLod:
     case PVK_SPV_OpImageSampleProjImplicitLod: case PVK_SPV_OpImageSampleProjDrefImplicitLod:
-    case PVK_SPV_OpImageQueryLod:
-        pvk_spv_fail(ctx, "implicit-LOD sampling needs derivatives, which compute shaders do not have");
+        pvk_spv_image_sample(ctx, in);
+        return;
+    case PVK_SPV_OpImageQueryLod: {
+        /* (mip level the sampler would access, LOD relative to the base level) */
+        uint32_t si = pvk_spv_arg(ctx, in, 3), coord = pvk_spv_arg(ctx, in, 4);
+        struct pvk_spv_type *it = pvk_spv_image_type(ctx, si, true), *r = pvk_spv_vtype(ctx, rid);
+        const char *tex = pvk_spv_fmt(ctx, "%s.t", pvk_spv_val(ctx, si)), *smp = pvk_spv_fmt(ctx, "%s.s", pvk_spv_val(ctx, si));
+        const char *c;
+        if (ctx->model != PVK_SPV_ExecutionModelFragment)
+            pvk_spv_fail(ctx, "OpImageQueryLod needs derivatives, which only fragment shaders have");
+        if (r->op != PVK_SPV_OpTypeVector || r->count != 2 || pvk_spv_type(ctx, r->elem)->op != PVK_SPV_OpTypeFloat ||
+            it->img.ms || it->img.dim == PVK_SPV_DimBuffer ||
+            (it->img.dim == PVK_SPV_Dim1D && !pvk_spv_image_as_2d(ctx, it)))
+            pvk_spv_fail(ctx, "unsupported OpImageQueryLod (no LOD for 1D, buffer and multisampled images)");
+        c = pvk_spv_comps(ctx, coord, 0, pvk_spv_sample_dims(it));
+        if (pvk_spv_image_as_2d(ctx, it))
+            c = pvk_spv_fmt(ctx, "float2(%s, 0.5f)", c);
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s.calculate_clamped_lod(%s, %s), %s.calculate_unclamped_lod(%s, %s))",
+                                          r->msl, tex, smp, c, tex, smp, c));
+        return;
+    }
     case PVK_SPV_OpImageGather: case PVK_SPV_OpImageDrefGather:
         pvk_spv_image_gather(ctx, in);
         return;
@@ -41903,6 +42384,29 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         return;
     case PVK_SPV_OpImageTexelPointer:
         pvk_spv_image_insn(ctx, in);
+        return;
+    case PVK_SPV_OpDPdx: case PVK_SPV_OpDPdy: case PVK_SPV_OpFwidth: case PVK_SPV_OpDPdxFine:
+    case PVK_SPV_OpDPdyFine: case PVK_SPV_OpFwidthFine: case PVK_SPV_OpDPdxCoarse: case PVK_SPV_OpDPdyCoarse:
+    case PVK_SPV_OpFwidthCoarse: {
+        static const char *const names[] = { "dfdx", "dfdy", "fwidth" }; /* Metal has no fine/coarse choice */
+        struct pvk_spv_type *s = pvk_spv_scalar_of(ctx, r);
+        if (ctx->model != PVK_SPV_ExecutionModelFragment)
+            pvk_spv_fail(ctx, "derivatives are only available in fragment shaders");
+        if (!s || s->op != PVK_SPV_OpTypeFloat || pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 3))->type != rtype)
+            pvk_spv_fail(ctx, "derivative of a non-float value");
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", names[(op - PVK_SPV_OpDPdx) % 3], pvk_spv_val(ctx, in->w[3])));
+        return;
+    }
+    case PVK_SPV_OpIsHelperInvocationEXT:
+        if (ctx->model != PVK_SPV_ExecutionModelFragment || r->op != PVK_SPV_OpTypeBool)
+            pvk_spv_fail(ctx, "OpIsHelperInvocationEXT is only available in fragment shaders");
+        pvk_spv_set(ctx, rid, "simd_is_helper_thread()");
+        return;
+    case PVK_SPV_OpDemoteToHelperInvocation:
+        if (ctx->model != PVK_SPV_ExecutionModelFragment)
+            pvk_spv_fail(ctx, "OpDemoteToHelperInvocation is only available in fragment shaders");
+        ctx->result->discards = true;
+        pvk_spv_line(ctx, "discard_fragment();"); /* Metal's discard demotes: helpers keep running */
         return;
     default:
         if ((op >= PVK_SPV_OpSampledImage && op <= PVK_SPV_OpImage) ||
@@ -42312,7 +42816,17 @@ static void pvk_spv_emit_chain(struct pvk_spv *ctx, uint32_t label, bool in_loop
             break;
         case PVK_SPV_OpKill:
         case PVK_SPV_OpTerminateInvocation:
-            pvk_spv_fail(ctx, "OpKill is only valid in fragment shaders");
+            /* Discarded fragments write nothing (not even device memory), so
+             * returning from this function is enough; callers go on as helpers. */
+            if (ctx->model != PVK_SPV_ExecutionModelFragment)
+                pvk_spv_fail(ctx, "OpKill is only valid in fragment shaders");
+            ctx->result->discards = true;
+            pvk_spv_line(ctx, "discard_fragment();");
+            if (pvk_spv_type(ctx, ctx->fn->ret)->op == PVK_SPV_OpTypeVoid)
+                pvk_spv_line(ctx, "return;");
+            else
+                pvk_spv_line(ctx, "return %s;", pvk_spv_zero(ctx, ctx->fn->ret));
+            break;
         case PVK_SPV_OpBranch:
             next = pvk_spv_arg(ctx, &term, 1);
             pvk_spv_phi_copies(ctx, label, next);
@@ -42362,9 +42876,12 @@ static void pvk_spv_emit_chain(struct pvk_spv *ctx, uint32_t label, bool in_loop
 
 static const char *pvk_spv_space(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
 {
+    if (p->value)
+        return "thread const"; /* input attachments */
     switch (p->storage) {
     case PVK_SPV_StorageFunction:
     case PVK_SPV_StoragePrivate:
+    case PVK_SPV_StorageOutput:
         return "thread";
     case PVK_SPV_StorageWorkgroup:
         return "threadgroup";
@@ -42399,6 +42916,8 @@ static const char *pvk_spv_global_param(struct pvk_spv *ctx, uint32_t var)
 {
     struct pvk_spv_id *x = pvk_spv_get(ctx, var);
     struct pvk_spv_type *t = pvk_spv_type(ctx, x->p->type);
+    if (x->p->value)
+        return pvk_spv_fmt(ctx, "%s %s", t->msl, x->msl);
     switch (x->p->storage) {
     case PVK_SPV_StorageInput:
         return pvk_spv_fmt(ctx, "%s %s", t->msl, x->msl);
@@ -42428,7 +42947,7 @@ static bool pvk_spv_based(struct pvk_spv *ctx, const struct pvk_spv_id *x)
 
 static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
 {
-    bool entry = fn->fid == ctx->entry_fid;
+    bool entry = fn->fid == ctx->entry_fid && !ctx->graphics; /* graphics: a helper behind the stage function */
     struct pvk_msl_result *res = ctx->result;
     struct pvk_sb *out = &ctx->text;
     const char **params = NULL;
@@ -42505,7 +43024,7 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
         pvk_sb_printf(ctx, out, "kernel void %s(", fn->msl);
     } else {
         for (g = 0; g < ctx->nglobals; g++)
-            if (pvk_spv_bit(fn->globals, g) && !pvk_spv_is_resource(ctx->ids[ctx->globals[g]].p))
+            if (pvk_spv_bit(fn->globals, g) && pvk_spv_passed(&ctx->ids[ctx->globals[g]]))
                 PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_global_param(ctx, ctx->globals[g]));
         for (set = 0; set < PVK_MSL_MAX_SETS; set++)
             if (sets & (1u << set))
@@ -42591,6 +43110,1110 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
     if (ctx->body.len)
         pvk_sb_append(ctx, out, ctx->body.data, ctx->body.len);
     pvk_sb_append(ctx, out, "}\n\n", 3);
+}
+
+/* ---- Graphics stages (STAGE INTERFACE, VERTEX INPUT) ---- */
+
+/* A scalar or vector of a stage input or output variable, at a location. */
+struct pvk_spv_leaf {
+    const char *lvalue; /* the variable's name and the selectors down to the leaf */
+    uint32_t location, component, ncomp, index;
+    struct pvk_spv_type *scalar;
+    uint32_t interp; /* PVK_MSL_INTERP_* */
+};
+
+struct pvk_spv_iface {
+    struct pvk_spv_leaf *leaves;
+    uint32_t nleaves, cap;
+    uint32_t used[2][PVK_MSL_MAX_LOCATIONS]; /* components taken, by index and location */
+};
+
+/* The leaves of a value of type tid at location *loc (advanced past it). */
+static void pvk_spv_flatten(struct pvk_spv *ctx, struct pvk_spv_iface *f, uint32_t tid, const char *lv, uint32_t *loc,
+                            uint32_t comp, uint32_t interp, uint32_t index, uint32_t depth)
+{
+    struct pvk_spv_type *t = pvk_spv_type(ctx, tid), *s;
+    struct pvk_spv_leaf leaf;
+    uint32_t i, n, mask;
+
+    if (depth > PVK_SPV_MAX_TYPE_DEPTH)
+        pvk_spv_fail(ctx, "stage interface type nested too deeply");
+    if (*loc >= PVK_MSL_MAX_LOCATIONS)
+        pvk_spv_fail(ctx, "stage interface location %u is out of range (0-%u)", *loc, PVK_MSL_MAX_LOCATIONS - 1);
+    switch (t->op) {
+    case PVK_SPV_OpTypeInt:
+    case PVK_SPV_OpTypeFloat:
+    case PVK_SPV_OpTypeVector:
+        s = pvk_spv_scalar_of(ctx, t);
+        n = pvk_spv_components(t);
+        if (s->op == PVK_SPV_OpTypeBool)
+            pvk_spv_fail(ctx, "boolean stage inputs and outputs are not allowed");
+        if (s->width != 16 && s->width != 32)
+            pvk_spv_fail(ctx, "%u-bit stage inputs and outputs are not supported", s->width);
+        if (comp + n > 4)
+            pvk_spv_fail(ctx, "location %u: components past the fourth", *loc);
+        mask = ((1u << n) - 1) << comp;
+        if (f->used[index][*loc] & mask)
+            pvk_spv_fail(ctx, "location %u component %u is used twice", *loc, comp);
+        f->used[index][*loc] |= mask;
+        leaf.lvalue = lv;
+        leaf.location = *loc;
+        leaf.component = comp;
+        leaf.ncomp = n;
+        leaf.index = index;
+        leaf.scalar = s;
+        leaf.interp = interp;
+        PVK_SPV_PUSH(ctx, f->leaves, f->nleaves, f->cap, leaf);
+        (*loc)++;
+        return;
+    case PVK_SPV_OpTypeMatrix:
+        for (i = 0; i < t->count; i++)
+            pvk_spv_flatten(ctx, f, t->elem, pvk_spv_fmt(ctx, "%s[%u]", lv, i), loc, comp, interp, index, depth + 1);
+        return;
+    case PVK_SPV_OpTypeArray:
+        if (t->count > PVK_MSL_MAX_LOCATIONS)
+            pvk_spv_fail(ctx, "stage interface array is too large");
+        for (i = 0; i < t->count; i++)
+            pvk_spv_flatten(ctx, f, t->elem, pvk_spv_fmt(ctx, "%s[%u]%s", lv, i, t->slot_padded ? ".v" : ""), loc, comp,
+                            interp, index, depth + 1);
+        return;
+    case PVK_SPV_OpTypeStruct:
+        for (i = 0; i < t->nmembers; i++) {
+            const struct pvk_spv_member *m = &t->members[i];
+            if (m->flags & PVK_SPV_M_BUILTIN)
+                pvk_spv_fail(ctx, "a block mixes built-in and user-defined members");
+            if (m->flags & PVK_SPV_M_LOCATION)
+                *loc = m->location;
+            pvk_spv_flatten(ctx, f, m->type, pvk_spv_fmt(ctx, "%s.%s", lv, m->msl), loc,
+                            (m->flags & PVK_SPV_M_COMPONENT) ? m->component : 0, interp | m->interp, index, depth + 1);
+        }
+        return;
+    default:
+        pvk_spv_fail(ctx, "unsupported stage input or output type (opcode %u)", t->op);
+    }
+}
+
+/* The scalar type of the 4-vector at a location: varyings are float, or
+ * uint for integers (and locations mixing types); vertex inputs and
+ * fragment outputs keep the shader's type. NONE: no leaf there. */
+#define PVK_SPV_SLOT_NONE ((enum pvk_msl_scalar_type)-1)
+static enum pvk_msl_scalar_type pvk_spv_slot_type(struct pvk_spv *ctx, const struct pvk_spv_iface *f, uint32_t loc,
+                                                  uint32_t index, bool varying)
+{
+    bool fl = false, si = false, ui = false;
+    uint32_t i;
+    for (i = 0; i < f->nleaves; i++) {
+        const struct pvk_spv_leaf *l = &f->leaves[i];
+        if (l->location != loc || l->index != index)
+            continue;
+        if (l->scalar->op == PVK_SPV_OpTypeFloat)
+            fl = true;
+        else if (l->scalar->is_signed)
+            si = true;
+        else
+            ui = true;
+    }
+    if (!fl && !si && !ui)
+        return PVK_SPV_SLOT_NONE;
+    if (varying)
+        return fl && !si && !ui ? PVK_MSL_SCALAR_FLOAT : PVK_MSL_SCALAR_UINT;
+    if ((int)fl + (int)si + (int)ui > 1)
+        pvk_spv_fail(ctx, "location %u mixes float, signed and unsigned components", loc);
+    return fl ? PVK_MSL_SCALAR_FLOAT : si ? PVK_MSL_SCALAR_INT : PVK_MSL_SCALAR_UINT;
+}
+
+/* n components of the 32-bit scalar type k. */
+static const char *pvk_spv_kind_msl(struct pvk_spv *ctx, enum pvk_msl_scalar_type k, uint32_t n)
+{
+    const char *s = k == PVK_MSL_SCALAR_FLOAT ? "float" : k == PVK_MSL_SCALAR_INT ? "int" : "uint";
+    return n > 1 ? pvk_spv_fmt(ctx, "%s%u", s, n) : s;
+}
+
+static const char *pvk_spv_swizzle(struct pvk_spv *ctx, const char *base, uint32_t comp, uint32_t n)
+{
+    if (comp == 0 && n == 4)
+        return base;
+    return pvk_spv_fmt(ctx, "%s.%.*s", base, (int)n, &"xyzw"[comp]);
+}
+
+/* e (the leaf's components of a slot of type k) as the leaf's type: a
+ * conversion between widths, a reinterpretation between kinds. */
+static const char *pvk_spv_from_slot(struct pvk_spv *ctx, const char *e, enum pvk_msl_scalar_type k,
+                                     const struct pvk_spv_leaf *l)
+{
+    struct pvk_spv_type *s = l->scalar;
+    const char *want = pvk_spv_vec_msl(ctx, s, l->ncomp, s->is_signed);
+    bool sf = s->op == PVK_SPV_OpTypeFloat, kf = k == PVK_MSL_SCALAR_FLOAT;
+    if (sf == kf) {
+        if (s->width == 32 && (sf || s->is_signed == (k == PVK_MSL_SCALAR_INT)))
+            return e;
+        if (s->width == 32)
+            return pvk_spv_fmt(ctx, "as_type<%s>(%s)", want, e);
+        return pvk_spv_fmt(ctx, "%s(%s)", want, e); /* 16-bit: narrowed */
+    }
+    if (s->width == 32)
+        return pvk_spv_fmt(ctx, "as_type<%s>(%s)", want, e);
+    if (sf) /* a half in an integer slot */
+        return pvk_spv_fmt(ctx, "as_type<%s>(%s(%s))", want, l->ncomp > 1 ? pvk_spv_fmt(ctx, "ushort%u", l->ncomp) : "ushort",
+                           e);
+    return pvk_spv_fmt(ctx, "%s(as_type<%s>(%s))", want, pvk_spv_kind_msl(ctx, PVK_MSL_SCALAR_UINT, l->ncomp), e);
+}
+
+/* The leaf's value e as components of a slot of type k. */
+static const char *pvk_spv_to_slot(struct pvk_spv *ctx, const char *e, enum pvk_msl_scalar_type k,
+                                   const struct pvk_spv_leaf *l)
+{
+    struct pvk_spv_type *s = l->scalar;
+    const char *want = pvk_spv_kind_msl(ctx, k, l->ncomp);
+    const char *wide = pvk_spv_kind_msl(ctx, s->op == PVK_SPV_OpTypeFloat ? PVK_MSL_SCALAR_FLOAT
+                                             : s->is_signed                ? PVK_MSL_SCALAR_INT
+                                                                           : PVK_MSL_SCALAR_UINT,
+                                        l->ncomp);
+    bool sf = s->op == PVK_SPV_OpTypeFloat, kf = k == PVK_MSL_SCALAR_FLOAT;
+    if (s->width == 16 && sf && !kf) /* a half's bits in an integer slot */
+        return pvk_spv_fmt(ctx, "%s(as_type<%s>(%s))", want, l->ncomp > 1 ? pvk_spv_fmt(ctx, "ushort%u", l->ncomp) : "ushort",
+                           e);
+    if (s->width == 16)
+        e = pvk_spv_fmt(ctx, "%s(%s)", wide, e); /* widened with its own signedness */
+    if (strcmp(wide, want) == 0)
+        return e;
+    return pvk_spv_fmt(ctx, "as_type<%s>(%s)", want, e);
+}
+
+static const char *pvk_spv_interp_attr(uint32_t interp, bool integer)
+{
+    bool np = (interp & PVK_MSL_INTERP_NO_PERSPECTIVE) != 0;
+    if (integer || (interp & PVK_MSL_INTERP_FLAT))
+        return "flat";
+    if (interp & PVK_MSL_INTERP_SAMPLE)
+        return np ? "sample_no_perspective" : "sample_perspective";
+    if (interp & PVK_MSL_INTERP_CENTROID)
+        return np ? "centroid_no_perspective" : "centroid_perspective";
+    return np ? "center_no_perspective" : "center_perspective";
+}
+
+/* Whether the reachable functions may write member m of the global block
+ * var: access chains to it, or any other use of the whole variable. */
+static bool pvk_spv_member_used(struct pvk_spv *ctx, uint32_t var, uint32_t m)
+{
+    uint32_t i, bi, k, b, e;
+    for (i = 0; i < ctx->norder; i++) {
+        const struct pvk_spv_func *fn = ctx->funcs[ctx->order[i] - 1];
+        for (bi = 0; bi < fn->nblocks; bi++) {
+            uint32_t off = fn->blocks[bi].begin;
+            while (off <= fn->blocks[bi].end) {
+                struct pvk_spv_insn in = pvk_spv_insn_at(ctx, off);
+                off += in.wc;
+                if ((in.op == PVK_SPV_OpAccessChain || in.op == PVK_SPV_OpInBoundsAccessChain) && in.wc > 4 &&
+                    in.w[3] == var) {
+                    struct pvk_spv_id *ix = pvk_spv_get(ctx, in.w[4]);
+                    if (ix->kind != PVK_SPV_K_CONST || pvk_spv_const_uint(ctx, in.w[4]) == m)
+                        return true;
+                    continue;
+                }
+                if (in.op == PVK_SPV_OpPhi)
+                    continue;
+                pvk_spv_id_range(&in, pvk_spv_shape(in.op), &b, &e);
+                for (k = b; k < e; k++)
+                    if (in.w[k] == var)
+                        return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* ViewIndex: the n-th set bit of the view mask for amplification id n. */
+static const char *pvk_spv_view_index(struct pvk_spv *ctx, bool *amplified)
+{
+    uint32_t mask = ctx->options ? ctx->options->view_mask : 0, n = 0, i;
+    const char *e = NULL;
+    for (i = 0; i < 32; i++)
+        n += (mask >> i) & 1u;
+    if (n <= 1) {
+        for (i = 0; i < 32 && mask && !(mask & (1u << i)); i++)
+            ;
+        return mask ? pvk_spv_fmt(ctx, "%uu", i) : "0u";
+    }
+    *amplified = true;
+    if ((mask & (mask + 1)) == 0)
+        return "uint(pvk_amplification_id)"; /* views 0 to n - 1 */
+    for (i = 32; i-- > 0;) { /* (a == 0 ? v0 : a == 1 ? v1 : ... : vlast), from the last view down */
+        if (!(mask & (1u << i)))
+            continue;
+        n--; /* the amplification id of view i */
+        e = e ? pvk_spv_fmt(ctx, "pvk_amplification_id == %u ? %uu : %s", n, i, e) : pvk_spv_fmt(ctx, "%uu", i);
+    }
+    return pvk_spv_fmt(ctx, "(%s)", e);
+}
+
+/* Vertex attribute formats the vertex function decodes. */
+enum { PVK_SPV_VF_UNORM, PVK_SPV_VF_SNORM, PVK_SPV_VF_USCALED, PVK_SPV_VF_SSCALED, PVK_SPV_VF_UINT, PVK_SPV_VF_SINT,
+       PVK_SPV_VF_SRGB, PVK_SPV_VF_SFLOAT };
+enum { PVK_SPV_VP_NONE, PVK_SPV_VP_A2B10G10R10, PVK_SPV_VP_A2R10G10B10, PVK_SPV_VP_B10G11R11, PVK_SPV_VP_E5B9G9R9 };
+
+struct pvk_spv_vformat {
+    uint32_t comps, bits, kind, packed;
+    bool bgra; /* B, G, R(, A) in memory */
+};
+
+static bool pvk_spv_vertex_format(VkFormat format, struct pvk_spv_vformat *f)
+{
+    uint32_t v = (uint32_t)format;
+    static const uint8_t comps8[] = { 1, 2, 3, 3, 4, 4 };
+    static const uint8_t kinds32[] = { PVK_SPV_VF_UINT, PVK_SPV_VF_SINT, PVK_SPV_VF_SFLOAT };
+    memset(f, 0, sizeof(*f));
+    if (v >= VK_FORMAT_R8_UNORM && v <= VK_FORMAT_B8G8R8A8_SRGB) { /* R, RG, RGB, BGR, RGBA, BGRA x 7 */
+        uint32_t g = (v - VK_FORMAT_R8_UNORM) / 7;
+        f->comps = comps8[g];
+        f->bits = 8;
+        f->kind = (v - VK_FORMAT_R8_UNORM) % 7;
+        f->bgra = g == 3 || g == 5;
+    } else if (v >= VK_FORMAT_A8B8G8R8_UNORM_PACK32 && v <= VK_FORMAT_A8B8G8R8_SRGB_PACK32) { /* bytes R, G, B, A */
+        f->comps = 4;
+        f->bits = 8;
+        f->kind = v - VK_FORMAT_A8B8G8R8_UNORM_PACK32;
+    } else if (v >= VK_FORMAT_A2R10G10B10_UNORM_PACK32 && v <= VK_FORMAT_A2B10G10R10_SINT_PACK32) {
+        f->comps = 4;
+        f->bits = 32;
+        f->kind = (v - VK_FORMAT_A2R10G10B10_UNORM_PACK32) % 6;
+        f->packed = v < VK_FORMAT_A2B10G10R10_UNORM_PACK32 ? PVK_SPV_VP_A2R10G10B10 : PVK_SPV_VP_A2B10G10R10;
+    } else if (v >= VK_FORMAT_R16_UNORM && v <= VK_FORMAT_R16G16B16A16_SFLOAT) {
+        f->comps = 1 + (v - VK_FORMAT_R16_UNORM) / 7;
+        f->bits = 16;
+        f->kind = (v - VK_FORMAT_R16_UNORM) % 7;
+        if (f->kind == 6)
+            f->kind = PVK_SPV_VF_SFLOAT;
+    } else if (v >= VK_FORMAT_R32_UINT && v <= VK_FORMAT_R32G32B32A32_SFLOAT) {
+        f->comps = 1 + (v - VK_FORMAT_R32_UINT) / 3;
+        f->bits = 32;
+        f->kind = kinds32[(v - VK_FORMAT_R32_UINT) % 3];
+    } else if (v == VK_FORMAT_B10G11R11_UFLOAT_PACK32 || v == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32) {
+        f->comps = 3;
+        f->bits = 32;
+        f->kind = PVK_SPV_VF_SFLOAT;
+        f->packed = v == VK_FORMAT_B10G11R11_UFLOAT_PACK32 ? PVK_SPV_VP_B10G11R11 : PVK_SPV_VP_E5B9G9R9;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+/* MSL for component i (in RGBA order) of an attribute at pvk_p (packed
+ * formats: in the word pvk_v). */
+static const char *pvk_spv_vertex_component(struct pvk_spv *ctx, const struct pvk_spv_vformat *f, uint32_t i)
+{
+    static const char *const loads[3][2] = {
+        { "uint(pvk_p[%u])", "int(((device const char*)pvk_p)[%u])" },
+        { "uint(((device const ushort*)pvk_p)[%u])", "int(((device const short*)pvk_p)[%u])" },
+        { "((device const uint*)pvk_p)[%u]", "((device const int*)pvk_p)[%u]" },
+    };
+    bool sg = f->kind == PVK_SPV_VF_SNORM || f->kind == PVK_SPV_VF_SSCALED || f->kind == PVK_SPV_VF_SINT;
+    uint32_t bits = f->bits, mem = f->bgra && i < 3 ? 2 - i : i;
+    const char *v;
+    double max;
+
+    switch (f->packed) {
+    case PVK_SPV_VP_B10G11R11: { /* unsigned 11/11/10-bit floats: a half's exponent, shorter mantissas */
+        static const char *const parts[] = { "extract_bits(pvk_v, 0, 11) << 4", "extract_bits(pvk_v, 11, 11) << 4",
+                                             "extract_bits(pvk_v, 22, 10) << 5" };
+        return pvk_spv_fmt(ctx, "float(as_type<half>(ushort(%s)))", parts[i]);
+    }
+    case PVK_SPV_VP_E5B9G9R9:
+        return pvk_spv_fmt(ctx, "float(extract_bits(pvk_v, %u, 9)) * exp2(float(extract_bits(pvk_v, 27, 5)) - 24.0f)",
+                           9 * i);
+    case PVK_SPV_VP_A2B10G10R10:
+    case PVK_SPV_VP_A2R10G10B10: {
+        uint32_t at = i == 3 ? 30 : (f->packed == PVK_SPV_VP_A2B10G10R10 ? 10 * i : 20 - 10 * i);
+        bits = i == 3 ? 2 : 10;
+        v = sg ? pvk_spv_fmt(ctx, "extract_bits(as_type<int>(pvk_v), %u, %u)", at, bits)
+               : pvk_spv_fmt(ctx, "extract_bits(pvk_v, %u, %u)", at, bits);
+        break;
+    }
+    default:
+        if (f->kind == PVK_SPV_VF_SFLOAT)
+            return bits == 16 ? pvk_spv_fmt(ctx, "float(((device const half*)pvk_p)[%u])", mem)
+                              : pvk_spv_fmt(ctx, "((device const float*)pvk_p)[%u]", mem);
+        v = pvk_spv_fmt(ctx, loads[bits == 8 ? 0 : bits == 16 ? 1 : 2][sg ? 1 : 0], mem);
+        break;
+    }
+    max = (double)(((uint64_t)1 << (sg ? bits - 1 : bits)) - 1);
+    switch (f->kind) {
+    case PVK_SPV_VF_UNORM:
+        return pvk_spv_fmt(ctx, "float(%s) / %.1ff", v, max);
+    case PVK_SPV_VF_SNORM:
+        return pvk_spv_fmt(ctx, "max(float(%s) / %.1ff, -1.0f)", v, max);
+    case PVK_SPV_VF_SRGB:
+        if (i == 3)
+            return pvk_spv_fmt(ctx, "float(%s) / 255.0f", v);
+        ctx->helper_mask |= PVK_SPV_H_SRGB;
+        return pvk_spv_fmt(ctx, "pvk_srgb_to_linear(float(%s) / 255.0f)", v);
+    case PVK_SPV_VF_USCALED:
+    case PVK_SPV_VF_SSCALED:
+        return pvk_spv_fmt(ctx, "float(%s)", v);
+    case PVK_SPV_VF_UINT:
+        return pvk_spv_fmt(ctx, "uint(%s)", v);
+    default:
+        return pvk_spv_fmt(ctx, "int(%s)", v);
+    }
+}
+
+/* Declares pvk_attr<loc>, the 4-vector the vertex input at loc reads,
+ * pulled from its vertex buffer (VERTEX INPUT); *kind receives its type. */
+static void pvk_spv_vertex_fetch(struct pvk_spv *ctx, uint32_t loc, enum pvk_msl_scalar_type *kind, uint32_t *need)
+{
+    const struct pvk_msl_options *o = ctx->options;
+    struct pvk_msl_result *res = ctx->result;
+    const VkVertexInputAttributeDescription *a = NULL;
+    const VkVertexInputBindingDescription *b = NULL;
+    struct pvk_spv_vformat f;
+    const char *t, *one, *zero, *index, *stride, *c[4];
+    uint32_t i, divisor = 1, size;
+
+    for (i = 0; o && o->vertex_attributes && i < o->vertex_attribute_count; i++)
+        if (o->vertex_attributes[i].location == loc)
+            a = &o->vertex_attributes[i];
+    t = pvk_spv_kind_msl(ctx, *kind, 4);
+    one = *kind == PVK_MSL_SCALAR_FLOAT ? "1.0f" : *kind == PVK_MSL_SCALAR_INT ? "1" : "1u";
+    zero = *kind == PVK_MSL_SCALAR_FLOAT ? "0.0f" : *kind == PVK_MSL_SCALAR_INT ? "0" : "0u";
+    if (!a) { /* no attribute (invalid usage): the defaults */
+        pvk_spv_line(ctx, "%s pvk_attr%u = %s(%s, %s, %s, %s);", t, loc, t, zero, zero, zero, one);
+        return;
+    }
+    if (!pvk_spv_vertex_format(a->format, &f))
+        pvk_spv_fail(ctx, "vertex attribute %u: format %d cannot be read", loc, (int)a->format);
+    for (i = 0; o->vertex_bindings && i < o->vertex_binding_count; i++)
+        if (o->vertex_bindings[i].binding == a->binding)
+            b = &o->vertex_bindings[i];
+    if (!b || a->binding >= 32)
+        pvk_spv_fail(ctx, "vertex attribute %u uses binding %u, which the vertex input state does not have", loc,
+                     a->binding);
+    for (i = 0; o->vertex_divisors && i < o->vertex_divisor_count; i++)
+        if (o->vertex_divisors[i].binding == a->binding)
+            divisor = o->vertex_divisors[i].divisor;
+    if (a->offset > (1u << 30) || b->stride > (1u << 30))
+        pvk_spv_fail(ctx, "vertex attribute %u: offset or stride out of range", loc);
+
+    /* The format's own type; the shader's input reads it (as Vulkan requires
+     * matching numeric types, a mismatch only reinterprets bits). */
+    *kind = f.kind == PVK_SPV_VF_UINT ? PVK_MSL_SCALAR_UINT : f.kind == PVK_SPV_VF_SINT ? PVK_MSL_SCALAR_INT
+                                                                                         : PVK_MSL_SCALAR_FLOAT;
+    t = pvk_spv_kind_msl(ctx, *kind, 4);
+    one = *kind == PVK_MSL_SCALAR_FLOAT ? "1.0f" : *kind == PVK_MSL_SCALAR_INT ? "1" : "1u";
+    zero = *kind == PVK_MSL_SCALAR_FLOAT ? "0.0f" : *kind == PVK_MSL_SCALAR_INT ? "0" : "0u";
+    if (b->inputRate == VK_VERTEX_INPUT_RATE_VERTEX) {
+        index = "pvk_vertex_id";
+        *need |= 1u; /* vertex_id */
+    } else if (divisor == 1) {
+        index = "pvk_instance_id";
+        *need |= 2u;
+    } else if (divisor == 0) { /* every instance reads element firstInstance */
+        index = "pvk_base_instance";
+        *need |= 4u;
+    } else {
+        index = pvk_spv_fmt(ctx, "((pvk_instance_id - pvk_base_instance) / %uu + pvk_base_instance)", divisor);
+        *need |= 6u;
+    }
+    stride = o->dynamic_vertex_strides ? "ulong(pvk_vb[%u].stride)" : "%uul";
+    stride = o->dynamic_vertex_strides ? pvk_spv_fmt(ctx, stride, a->binding) : pvk_spv_fmt(ctx, stride, b->stride);
+    size = f.packed ? 4 : f.comps * f.bits / 8;
+    res->vertex_bindings |= 1u << a->binding;
+    res->vertex_input_count++;
+
+    for (i = 0; i < 4; i++)
+        c[i] = i < f.comps ? pvk_spv_vertex_component(ctx, &f, i) : i == 3 ? one : zero;
+    pvk_spv_line(ctx, "%s pvk_attr%u = %s(%s, %s, %s, %s);", t, loc, t, zero, zero, zero, one);
+    pvk_spv_line(ctx, "{");
+    ctx->indent++;
+    pvk_spv_line(ctx, "ulong pvk_off = ulong(%s) * %s + %uul;", index, stride, a->offset);
+    if (o->robust_vertex_input)
+        pvk_spv_line(ctx, "if (pvk_off + %uul <= pvk_vb[%u].size)", size, a->binding);
+    pvk_spv_line(ctx, "{");
+    ctx->indent++;
+    pvk_spv_line(ctx, "device const uchar* pvk_p = pvk_vb[%u].p + pvk_off;", a->binding);
+    if (f.packed)
+        pvk_spv_line(ctx, "uint pvk_v = *(device const uint*)pvk_p;");
+    pvk_spv_line(ctx, "pvk_attr%u = %s(%s, %s, %s, %s);", loc, t, c[0], c[1], c[2], c[3]);
+    ctx->indent--;
+    pvk_spv_line(ctx, "}");
+    ctx->indent--;
+    pvk_spv_line(ctx, "}");
+}
+
+/* Stage function parameters needed (pvk_spv_emit_stage). */
+#define PVK_SPV_NEED_VERTEX_ID 0x1u
+#define PVK_SPV_NEED_INSTANCE_ID 0x2u
+#define PVK_SPV_NEED_BASE_INSTANCE 0x4u
+#define PVK_SPV_NEED_BASE_VERTEX 0x8u
+#define PVK_SPV_NEED_AMPLIFICATION 0x10u
+#define PVK_SPV_NEED_POSITION 0x20u
+#define PVK_SPV_NEED_FRONT_FACING 0x40u
+#define PVK_SPV_NEED_SAMPLE_ID 0x80u
+#define PVK_SPV_NEED_SAMPLE_MASK 0x100u
+#define PVK_SPV_NEED_POINT_COORD 0x200u
+#define PVK_SPV_NEED_LAYER 0x400u
+#define PVK_SPV_NEED_VIEWPORT 0x800u
+#define PVK_SPV_NEED_PRIMITIVE_ID 0x1000u
+
+/* Global indices the entry point's OpEntryPoint lists. */
+static uint32_t *pvk_spv_interface_list(struct pvk_spv *ctx)
+{
+    struct pvk_spv_insn in = pvk_spv_insn_at(ctx, ctx->entry_insn);
+    uint32_t words = (ctx->nglobals + 31) / 32, *set = pvk_spv_alloc(ctx, sizeof(uint32_t) * (words ? words : 1)), i;
+    pvk_spv_string(ctx, &in, 3, &i);
+    for (; i < in.wc; i++) {
+        struct pvk_spv_id *x;
+        if (in.w[i] == 0 || in.w[i] >= ctx->bound)
+            pvk_spv_fail(ctx, "OpEntryPoint lists invalid id %u", in.w[i]);
+        x = &ctx->ids[in.w[i]];
+        if (x->kind != PVK_SPV_K_VAR || x->func)
+            pvk_spv_fail(ctx, "OpEntryPoint lists %u, which is not a global variable", in.w[i]);
+        set[x->global / 32] |= 1u << (x->global % 32);
+    }
+    return set;
+}
+
+/* Before the functions are emitted: built-ins that are expressions, names
+ * for outputs only the interface lists, unsupported decorations. */
+static void pvk_spv_stage_prepare(struct pvk_spv *ctx)
+{
+    uint32_t *listed = pvk_spv_interface_list(ctx), g;
+    struct pvk_spv_func *entry = ctx->funcs[pvk_spv_get(ctx, ctx->entry_fid)->func - 1];
+    for (g = 0; g < ctx->nglobals; g++) {
+        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+        bool used = pvk_spv_bit(entry->globals, g);
+        if (!used && pvk_spv_bit(listed, g) && x->p->storage == PVK_SPV_StorageOutput &&
+            ctx->model == PVK_SPV_ExecutionModelVertex && !x->msl) { /* declared outputs the fragment may read */
+            x->msl = pvk_spv_name(ctx, ctx->globals[g]);
+            x->p->expr = x->msl;
+            used = true;
+        }
+        if (!used)
+            continue;
+        if (x->flags & PVK_SPV_F_UNSUPPORTED)
+            pvk_spv_fail(ctx, "variable %u: Patch, PerPrimitive, PerVertexKHR and XfbBuffer are not supported",
+                         ctx->globals[g]);
+        if (x->p->storage == PVK_SPV_StorageInput && (x->flags & PVK_SPV_F_BUILTIN) &&
+            x->builtin == PVK_SPV_BuiltInHelperInvocation) {
+            x->flags |= PVK_SPV_F_EXPR; /* demotion changes it: read it each time */
+            x->p->expr = "simd_is_helper_thread()";
+        }
+    }
+}
+
+/* Whether a global takes part in the stage function: used by the entry
+ * point, or (vertex outputs) listed in its interface. */
+static bool pvk_spv_stage_global(struct pvk_spv *ctx, const struct pvk_spv_func *entry, uint32_t g)
+{
+    return pvk_spv_bit(entry->globals, g) || (ctx->ids[ctx->globals[g]].msl && ctx->ids[ctx->globals[g]].p->storage ==
+                                                                                   PVK_SPV_StorageOutput);
+}
+
+/* A built-in variable or block member the stage function provides or
+ * reads: lv is its lvalue, tid its type. */
+static void pvk_spv_stage_builtin(struct pvk_spv *ctx, uint32_t builtin, uint32_t tid, const char *lv, bool output,
+                                  struct pvk_sb *outs, uint32_t *need, bool per_sample)
+{
+    struct pvk_msl_result *res = ctx->result;
+    struct pvk_spv_type *t = pvk_spv_type(ctx, tid), *s = pvk_spv_scalar_of(ctx, t);
+    bool vertex = ctx->model == PVK_SPV_ExecutionModelVertex, amp = false;
+    const char *e = NULL;
+
+    if (output && vertex) {
+        switch (builtin) {
+        case PVK_SPV_BuiltInPosition:
+            /* Vulkan's clip space has y pointing down, Metal's up: flipping y
+             * here keeps images, winding and FragCoord as in Vulkan. */
+            if (t->op != PVK_SPV_OpTypeVector || t->count != 4)
+                pvk_spv_fail(ctx, "Position must be a vec4");
+            res->builtins |= PVK_MSL_BUILTIN_POSITION;
+            pvk_spv_line(ctx, "pvk_out.pvk_position = float4(%s);", lv);
+            pvk_spv_line(ctx, "pvk_out.pvk_position.y = -pvk_out.pvk_position.y;");
+            return;
+        case PVK_SPV_BuiltInPointSize:
+            if (t->op != PVK_SPV_OpTypeFloat)
+                pvk_spv_fail(ctx, "PointSize must be a float");
+            res->builtins |= PVK_MSL_BUILTIN_POINT_SIZE;
+            pvk_sb_printf(ctx, outs, "    float pvk_point_size [[point_size]];\n");
+            pvk_spv_line(ctx, "pvk_out.pvk_point_size = float(%s);", lv);
+            return;
+        case PVK_SPV_BuiltInClipDistance:
+            if (t->op != PVK_SPV_OpTypeArray || pvk_spv_type(ctx, t->elem)->op != PVK_SPV_OpTypeFloat || t->count > 8)
+                pvk_spv_fail(ctx, "ClipDistance must be an array of up to 8 floats");
+            res->builtins |= PVK_MSL_BUILTIN_CLIP_DISTANCE;
+            res->clip_distances = t->count;
+            pvk_sb_printf(ctx, outs, "    float pvk_clip_distance [[clip_distance]] [%u];\n", t->count);
+            pvk_spv_line(ctx, "for (uint pvk_i = 0u; pvk_i < %uu; pvk_i++)", t->count);
+            pvk_spv_line(ctx, "    pvk_out.pvk_clip_distance[pvk_i] = %s[pvk_i];", lv);
+            return;
+        case PVK_SPV_BuiltInCullDistance:
+            pvk_spv_fail(ctx, "CullDistance is not supported: Metal has no cull distances");
+        case PVK_SPV_BuiltInLayer:
+        case PVK_SPV_BuiltInViewportIndex: {
+            bool layer = builtin == PVK_SPV_BuiltInLayer;
+            if (t->op != PVK_SPV_OpTypeInt || t->width != 32)
+                pvk_spv_fail(ctx, "Layer and ViewportIndex must be 32-bit integers");
+            res->builtins |= layer ? PVK_MSL_BUILTIN_LAYER : PVK_MSL_BUILTIN_VIEWPORT_INDEX;
+            res->layered = true;
+            pvk_sb_printf(ctx, outs, "    uint pvk_%s [[%s]];\n", layer ? "layer" : "viewport",
+                          layer ? "render_target_array_index" : "viewport_array_index");
+            pvk_spv_line(ctx, "pvk_out.pvk_%s = uint(%s);", layer ? "layer" : "viewport", lv);
+            return;
+        }
+        default:
+            pvk_spv_fail(ctx, "built-in %u is not a vertex shader output", builtin);
+        }
+    }
+    if (output) { /* fragment */
+        switch (builtin) {
+        case PVK_SPV_BuiltInFragDepth:
+            if (t->op != PVK_SPV_OpTypeFloat || t->width != 32)
+                pvk_spv_fail(ctx, "FragDepth must be a float");
+            if (res->early_fragment_tests)
+                return; /* Vulkan: the tests already used the rasterized depth, the write is ignored */
+            res->builtins |= PVK_MSL_BUILTIN_FRAG_DEPTH;
+            res->depth_replacing = true;
+            pvk_spv_line(ctx, "pvk_out.pvk_frag_depth = %s;", lv);
+            return;
+        case PVK_SPV_BuiltInSampleMask:
+            if (t->op != PVK_SPV_OpTypeArray || pvk_spv_type(ctx, t->elem)->op != PVK_SPV_OpTypeInt)
+                pvk_spv_fail(ctx, "SampleMask must be an array of integers");
+            res->builtins |= PVK_MSL_BUILTIN_SAMPLE_MASK;
+            pvk_sb_printf(ctx, outs, "    uint pvk_sample_mask [[sample_mask]];\n");
+            pvk_spv_line(ctx, "pvk_out.pvk_sample_mask = uint(%s[0]);", lv);
+            return;
+        default:
+            pvk_spv_fail(ctx, "built-in %u is not a fragment shader output", builtin);
+        }
+    }
+
+    /* inputs: the variable is initialized from the stage function's parameters */
+    switch (vertex ? builtin + 100000u : builtin) {
+    case 100000u + PVK_SPV_BuiltInVertexIndex:
+        res->builtins |= PVK_MSL_BUILTIN_VERTEX_INDEX;
+        *need |= PVK_SPV_NEED_VERTEX_ID; /* includes the base vertex, as Vulkan's */
+        e = "pvk_vertex_id";
+        break;
+    case 100000u + PVK_SPV_BuiltInInstanceIndex:
+        res->builtins |= PVK_MSL_BUILTIN_INSTANCE_INDEX;
+        *need |= PVK_SPV_NEED_INSTANCE_ID; /* includes the base instance, as Vulkan's */
+        e = "pvk_instance_id";
+        break;
+    case 100000u + PVK_SPV_BuiltInBaseVertex:
+        res->builtins |= PVK_MSL_BUILTIN_BASE_VERTEX;
+        *need |= PVK_SPV_NEED_BASE_VERTEX; /* firstVertex for non-indexed draws */
+        e = "pvk_base_vertex";
+        break;
+    case 100000u + PVK_SPV_BuiltInBaseInstance:
+        res->builtins |= PVK_MSL_BUILTIN_BASE_INSTANCE;
+        *need |= PVK_SPV_NEED_BASE_INSTANCE;
+        e = "pvk_base_instance";
+        break;
+    case 100000u + PVK_SPV_BuiltInDrawIndex:
+        res->builtins |= PVK_MSL_BUILTIN_DRAW_INDEX;
+        e = "0u"; /* one draw per command (multiDrawIndirect is not supported) */
+        break;
+    case 100000u + PVK_SPV_BuiltInViewIndex:
+    case PVK_SPV_BuiltInViewIndex:
+        res->builtins |= PVK_MSL_BUILTIN_VIEW_INDEX;
+        e = pvk_spv_view_index(ctx, &amp);
+        if (amp)
+            *need |= PVK_SPV_NEED_AMPLIFICATION;
+        break;
+    case PVK_SPV_BuiltInFragCoord:
+        if (t->op != PVK_SPV_OpTypeVector || t->count != 4)
+            pvk_spv_fail(ctx, "FragCoord must be a vec4");
+        res->builtins |= PVK_MSL_BUILTIN_FRAG_COORD;
+        *need |= PVK_SPV_NEED_POSITION;
+        if (per_sample) { /* Vulkan: at the sample's position (Metal gives the pixel center) */
+            *need |= PVK_SPV_NEED_SAMPLE_ID;
+            pvk_spv_line(ctx, "%s = float4(floor(pvk_frag_coord.xy) + get_sample_position(pvk_sample_id), "
+                              "pvk_frag_coord.zw);", lv);
+        } else {
+            pvk_spv_line(ctx, "%s = pvk_frag_coord;", lv);
+        }
+        return;
+    case PVK_SPV_BuiltInFrontFacing:
+        if (t->op != PVK_SPV_OpTypeBool)
+            pvk_spv_fail(ctx, "FrontFacing must be a bool");
+        res->builtins |= PVK_MSL_BUILTIN_FRONT_FACING;
+        *need |= PVK_SPV_NEED_FRONT_FACING;
+        pvk_spv_line(ctx, "%s = pvk_front_facing;", lv);
+        return;
+    case PVK_SPV_BuiltInSampleId:
+        res->builtins |= PVK_MSL_BUILTIN_SAMPLE_ID;
+        *need |= PVK_SPV_NEED_SAMPLE_ID;
+        e = "pvk_sample_id";
+        break;
+    case PVK_SPV_BuiltInSamplePosition:
+        if (t->op != PVK_SPV_OpTypeVector || t->count != 2)
+            pvk_spv_fail(ctx, "SamplePosition must be a vec2");
+        res->builtins |= PVK_MSL_BUILTIN_SAMPLE_POSITION;
+        *need |= PVK_SPV_NEED_SAMPLE_ID;
+        pvk_spv_line(ctx, "%s = get_sample_position(pvk_sample_id);", lv);
+        return;
+    case PVK_SPV_BuiltInSampleMask:
+        if (t->op != PVK_SPV_OpTypeArray || pvk_spv_type(ctx, t->elem)->op != PVK_SPV_OpTypeInt)
+            pvk_spv_fail(ctx, "SampleMask must be an array of integers");
+        res->builtins |= PVK_MSL_BUILTIN_SAMPLE_MASK_IN;
+        *need |= PVK_SPV_NEED_SAMPLE_MASK;
+        if (per_sample) /* Vulkan: only the invocation's own sample (Metal gives the fragment's coverage) */
+            *need |= PVK_SPV_NEED_SAMPLE_ID;
+        pvk_spv_line(ctx, "%s[0] = %s(pvk_sample_mask_in%s);", lv, pvk_spv_type(ctx, t->elem)->msl,
+                     per_sample ? " & (1u << pvk_sample_id)" : "");
+        return;
+    case PVK_SPV_BuiltInHelperInvocation:
+        res->builtins |= PVK_MSL_BUILTIN_HELPER_INVOCATION;
+        return; /* an expression (pvk_spv_stage_prepare) */
+    case PVK_SPV_BuiltInPointCoord:
+        if (t->op != PVK_SPV_OpTypeVector || t->count != 2)
+            pvk_spv_fail(ctx, "PointCoord must be a vec2");
+        res->builtins |= PVK_MSL_BUILTIN_POINT_COORD;
+        *need |= PVK_SPV_NEED_POINT_COORD;
+        pvk_spv_line(ctx, "%s = pvk_point_coord;", lv);
+        return;
+    case PVK_SPV_BuiltInLayer:
+        res->builtins |= PVK_MSL_BUILTIN_LAYER;
+        *need |= PVK_SPV_NEED_LAYER;
+        e = "pvk_layer";
+        break;
+    case PVK_SPV_BuiltInViewportIndex:
+        res->builtins |= PVK_MSL_BUILTIN_VIEWPORT_INDEX;
+        *need |= PVK_SPV_NEED_VIEWPORT;
+        e = "pvk_viewport";
+        break;
+    case PVK_SPV_BuiltInPrimitiveId:
+        res->builtins |= PVK_MSL_BUILTIN_PRIMITIVE_ID;
+        *need |= PVK_SPV_NEED_PRIMITIVE_ID;
+        e = "pvk_primitive_id";
+        break;
+    default:
+        pvk_spv_fail(ctx, "built-in %u is not supported as a %s shader input", builtin, vertex ? "vertex" : "fragment");
+    }
+    if (!s || t->op != PVK_SPV_OpTypeInt || t->width != 32)
+        pvk_spv_fail(ctx, "built-in %u must be a 32-bit integer", builtin);
+    pvk_spv_line(ctx, "%s = %s(%s);", lv, t->msl, e);
+}
+
+/* The vertex or fragment function: it declares the SPIR-V entry point's
+ * globals, fills the inputs from the stage's built-ins, varyings or vertex
+ * buffers, calls the entry point and returns the outputs. */
+static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
+{
+    struct pvk_msl_result *res = ctx->result;
+    const struct pvk_msl_options *o = ctx->options;
+    struct pvk_spv_func *entry = ctx->funcs[pvk_spv_get(ctx, ctx->entry_fid)->func - 1];
+    bool vertex = ctx->model == PVK_SPV_ExecutionModelVertex, per_sample = false, early = false;
+    struct pvk_spv_iface in, out;
+    struct pvk_sb outs, ins;
+    const char **params = NULL, **args = NULL, *depth_mode = "any";
+    uint32_t nparams = 0, cap = 0, nargs = 0, cap_args = 0, g, i, loc, idx, set, need = 0;
+    uint32_t fetch_colors = 0, sample_inputs = 0, nin = 0, nout = 0;
+    enum pvk_msl_scalar_type in_type[PVK_MSL_MAX_LOCATIONS], out_type[2][PVK_MSL_MAX_LOCATIONS];
+    struct pvk_msl_varying vin[PVK_MSL_MAX_LOCATIONS], vout[PVK_MSL_MAX_LOCATIONS + 1];
+    struct pvk_sb *text = &ctx->text;
+
+    memset(&in, 0, sizeof(in));
+    memset(&out, 0, sizeof(out));
+    memset(&outs, 0, sizeof(outs));
+    memset(&ins, 0, sizeof(ins));
+    memset(vin, 0, sizeof(vin));
+    memset(vout, 0, sizeof(vout));
+
+    /* Execution modes */
+    for (i = 0; i < ctx->nmodes; i++) {
+        struct pvk_spv_insn mi = pvk_spv_insn_at(ctx, ctx->modes[i]);
+        uint32_t mode = pvk_spv_arg(ctx, &mi, 2);
+        if (mi.w[1] != ctx->entry_fid)
+            continue;
+        switch (mode) {
+        case PVK_SPV_ExecutionModeOriginUpperLeft:
+        case PVK_SPV_ExecutionModeDepthReplacing:
+        case 16: /* DepthUnchanged */
+        case 4459: case 4460: case 4461: case 4462: case 4463: /* float controls: Metal's defaults */
+            break;
+        case PVK_SPV_ExecutionModeEarlyFragmentTests:
+            early = true;
+            break;
+        case PVK_SPV_ExecutionModeDepthGreater:
+            depth_mode = "greater";
+            break;
+        case PVK_SPV_ExecutionModeDepthLess:
+            depth_mode = "less";
+            break;
+        case 8: /* OriginLowerLeft */
+        case 6: /* PixelCenterInteger */
+            pvk_spv_fail(ctx, "Vulkan fragment shaders use OriginUpperLeft with pixel centers at half integers");
+        default:
+            pvk_spv_fail(ctx, "unsupported execution mode %u", mode);
+        }
+    }
+    res->early_fragment_tests = early;
+
+    /* Interface variables: user locations into leaves */
+    for (g = 0; g < ctx->nglobals; g++) {
+        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+        uint32_t st = x->p->storage;
+        struct pvk_spv_type *t = pvk_spv_type(ctx, x->p->type);
+        if (!pvk_spv_stage_global(ctx, entry, g) || (st != PVK_SPV_StorageInput && st != PVK_SPV_StorageOutput))
+            continue;
+        if ((x->flags & PVK_SPV_F_BUILTIN) || (t->op == PVK_SPV_OpTypeStruct && t->nmembers &&
+                                                (t->members[0].flags & PVK_SPV_M_BUILTIN)))
+            continue; /* built-ins below */
+        loc = x->location;
+        idx = (x->flags & PVK_SPV_F_INDEX) ? x->index : 0;
+        if (!(x->flags & PVK_SPV_F_LOCATION) && t->op != PVK_SPV_OpTypeStruct)
+            pvk_spv_fail(ctx, "stage %s variable %u has no Location", st == PVK_SPV_StorageInput ? "input" : "output",
+                         ctx->globals[g]);
+        if (idx > 1 || (idx && (vertex || st != PVK_SPV_StorageOutput || loc != 0)))
+            pvk_spv_fail(ctx, "variable %u: Index 1 is only for fragment output location 0 (dual-source blending)",
+                         ctx->globals[g]);
+        if ((x->flags & PVK_SPV_F_LOCATION) || t->op != PVK_SPV_OpTypeStruct || t->nmembers == 0 ||
+            (t->members[0].flags & PVK_SPV_M_LOCATION)) {
+            uint32_t at = loc;
+            if (!(x->flags & PVK_SPV_F_LOCATION) && t->op == PVK_SPV_OpTypeStruct)
+                at = t->members[0].location;
+            pvk_spv_flatten(ctx, st == PVK_SPV_StorageInput ? &in : &out, x->p->type, x->msl, &at,
+                            (x->flags & PVK_SPV_F_COMPONENT) ? x->component : 0, x->interp, idx, 0);
+        } else {
+            pvk_spv_fail(ctx, "stage interface block %u has no Location", ctx->globals[g]);
+        }
+    }
+
+    /* Slot types: per location (fragment inputs: the vertex stage's when linked) */
+    for (loc = 0; loc < PVK_MSL_MAX_LOCATIONS; loc++) {
+        in_type[loc] = pvk_spv_slot_type(ctx, &in, loc, 0, !vertex);
+        out_type[0][loc] = pvk_spv_slot_type(ctx, &out, loc, 0, vertex);
+        out_type[1][loc] = pvk_spv_slot_type(ctx, &out, loc, 1, vertex);
+        if (!vertex && out_type[0][loc] != PVK_SPV_SLOT_NONE && loc >= 8)
+            pvk_spv_fail(ctx, "fragment output location %u is out of range (0-7)", loc);
+        if (!vertex && in_type[loc] != PVK_SPV_SLOT_NONE && o && o->linked) {
+            enum pvk_msl_scalar_type vt = PVK_SPV_SLOT_NONE;
+            for (i = 0; i < o->vertex_output_count && o->vertex_outputs; i++)
+                if (o->vertex_outputs[i].location == loc)
+                    vt = o->vertex_outputs[i].type;
+            if (vt == PVK_SPV_SLOT_NONE) {
+                in_type[loc] = PVK_SPV_SLOT_NONE; /* not written (undefined in Vulkan): reads 0 */
+                continue;
+            }
+            /* A float read from a vertex location that mixes types (uint) is
+             * reinterpreted; integers cannot come from a float location. */
+            if (vt == PVK_MSL_SCALAR_FLOAT && in_type[loc] != PVK_MSL_SCALAR_FLOAT)
+                pvk_spv_fail(ctx, "location %u: the fragment input does not match the vertex output's type", loc);
+            in_type[loc] = vt;
+        }
+    }
+    if (!vertex) { /* per-sample execution: Sample inputs, SampleId, SamplePosition, sample shading */
+        for (i = 0; i < in.nleaves; i++)
+            if ((in.leaves[i].interp & PVK_MSL_INTERP_SAMPLE) && in_type[in.leaves[i].location] != PVK_SPV_SLOT_NONE)
+                sample_inputs++;
+        for (g = 0; g < ctx->nglobals; g++) {
+            struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+            if (pvk_spv_bit(entry->globals, g) && x->p->storage == PVK_SPV_StorageInput &&
+                (x->flags & PVK_SPV_F_BUILTIN) &&
+                (x->builtin == PVK_SPV_BuiltInSampleId || x->builtin == PVK_SPV_BuiltInSamplePosition))
+                sample_inputs++;
+        }
+        per_sample = sample_inputs || (o && o->sample_shading);
+    }
+
+    /* The function's body: declarations, inputs, the call, outputs */
+    ctx->body.len = 0;
+    ctx->out = &ctx->body;
+    ctx->indent = 1;
+    pvk_spv_line(ctx, "%s_out pvk_out = {};", name);
+    for (g = 0; g < ctx->nglobals; g++) { /* declare */
+        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+        struct pvk_spv_type *t;
+        if (!pvk_spv_stage_global(ctx, entry, g) || pvk_spv_is_resource(x->p) || (x->flags & PVK_SPV_F_EXPR) ||
+            x->p->storage == PVK_SPV_StoragePushConstant)
+            continue;
+        t = pvk_spv_type(ctx, x->p->type);
+        if (x->p->storage == PVK_SPV_StoragePrivate || x->p->storage == PVK_SPV_StorageOutput) {
+            struct pvk_spv_insn vi = pvk_spv_insn_at(ctx, x->insn);
+            if (vi.wc > 4) {
+                pvk_spv_line(ctx, "%s %s = %s;", t->msl, x->msl, pvk_spv_const_expr(ctx, vi.w[4], 0));
+                continue;
+            }
+        }
+        pvk_spv_line(ctx, "%s %s = {};", t->msl, x->msl);
+    }
+    for (g = 0; g < ctx->nglobals; g++) { /* input attachments: framebuffer fetch */
+        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+        uint32_t tid = x->p->type, n = 1, k;
+        struct pvk_spv_type *t;
+        if (!pvk_spv_stage_global(ctx, entry, g) || !x->p->value)
+            continue;
+        t = pvk_spv_type(ctx, tid);
+        if (t->op == PVK_SPV_OpTypeRuntimeArray)
+            pvk_spv_fail(ctx, "runtime-sized input attachment arrays are not supported");
+        if (t->op == PVK_SPV_OpTypeArray) {
+            n = t->count;
+            if (pvk_spv_type(ctx, t->elem)->op != PVK_SPV_OpTypeImage)
+                pvk_spv_fail(ctx, "arrays of arrays of input attachments are not supported");
+        }
+        if (!(x->flags & PVK_SPV_F_IA_INDEX) || x->ia_index + n > 32 || n > 32)
+            pvk_spv_fail(ctx, "input attachment %u needs an InputAttachmentIndex below 32", ctx->globals[g]);
+        for (k = 0; k < n; k++) {
+            uint32_t ia = x->ia_index + k, c = ia;
+            if (o && o->input_attachment_colors) {
+                if (ia >= o->input_attachment_color_count)
+                    pvk_spv_fail(ctx, "input attachment index %u has no color attachment", ia);
+                c = o->input_attachment_colors[ia];
+            }
+            if (c >= 8)
+                pvk_spv_fail(ctx, "input attachment index %u maps to color attachment %u (0-7)", ia, c);
+            res->input_attachments |= 1u << ia;
+            if (t->op == PVK_SPV_OpTypeArray)
+                pvk_spv_line(ctx, "%s[%u]%s = pvk_color%u;", x->msl, k, t->slot_padded ? ".v" : "", c);
+            else
+                pvk_spv_line(ctx, "%s = pvk_color%u;", x->msl, c);
+            if (!(fetch_colors & (1u << c)))
+                PVK_SPV_PUSH(ctx, params, nparams, cap,
+                             pvk_spv_fmt(ctx, "%s pvk_color%u [[color(%u)]]",
+                                         pvk_spv_type(ctx, t->op == PVK_SPV_OpTypeArray ? t->elem : tid)->msl, c, c));
+            fetch_colors |= 1u << c;
+        }
+    }
+    res->color_fetches = fetch_colors;
+
+    /* Built-in inputs */
+    for (g = 0; g < ctx->nglobals; g++) {
+        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+        if (!pvk_spv_bit(entry->globals, g) || x->p->storage != PVK_SPV_StorageInput)
+            continue;
+        if (x->flags & PVK_SPV_F_BUILTIN)
+            pvk_spv_stage_builtin(ctx, x->builtin, x->p->type, x->msl, false, &outs, &need, per_sample);
+        else if (pvk_spv_type(ctx, x->p->type)->op == PVK_SPV_OpTypeStruct &&
+                 pvk_spv_type(ctx, x->p->type)->nmembers &&
+                 (pvk_spv_type(ctx, x->p->type)->members[0].flags & PVK_SPV_M_BUILTIN))
+            pvk_spv_fail(ctx, "built-in input blocks are not supported in vertex and fragment shaders");
+    }
+
+    /* User inputs */
+    if (vertex) {
+        for (loc = 0; loc < PVK_MSL_MAX_LOCATIONS; loc++) {
+            enum pvk_msl_scalar_type k = in_type[loc];
+            if (k == PVK_SPV_SLOT_NONE)
+                continue;
+            pvk_spv_vertex_fetch(ctx, loc, &k, &need);
+            in_type[loc] = k;
+            vin[nin].location = loc;
+            vin[nin].type = k;
+            for (i = 0; i < in.nleaves; i++)
+                if (in.leaves[i].location == loc)
+                    vin[nin].components |= ((1u << in.leaves[i].ncomp) - 1) << in.leaves[i].component;
+            nin++;
+        }
+        res->vertex_table_buffer = o && o->vertex_table_buffer ? o->vertex_table_buffer : PVK_MSL_VERTEX_TABLE_BUFFER;
+    }
+    for (i = 0; i < in.nleaves; i++) {
+        const struct pvk_spv_leaf *l = &in.leaves[i];
+        enum pvk_msl_scalar_type k = in_type[l->location];
+        if (k == PVK_SPV_SLOT_NONE)
+            continue; /* (an unwritten fragment input: 0) */
+        pvk_spv_line(ctx, "%s = %s;", l->lvalue,
+                     pvk_spv_from_slot(ctx, pvk_spv_swizzle(ctx, vertex ? pvk_spv_fmt(ctx, "pvk_attr%u", l->location)
+                                                                         : pvk_spv_fmt(ctx, "pvk_in.pvk_l%u", l->location),
+                                                            l->component, l->ncomp),
+                                       k, l));
+    }
+    if (!vertex) {
+        for (loc = 0; loc < PVK_MSL_MAX_LOCATIONS; loc++) {
+            uint32_t interp = 0;
+            if (in_type[loc] == PVK_SPV_SLOT_NONE)
+                continue;
+            for (i = 0; i < in.nleaves; i++)
+                if (in.leaves[i].location == loc) {
+                    interp = in.leaves[i].interp; /* (a location's variables must agree) */
+                    vin[nin].components |= ((1u << in.leaves[i].ncomp) - 1) << in.leaves[i].component;
+                }
+            if (per_sample && !(interp & PVK_MSL_INTERP_FLAT)) /* sample shading: interpolated at the sample */
+                interp = (interp & ~PVK_MSL_INTERP_CENTROID) | PVK_MSL_INTERP_SAMPLE;
+            if (in_type[loc] != PVK_MSL_SCALAR_FLOAT)
+                interp = PVK_MSL_INTERP_FLAT;
+            pvk_sb_printf(ctx, &ins, "    %s pvk_l%u [[user(locn%u)]] [[%s]];\n", pvk_spv_kind_msl(ctx, in_type[loc], 4),
+                          loc, loc, pvk_spv_interp_attr(interp, in_type[loc] != PVK_MSL_SCALAR_FLOAT));
+            vin[nin].location = loc;
+            vin[nin].type = in_type[loc];
+            vin[nin].interpolation = interp;
+            nin++;
+        }
+    }
+
+    /* The call */
+    for (g = 0; g < ctx->nglobals; g++)
+        if (pvk_spv_bit(entry->globals, g) && pvk_spv_passed(&ctx->ids[ctx->globals[g]]))
+            PVK_SPV_PUSH(ctx, args, nargs, cap_args, ctx->ids[ctx->globals[g]].msl);
+    for (set = 0; set < PVK_MSL_MAX_SETS; set++)
+        if (pvk_spv_func_sets(ctx, entry) & (1u << set))
+            PVK_SPV_PUSH(ctx, args, nargs, cap_args, pvk_spv_fmt(ctx, "set%u", set));
+    pvk_spv_line(ctx, "%s(%s);", entry->msl, pvk_spv_join(ctx, "", args, nargs, ", ", ""));
+
+    /* Outputs: built-ins, then locations */
+    if (vertex)
+        pvk_sb_printf(ctx, &outs, "    float4 pvk_position [[position]];\n");
+    for (g = 0; g < ctx->nglobals; g++) {
+        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+        struct pvk_spv_type *t;
+        if (!pvk_spv_stage_global(ctx, entry, g) || x->p->storage != PVK_SPV_StorageOutput)
+            continue;
+        t = pvk_spv_type(ctx, x->p->type);
+        if (x->flags & PVK_SPV_F_BUILTIN) {
+            if (pvk_spv_bit(entry->globals, g))
+                pvk_spv_stage_builtin(ctx, x->builtin, x->p->type, x->msl, true, &outs, &need, per_sample);
+        } else if (t->op == PVK_SPV_OpTypeStruct && t->nmembers && (t->members[0].flags & PVK_SPV_M_BUILTIN)) {
+            for (i = 0; i < t->nmembers; i++) { /* gl_PerVertex: the members the shader writes */
+                const struct pvk_spv_member *m = &t->members[i];
+                if (!(m->flags & PVK_SPV_M_BUILTIN))
+                    pvk_spv_fail(ctx, "a block mixes built-in and user-defined members");
+                if (pvk_spv_bit(entry->globals, g) && pvk_spv_member_used(ctx, ctx->globals[g], i))
+                    pvk_spv_stage_builtin(ctx, m->builtin, m->type, pvk_spv_fmt(ctx, "%s.%s", x->msl, m->msl), true,
+                                          &outs, &need, per_sample);
+            }
+        }
+    }
+    if (vertex && o && o->point_size && !(res->builtins & PVK_MSL_BUILTIN_POINT_SIZE)) {
+        pvk_sb_printf(ctx, &outs, "    float pvk_point_size [[point_size]];\n");
+        pvk_spv_line(ctx, "pvk_out.pvk_point_size = 1.0f;"); /* maintenance5: points are 1 pixel wide */
+    }
+    if (res->builtins & PVK_MSL_BUILTIN_FRAG_DEPTH)
+        pvk_sb_printf(ctx, &outs, "    float pvk_frag_depth [[depth(%s)]];\n", depth_mode);
+    for (idx = 0; idx < 2; idx++) {
+        for (loc = 0; loc < PVK_MSL_MAX_LOCATIONS; loc++) {
+            enum pvk_msl_scalar_type k = out_type[idx][loc];
+            const char *member;
+            if (k == PVK_SPV_SLOT_NONE)
+                continue;
+            if (!vertex && o && o->color_attachments_valid &&
+                (!(o->color_attachments & (1u << loc)) || o->color_attachment_types[loc] != k))
+                continue; /* no attachment of this type: Metal rejects the output */
+            member = vertex ? pvk_spv_fmt(ctx, "pvk_l%u", loc)
+                     : idx  ? pvk_spv_fmt(ctx, "pvk_color%u_1", loc)
+                            : pvk_spv_fmt(ctx, "pvk_color%u", loc);
+            if (vertex)
+                pvk_sb_printf(ctx, &outs, "    %s %s [[user(locn%u)]];\n", pvk_spv_kind_msl(ctx, k, 4), member, loc);
+            else if (idx)
+                pvk_sb_printf(ctx, &outs, "    %s %s [[color(%u), index(1)]];\n", pvk_spv_kind_msl(ctx, k, 4), member, loc);
+            else
+                pvk_sb_printf(ctx, &outs, "    %s %s [[color(%u)]];\n", pvk_spv_kind_msl(ctx, k, 4), member, loc);
+            vout[nout].location = loc;
+            vout[nout].index = idx;
+            vout[nout].type = k;
+            for (i = 0; i < out.nleaves; i++) {
+                const struct pvk_spv_leaf *l = &out.leaves[i];
+                if (l->location != loc || l->index != idx)
+                    continue;
+                vout[nout].components |= ((1u << l->ncomp) - 1) << l->component;
+                pvk_spv_line(ctx, "%s = %s;",
+                             pvk_spv_swizzle(ctx, pvk_spv_fmt(ctx, "pvk_out.%s", member), l->component, l->ncomp),
+                             pvk_spv_to_slot(ctx, l->lvalue, k, l));
+            }
+            nout++;
+        }
+    }
+    if (outs.len)
+        pvk_spv_line(ctx, "return pvk_out;");
+
+    /* Parameters */
+    if (vertex && res->vertex_input_count) {
+        uint32_t tb = res->vertex_table_buffer;
+        if (tb > 30 || (res->set_mask >> tb) & 1u || ((res->has_push_constants && tb == res->push_constant_buffer)))
+            pvk_spv_fail(ctx, "the vertex buffer table's buffer index %u is taken (or out of range)", tb);
+        PVK_SPV_PUSH(ctx, params, nparams, cap,
+                     pvk_spv_fmt(ctx, "constant pvk_vertex_buffer* pvk_vb [[buffer(%u)]]", tb));
+    }
+    if (!vertex && per_sample)
+        need |= PVK_SPV_NEED_SAMPLE_ID; /* runs the function per sample */
+    res->sample_shading = !vertex && per_sample;
+    if (need & PVK_SPV_NEED_VERTEX_ID)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_vertex_id [[vertex_id]]");
+    if (need & PVK_SPV_NEED_INSTANCE_ID)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_instance_id [[instance_id]]");
+    if (need & PVK_SPV_NEED_BASE_VERTEX)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_base_vertex [[base_vertex]]");
+    if (need & PVK_SPV_NEED_BASE_INSTANCE)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_base_instance [[base_instance]]");
+    if (need & PVK_SPV_NEED_AMPLIFICATION)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "ushort pvk_amplification_id [[amplification_id]]");
+    if (need & PVK_SPV_NEED_POSITION)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "float4 pvk_frag_coord [[position]]");
+    if (need & PVK_SPV_NEED_FRONT_FACING)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "bool pvk_front_facing [[front_facing]]");
+    if (need & PVK_SPV_NEED_SAMPLE_ID)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_sample_id [[sample_id]]");
+    if (need & PVK_SPV_NEED_SAMPLE_MASK)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_sample_mask_in [[sample_mask]]");
+    if (need & PVK_SPV_NEED_POINT_COORD)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "float2 pvk_point_coord [[point_coord]]");
+    if (need & PVK_SPV_NEED_LAYER)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_layer [[render_target_array_index]]");
+    if (need & PVK_SPV_NEED_VIEWPORT)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_viewport [[viewport_array_index]]");
+    if (need & PVK_SPV_NEED_PRIMITIVE_ID)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_primitive_id [[primitive_id]]");
+    for (set = 0; set < PVK_MSL_MAX_SETS; set++)
+        if (res->set_mask & (1u << set))
+            PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_fmt(ctx, "constant pvk_set%u& set%u [[buffer(%u)]]", set, set, set));
+    for (g = 0; g < ctx->nglobals; g++) {
+        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+        if (pvk_spv_bit(entry->globals, g) && x->p->storage == PVK_SPV_StoragePushConstant)
+            PVK_SPV_PUSH(ctx, params, nparams, cap,
+                         pvk_spv_fmt(ctx, "constant %s& %s [[buffer(%u)]]", pvk_spv_type(ctx, x->p->type)->msl, x->msl,
+                                     res->push_constant_buffer));
+    }
+
+    /* Reflection */
+    if (nin) {
+        res->inputs = calloc(nin, sizeof(*res->inputs));
+        if (!res->inputs)
+            pvk_spv_oom(ctx);
+        memcpy(res->inputs, vin, nin * sizeof(*vin));
+        res->input_count = nin;
+    }
+    if (nout) {
+        res->outputs = calloc(nout, sizeof(*res->outputs));
+        if (!res->outputs)
+            pvk_spv_oom(ctx);
+        memcpy(res->outputs, vout, nout * sizeof(*vout));
+        res->output_count = nout;
+    }
+
+    /* Text: the structs, then the function */
+    if (vertex && res->vertex_input_count)
+        pvk_sb_printf(ctx, text, "/* A vertex buffer table entry (struct pvk_msl_vertex_buffer). */\n"
+                                 "struct pvk_vertex_buffer\n{\n    device const uchar* p;\n    ulong size;\n"
+                                 "    uint stride;\n    uint reserved;\n};\n\n");
+    if (ins.len) {
+        pvk_sb_printf(ctx, text, "struct %s_in\n{\n", name);
+        pvk_sb_append(ctx, text, ins.data, ins.len);
+        pvk_sb_append(ctx, text, "};\n\n", 4);
+        PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_fmt(ctx, "%s_in pvk_in [[stage_in]]", name));
+        memmove(params + 1, params, (nparams - 1) * sizeof(*params)); /* first, for readability */
+        params[0] = pvk_spv_fmt(ctx, "%s_in pvk_in [[stage_in]]", name);
+    }
+    if (outs.len) {
+        pvk_sb_printf(ctx, text, "struct %s_out\n{\n", name);
+        pvk_sb_append(ctx, text, outs.data, outs.len);
+        pvk_sb_append(ctx, text, "};\n\n", 4);
+    } else {
+        /* nothing to return: drop the pvk_out declaration (the first line) */
+        char *nl = memchr(ctx->body.data, '\n', ctx->body.len);
+        size_t cut = nl ? (size_t)(nl - ctx->body.data) + 1 : ctx->body.len;
+        memmove(ctx->body.data, ctx->body.data + cut, ctx->body.len - cut + 1);
+        ctx->body.len -= cut;
+    }
+    free(outs.data);
+    free(ins.data);
+    if (early)
+        pvk_sb_append(ctx, text, "[[early_fragment_tests]]\n", 25);
+    pvk_sb_printf(ctx, text, "%s %s%s %s(", vertex ? "vertex" : "fragment", outs.len ? name : "void",
+                  outs.len ? "_out" : "", name);
+    for (i = 0; i < nparams; i++)
+        pvk_sb_printf(ctx, text, "%s%s", i ? ",\n    " : "\n    ", params[i]);
+    pvk_sb_append(ctx, text, ")\n{\n", 4);
+    pvk_sb_append(ctx, text, ctx->body.data, ctx->body.len);
+    pvk_sb_append(ctx, text, "}\n", 2);
 }
 
 /* ---- Entry ---- */
@@ -42720,15 +44343,17 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
 
     pvk_spv_parse(ctx);
     if (!ctx->entry_found)
-        pvk_spv_fail(ctx, ctx->want_entry ? "entry point \"%.64s\" not found" : "no entry point%.0s",
-                     ctx->want_entry ? ctx->want_entry : "");
+        pvk_spv_fail(ctx, ctx->want_entry ? "entry point \"%.64s\" not found%s" : "no entry point%.0s%s",
+                     ctx->want_entry ? ctx->want_entry : "",
+                     ctx->options && ctx->options->stage ? " for the shader's stage" : "");
     if (pvk_spv_get(ctx, ctx->entry_fid)->kind != PVK_SPV_K_FUNC)
         pvk_spv_fail(ctx, "entry point is not a function");
     if (pvk_spv_type(ctx, pvk_spv_func_of(ctx, ctx->entry_fid)->ret)->op != PVK_SPV_OpTypeVoid ||
         pvk_spv_func_of(ctx, ctx->entry_fid)->nparams)
         pvk_spv_fail(ctx, "entry point function must be void(void)");
     pvk_spv_apply_member_insns(ctx);
-    pvk_spv_workgroup_size(ctx);
+    if (!ctx->graphics)
+        pvk_spv_workgroup_size(ctx);
     pvk_spv_layout_types(ctx);
 
     /* Each function gets a bitset of the globals: keep that bounded. */
@@ -42740,7 +44365,7 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
     kernel = pvk_spv_kernel_name(ctx);
     for (i = 0; i < ctx->norder; i++) {
         struct pvk_spv_func *fn = ctx->funcs[ctx->order[i] - 1];
-        fn->msl = fn->fid == ctx->entry_fid ? kernel : pvk_spv_name(ctx, fn->fid);
+        fn->msl = fn->fid == ctx->entry_fid && !ctx->graphics ? kernel : pvk_spv_name(ctx, fn->fid);
     }
     pvk_spv_assign_resources(ctx);
     if (ctx->options && ctx->options->dispatch_base) {
@@ -42766,9 +44391,13 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         if (pvk_spv_is_resource(x->p))
             pvk_spv_resource_view(ctx, ctx->globals[g]);
     }
+    if (ctx->graphics)
+        pvk_spv_stage_prepare(ctx);
     pvk_spv_emit_constants(ctx);
     for (i = 0; i < ctx->norder; i++)
         pvk_spv_emit_function(ctx, ctx->funcs[ctx->order[i] - 1]);
+    if (ctx->graphics)
+        pvk_spv_emit_stage(ctx, kernel);
 
     /* Metal has buffer indices 0-30; the push constants must not hit a set. */
     if (res->push_constant_buffer > 30)
@@ -42777,8 +44406,12 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         pvk_spv_fail(ctx, "push-constant buffer %u is also descriptor set %u", res->push_constant_buffer,
                      res->push_constant_buffer);
 
-    pvk_sb_printf(ctx, out, "/* Generated by PlasmaVK from SPIR-V. Kernel: %s */\n\n#include <metal_stdlib>\n\n"
-                            "using namespace metal;\n\n", kernel);
+    pvk_sb_printf(ctx, out, "/* Generated by PlasmaVK from SPIR-V. %s: %s */\n\n#include <metal_stdlib>\n\n"
+                            "using namespace metal;\n\n",
+                  ctx->model == PVK_SPV_ExecutionModelVertex     ? "Vertex function"
+                  : ctx->model == PVK_SPV_ExecutionModelFragment ? "Fragment function"
+                                                                 : "Kernel",
+                  kernel);
     if (ctx->use_array)
         pvk_sb_append(ctx, out, pvk_spv_templates, sizeof(pvk_spv_templates) - 1);
     if (ctx->use_padded)
@@ -42810,12 +44443,18 @@ static void pvk_msl_result_free(struct pvk_msl_result *result)
     free(result->msl);
     free(result->resources);
     free(result->spec_constants);
+    free(result->inputs);
+    free(result->outputs);
     result->msl = NULL;
     result->resources = NULL;
     result->spec_constants = NULL;
+    result->inputs = NULL;
+    result->outputs = NULL;
     result->msl_length = 0;
     result->resource_count = 0;
     result->spec_constant_count = 0;
+    result->input_count = 0;
+    result->output_count = 0;
 }
 
 static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const char *entry_point,
@@ -42859,6 +44498,36 @@ static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const
         memcpy(result->error, error, sizeof(error));
     }
     return code;
+}
+
+static VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_t vs_word_count, const char *vs_entry,
+                                          const struct pvk_msl_options *vs_options, const uint32_t *fs_words,
+                                          size_t fs_word_count, const char *fs_entry,
+                                          const struct pvk_msl_options *fs_options, struct pvk_msl_result *vs,
+                                          struct pvk_msl_result *fs)
+{
+    struct pvk_msl_options vo, fo;
+    VkResult r;
+
+    memset(fs, 0, sizeof(*fs));
+    memset(&vo, 0, sizeof(vo));
+    if (vs_options)
+        vo = *vs_options;
+    vo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    r = pvk_spirv_to_msl(vs_words, vs_word_count, vs_entry, &vo, vs);
+    if (r != VK_SUCCESS || !fs_word_count)
+        return r;
+    memset(&fo, 0, sizeof(fo));
+    if (fs_options)
+        fo = *fs_options;
+    fo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fo.linked = true;
+    fo.vertex_outputs = vs->outputs;
+    fo.vertex_output_count = vs->output_count;
+    r = pvk_spirv_to_msl(fs_words, fs_word_count, fs_entry, &fo, fs);
+    if (r != VK_SUCCESS)
+        pvk_msl_result_free(vs);
+    return r;
 }
 
 /* ==========================================================================
