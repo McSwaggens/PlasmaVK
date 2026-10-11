@@ -31400,6 +31400,8 @@ static inline id pvk_MTLComputePipelineDescriptor_new(void) { PVK_CLASS_CACHE("M
 static inline void pvk_MTLComputePipelineDescriptor_setComputeFunction(id self, id computeFunction) { PVK_SEL_CACHE("setComputeFunction:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, computeFunction); }
 static inline void pvk_MTLComputePipelineDescriptor_setMaxTotalThreadsPerThreadgroup(id self, unsigned long maxTotalThreadsPerThreadgroup) { PVK_SEL_CACHE("setMaxTotalThreadsPerThreadgroup:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, maxTotalThreadsPerThreadgroup); }
 static inline unsigned long pvk_MTLComputePipelineState_maxTotalThreadsPerThreadgroup(id self) { PVK_SEL_CACHE("maxTotalThreadsPerThreadgroup"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
+static inline pvk_MTLResourceID pvk_MTLTexture_gpuResourceID(id self) { PVK_SEL_CACHE("gpuResourceID"); return PVK_MSG(pvk_MTLResourceID, (id, SEL))(self, pvk_sel_); }
+static inline pvk_MTLResourceID pvk_MTLSamplerState_gpuResourceID(id self) { PVK_SEL_CACHE("gpuResourceID"); return PVK_MSG(pvk_MTLResourceID, (id, SEL))(self, pvk_sel_); }
 
 /* ==========================================================================
  * 5. Internals
@@ -33398,6 +33400,34 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  *
  * Formats, VkImage, VkImageView, VkBufferView, VkSampler and host image copy.
  * ========================================================================== */
+
+/* The Metal objects descriptors refer to. Descriptor writes (section 12)
+ * read these fields; the rest of each struct belongs to this section.
+ *
+ * Descriptor memory format (sections 12, 13 and 16 rely on it): a descriptor
+ * set is a table in GPU memory, bound by address at argument-table buffer
+ * index N for set N. Bindings are ordered by binding number, each binding's
+ * offset is 16-byte aligned, and the elements of an array binding follow
+ * each other with a per-type stride:
+ *   uniform/storage buffer (+ dynamic)  16 B: { uint64 GPU address, uint64 size in bytes }
+ *   sampled/storage image, input attachment,
+ *   uniform/storage texel buffer         8 B: MTLResourceID of mtl_texture
+ *   sampler                              8 B: MTLResourceID of mtl_sampler
+ *   combined image sampler              16 B: { texture MTLResourceID, sampler MTLResourceID }
+ *   inline uniform block                the block's bytes (descriptorCount bytes)
+ * A variable-count binding is the set's last binding. Dynamic offsets are
+ * applied at bind time to a copy of the table. */
+struct pvk_image_view {
+    id mtl_texture; /* MTLTexture view of the image */
+};
+
+struct pvk_buffer_view {
+    id mtl_texture; /* texture buffer over the bound memory's MTLBuffer */
+};
+
+struct pvk_sampler {
+    id mtl_sampler; /* MTLSamplerState created with supportArgumentBuffers */
+};
 
 /* ==========================================================================
  * 12. Descriptor sets
