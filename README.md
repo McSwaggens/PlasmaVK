@@ -13,31 +13,19 @@ no dependencies.
 Everywhere else, include `plasmavk.h` and call `vk*` as usual. You don't need
 linker flags: the header links Metal itself.
 
-**Status:** early. Instances, devices and queues, memory and buffers, command
-buffers with transfer and compute commands, queue submission, fences, binary
-and timeline semaphores, events, timestamp queries (query pools, results and
-their copies), private data, and compute pipelines (SPIR-V translated to MSL,
-push constants and buffer device addresses) work. Formats (every core format
-Metal can hold, compressed BC/ETC2/ASTC included), images, image and buffer
-views, samplers, image copies, blits, clears and resolves, and host image
-copies work, as does sampler Y'CbCr conversion (8-bit multi-planar and
-packed 4:2:2 formats, disjoint planes, every model, range, chroma location
-and filter, done in the shader). Descriptor sets work: every descriptor type, dynamic offsets,
-inline uniform blocks, push descriptors, update templates and descriptor
-indexing (update after bind, partially bound, variable-count and runtime
-arrays, non-uniform indexing). Window system integration works:
-VK_EXT_metal_surface surfaces on a CAMetalLayer, VK_KHR_swapchain (FIFO and
-immediate presentation, sRGB and, with VK_EXT_swapchain_colorspace, extended
-and HDR color spaces). Graphics works: render passes (subpasses merged into
-Metal passes, input attachments through framebuffer fetch, resolves,
-multiview), dynamic rendering with local read, graphics pipelines with every
-core dynamic state and pipeline caches, every draw command (indirect counts,
-8-bit indices and triangle fans emulated), occlusion queries and
-VK_KHR_shader_draw_parameters, VK_KHR_draw_indirect_count and
-VK_EXT_shader_viewport_index_layer; not yet: sample masks, depth bounds,
-depth/stencil input attachments and multi-draw indirect. Every other Vulkan
-1.4 command exists but logs "not implemented". The target is full Vulkan 1.4 plus
-the Roadmap 2026 profile, measured by the Khronos conformance suite.
+**Status:** every Vulkan 1.4 command is implemented on Metal 4 (no stubs left),
+along with the extensions PlasmaVK advertises: surfaces and swapchains on
+CAMetalLayer, maintenance5, descriptor indexing, draw parameters, indirect
+count, viewport index / layer output and, on Apple10 GPUs, sampler min/max
+filtering. SPIR-V compute, vertex and fragment shaders are translated to MSL
+inside the header, including subgroups, robustness, Y'CbCr sampling and
+buffer device addresses. PlasmaVK passes its own black-box conformance suite
+(`tests/conformance/`, every Vulkan 1.4 command covered) with no failures;
+the only skipped tests need hardware Apple GPUs lack, like protected memory,
+multi-GPU device groups or 64-bit shader atomics. It is not Khronos-conformant
+(that requires the Khronos CTS), and performance work has barely started:
+shaders compile in Metal's safe math mode, which costs GPU time against
+MoltenVK in the render benchmarks.
 
 ## Requirements
 
