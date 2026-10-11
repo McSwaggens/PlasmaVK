@@ -16,10 +16,12 @@ linker flags: the header links Metal itself.
 **Status:** early. Instances, devices and queues, memory and buffers, command
 buffers with transfer and compute commands, queue submission, fences, binary
 and timeline semaphores, and compute pipelines (SPIR-V translated to MSL,
-push constants and buffer device addresses) work. Descriptor sets, images and
-graphics are next; every other Vulkan 1.4 command exists but logs "not
-implemented". The target is full Vulkan 1.4 plus the Roadmap 2026 profile,
-measured by the Khronos conformance suite.
+push constants and buffer device addresses) work. Formats (every core format
+Metal can hold, compressed BC/ETC2/ASTC included), images, image and buffer
+views, samplers, image copies, blits, clears and resolves, and host image
+copies work. Descriptor sets and graphics are next; every other Vulkan 1.4
+command exists but logs "not implemented". The target is full Vulkan 1.4 plus
+the Roadmap 2026 profile, measured by the Khronos conformance suite.
 
 ## Requirements
 

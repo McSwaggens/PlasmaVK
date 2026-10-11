@@ -1,5 +1,6 @@
 /* Chapter "Resource Creation": buffers, their memory requirements, memory
- * binding and buffer device addresses. */
+ * binding and buffer device addresses; images, their memory requirements,
+ * binding and subresource layouts; image views and buffer views. */
 #include "ct.h"
 
 #include <stdio.h>
@@ -1095,6 +1096,498 @@ CT_TEST(buffer_device_address_shader,
     ct_env_fini(&e);
 }
 
+/* ---- Images ---- */
+
+#define XFER (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+
+/* Image kinds every Vulkan 1.x device can make with R8G8B8A8_UNORM (its
+ * required features, Formats > Required Format Support) and D16_UNORM. */
+static int image_kinds(const struct ct_env *e, VkImageCreateInfo *k, unsigned max)
+{
+    unsigned n = 0;
+    VkImageFormatProperties p;
+    k[n++] = ct_image_info(VK_IMAGE_TYPE_1D, VK_FORMAT_R8G8B8A8_UNORM, 64, 1, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT | XFER);
+    k[n++] = ct_image_info(VK_IMAGE_TYPE_1D, VK_FORMAT_R8G8B8A8_UNORM, 64, 1, 1, 1, 4, VK_IMAGE_USAGE_SAMPLED_BIT);
+    k[n++] = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 37, 19, 1, 6, 1,
+                           VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | XFER);
+    k[n++] = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 32, 32, 1, 1, 8,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+    k[n] = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 16, 16, 1, 5, 12, VK_IMAGE_USAGE_SAMPLED_BIT);
+    k[n++].flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    k[n++] = ct_image_info(VK_IMAGE_TYPE_3D, VK_FORMAT_R8G8B8A8_UNORM, 16, 8, 4, 5, 1, VK_IMAGE_USAGE_SAMPLED_BIT | XFER);
+    k[n++] = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_D16_UNORM, 64, 64, 1, 1, 2,
+                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+    if (vkGetPhysicalDeviceImageFormatProperties(e->pd, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D,
+                                                 VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 0,
+                                                 &p) == VK_SUCCESS &&
+        (p.sampleCounts & VK_SAMPLE_COUNT_4_BIT) && n < max) {
+        k[n] = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 32, 32, 1, 1, 1, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+        k[n++].samples = VK_SAMPLE_COUNT_4_BIT;
+    }
+    if (vkGetPhysicalDeviceImageFormatProperties(e->pd, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_LINEAR,
+                                                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 0, &p) == VK_SUCCESS &&
+        n < max) {
+        k[n] = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 13, 7, 1, 1, 1, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+        k[n].tiling = VK_IMAGE_TILING_LINEAR;
+        k[n++].initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
+    }
+    return (int)n;
+}
+
+CT_TEST(create_image_kinds,
+        "Resource Creation > Images: 1D, 1D array, mipmapped 2D, 2D array, cube-compatible, 3D, depth, "
+        "multisampled and linear images within the format's capabilities are created, bound and destroyed",
+        "vkCreateImage vkDestroyImage vkGetImageMemoryRequirements vkAllocateMemory vkBindImageMemory vkFreeMemory "
+        "vkGetPhysicalDeviceImageFormatProperties")
+{
+    VkImageCreateInfo kinds[12];
+    struct ct_env e;
+    int n, i;
+    ct_env_init(t, &e);
+    ct_env_device(t, &e, NULL);
+    n = image_kinds(&e, kinds, CT_ARRAY_SIZE(kinds));
+    for (i = 0; i < n; i++) {
+        struct ct_image m;
+        ct_image(t, &e, &kinds[i], kinds[i].tiling == VK_IMAGE_TILING_LINEAR ? HOST_COHERENT : 0, &m);
+        ct_image_fini(&e, &m);
+    }
+    vkDestroyImage(e.device, VK_NULL_HANDLE, NULL);
+    ct_env_fini(&e);
+}
+
+static VkMemoryRequirements image_requirements(const struct ct_env *e, const VkImageCreateInfo *info)
+{
+    VkMemoryRequirements req;
+    VkImage image = VK_NULL_HANDLE;
+    memset(&req, 0, sizeof(req));
+    if (vkCreateImage(e->device, info, NULL, &image) != VK_SUCCESS)
+        return req;
+    memset(&req, 0xA5, sizeof(req));
+    vkGetImageMemoryRequirements(e->device, image, &req);
+    vkDestroyImage(e->device, image, NULL);
+    return req;
+}
+
+CT_TEST(image_requirements_rules,
+        "Resource Creation > Resource Memory Association: memoryTypeBits has a bit set, includes a DEVICE_LOCAL type, "
+        "includes a HOST_VISIBLE|HOST_COHERENT type for linear images, excludes LAZILY_ALLOCATED types unless the "
+        "image is a transient attachment, and is identical for color images of equal tiling, flags and "
+        "HOST_TRANSFER/TRANSIENT usage; alignment is a power of two; size is identical for identical parameters",
+        "vkCreateImage vkDestroyImage vkGetImageMemoryRequirements vkGetPhysicalDeviceImageFormatProperties")
+{
+    VkImageCreateInfo kinds[12], info;
+    VkMemoryRequirements req, again, first;
+    struct ct_env e;
+    uint32_t local = 0, coherent = 0, lazy = 0, i;
+    int n, k;
+
+    ct_env_init(t, &e);
+    ct_env_device(t, &e, NULL);
+    for (i = 0; i < e.mem.memoryTypeCount; i++) {
+        VkMemoryPropertyFlags f = e.mem.memoryTypes[i].propertyFlags;
+        if (f & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+            local |= 1u << i;
+        if ((f & HOST_COHERENT) == HOST_COHERENT)
+            coherent |= 1u << i;
+        if (f & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT)
+            lazy |= 1u << i;
+    }
+    n = image_kinds(&e, kinds, CT_ARRAY_SIZE(kinds));
+    for (k = 0; k < n; k++) {
+        req = image_requirements(&e, &kinds[k]);
+        again = image_requirements(&e, &kinds[k]);
+        CT_CHECKF(t, req.memoryTypeBits != 0 && (req.memoryTypeBits & local), "kind %d: memoryTypeBits 0x%x", k,
+                  req.memoryTypeBits);
+        CT_CHECKF(t, !(req.memoryTypeBits & lazy), "kind %d: a lazily allocated type for a non-transient image", k);
+        CT_CHECKF(t, ct_is_pow2(req.alignment), "kind %d: alignment %llu", k, (unsigned long long)req.alignment);
+        CT_CHECKF(t, req.size >= 1 && req.size == again.size && req.alignment == again.alignment,
+                  "kind %d: sizes %llu / %llu", k, (unsigned long long)req.size, (unsigned long long)again.size);
+        if (kinds[k].tiling == VK_IMAGE_TILING_LINEAR)
+            CT_CHECKF(t, req.memoryTypeBits & coherent, "linear image: no host-coherent type in 0x%x", req.memoryTypeBits);
+    }
+    /* identical across color formats and usages for equal tiling and flags */
+    {
+        static const VkFormat colors[] = { VK_FORMAT_R8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                           VK_FORMAT_R32_UINT, VK_FORMAT_A2B10G10R10_UNORM_PACK32 };
+        static const VkImageUsageFlags use[] = { VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | XFER,
+                                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT };
+        unsigned c, u;
+        info = ct_image_info(VK_IMAGE_TYPE_2D, colors[0], 64, 64, 1, 1, 1, use[0]);
+        first = image_requirements(&e, &info);
+        for (c = 0; c < CT_ARRAY_SIZE(colors); c++)
+            for (u = 0; u < CT_ARRAY_SIZE(use); u++) {
+                info = ct_image_info(VK_IMAGE_TYPE_2D, colors[c], 64 + c, 32, 1, 1 + u, 1, use[u]);
+                req = image_requirements(&e, &info);
+                CT_CHECKF(t, req.memoryTypeBits == first.memoryTypeBits, "format %d usage 0x%x: memoryTypeBits 0x%x, not 0x%x",
+                          (int)colors[c], use[u], req.memoryTypeBits, first.memoryTypeBits);
+            }
+        /* transient attachments may (and only they may) use lazily allocated memory */
+        info = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 64, 64, 1, 1, 1,
+                             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT);
+        req = image_requirements(&e, &info);
+        CT_CHECK(t, req.memoryTypeBits != 0 && (req.memoryTypeBits & local));
+        info.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        again = image_requirements(&e, &info);
+        CT_CHECK(t, req.memoryTypeBits == again.memoryTypeBits);
+    }
+    ct_env_fini(&e);
+}
+
+/* Member by member: the struct has padding. */
+static int same_requirements(const VkMemoryRequirements *a, const VkMemoryRequirements *b)
+{
+    return a->size == b->size && a->alignment == b->alignment && a->memoryTypeBits == b->memoryTypeBits;
+}
+
+CT_TEST(device_image_requirements,
+        "Resource Creation > vkGetDeviceImageMemoryRequirements: returns the requirements an image created with the "
+        "same VkImageCreateInfo has; vkGetImageMemoryRequirements2 returns those of vkGetImageMemoryRequirements; "
+        "VkMemoryDedicatedRequirements: requiresDedicatedAllocation implies prefersDedicatedAllocation",
+        "vkCreateImage vkDestroyImage vkGetImageMemoryRequirements vkGetImageMemoryRequirements2 "
+        "vkGetDeviceImageMemoryRequirements vkGetPhysicalDeviceImageFormatProperties")
+{
+    VkImageCreateInfo kinds[12];
+    struct ct_env e;
+    int n, k;
+    ct_env_init(t, &e);
+    if (e.version < VK_API_VERSION_1_3)
+        ct_skip(t, "vkGetDeviceImageMemoryRequirements needs Vulkan 1.3");
+    ct_env_device(t, &e, NULL);
+    n = image_kinds(&e, kinds, CT_ARRAY_SIZE(kinds));
+    for (k = 0; k < n; k++) {
+        VkDeviceImageMemoryRequirements dinfo;
+        VkImageMemoryRequirementsInfo2 info2;
+        VkMemoryDedicatedRequirements dedicated;
+        VkMemoryRequirements2 d, r2;
+        VkMemoryRequirements r1;
+        VkImage image;
+        CT_REQUIRE_VK(t, vkCreateImage(e.device, &kinds[k], NULL, &image));
+        vkGetImageMemoryRequirements(e.device, image, &r1);
+        memset(&info2, 0, sizeof(info2));
+        info2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2;
+        info2.image = image;
+        memset(&dedicated, 0xA5, sizeof(dedicated));
+        dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS;
+        dedicated.pNext = NULL;
+        memset(&r2, 0, sizeof(r2));
+        r2.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+        r2.pNext = &dedicated;
+        vkGetImageMemoryRequirements2(e.device, &info2, &r2);
+        memset(&dinfo, 0, sizeof(dinfo));
+        dinfo.sType = VK_STRUCTURE_TYPE_DEVICE_IMAGE_MEMORY_REQUIREMENTS;
+        dinfo.pCreateInfo = &kinds[k];
+        memset(&d, 0, sizeof(d));
+        d.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+        vkGetDeviceImageMemoryRequirements(e.device, &dinfo, &d);
+        CT_CHECKF(t, same_requirements(&r1, &r2.memoryRequirements),
+                  "kind %d: size/alignment/bits %llu/%llu/0x%x, Requirements2 %llu/%llu/0x%x", k,
+                  (unsigned long long)r1.size, (unsigned long long)r1.alignment, r1.memoryTypeBits,
+                  (unsigned long long)r2.memoryRequirements.size, (unsigned long long)r2.memoryRequirements.alignment,
+                  r2.memoryRequirements.memoryTypeBits);
+        CT_CHECKF(t, same_requirements(&r1, &d.memoryRequirements),
+                  "kind %d: size/alignment/bits %llu/%llu/0x%x, device requirements %llu/%llu/0x%x", k,
+                  (unsigned long long)r1.size, (unsigned long long)r1.alignment, r1.memoryTypeBits,
+                  (unsigned long long)d.memoryRequirements.size, (unsigned long long)d.memoryRequirements.alignment,
+                  d.memoryRequirements.memoryTypeBits);
+        CT_CHECK(t, (dedicated.prefersDedicatedAllocation == VK_TRUE || dedicated.prefersDedicatedAllocation == VK_FALSE) &&
+                        (dedicated.requiresDedicatedAllocation == VK_FALSE || dedicated.prefersDedicatedAllocation));
+        vkDestroyImage(e.device, image, NULL);
+    }
+    ct_env_fini(&e);
+}
+
+CT_TEST(bind_image_memory2,
+        "Resource Creation > vkBindImageMemory2: several images bind into one allocation at offsets that are "
+        "multiples of their alignment, and VkBindMemoryStatus receives each bind's result",
+        "vkCreateImage vkDestroyImage vkGetImageMemoryRequirements vkAllocateMemory vkBindImageMemory2 vkFreeMemory")
+{
+    struct ct_env e;
+    VkImageCreateInfo info = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 40, 30, 1, 3, 2,
+                                           VK_IMAGE_USAGE_SAMPLED_BIT | XFER);
+    VkImage images[3];
+    VkMemoryRequirements req;
+    VkMemoryAllocateInfo alloc;
+    VkBindImageMemoryInfo binds[3];
+    VkBindMemoryStatus status[3];
+    VkResult results[3];
+    VkDeviceMemory memory;
+    VkDeviceSize stride;
+    unsigned i;
+
+    ct_env_init(t, &e);
+    if (e.version < VK_API_VERSION_1_1)
+        ct_skip(t, "vkBindImageMemory2 needs Vulkan 1.1");
+    ct_env_device(t, &e, NULL);
+    for (i = 0; i < 3; i++)
+        CT_REQUIRE_VK(t, vkCreateImage(e.device, &info, NULL, &images[i]));
+    vkGetImageMemoryRequirements(e.device, images[0], &req);
+    stride = (req.size + req.alignment - 1) / req.alignment * req.alignment;
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = stride * 3;
+    alloc.memoryTypeIndex = ct_find_memory_type(&e, req.memoryTypeBits, 0, SPECIAL_TYPES);
+    CT_REQUIRE(t, alloc.memoryTypeIndex != UINT32_MAX);
+    CT_REQUIRE_VK(t, vkAllocateMemory(e.device, &alloc, NULL, &memory));
+    memset(binds, 0, sizeof(binds));
+    memset(status, 0, sizeof(status));
+    for (i = 0; i < 3; i++) {
+        results[i] = VK_ERROR_UNKNOWN;
+        status[i].sType = VK_STRUCTURE_TYPE_BIND_MEMORY_STATUS;
+        status[i].pResult = &results[i];
+        binds[i].sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO;
+        binds[i].pNext = e.version >= VK_API_VERSION_1_4 ? &status[i] : NULL;
+        binds[i].image = images[i];
+        binds[i].memory = memory;
+        binds[i].memoryOffset = stride * (2 - i);
+    }
+    CT_CHECK_VK(t, vkBindImageMemory2(e.device, 3, binds), VK_SUCCESS);
+    if (e.version >= VK_API_VERSION_1_4)
+        for (i = 0; i < 3; i++)
+            CT_CHECK(t, results[i] == VK_SUCCESS);
+    for (i = 0; i < 3; i++)
+        vkDestroyImage(e.device, images[i], NULL);
+    vkFreeMemory(e.device, memory, NULL);
+    ct_env_fini(&e);
+}
+
+CT_TEST(linear_image_layout,
+        "Resource Creation > vkGetImageSubresourceLayout: for a linear image, texel (x, y) is at offset + y * "
+        "rowPitch + x * texel size of the bound memory, within its size; vkGetDeviceImageSubresourceLayout gives the "
+        "same layout (checked by writing texels through a mapping and copying the image to a buffer)",
+        "vkCreateImage vkDestroyImage vkGetImageMemoryRequirements vkAllocateMemory vkBindImageMemory vkFreeMemory "
+        "vkMapMemory vkGetImageSubresourceLayout vkGetDeviceImageSubresourceLayout vkCmdCopyImageToBuffer "
+        "vkCmdPipelineBarrier vkCreateBuffer vkDestroyBuffer vkGetBufferMemoryRequirements vkBindBufferMemory "
+        "vkGetPhysicalDeviceImageFormatProperties")
+{
+    struct ct_env e;
+    VkImageCreateInfo info = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 13, 7, 1, 1, 1,
+                                           VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    VkImageFormatProperties p;
+    VkImageSubresource sub;
+    VkSubresourceLayout layout;
+    VkMemoryRequirements req;
+    VkBufferImageCopy r;
+    VkCommandBuffer cb;
+    struct ct_image m;
+    struct ct_buffer out;
+    unsigned char *data;
+    uint32_t y;
+
+    ct_env_init(t, &e);
+    if (vkGetPhysicalDeviceImageFormatProperties(e.pd, info.format, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_LINEAR,
+                                                 info.usage, 0, &p) != VK_SUCCESS)
+        ct_skip(t, "no linear R8G8B8A8_UNORM images with TRANSFER_SRC usage");
+    ct_env_device(t, &e, NULL);
+    info.tiling = VK_IMAGE_TILING_LINEAR;
+    info.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
+    ct_image(t, &e, &info, HOST_COHERENT, &m);
+    vkGetImageMemoryRequirements(e.device, m.image, &req);
+    memset(&sub, 0, sizeof(sub));
+    sub.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    memset(&layout, 0xA5, sizeof(layout));
+    vkGetImageSubresourceLayout(e.device, m.image, &sub, &layout);
+    CT_CHECKF(t, layout.rowPitch >= 13 * 4 && layout.offset + layout.rowPitch * 6 + 13 * 4 <= req.size &&
+                     layout.size >= layout.rowPitch * 6 + 13 * 4 && layout.offset + layout.size <= req.size,
+              "offset %llu rowPitch %llu size %llu, memory %llu", (unsigned long long)layout.offset,
+              (unsigned long long)layout.rowPitch, (unsigned long long)layout.size, (unsigned long long)req.size);
+    if (e.version >= VK_API_VERSION_1_4) {
+        VkDeviceImageSubresourceInfo dinfo;
+        VkImageSubresource2 sub2;
+        VkSubresourceLayout2 l2;
+        memset(&sub2, 0, sizeof(sub2));
+        sub2.sType = VK_STRUCTURE_TYPE_IMAGE_SUBRESOURCE_2;
+        sub2.imageSubresource = sub;
+        memset(&dinfo, 0, sizeof(dinfo));
+        dinfo.sType = VK_STRUCTURE_TYPE_DEVICE_IMAGE_SUBRESOURCE_INFO;
+        dinfo.pCreateInfo = &info;
+        dinfo.pSubresource = &sub2;
+        memset(&l2, 0, sizeof(l2));
+        l2.sType = VK_STRUCTURE_TYPE_SUBRESOURCE_LAYOUT_2;
+        vkGetDeviceImageSubresourceLayout(e.device, &dinfo, &l2);
+        CT_CHECK(t, memcmp(&l2.subresourceLayout, &layout, sizeof(layout)) == 0);
+    }
+    CT_REQUIRE_VK(t, vkMapMemory(e.device, m.memory, 0, VK_WHOLE_SIZE, 0, (void **)&data));
+    for (y = 0; y < 7; y++)
+        ct_fill_pattern(data + layout.offset + y * layout.rowPitch, 13 * 4, y + 1);
+    ct_host_buffer(t, &e, 13 * 7 * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &out);
+    memset(&r, 0, sizeof(r));
+    r.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    r.imageSubresource.layerCount = 1;
+    r.imageExtent.width = 13;
+    r.imageExtent.height = 7;
+    r.imageExtent.depth = 1;
+    cb = ct_begin_commands(t, &e);
+    ct_image_barrier(cb, m.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_PREINITIALIZED,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    vkCmdCopyImageToBuffer(cb, m.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, out.buffer, 1, &r);
+    ct_host_read_barrier(cb);
+    ct_submit_and_wait(t, &e, cb);
+    for (y = 0; y < 7; y++)
+        CT_CHECKF(t, memcmp(out.data + y * 13 * 4, data + layout.offset + y * layout.rowPitch, 13 * 4) == 0, "row %u", y);
+    ct_buffer_fini(&e, &out);
+    ct_image_fini(&e, &m);
+    ct_env_fini(&e);
+}
+
+CT_TEST(create_image_views,
+        "Resource Creation > Image Views: views of each type compatible with the image (1D/1D_ARRAY of 1D images; "
+        "2D/2D_ARRAY of 2D; CUBE and, with imageCubeArray, CUBE_ARRAY of cube-compatible images; 3D of 3D), of "
+        "subresource ranges with VK_REMAINING_*, with component swizzles, of mutable images in another compatible "
+        "format, and depth views are created and destroyed (no swizzles or reinterpreting views with "
+        "VK_KHR_portability_subset, whose features may forbid them)",
+        "vkCreateImage vkDestroyImage vkGetImageMemoryRequirements vkAllocateMemory vkBindImageMemory vkFreeMemory "
+        "vkCreateImageView vkDestroyImageView vkGetPhysicalDeviceFeatures2")
+{
+    struct {
+        VkImageCreateInfo image;
+        VkImageViewType type;
+        VkFormat format;
+        VkImageAspectFlags aspect;
+        uint32_t level, levels, layer, layers;
+    } v[12];
+    struct ct_env e;
+    struct ct_features f;
+    VkPhysicalDeviceFeatures2 enable;
+    unsigned n = 0, i;
+
+    ct_env_init(t, &e);
+    ct_get_features(&e, &f, 0);
+    memset(&enable, 0, sizeof(enable));
+    enable.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    enable.features.imageCubeArray = f.f2.features.imageCubeArray;
+    ct_env_device(t, &e, &enable);
+#define VIEW(info, ty, fmt, asp, l, ls, a, as)                                                                    \
+    do {                                                                                                       \
+        v[n].image = info;                                                                                     \
+        v[n].type = ty;                                                                                        \
+        v[n].format = fmt;                                                                                     \
+        v[n].aspect = asp;                                                                                     \
+        v[n].level = l;                                                                                        \
+        v[n].levels = ls;                                                                                      \
+        v[n].layer = a;                                                                                        \
+        v[n].layers = as;                                                                                      \
+        n++;                                                                                                   \
+    } while (0)
+    VIEW(ct_image_info(VK_IMAGE_TYPE_1D, VK_FORMAT_R8G8B8A8_UNORM, 64, 1, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT),
+         VK_IMAGE_VIEW_TYPE_1D, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1);
+    VIEW(ct_image_info(VK_IMAGE_TYPE_1D, VK_FORMAT_R8G8B8A8_UNORM, 64, 1, 1, 1, 4, VK_IMAGE_USAGE_SAMPLED_BIT),
+         VK_IMAGE_VIEW_TYPE_1D_ARRAY, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 1, VK_REMAINING_ARRAY_LAYERS);
+    VIEW(ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 64, 64, 1, 7, 1, VK_IMAGE_USAGE_SAMPLED_BIT),
+         VK_IMAGE_VIEW_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 2, VK_REMAINING_MIP_LEVELS, 0, 1);
+    VIEW(ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 64, 64, 1, 7, 1, VK_IMAGE_USAGE_SAMPLED_BIT),
+         VK_IMAGE_VIEW_TYPE_2D_ARRAY, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 0, 3, 0, 1);
+    VIEW(ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16B16A16_SFLOAT, 32, 32, 1, 2, 6, VK_IMAGE_USAGE_SAMPLED_BIT),
+         VK_IMAGE_VIEW_TYPE_2D_ARRAY, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 2, 3);
+    VIEW(ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 16, 16, 1, 1, 12, VK_IMAGE_USAGE_SAMPLED_BIT),
+         VK_IMAGE_VIEW_TYPE_CUBE, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 6, 6);
+    v[n - 1].image.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    if (f.f2.features.imageCubeArray) {
+        VIEW(ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 16, 16, 1, 1, 12, VK_IMAGE_USAGE_SAMPLED_BIT),
+             VK_IMAGE_VIEW_TYPE_CUBE_ARRAY, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 12);
+        v[n - 1].image.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    }
+    VIEW(ct_image_info(VK_IMAGE_TYPE_3D, VK_FORMAT_R8G8B8A8_UNORM, 16, 16, 8, 4, 1, VK_IMAGE_USAGE_SAMPLED_BIT),
+         VK_IMAGE_VIEW_TYPE_3D, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 1, 2, 0, 1);
+    VIEW(ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 16, 16, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT),
+         VK_IMAGE_VIEW_TYPE_2D, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1);
+    v[n - 1].image.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+    if (!e.portability_subset) { /* imageViewFormatReinterpretation may be VK_FALSE (VUID-...-04466) */
+        VIEW(ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 16, 16, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT),
+             VK_IMAGE_VIEW_TYPE_2D, VK_FORMAT_R32_UINT, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1);
+        v[n - 1].image.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+    }
+    VIEW(ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_D16_UNORM, 16, 16, 1, 1, 2,
+                       VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT),
+         VK_IMAGE_VIEW_TYPE_2D_ARRAY, VK_FORMAT_D16_UNORM, VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 2);
+#undef VIEW
+    for (i = 0; i < n; i++) {
+        VkImageViewCreateInfo vi;
+        VkImageView view = VK_NULL_HANDLE;
+        struct ct_image m;
+        VkResult r;
+        ct_image(t, &e, &v[i].image, 0, &m);
+        memset(&vi, 0, sizeof(vi));
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = m.image;
+        vi.viewType = v[i].type;
+        vi.format = v[i].format;
+        if (i % 2 && !e.portability_subset) { /* imageViewFormatSwizzle may be VK_FALSE (VUID-...-04465) */
+            vi.components.r = VK_COMPONENT_SWIZZLE_B;
+            vi.components.g = VK_COMPONENT_SWIZZLE_ONE;
+            vi.components.b = VK_COMPONENT_SWIZZLE_R;
+            vi.components.a = VK_COMPONENT_SWIZZLE_ZERO;
+        }
+        vi.subresourceRange.aspectMask = v[i].aspect;
+        vi.subresourceRange.baseMipLevel = v[i].level;
+        vi.subresourceRange.levelCount = v[i].levels;
+        vi.subresourceRange.baseArrayLayer = v[i].layer;
+        vi.subresourceRange.layerCount = v[i].layers;
+        r = vkCreateImageView(e.device, &vi, NULL, &view);
+        CT_CHECKF(t, r == VK_SUCCESS && view != VK_NULL_HANDLE, "view %u (type %d): %s", i, v[i].type, ct_result_name(r));
+        if (r == VK_SUCCESS)
+            vkDestroyImageView(e.device, view, NULL);
+        ct_image_fini(&e, &m);
+    }
+    vkDestroyImageView(e.device, VK_NULL_HANDLE, NULL);
+    ct_env_fini(&e);
+}
+
+CT_TEST(create_buffer_views,
+        "Resource Creation > Buffer Views: views of formats with UNIFORM/STORAGE_TEXEL_BUFFER features, at offsets "
+        "that are multiples of minTexelBufferOffsetAlignment, of explicit ranges and of VK_WHOLE_SIZE, are created",
+        "vkCreateBuffer vkDestroyBuffer vkGetBufferMemoryRequirements vkAllocateMemory vkBindBufferMemory vkFreeMemory "
+        "vkCreateBufferView vkDestroyBufferView vkGetPhysicalDeviceFormatProperties vkGetPhysicalDeviceFormatProperties2")
+{
+    static const VkFormat list[] = { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R32_UINT, VK_FORMAT_R32G32B32A32_SFLOAT,
+                                     VK_FORMAT_R16_SFLOAT };
+    struct ct_env e;
+    VkBuffer buffer;
+    VkDeviceMemory memory;
+    VkMemoryRequirements req;
+    VkMemoryAllocateInfo alloc;
+    VkDeviceSize align;
+    unsigned i, made = 0;
+
+    ct_env_init(t, &e);
+    ct_env_device(t, &e, NULL);
+    align = e.props.limits.minTexelBufferOffsetAlignment;
+    buffer = make_buffer(t, &e, 4 * align + 4096,
+                         VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT);
+    vkGetBufferMemoryRequirements(e.device, buffer, &req);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = ct_find_memory_type(&e, req.memoryTypeBits, 0, SPECIAL_TYPES);
+    CT_REQUIRE_VK(t, vkAllocateMemory(e.device, &alloc, NULL, &memory));
+    CT_REQUIRE_VK(t, vkBindBufferMemory(e.device, buffer, memory, 0));
+    for (i = 0; i < CT_ARRAY_SIZE(list); i++) {
+        VkFormatFeatureFlags2 f = ct_format_features(&e, list[i], 2);
+        VkBufferViewCreateInfo bi;
+        VkBufferView view;
+        unsigned w;
+        /* the buffer has both texel usages: the format needs both features */
+        if ((f & (VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT | VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT)) !=
+            (VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT | VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT))
+            continue;
+        for (w = 0; w < 2; w++) {
+            memset(&bi, 0, sizeof(bi));
+            bi.sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
+            bi.buffer = buffer;
+            bi.format = list[i];
+            bi.offset = align * (w + 1);
+            bi.range = w ? VK_WHOLE_SIZE : 256;
+            CT_CHECK_VK(t, vkCreateBufferView(e.device, &bi, NULL, &view), VK_SUCCESS);
+            vkDestroyBufferView(e.device, view, NULL);
+            made++;
+        }
+    }
+    CT_CHECK(t, made >= 6); /* R8G8B8A8_UNORM, R32_UINT and R32G32B32A32_SFLOAT have both (required) */
+    vkDestroyBufferView(e.device, VK_NULL_HANDLE, NULL);
+    vkDestroyBuffer(e.device, buffer, NULL);
+    vkFreeMemory(e.device, memory, NULL);
+    ct_env_fini(&e);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(create_buffer),
     CT_REF(create_buffer_concurrent),
@@ -1118,6 +1611,13 @@ static const struct ct_test *const tests[] = {
     CT_REF(buffer_capture_replay),
     CT_REF(bound_range_on_device),
     CT_REF(buffer_device_address_shader),
+    CT_REF(create_image_kinds),
+    CT_REF(image_requirements_rules),
+    CT_REF(device_image_requirements),
+    CT_REF(bind_image_memory2),
+    CT_REF(linear_image_layout),
+    CT_REF(create_image_views),
+    CT_REF(create_buffer_views),
 };
 
 CT_SUITE(resources, tests)

@@ -172,6 +172,40 @@ void ct_submit_and_wait(struct ct *t, struct ct_env *e, VkCommandBuffer cb);
 void ct_host_read_barrier(VkCommandBuffer cb);
 void ct_transfer_barrier(VkCommandBuffer cb);
 
+/* ---- Images and host buffers (on e->device) ---- */
+
+/* A host-visible, host-coherent buffer, mapped; ends the test on failure. */
+struct ct_buffer {
+    VkBuffer buffer;
+    VkDeviceMemory memory;
+    unsigned char *data;
+    VkDeviceSize size;
+};
+void ct_host_buffer(struct ct *t, struct ct_env *e, VkDeviceSize size, VkBufferUsageFlags usage, struct ct_buffer *out);
+void ct_buffer_fini(struct ct_env *e, struct ct_buffer *b);
+
+/* An image bound at offset 0 to memory of the first type its requirements
+ * allow that has the `required` properties (and no protected or lazily
+ * allocated ones); ends the test on failure. */
+struct ct_image {
+    VkImage image;
+    VkDeviceMemory memory;
+    VkImageCreateInfo info;
+};
+VkImageCreateInfo ct_image_info(VkImageType type, VkFormat format, uint32_t w, uint32_t h, uint32_t d, uint32_t levels,
+                                uint32_t layers, VkImageUsageFlags usage);
+void ct_image(struct ct *t, struct ct_env *e, const VkImageCreateInfo *info, VkMemoryPropertyFlags required,
+              struct ct_image *out);
+void ct_image_fini(struct ct_env *e, struct ct_image *m);
+/* All commands before against all after, with an image layout transition of
+ * every subresource of `aspect` (image may be VK_NULL_HANDLE: memory only). */
+void ct_image_barrier(VkCommandBuffer cb, VkImage image, VkImageAspectFlags aspect, VkImageLayout from, VkImageLayout to);
+/* optimalTilingFeatures (or linear, buffer) of VkFormatProperties3, or of
+ * VkFormatProperties on Vulkan 1.0-1.2. */
+VkFormatFeatureFlags2 ct_format_features(const struct ct_env *e, VkFormat format, int which); /* 0 optimal 1 linear 2 buffer */
+/* A pattern of bytes for texel data. */
+void ct_fill_pattern(unsigned char *p, size_t n, unsigned seed);
+
 /* vkCreateInstance with portability enumeration added when offered. */
 VkResult ct_create_instance(uint32_t app_version, const char *const *extensions, uint32_t extension_count,
                             const VkAllocationCallbacks *alloc, VkInstance *instance);
