@@ -1,6 +1,6 @@
 /* Chapter "Clear Commands": vkCmdClearColorImage and
  * vkCmdClearDepthStencilImage, checked texel by texel, of whole images and
- * of subresource ranges. */
+ * of subresource ranges; vkCmdClearAttachments; vkCmdUpdateBuffer. */
 #include "ct.h"
 
 #include <stdio.h>
@@ -393,12 +393,116 @@ CT_TEST(clear_attachments,
     ct_scene_fini(&s);
 }
 
+CT_TEST(update_buffer,
+        "Clear Commands > Updating Buffers (vkCmdUpdateBuffer): dataSize bytes (a multiple of 4, up to 65536) "
+        "from pData are written at dstOffset (a multiple of 4), the rest of the buffer untouched; the data is "
+        "copied from pData when the command is recorded (pData changed and freed before the submission, and the "
+        "command buffer submitted twice), also in a secondary command buffer; it is a transfer operation for "
+        "synchronization (ordered after a fill and another update by transfer barriers)",
+        "vkCmdUpdateBuffer vkCmdFillBuffer vkCmdPipelineBarrier vkCmdExecuteCommands vkCreateCommandPool "
+        "vkDestroyCommandPool vkAllocateCommandBuffers vkFreeCommandBuffers vkBeginCommandBuffer vkEndCommandBuffer "
+        "vkQueueSubmit vkQueueWaitIdle "
+        "vkCreateBuffer vkDestroyBuffer vkGetBufferMemoryRequirements vkAllocateMemory vkBindBufferMemory "
+        "vkMapMemory vkFreeMemory")
+{
+    enum { SIZE = 160 * 1024, BIG = 65536, BIG_AT = 1028, OVER_AT = 70000, SECOND_AT = 100000 };
+    static const uint32_t small[2] = { 0x01234567u, 0x89abcdefu };
+    static const uint32_t first[4] = { 0x11111111u, 0x22222222u, 0x33333333u, 0x44444444u };
+    static const uint32_t second[2] = { 0x55555555u, 0x66666666u };
+    static const uint32_t third[3] = { 0xaaaaaaaau, 0xbbbbbbbbu, 0xccccccccu };
+    struct ct_env e;
+    struct ct_buffer b;
+    VkCommandPoolCreateInfo pinfo;
+    VkCommandBufferAllocateInfo ainfo;
+    VkCommandBufferBeginInfo begin;
+    VkCommandBufferInheritanceInfo inherit;
+    VkSubmitInfo submit;
+    VkCommandPool pool;
+    VkCommandBuffer cb, secondary;
+    unsigned char *big, *want;
+    uint32_t round;
+    size_t i;
+
+    ct_env_init(t, &e);
+    ct_env_device(t, &e, NULL);
+    ct_host_buffer(t, &e, SIZE, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &b);
+    big = malloc(BIG);
+    want = malloc(SIZE);
+    CT_REQUIRE(t, big && want);
+    ct_fill_pattern(big, BIG, 9);
+    memset(want, 0xEE, SIZE);
+    memcpy(want + 4, small, sizeof(small));
+    memcpy(want + BIG_AT, big, BIG);
+    memcpy(want + OVER_AT, first, sizeof(first));
+    memcpy(want + OVER_AT + 8, second, sizeof(second));
+    memcpy(want + SIZE - 4, small, 4);
+    memcpy(want + SECOND_AT, third, sizeof(third));
+
+    memset(&pinfo, 0, sizeof(pinfo));
+    pinfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pinfo.queueFamilyIndex = e.queue_family;
+    CT_REQUIRE_VK(t, vkCreateCommandPool(e.device, &pinfo, NULL, &pool));
+    memset(&ainfo, 0, sizeof(ainfo));
+    ainfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    ainfo.commandPool = pool;
+    ainfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ainfo.commandBufferCount = 1;
+    CT_REQUIRE_VK(t, vkAllocateCommandBuffers(e.device, &ainfo, &cb));
+    ainfo.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+    CT_REQUIRE_VK(t, vkAllocateCommandBuffers(e.device, &ainfo, &secondary));
+    memset(&inherit, 0, sizeof(inherit));
+    inherit.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+    memset(&begin, 0, sizeof(begin));
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.pInheritanceInfo = &inherit;
+    CT_REQUIRE_VK(t, vkBeginCommandBuffer(secondary, &begin));
+    vkCmdUpdateBuffer(secondary, b.buffer, SECOND_AT, sizeof(third), third);
+    CT_REQUIRE_VK(t, vkEndCommandBuffer(secondary));
+    begin.pInheritanceInfo = NULL;
+    CT_REQUIRE_VK(t, vkBeginCommandBuffer(cb, &begin));
+    vkCmdFillBuffer(cb, b.buffer, 0, VK_WHOLE_SIZE, 0xEEEEEEEEu);
+    ct_transfer_barrier(cb);
+    vkCmdExecuteCommands(cb, 1, &secondary);
+    vkCmdUpdateBuffer(cb, b.buffer, 4, sizeof(small), small);
+    vkCmdUpdateBuffer(cb, b.buffer, BIG_AT, BIG, big);
+    vkCmdUpdateBuffer(cb, b.buffer, OVER_AT, sizeof(first), first);
+    vkCmdUpdateBuffer(cb, b.buffer, SIZE - 4, 4, small); /* the last word */
+    ct_transfer_barrier(cb);
+    vkCmdUpdateBuffer(cb, b.buffer, OVER_AT + 8, sizeof(second), second);
+    ct_host_read_barrier(cb);
+    CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
+    memset(big, 0, BIG); /* recorded already: neither this nor the free matters */
+    free(big);
+    for (round = 0; round < 2; round++) {
+        memset(b.data, 0, SIZE);
+        memset(&submit, 0, sizeof(submit));
+        submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &cb;
+        CT_REQUIRE_VK(t, vkQueueSubmit(e.queue, 1, &submit, VK_NULL_HANDLE));
+        CT_REQUIRE_VK(t, vkQueueWaitIdle(e.queue));
+        for (i = 0; i < SIZE; i++)
+            if (b.data[i] != want[i]) {
+                ct_fail(t, __FILE__, __LINE__, "submission %u: byte %zu is 0x%02x, expected 0x%02x", round + 1, i,
+                        b.data[i], want[i]);
+                break;
+            }
+    }
+    vkFreeCommandBuffers(e.device, pool, 1, &cb);
+    vkFreeCommandBuffers(e.device, pool, 1, &secondary);
+    vkDestroyCommandPool(e.device, pool, NULL);
+    free(want);
+    ct_buffer_fini(&e, &b);
+    ct_env_fini(&e);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(clear_color_image),
     CT_REF(clear_color_image_integer),
     CT_REF(clear_color_image_3d),
     CT_REF(clear_depth_stencil_image),
     CT_REF(clear_attachments),
+    CT_REF(update_buffer),
 };
 
 CT_SUITE(clears, tests)

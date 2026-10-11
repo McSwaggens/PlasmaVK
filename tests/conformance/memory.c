@@ -968,6 +968,78 @@ CT_TEST(noncoherent_flush_invalidate_gpu,
     ct_env_fini(&e);
 }
 
+/* ==========================================================================
+ * Peer memory
+ * ========================================================================== */
+
+CT_TEST(peer_memory_features,
+        "Memory Allocation > Peer Memory Features (vkGetDeviceGroupPeerMemoryFeatures, Vulkan 1.1): on a device "
+        "made of a group of two or more physical devices, for every pair of distinct device indices "
+        "(VUID-vkGetDeviceGroupPeerMemoryFeatures-localDeviceIndex-00694), VK_PEER_MEMORY_FEATURE_COPY_DST_BIT is "
+        "supported for every heap that is not device-local and for at least one device-local heap",
+        "vkGetDeviceGroupPeerMemoryFeatures vkEnumeratePhysicalDeviceGroups vkGetPhysicalDeviceMemoryProperties "
+        "vkCreateDevice vkDestroyDevice")
+{
+    struct ct_env e;
+    VkPhysicalDeviceGroupProperties groups[16];
+    VkPhysicalDeviceMemoryProperties mem;
+    VkDeviceGroupDeviceCreateInfo group_info;
+    VkDeviceQueueCreateInfo queue;
+    VkDeviceCreateInfo info;
+    const char *names[2];
+    float priority = 1.0f;
+    uint32_t count = 16, g, i, l, r, h;
+
+    ct_env_init(t, &e);
+    if (e.version < VK_API_VERSION_1_1)
+        ct_skip(t, "device groups are Vulkan 1.1");
+    for (i = 0; i < 16; i++) {
+        memset(&groups[i], 0, sizeof(groups[i]));
+        groups[i].sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GROUP_PROPERTIES;
+    }
+    CT_REQUIRE(t, vkEnumeratePhysicalDeviceGroups(e.instance, &count, groups) >= 0);
+    for (g = 0; g < count && groups[g].physicalDeviceCount < 2; g++)
+        ;
+    if (g == count)
+        ct_skip(t, "every device group has one physical device: no two distinct device indices");
+    vkGetPhysicalDeviceMemoryProperties(groups[g].physicalDevices[0], &mem);
+    memset(&group_info, 0, sizeof(group_info));
+    group_info.sType = VK_STRUCTURE_TYPE_DEVICE_GROUP_DEVICE_CREATE_INFO;
+    group_info.physicalDeviceCount = groups[g].physicalDeviceCount;
+    group_info.pPhysicalDevices = groups[g].physicalDevices;
+    memset(&queue, 0, sizeof(queue));
+    queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queue.queueCount = 1;
+    queue.pQueuePriorities = &priority;
+    e.pd = groups[g].physicalDevices[0];
+    e.portability_subset = ct_device_extension_supported(e.pd, "VK_KHR_portability_subset");
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    info.pNext = &group_info;
+    info.queueCreateInfoCount = 1;
+    info.pQueueCreateInfos = &queue;
+    info.enabledExtensionCount = ct_add_portability_subset(&e, names, 0);
+    info.ppEnabledExtensionNames = info.enabledExtensionCount ? names : NULL;
+    CT_REQUIRE_VK(t, vkCreateDevice(e.pd, &info, NULL, &e.device));
+    for (l = 0; l < groups[g].physicalDeviceCount; l++)
+        for (r = 0; r < groups[g].physicalDeviceCount; r++) {
+            int device_local_dst = 0;
+            if (l == r)
+                continue;
+            for (h = 0; h < mem.memoryHeapCount; h++) {
+                VkPeerMemoryFeatureFlags f = 0;
+                vkGetDeviceGroupPeerMemoryFeatures(e.device, h, l, r, &f);
+                if (mem.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+                    device_local_dst |= (f & VK_PEER_MEMORY_FEATURE_COPY_DST_BIT) != 0;
+                else
+                    CT_CHECKF(t, f & VK_PEER_MEMORY_FEATURE_COPY_DST_BIT,
+                              "heap %u (host local), device %u accessing %u's memory: features 0x%x", h, l, r, f);
+            }
+            CT_CHECKF(t, device_local_dst, "device %u accessing %u's memory: no device-local heap with COPY_DST", l, r);
+        }
+    ct_env_fini(&e);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(memory_counts),
     CT_REF(memory_heap_device_local),
@@ -996,6 +1068,7 @@ static const struct ct_test *const tests[] = {
     CT_REF(coherent_device_writes),
     CT_REF(coherent_host_writes),
     CT_REF(noncoherent_flush_invalidate_gpu),
+    CT_REF(peer_memory_features),
 };
 
 CT_SUITE(memory, tests)

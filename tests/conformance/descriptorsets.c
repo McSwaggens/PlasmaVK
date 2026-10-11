@@ -3,7 +3,7 @@
  * consecutive bindings, inline uniform blocks), update templates, binding
  * with dynamic offsets, push descriptors, update after bind, variable-count
  * and partially bound bindings, and what a compute shader reads through
- * descriptors of every type.
+ * descriptors of every type; and Push Constant Updates.
  *
  * Every test enables the descriptor features the device supports among
  * those it uses, and skips when one it needs is missing (optional features,
@@ -2201,6 +2201,148 @@ CT_TEST(immutable_samplers,
     dt_fini(&d);
 }
 
+/* ---- Push constants ---- */
+
+/*
+ * #version 450
+ * // Copies the push constants' words v[] to the buffer from word `base` on.
+ * layout(local_size_x = 1) in;
+ * layout(push_constant) uniform P { uint base; uint v[7]; } pc;
+ * layout(std430, set = 0, binding = 0) buffer Out { uint w[]; } o;
+ * void main()
+ * {
+ *     for (uint i = 0u; i < 7u; i++)
+ *         o.w[pc.base + i] = pc.v[i];
+ * }
+ */
+static const uint32_t spv_push_copy[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x0000002d, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0007000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x00000016, 0x0000001c, 0x00060010,
+    0x00000004, 0x00000011, 0x00000001, 0x00000001, 0x00000001, 0x00030003, 0x00000002, 0x000001c2,
+    0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000008, 0x00000069, 0x00030005,
+    0x00000014, 0x0074754f, 0x00040006, 0x00000014, 0x00000000, 0x00000077, 0x00030005, 0x00000016,
+    0x0000006f, 0x00030005, 0x0000001a, 0x00000050, 0x00050006, 0x0000001a, 0x00000000, 0x65736162,
+    0x00000000, 0x00040006, 0x0000001a, 0x00000001, 0x00000076, 0x00030005, 0x0000001c, 0x00006370,
+    0x00040047, 0x00000013, 0x00000006, 0x00000004, 0x00030047, 0x00000014, 0x00000002, 0x00050048,
+    0x00000014, 0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x00000016, 0x00000021, 0x00000000,
+    0x00040047, 0x00000016, 0x00000022, 0x00000000, 0x00040047, 0x00000019, 0x00000006, 0x00000004,
+    0x00030047, 0x0000001a, 0x00000002, 0x00050048, 0x0000001a, 0x00000000, 0x00000023, 0x00000000,
+    0x00050048, 0x0000001a, 0x00000001, 0x00000023, 0x00000004, 0x00020013, 0x00000002, 0x00030021,
+    0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000000, 0x00040020, 0x00000007,
+    0x00000007, 0x00000006, 0x0004002b, 0x00000006, 0x00000009, 0x00000000, 0x0004002b, 0x00000006,
+    0x00000010, 0x00000007, 0x00020014, 0x00000011, 0x0003001d, 0x00000013, 0x00000006, 0x0003001e,
+    0x00000014, 0x00000013, 0x00040020, 0x00000015, 0x0000000c, 0x00000014, 0x0004003b, 0x00000015,
+    0x00000016, 0x0000000c, 0x00040015, 0x00000017, 0x00000020, 0x00000001, 0x0004002b, 0x00000017,
+    0x00000018, 0x00000000, 0x0004001c, 0x00000019, 0x00000006, 0x00000010, 0x0004001e, 0x0000001a,
+    0x00000006, 0x00000019, 0x00040020, 0x0000001b, 0x00000009, 0x0000001a, 0x0004003b, 0x0000001b,
+    0x0000001c, 0x00000009, 0x00040020, 0x0000001d, 0x00000009, 0x00000006, 0x0004002b, 0x00000017,
+    0x00000022, 0x00000001, 0x00040020, 0x00000026, 0x0000000c, 0x00000006, 0x00040017, 0x0000002a,
+    0x00000006, 0x00000003, 0x0004002b, 0x00000006, 0x0000002b, 0x00000001, 0x0006002c, 0x0000002a,
+    0x0000002c, 0x0000002b, 0x0000002b, 0x0000002b, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200f8, 0x00000005, 0x0004003b, 0x00000007, 0x00000008, 0x00000007, 0x0003003e,
+    0x00000008, 0x00000009, 0x000200f9, 0x0000000a, 0x000200f8, 0x0000000a, 0x000400f6, 0x0000000c,
+    0x0000000d, 0x00000000, 0x000200f9, 0x0000000e, 0x000200f8, 0x0000000e, 0x0004003d, 0x00000006,
+    0x0000000f, 0x00000008, 0x000500b0, 0x00000011, 0x00000012, 0x0000000f, 0x00000010, 0x000400fa,
+    0x00000012, 0x0000000b, 0x0000000c, 0x000200f8, 0x0000000b, 0x00050041, 0x0000001d, 0x0000001e,
+    0x0000001c, 0x00000018, 0x0004003d, 0x00000006, 0x0000001f, 0x0000001e, 0x0004003d, 0x00000006,
+    0x00000020, 0x00000008, 0x00050080, 0x00000006, 0x00000021, 0x0000001f, 0x00000020, 0x0004003d,
+    0x00000006, 0x00000023, 0x00000008, 0x00060041, 0x0000001d, 0x00000024, 0x0000001c, 0x00000022,
+    0x00000023, 0x0004003d, 0x00000006, 0x00000025, 0x00000024, 0x00060041, 0x00000026, 0x00000027,
+    0x00000016, 0x00000018, 0x00000021, 0x0003003e, 0x00000027, 0x00000025, 0x000200f9, 0x0000000d,
+    0x000200f8, 0x0000000d, 0x0004003d, 0x00000006, 0x00000028, 0x00000008, 0x00050080, 0x00000006,
+    0x00000029, 0x00000028, 0x00000022, 0x0003003e, 0x00000008, 0x00000029, 0x000200f9, 0x0000000a,
+    0x000200f8, 0x0000000c, 0x000100fd, 0x00010038,
+};
+
+/* Compute shader writes before against compute shader writes after. */
+static void compute_barrier(VkCommandBuffer cb)
+{
+    VkMemoryBarrier mb;
+    memset(&mb, 0, sizeof(mb));
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0,
+                         NULL, 0, NULL);
+}
+
+static void push2(VkCommandBuffer cb, VkPipelineLayout layout, uint32_t offset, uint32_t size, const void *values)
+{
+    VkPushConstantsInfo info;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO;
+    info.layout = layout;
+    info.stageFlags = COMPUTE;
+    info.offset = offset;
+    info.size = size;
+    info.pValues = values;
+    vkCmdPushConstants2(cb, &info);
+}
+
+CT_TEST(push_constants2,
+        "Resource Descriptors > Push Constant Updates (vkCmdPushConstants2, Vulkan 1.4): VkPushConstantsInfo "
+        "updates size bytes at offset of the push constants of stageFlags; updates are incremental (\"while still "
+        "reading the previous data for push constants not modified\"), interleave with vkCmdPushConstants, and "
+        "take pValues when recorded (the application's array changed afterwards)",
+        DISPATCH_COMMANDS " vkCmdPushConstants vkCmdPushConstants2")
+{
+    static const uint32_t all[8] = { 0, 1, 2, 3, 4, 5, 6, 7 }, base8 = 8, base16 = 16, base24 = 24, fifty = 50;
+    static const uint32_t want[4][7] = {
+        { 1, 2, 3, 4, 5, 6, 7 }, { 1, 2, 3, 4, 5, 6, 7 }, { 1, 2, 100, 101, 5, 6, 7 }, { 50, 2, 100, 101, 5, 6, 7 },
+    };
+    uint32_t pair[2] = { 100, 101 };
+    struct ct_buffer out;
+    VkDescriptorSetLayoutBinding b = lb(0, SSBO, 1);
+    VkDescriptorPoolSize size = ps(SSBO, 1);
+    VkDescriptorSetLayout sl;
+    VkPipelineLayout pl;
+    VkDescriptorPool pool;
+    VkDescriptorSet set;
+    VkPipeline p;
+    VkCommandBuffer cb;
+    struct dt d;
+    uint32_t i, j;
+
+    dt_init(t, &d, VK_API_VERSION_1_4);
+    dt_buffer(t, &d, 4 * 32, &out);
+    sl = make_layout(t, &d, &b, 1, 0, NULL);
+    pl = make_pipeline_layout(t, &d, &sl, 1, 32);
+    p = make_pipeline(t, &d, spv_push_copy, sizeof(spv_push_copy), pl);
+    pool = make_pool(t, &d, 1, &size, 1, 0, 0);
+    set = alloc_set(t, &d, pool, sl);
+    write_buffer(&d, set, 0, 0, SSBO, &out, 0, VK_WHOLE_SIZE);
+    cb = ct_begin_commands(t, &d.e);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
+    push2(cb, pl, 0, 32, all); /* base 0, v = 1 .. 7 */
+    vkCmdDispatch(cb, 1, 1, 1);
+    compute_barrier(cb);
+    push2(cb, pl, 0, 4, &base8); /* v unchanged */
+    vkCmdDispatch(cb, 1, 1, 1);
+    compute_barrier(cb);
+    push2(cb, pl, 12, 8, pair); /* v[2], v[3] */
+    push2(cb, pl, 0, 4, &base16);
+    vkCmdDispatch(cb, 1, 1, 1);
+    compute_barrier(cb);
+    vkCmdPushConstants(cb, pl, COMPUTE, 4, 4, &fifty); /* v[0] */
+    push2(cb, pl, 0, 4, &base24);
+    vkCmdDispatch(cb, 1, 1, 1);
+    ct_host_read_barrier(cb);
+    pair[0] = pair[1] = 0xdeadbeefu; /* recorded already */
+    ct_submit_and_wait(t, &d.e, cb);
+    for (i = 0; i < 4; i++)
+        for (j = 0; j < 7; j++)
+            CT_CHECKF(t, word(&out, 8 * i + j) == want[i][j], "dispatch %u: v[%u] read %u, expected %u", i, j,
+                      word(&out, 8 * i + j), want[i][j]);
+    vkDestroyPipeline(d.e.device, p, NULL);
+    vkDestroyDescriptorPool(d.e.device, pool, NULL);
+    vkDestroyPipelineLayout(d.e.device, pl, NULL);
+    vkDestroyDescriptorSetLayout(d.e.device, sl, NULL);
+    ct_buffer_fini(&d.e, &out);
+    dt_fini(&d);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(set_layout_types),
     CT_REF(set_layout_empty),
@@ -2221,6 +2363,7 @@ static const struct ct_test *const tests[] = {
     CT_REF(set_layout_lifetime),
     CT_REF(image_descriptors),
     CT_REF(immutable_samplers),
+    CT_REF(push_constants2),
 };
 
 CT_SUITE(descriptorsets, tests)

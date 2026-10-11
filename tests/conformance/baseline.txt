@@ -62,6 +62,12 @@ devsandqueues.create_device_unsupported_extension
 devsandqueues.device_allocation_callbacks
 devsandqueues.device_allocation_failure
 
+cmdbuffers.reset_command_pool
+cmdbuffers.reset_command_buffer
+cmdbuffers.trim_command_pool
+cmdbuffers.queue_submit2
+cmdbuffers.set_device_mask
+
 memory.memory_counts
 memory.memory_commitment
 memory.noncoherent_flush_invalidate_gpu
@@ -362,6 +368,7 @@ resources.create_image_views
 resources.create_buffer_views
 resources.multiplanar_disjoint_memory
 resources.multiplanar_linear_layout
+resources.linear_image_layout_khr
 formats.B4G4R4A4_UNORM_PACK16
 formats.R5G6B5_UNORM_PACK16
 formats.A1R5G5B5_UNORM_PACK16
@@ -434,6 +441,9 @@ capabilities.image_format_host_transfer
 capabilities.image_format_properties2
 capabilities.sparse_image_format_properties
 capabilities.ycbcr_descriptor_count
+capabilities.external_buffer_properties
+capabilities.external_semaphore_properties
+capabilities.external_fence_properties
 samplers.create_sampler_parameters
 samplers.create_sampler_anisotropy
 samplers.create_sampler_unnormalized
@@ -453,11 +463,17 @@ copies.resolve_image
 copies.host_image_copy
 copies.copy_buffer_image_planes
 copies.copy_image_planes
+copies.copy_buffer2
+copies.copy_buffer_image2
+copies.copy_image2
+copies.blit_image2
+copies.resolve_image2
 clears.clear_color_image
 clears.clear_color_image_integer
 clears.clear_color_image_3d
 clears.clear_depth_stencil_image
 clears.clear_attachments
+clears.update_buffer
 
 descriptorsets.set_layout_types
 descriptorsets.set_layout_empty
@@ -478,6 +494,7 @@ descriptorsets.variable_count_partially_bound
 descriptorsets.set_layout_lifetime
 descriptorsets.image_descriptors
 descriptorsets.immutable_samplers
+descriptorsets.push_constants2
 queries.create_query_pools
 queries.host_reset_unavailable
 queries.cmd_reset_unavailable
@@ -501,6 +518,9 @@ synchronization.event_device_signal_host_sees
 synchronization.event_wait_host_signal
 synchronization.event_wait_device_signal
 synchronization.event_wait2
+synchronization.semaphore_counter_value
+synchronization.wait_semaphores
+synchronization.device_wait_idle
 privatedata.private_data_slots
 privatedata.private_data_slot_destroy_null
 privatedata.private_data_objects
@@ -542,6 +562,8 @@ renderpass.dynamic_rendering_suspend_resume
 renderpass.dynamic_rendering_multiview
 renderpass.local_read_attachment_locations
 renderpass.local_read_input_attachment
+renderpass.render_pass_next_subpass
+renderpass.rendering_area_granularity_khr
 
 pipelines.pipeline_without_fragment_shader
 pipelines.pipeline_specialization
@@ -567,6 +589,9 @@ drawing.draw_parameters
 drawing.vertex_attributes
 drawing.vertex_attribute_divisor
 drawing.vertex_binding_stride_dynamic
+drawing.bind_index_buffer2
+drawing.bind_index_buffer2_khr
+drawing.draw_indirect_count_khr
 
 rasterization.viewport_transform
 rasterization.viewport_depth_range
@@ -579,14 +604,25 @@ rasterization.multisample_coverage
 rasterization.sample_shading
 rasterization.wide_points
 rasterization.interpolation_flat_smooth
+rasterization.line_width_dynamic
+rasterization.line_stipple_dynamic
 
 fragops.scissor_test
 fragops.depth_compare_ops
 fragops.stencil_ops
 fragops.alpha_to_one
+fragops.depth_bounds_dynamic
 
 framebuffer.blend_equations
 framebuffer.color_write_mask
 framebuffer.independent_blend
 framebuffer.dual_source_blend
 framebuffer.srgb_blending
+
+dispatch.dispatch_indirect
+dispatch.dispatch_base
+dispatch.dispatch_indirect_after_base
+
+sparsemem.sparse_requirements_non_sparse
+
+debugging.tool_properties

@@ -1191,6 +1191,185 @@ CT_TEST(vertex_binding_stride_dynamic,
     ct_scene_fini(&s);
 }
 
+/* ---- vkCmdBindIndexBuffer2 and the KHR aliases ---- */
+
+/* The index data of the bind_index_buffer2 tests: UINT8 { 5, 6 } at byte 1,
+ * UINT16 { 3, 1, 4 } at byte 4, UINT32 { 7, 0, 2, 11 } at byte 64. */
+static void index2_data(unsigned char *p)
+{
+    static const uint8_t i8[3] = { 9, 5, 6 };
+    static const uint16_t i16[4] = { 3, 1, 4, 9 };
+    static const uint32_t i32[4] = { 7, 0, 2, 11 };
+    memcpy(p, i8, sizeof(i8));
+    memcpy(p + 4, i16, sizeof(i16));
+    memcpy(p + 64, i32, sizeof(i32));
+}
+
+/* Ranges hold the indices each draw reads (by either reading of
+ * VUID-vkCmdDrawIndexed-robustBufferAccess2-08798: the offset counted in the
+ * size or not). */
+static void index2_draws(VkCommandBuffer cb, const struct ct_buffer *ib, PFN_vkCmdBindIndexBuffer2 bind, int uint8)
+{
+    vkCmdBindIndexBuffer(cb, ib->buffer, 64, VK_INDEX_TYPE_UINT32); /* replaced by the next bind */
+    bind(cb, ib->buffer, 4, 32, VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexed(cb, 3, 1, 0, 2, 1); /* 3 1 4, + 2: x 5 3 6, y 1 */
+    bind(cb, ib->buffer, 64, VK_WHOLE_SIZE, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexed(cb, 2, 1, 2, 0, 3); /* 2 11: x 2 11, y 3 */
+    if (uint8) {
+        bind(cb, ib->buffer, 1, 32, VK_INDEX_TYPE_UINT8);
+        vkCmdDrawIndexed(cb, 2, 1, 0, 4, 6); /* 5 6, + 4: x 9 10, y 6 */
+    }
+}
+
+static void index2_expect(struct points *want, int uint8)
+{
+    memset(want, 0, sizeof(*want));
+    want->bg = CT_BLACK;
+    add_index_points(want, 5, 1, 1, 1);
+    add_index_points(want, 3, 1, 1, 1);
+    add_index_points(want, 6, 1, 1, 1);
+    add_index_points(want, 2, 1, 3, 1);
+    add_index_points(want, 11, 1, 3, 1);
+    if (uint8) {
+        add_index_points(want, 9, 1, 6, 1);
+        add_index_points(want, 10, 1, 6, 1);
+    }
+}
+
+/* index_vert points, drawn by index2_draws with `bind`. */
+static void index2_run(struct ct *t, struct ct_scene *s, PFN_vkCmdBindIndexBuffer2 bind, int uint8)
+{
+    struct ct_target c;
+    struct ct_buffer ib;
+    struct points want;
+    VkShaderModule vs, fs;
+    VkPipeline pipe;
+    VkCommandBuffer cb;
+
+    ct_scene_color(t, s, &c);
+    ct_host_buffer(t, &s->e, 256, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, &ib);
+    index2_data(ib.data);
+    vs = ct_shader_module(t, &s->e, index_vert, sizeof(index_vert));
+    fs = ct_shader_module(t, &s->e, flat_frag, sizeof(flat_frag));
+    pipe = point_pipeline(t, s, vs, fs, NULL);
+    cb = ct_begin_commands(t, &s->e);
+    ct_begin_rendering(cb, &c, 1, ct_black, NULL, 0.0f);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    index2_draws(cb, &ib, bind, uint8);
+    vkCmdEndRendering(cb);
+    ct_scene_read(t, s, cb, &c);
+    index2_expect(&want, uint8);
+    ct_check_rgba8(t, s->out.data, W, H, expect_points, &want, 0, uint8 ? "points (UINT16, UINT32, UINT8)" : "points");
+    vkDestroyPipeline(s->e.device, pipe, NULL);
+    vkDestroyShaderModule(s->e.device, vs, NULL);
+    vkDestroyShaderModule(s->e.device, fs, NULL);
+    ct_buffer_fini(&s->e, &ib);
+    ct_target_fini(&s->e, &c);
+}
+
+CT_TEST(bind_index_buffer2,
+        "Drawing Commands > Programmable Primitive Shading (vkCmdBindIndexBuffer2, Vulkan 1.4): buffer, offset and "
+        "size (VK_WHOLE_SIZE: to the end of the buffer) give the bound index buffer range, from whose start "
+        "indexed draws read their indices (VK_INDEX_TYPE_UINT16, UINT32, UINT8), replacing an earlier binding",
+        DR_COMMANDS "vkCmdDrawIndexed vkCmdBindIndexBuffer vkCmdBindIndexBuffer2")
+{
+    struct ct_scene s;
+    ct_scene_init(t, &s);
+    if (s.e.version < VK_API_VERSION_1_4)
+        ct_skip(t, "vkCmdBindIndexBuffer2 is Vulkan 1.4");
+    CT_REQUIRE(t, s.f.v14.indexTypeUint8);
+    index2_run(t, &s, vkCmdBindIndexBuffer2, 1);
+    ct_scene_fini(&s);
+}
+
+CT_TEST(bind_index_buffer2_khr,
+        "Drawing Commands > Programmable Primitive Shading (vkCmdBindIndexBuffer2KHR, VK_KHR_maintenance5 on an "
+        "apiVersion 1.3 device, the maintenance5 feature enabled): as vkCmdBindIndexBuffer2, the bound index "
+        "buffer range from offset, of size bytes or to the end of the buffer (UINT16 and UINT32 indices)",
+        DR_COMMANDS "vkCmdDrawIndexed vkCmdBindIndexBuffer vkCmdBindIndexBuffer2KHR vkGetDeviceProcAddr")
+{
+    const char *exts[] = { "VK_KHR_maintenance5" };
+    VkPhysicalDeviceMaintenance5Features m5;
+    PFN_vkCmdBindIndexBuffer2KHR bind;
+    struct ct_scene s;
+
+    memset(&m5, 0, sizeof(m5));
+    m5.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES;
+    m5.maintenance5 = VK_TRUE;
+    ct_scene_init_ext(t, &s, exts, 1, &m5);
+    bind = (PFN_vkCmdBindIndexBuffer2KHR)vkGetDeviceProcAddr(s.e.device, "vkCmdBindIndexBuffer2KHR");
+    CT_REQUIREF(t, bind != NULL, "vkCmdBindIndexBuffer2KHR: NULL with VK_KHR_maintenance5 enabled");
+    index2_run(t, &s, bind, 0);
+    ct_scene_fini(&s);
+}
+
+CT_TEST(draw_indirect_count_khr,
+        "Drawing Commands > Programmable Primitive Shading (vkCmdDrawIndirectCountKHR, "
+        "vkCmdDrawIndexedIndirectCountKHR: VK_KHR_draw_indirect_count on an apiVersion 1.3 device, "
+        "drawIndirectCount enabled, VUID-vkCmdDrawIndirectCount-None-04445): as the core commands, "
+        "min(the count buffer's value, maxDrawCount) draws (counts within maxDrawIndirectCount)",
+        DR_COMMANDS "vkCmdDrawIndirectCountKHR vkCmdDrawIndexedIndirectCountKHR vkCmdBindIndexBuffer "
+                    "vkGetDeviceProcAddr")
+{
+    const char *exts[] = { "VK_KHR_draw_indirect_count" };
+    static const uint16_t indices[4] = { 0, 1, 2, 3 };
+    VkDrawIndirectCommand d[3] = { { 1, 1, 1, 2 }, { 1, 1, 3, 2 }, { 1, 1, 5, 2 } };
+    VkDrawIndexedIndirectCommand x[3] = { { 1, 1, 0, 1, 5 }, { 1, 1, 1, 2, 5 }, { 1, 1, 2, 3, 5 } };
+    uint32_t counts[3] = { 3, 0, 2 }, lim, i;
+    PFN_vkCmdDrawIndirectCountKHR draw;
+    PFN_vkCmdDrawIndexedIndirectCountKHR draw_indexed;
+    struct ct_scene s;
+    struct ct_target c;
+    struct ct_buffer buf;
+    struct points want;
+    VkShaderModule vs, fs;
+    VkPipeline pipe;
+    VkCommandBuffer cb;
+
+    ct_scene_init_ext(t, &s, exts, 1, NULL);
+    CT_REQUIREF(t, s.f.v12.drawIndirectCount, "VK_KHR_draw_indirect_count is offered without drawIndirectCount");
+    draw = (PFN_vkCmdDrawIndirectCountKHR)vkGetDeviceProcAddr(s.e.device, "vkCmdDrawIndirectCountKHR");
+    draw_indexed =
+        (PFN_vkCmdDrawIndexedIndirectCountKHR)vkGetDeviceProcAddr(s.e.device, "vkCmdDrawIndexedIndirectCountKHR");
+    CT_REQUIREF(t, draw && draw_indexed, "a command of VK_KHR_draw_indirect_count is NULL with the extension enabled");
+    lim = s.e.props.limits.maxDrawIndirectCount; /* 1 without multiDrawIndirect */
+    for (i = 0; i < 3; i++)
+        counts[i] = CT_MIN(counts[i], lim);
+    ct_scene_color(t, &s, &c);
+    ct_host_buffer(t, &s.e, 1024, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, &buf);
+    memcpy(buf.data, d, sizeof(d));
+    memcpy(buf.data + 256, x, sizeof(x));
+    memcpy(buf.data + 512, counts, sizeof(counts));
+    memcpy(buf.data + 768, indices, sizeof(indices));
+    vs = ct_shader_module(t, &s.e, index_vert, sizeof(index_vert));
+    fs = ct_shader_module(t, &s.e, flat_frag, sizeof(flat_frag));
+    pipe = point_pipeline(t, &s, vs, fs, NULL);
+    cb = ct_begin_commands(t, &s.e);
+    ct_begin_rendering(cb, &c, 1, ct_black, NULL, 0.0f);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vkCmdBindIndexBuffer(cb, buf.buffer, 768, VK_INDEX_TYPE_UINT16);
+    draw(cb, buf.buffer, 0, buf.buffer, 512, 2, sizeof(VkDrawIndirectCommand));             /* count 3, max 2 */
+    draw_indexed(cb, buf.buffer, 256, buf.buffer, 516, 3, sizeof(VkDrawIndexedIndirectCommand)); /* count 0 */
+    draw_indexed(cb, buf.buffer, 256, buf.buffer, 520, 3, sizeof(VkDrawIndexedIndirectCommand)); /* count 2 */
+    vkCmdEndRendering(cb);
+    ct_scene_read(t, &s, cb, &c);
+    memset(&want, 0, sizeof(want));
+    want.bg = CT_BLACK;
+    for (i = 0; i < CT_MIN(counts[0], 2u); i++)
+        add_index_points(&want, 1 + 2 * i, 1, 2, 1);
+    for (i = 0; i < counts[2]; i++) /* index i + vertexOffset */
+        add_index_points(&want, 1 + 2 * i, 1, 5, 1);
+    ct_check_rgba8(t, s.out.data, W, H, expect_points, &want, 0, "points");
+    if (lim < 3)
+        ct_note(t, "counts limited to maxDrawIndirectCount %u", lim);
+    vkDestroyPipeline(s.e.device, pipe, NULL);
+    vkDestroyShaderModule(s.e.device, vs, NULL);
+    vkDestroyShaderModule(s.e.device, fs, NULL);
+    ct_buffer_fini(&s.e, &buf);
+    ct_target_fini(&s.e, &c);
+    ct_scene_fini(&s);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(draw_vertex_instance_index),
     CT_REF(draw_indexed),
@@ -1204,6 +1383,9 @@ static const struct ct_test *const tests[] = {
     CT_REF(vertex_attributes),
     CT_REF(vertex_attribute_divisor),
     CT_REF(vertex_binding_stride_dynamic),
+    CT_REF(bind_index_buffer2),
+    CT_REF(bind_index_buffer2_khr),
+    CT_REF(draw_indirect_count_khr),
 };
 
 CT_SUITE(drawing, tests)

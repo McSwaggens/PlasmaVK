@@ -1251,6 +1251,173 @@ CT_TEST(local_read_input_attachment,
     ct_scene_fini(&s);
 }
 
+CT_TEST(render_pass_next_subpass,
+        "Render Pass > Render Pass Commands (vkCmdNextSubpass): the subpass index advances by one and later "
+        "commands are recorded for that subpass, inline (VK_SUBPASS_CONTENTS_INLINE) or in secondary command "
+        "buffers executed in it (VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS, inheriting the subpass); "
+        "attachments a subpass preserves (pPreserveAttachments) keep what an earlier subpass wrote "
+        "(vkCreateRenderPass)",
+        RP_COMMANDS "vkCreateRenderPass vkDestroyRenderPass vkCreateFramebuffer vkDestroyFramebuffer "
+                    "vkCmdBeginRenderPass vkCmdNextSubpass vkCmdEndRenderPass vkAllocateCommandBuffers "
+                    "vkBeginCommandBuffer vkEndCommandBuffer vkCmdExecuteCommands vkFreeCommandBuffers")
+{
+    struct ct_scene s;
+    struct ct_target c[3];
+    struct ct_gfx g;
+    VkAttachmentDescription att[3];
+    VkAttachmentReference refs[3];
+    uint32_t preserve[2] = { 0, 1 };
+    VkSubpassDescription sp[3];
+    VkRenderPassCreateInfo info;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    VkFramebuffer fb;
+    VkImageView views[3];
+    VkPipeline pipes[3];
+    VkClearValue clears[3];
+    VkCommandBufferAllocateInfo alloc;
+    VkCommandBufferInheritanceInfo inherit;
+    VkCommandBufferBeginInfo begin;
+    VkCommandBuffer cb, second;
+    uint32_t i;
+    struct ct_box want[3] = {
+        { 0, 0, W / 2, H, RED, BLACK },   /* subpass 0: left half */
+        { 0, 0, W, H / 2, GREEN, BLACK }, /* subpass 1: top half */
+        { 0, H / 2, W, H, BLUE, BLACK },  /* subpass 2 (secondary): bottom half */
+    };
+
+    ct_scene_init(t, &s);
+    memset(att, 0, sizeof(att));
+    memset(sp, 0, sizeof(sp));
+    for (i = 0; i < 3; i++) {
+        ct_scene_color(t, &s, &c[i]);
+        views[i] = c[i].view;
+        att[i].format = VK_FORMAT_R8G8B8A8_UNORM;
+        att[i].samples = VK_SAMPLE_COUNT_1_BIT;
+        att[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        att[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        att[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att[i].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att[i].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        refs[i].attachment = i;
+        refs[i].layout = VK_IMAGE_LAYOUT_GENERAL;
+        sp[i].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sp[i].colorAttachmentCount = 1;
+        sp[i].pColorAttachments = &refs[i];
+        sp[i].preserveAttachmentCount = i; /* the earlier subpasses' attachments */
+        sp[i].pPreserveAttachments = i ? preserve : NULL;
+        clears[i] = clear_color(ct_black);
+    }
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    info.attachmentCount = 3;
+    info.pAttachments = att;
+    info.subpassCount = 3;
+    info.pSubpasses = sp;
+    CT_REQUIRE_VK(t, vkCreateRenderPass(s.e.device, &info, NULL, &rp));
+    fb = framebuffer(t, &s.e, rp, views, 3, 1);
+    for (i = 0; i < 3; i++) {
+        ct_gfx_init(&g, s.vs, s.fs, s.layout, W, H);
+        g.render_pass = rp;
+        g.subpass = i;
+        pipes[i] = ct_gfx_pipeline(t, &s.e, &g);
+    }
+
+    cb = ct_begin_commands(t, &s.e);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc.commandPool = s.e.pool;
+    alloc.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+    alloc.commandBufferCount = 1;
+    CT_REQUIRE_VK(t, vkAllocateCommandBuffers(s.e.device, &alloc, &second));
+    memset(&inherit, 0, sizeof(inherit));
+    inherit.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+    inherit.renderPass = rp;
+    inherit.subpass = 2;
+    inherit.framebuffer = fb;
+    memset(&begin, 0, sizeof(begin));
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT | VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+    begin.pInheritanceInfo = &inherit;
+    CT_REQUIRE_VK(t, vkBeginCommandBuffer(second, &begin));
+    vkCmdBindPipeline(second, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[2]);
+    ct_draw_rect(second, s.layout, -1.0f, 0.0f, 1.0f, 1.0f, ct_blue, 0.0f);
+    CT_REQUIRE_VK(t, vkEndCommandBuffer(second));
+
+    begin_pass(cb, rp, fb, 0, 0, W, H, clears, 3);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[0]);
+    ct_draw_rect(cb, s.layout, -1.0f, -1.0f, 0.0f, 1.0f, ct_red, 0.0f);
+    vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[1]);
+    ct_draw_rect(cb, s.layout, -1.0f, -1.0f, 1.0f, 0.0f, ct_green, 0.0f);
+    vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
+    vkCmdExecuteCommands(cb, 1, &second);
+    vkCmdEndRenderPass(cb);
+    for (i = 0; i < 3; i++)
+        ct_target_read(cb, &c[i], 0, VK_IMAGE_ASPECT_COLOR_BIT, s.out.buffer, (VkDeviceSize)i * W * H * 4);
+    ct_submit_and_wait(t, &s.e, cb);
+    ct_check_rgba8(t, s.out.data, W, H, ct_expect_box, &want[0], 0, "attachment of subpass 0 (preserved by 1 and 2)");
+    ct_check_rgba8(t, s.out.data + W * H * 4, W, H, ct_expect_box, &want[1], 0,
+                   "attachment of subpass 1 (preserved by 2)");
+    ct_check_rgba8(t, s.out.data + 2 * W * H * 4, W, H, ct_expect_box, &want[2], 0,
+                   "attachment of subpass 2 (secondary command buffer)");
+
+    vkFreeCommandBuffers(s.e.device, s.e.pool, 1, &second);
+    for (i = 0; i < 3; i++) {
+        vkDestroyPipeline(s.e.device, pipes[i], NULL);
+        ct_target_fini(&s.e, &c[i]);
+    }
+    vkDestroyFramebuffer(s.e.device, fb, NULL);
+    vkDestroyRenderPass(s.e.device, rp, NULL);
+    ct_scene_fini(&s);
+}
+
+CT_TEST(rendering_area_granularity_khr,
+        "Render Pass > Dynamic Render Pass Instances (vkGetRenderingAreaGranularityKHR, VK_KHR_maintenance5 on an "
+        "apiVersion 1.3 device, the maintenance5 feature enabled): the render area granularity for the "
+        "attachment formats of VkRenderingAreaInfo (color, color and depth/stencil, none) is a non-zero extent in "
+        "pixels",
+        "vkGetRenderingAreaGranularityKHR vkGetDeviceProcAddr vkCreateDevice vkDestroyDevice")
+{
+    const char *exts[] = { "VK_KHR_maintenance5" };
+    VkPhysicalDeviceMaintenance5Features m5;
+    PFN_vkGetRenderingAreaGranularityKHR get;
+    VkFormat color[2] = { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM };
+    VkRenderingAreaInfo info;
+    VkExtent2D gran;
+    struct ct_env e;
+    uint32_t i;
+
+    if (CT_VERSION(ct_instance_version()) < VK_API_VERSION_1_3)
+        ct_skip(t, "instance version below 1.3");
+    ct_env_init_ex(t, &e, VK_API_VERSION_1_3, NULL, 0);
+    if (e.version < VK_API_VERSION_1_3)
+        ct_skip(t, "device version below 1.3");
+    if (!ct_device_extension_supported(e.pd, "VK_KHR_maintenance5"))
+        ct_skip(t, "VK_KHR_maintenance5 is not offered");
+    memset(&m5, 0, sizeof(m5));
+    m5.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES;
+    m5.maintenance5 = VK_TRUE;
+    ct_env_device_ex(t, &e, &m5, exts, 1, NULL);
+    get = (PFN_vkGetRenderingAreaGranularityKHR)vkGetDeviceProcAddr(e.device, "vkGetRenderingAreaGranularityKHR");
+    CT_REQUIREF(t, get != NULL, "vkGetRenderingAreaGranularityKHR: NULL with VK_KHR_maintenance5 enabled");
+    for (i = 0; i < 3; i++) {
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_AREA_INFO;
+        info.colorAttachmentCount = i == 2 ? 0 : i + 1;
+        info.pColorAttachmentFormats = i == 2 ? NULL : color;
+        if (i == 1) {
+            info.depthAttachmentFormat = ct_depth_stencil_format(&e);
+            info.stencilAttachmentFormat = info.depthAttachmentFormat;
+        }
+        gran.width = gran.height = 0;
+        get(e.device, &info, &gran);
+        CT_CHECKF(t, gran.width >= 1 && gran.height >= 1, "attachments %u: granularity %u x %u", i, gran.width,
+                  gran.height);
+    }
+    ct_env_fini(&e);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(render_pass_clear_store),
     CT_REF(render_pass_load_and_render_area),
@@ -1265,6 +1432,8 @@ static const struct ct_test *const tests[] = {
     CT_REF(dynamic_rendering_multiview),
     CT_REF(local_read_attachment_locations),
     CT_REF(local_read_input_attachment),
+    CT_REF(render_pass_next_subpass),
+    CT_REF(rendering_area_granularity_khr),
 };
 
 CT_SUITE(renderpass, tests)

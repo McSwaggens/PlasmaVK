@@ -19,27 +19,31 @@ One file per chapter of the Vulkan specification:
 |---|---|---|
 | `initialization.c` | Initialization: `vkGet*ProcAddr`, instances | 25 |
 | `devsandqueues.c` | Devices and Queues: physical devices, properties, features queries, queue families, devices, queues | 34 |
-| `memory.c` | Memory Allocation: memory properties, allocation, mapping, flushing, host/device visibility | 27 |
-| `resources.c` | Resource Creation: buffers, images, memory requirements, binding, device addresses, subresource layouts, image and buffer views, multi-planar images (disjoint planes, linear plane layouts) | 31 |
+| `cmdbuffers.c` | Command Buffers: resetting pools and command buffers (what they hold afterwards), trimming pools, `vkQueueSubmit2` (batches, binary and timeline semaphores, fences), the device mask | 5 |
+| `memory.c` | Memory Allocation: memory properties, allocation, mapping, flushing, host/device visibility, peer memory features | 28 |
+| `resources.c` | Resource Creation: buffers, images, memory requirements, binding, device addresses, subresource layouts, image and buffer views, multi-planar images (disjoint planes, linear plane layouts), the subresource layout queries of VK_KHR_maintenance5 on a 1.3 device | 32 |
 | `extensions.c` | Layers & Extensions: enumeration, extension dependencies | 12 |
 | `features.c` | Features > Feature Requirements: one test per required feature | 86 |
 | `limits.c` | Limits > Limit Requirements: one test per limit of the Required Limits table | 145 |
 | `formats.c` | Formats: one test per format of the Required Format Support tables (features, image types), the required Y'CbCr formats, and the chapter's other rules | 66 |
-| `capabilities.c` | Additional Capabilities: image format properties (extents, mip levels, layers, sample counts, monotonicity, host image copy, Y'CbCr descriptor counts), sparse image formats | 7 |
+| `capabilities.c` | Additional Capabilities: image format properties (extents, mip levels, layers, sample counts, monotonicity, host image copy, Y'CbCr descriptor counts), sparse image formats, external memory, semaphore and fence handle types | 10 |
 | `samplers.c` | Samplers: creation with every parameter, maxSamplerAllocationCount, sampler Y'CbCr conversions (creation, sampling texel by texel) | 8 |
-| `copies.c` | Copy Commands: buffer/image and image/image copies (also of multi-planar image planes), blits, resolves, host image copies, texel by texel | 12 |
-| `clears.c` | Clear Commands: color and depth/stencil image clears, texel by texel; `vkCmdClearAttachments` (rectangles, layers of a layered framebuffer) | 5 |
-| `descriptorsets.c` | Resource Descriptors > Descriptor Sets: set layouts and support queries, pools and allocation, writes, copies, inline uniform blocks, update templates, dynamic offsets, push descriptors, update after bind, variable-count and partially bound bindings, every descriptor type read by a compute shader | 19 |
+| `copies.c` | Copy Commands: buffer/image and image/image copies (also of multi-planar image planes), blits, resolves, host image copies, texel by texel; buffer copies and the copies, blits and resolves of Vulkan 1.3 (`vkCmdCopyBuffer2` ...) | 17 |
+| `clears.c` | Clear Commands: color and depth/stencil image clears, texel by texel; `vkCmdClearAttachments` (rectangles, layers of a layered framebuffer); `vkCmdUpdateBuffer` | 6 |
+| `descriptorsets.c` | Resource Descriptors > Descriptor Sets: set layouts and support queries, pools and allocation, writes, copies, inline uniform blocks, update templates, dynamic offsets, push descriptors, update after bind, variable-count and partially bound bindings, every descriptor type read by a compute shader; push constant updates (`vkCmdPushConstants2`) | 20 |
 | `queries.c` | Queries: pools, host and device resets, timestamp availability, order and period, `vkCmdWriteTimestamp2`, secondaries, results layout with every flag, waiting, unavailable occlusion queries with PARTIAL, `vkCmdCopyQueryPoolResults` (later submission, same command buffer, WAIT), occlusion query counts (precise, occluded, no draws, several draws) | 16 |
-| `synchronization.c` | Synchronization and Cache Control > Events: host and device state, the host seeing a device signal, device waits on host and device signals (same command buffer, batch, earlier submission, several events, synchronization2, device-only events) | 7 |
+| `synchronization.c` | Synchronization and Cache Control. Events: host and device state, the host seeing a device signal, device waits on host and device signals (same command buffer, batch, earlier submission, several events, synchronization2, device-only events); timeline semaphore values and host waits; `vkDeviceWaitIdle` | 10 |
 | `privatedata.c` | Private Data: slots, data on objects of many types, data of new objects and slots, many objects, reserved slots, allocation callbacks | 7 |
-| `renderpass.c` | Render Pass: load and store operations, render areas, subpasses with an input attachment and a dependency (`vkCreateRenderPass2`, `vkCmdNextSubpass2`), color and depth resolves (multisampled attachments stored or not), multiview, imageless framebuffers, render area granularity; dynamic rendering: color and depth, resolves, suspending and resuming across command buffers, multiview, local read (attachment locations, input attachment indices) | 13 |
+| `renderpass.c` | Render Pass: load and store operations, render areas, subpasses with an input attachment and a dependency (`vkCreateRenderPass2`, `vkCmdNextSubpass2`), color and depth resolves (multisampled attachments stored or not), multiview, imageless framebuffers, render area granularity (also `vkGetRenderingAreaGranularityKHR` on a 1.3 device), `vkCmdNextSubpass` (inline and secondary contents, preserved attachments); dynamic rendering: color and depth, resolves, suspending and resuming across command buffers, multiview, local read (attachment locations, input attachment indices) | 15 |
 | `pipelines.c` | Pipelines: no fragment shader, specialization constants, a uniform buffer through a descriptor set; dynamic state (viewports and scissors with and without counts, cull mode, front face, topology, depth and stencil state, rasterizer discard, depth bias); pipeline caches (header, `VK_INCOMPLETE`, partial data, round trip, merging), `FAIL_ON_PIPELINE_COMPILE_REQUIRED` with `EARLY_RETURN_ON_FAILURE`, creation feedback | 12 |
-| `drawing.c` | Drawing Commands and Fixed-Function Vertex Processing: vertex and instance numbering of direct, indexed (UINT16, UINT32, UINT8) and indirect draws, draw counts, primitive restart (static and dynamic), every primitive topology, draw parameters (BaseVertex, BaseInstance, DrawIndex), vertex attribute formats, offsets and instance rates, divisors, dynamic binding strides | 12 |
-| `rasterization.c` | Fixed-Function Vertex Post-Processing and Rasterization: viewport transform (offsets, negative heights, depth ranges), clipping and depth clamping, ViewportIndex and Layer from the vertex shader, culling, rasterizer discard, coverage at the standard sample locations, sample shading, wide points, flat and smooth interpolation | 11 |
-| `fragops.c` | Fragment Operations: scissor test, every depth compare op, every stencil op (clamping, wrapping, fail and depth-fail ops, write and compare masks), depth bounds, sample mask, alpha to one | 6 |
+| `drawing.c` | Drawing Commands and Fixed-Function Vertex Processing: vertex and instance numbering of direct, indexed (UINT16, UINT32, UINT8) and indirect draws, draw counts, primitive restart (static and dynamic), every primitive topology, draw parameters (BaseVertex, BaseInstance, DrawIndex), vertex attribute formats, offsets and instance rates, divisors, dynamic binding strides; `vkCmdBindIndexBuffer2` ranges; the KHR aliases of VK_KHR_maintenance5 and VK_KHR_draw_indirect_count on a 1.3 device | 15 |
+| `rasterization.c` | Fixed-Function Vertex Post-Processing and Rasterization: viewport transform (offsets, negative heights, depth ranges), clipping and depth clamping, ViewportIndex and Layer from the vertex shader, culling, rasterizer discard, coverage at the standard sample locations, sample shading, wide points, flat and smooth interpolation, dynamic line width and line stipple | 13 |
+| `fragops.c` | Fragment Operations: scissor test, every depth compare op, every stencil op (clamping, wrapping, fail and depth-fail ops, write and compare masks), depth bounds (static and dynamic), sample mask, alpha to one | 7 |
 | `framebuffer.c` | The Framebuffer: blend factors and operations (constants static and dynamic), color write masks, independent blending, dual-source blending, sRGB blending in linear space, logic operations | 6 |
+| `dispatch.c` | Dispatching Commands: `vkCmdDispatchIndirect` (parameters read at execution, zero counts), `vkCmdDispatchBase` (WorkgroupId, NumWorkgroups, GlobalInvocationId), no base carried over | 3 |
+| `sparsemem.c` | Sparse Resources: sparse image memory requirements (none without sparse residency), `vkQueueBindSparse` on a sparse binding queue | 3 |
 | `wsi.c` | Window System Integration: Metal surfaces, surface queries (support, capabilities, formats, present modes, present rectangles, device group modes), swapchains (images, allocation callbacks, `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`, recreation with `oldSwapchain`, aliasing a swapchain image), acquire and present (semaphores, fences, timeouts, two swapchains in one present), swapchain images as transfer source and destination | 20 |
+| `debugging.c` | Debugging > Active Tooling Information: `vkGetPhysicalDeviceToolProperties` (count protocol, strings) | 1 |
 
 Framework: `ct.h` (test macros, helpers; for the graphics chapters
 offscreen render targets, a pipeline description with defaults, rectangle
@@ -225,10 +229,23 @@ against the specification; the tests are right:
   VkPipelineInputAssemblyStateCreateInfo: "primitiveRestartEnable controls
   whether a special vertex index value is treated as restarting the assembly
   of primitives". With restart enabled the test passes.
+- `dispatch.dispatch_indirect_after_base`: after `vkCmdDispatchBase` with a
+  non-zero base, a `vkCmdDispatchIndirect` in the same command buffer keeps
+  that base: its WorkgroupId values start at the earlier base instead of 0
+  (`vkCmdDispatch` after the same command starts at 0). vkCmdDispatchIndirect
+  "behaves similarly to vkCmdDispatch except that the parameters are read by
+  the device from a buffer during execution", and "vkCmdDispatch is
+  equivalent to vkCmdDispatchBase(0,0,0,groupCountX,groupCountY,groupCountZ)".
 
 The graphics chapters' tests also skip on MoltenVK where it lacks a feature
 (`drawIndirectCount`, `depthBounds`, `logicOp`), and draw no triangle fans on
-it (`VK_KHR_portability_subset`, whose `triangleFans` may be off).
+it (`VK_KHR_portability_subset`, whose `triangleFans` may be off); and
+without `VK_KHR_draw_indirect_count`, `drawing.draw_indirect_count_khr`.
+Sparse resources, wide lines, stippled lines, depth bounds and external
+handle types are not offered by MoltenVK either: their tests check what is
+valid without them (sparse requirements of non-sparse images, line width
+1.0, stippling disabled, the depth bounds test disabled, the handle type
+queries) and skip the rest.
 
 `baseline-moltenvk.txt` lists every other test, which passes on MoltenVK;
 `make conformance-mvk` fails if one of those regresses.
@@ -247,6 +264,8 @@ a required behaviour.
 | Tests | Why |
 |---|---|
 | `devsandqueues.get_device_queue2_protected`, `features.pipelineProtectedAccess`, `devsandqueues.queue_families_sparse_protected` | Apple GPUs have no protected memory; sparse resources are not implemented. |
+| `sparsemem.sparse_requirements_residency`, `sparsemem.queue_bind_sparse` | Sparse resources are not implemented: no `sparseResidencyImage2D`, no queue family with `VK_QUEUE_SPARSE_BINDING_BIT` (which `vkQueueBindSparse` requires). `sparsemem.sparse_requirements_non_sparse` covers the sparse requirement queries PlasmaVK answers. |
+| `memory.peer_memory_features` | Every device group has one physical device: `vkGetDeviceGroupPeerMemoryFeatures` has no valid call (its local and remote device indices must differ). |
 | `resources.buffer_capture_replay` | Metal cannot place a resource at a requested GPU address, so `bufferDeviceAddressCaptureReplay` is unsupported. |
 | `extensions.instance_layer_extensions` | No layers: PlasmaVK is linked directly, without a loader. |
 | `features.shaderInt64` | Required only with 64-bit shader atomics, which Apple7/Apple8 GPUs lack. |
@@ -285,4 +304,14 @@ into", so the pipeline layout stays a valid handle (the test binds a set of a
 second, identically defined layout that is still alive).
 `initialization.instance_allocation_failure` crashes
 inside the validation layer, which does not survive injected allocation
-failures; without the layer it passes.
+failures; without the layer it passes. `debugging.tool_properties` fails under
+the validation layer, which reports itself as an active tool but answers a
+count of 0 with a non-NULL array by setting the count to 1 and returning
+`VK_SUCCESS`, where Fundamentals > Array Results requires that only as many
+elements be written as the count allows, the count be overwritten with the
+number written, and `VK_INCOMPLETE` be returned; without the layer there are no
+tools and it passes. With synchronization validation as well
+(`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true`), the only further reports are
+`SYNC-HAZARD-READ-AFTER-WRITE` for `synchronization.event_wait_device_signal`,
+whose copies wait (vkCmdWaitEvents) on events set by fills in another command
+buffer, a dependency synchronization validation does not follow.

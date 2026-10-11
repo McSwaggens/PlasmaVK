@@ -394,6 +394,86 @@ CT_TEST(alpha_to_one,
     ct_scene_fini(&s);
 }
 
+/* depth_bounds_dynamic: bands of 4 rows; the stored depth is 0.25 left,
+ * 0.5 right. Bands 0 and 1 are drawn with the test disabled, 2 and 3 with
+ * it enabled (only with depthBounds) and bounds around 0.5, then 0.25. */
+static uint32_t expect_bounds(uint32_t x, uint32_t y, const void *ctx)
+{
+    int enabled = *(const int *)ctx;
+    switch (y / 4) {
+    case 0:
+        return CT_RED;
+    case 1:
+        return CT_GREEN;
+    case 2:
+        return enabled && x >= W / 2 ? CT_BLUE : CT_BLACK;
+    default:
+        return enabled && x < W / 2 ? CT_WHITE : CT_BLACK;
+    }
+}
+
+CT_TEST(depth_bounds_dynamic,
+        "Fragment Operations > Depth Bounds Test, with VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE and "
+        "VK_DYNAMIC_STATE_DEPTH_BOUNDS: vkCmdSetDepthBoundsTestEnable and vkCmdSetDepthBounds set the test and "
+        "its range for later draws; disabled (the only value without depthBounds, "
+        "VUID-vkCmdSetDepthBoundsTestEnable-depthBounds-10010) the bounds set have no effect; enabled "
+        "(depthBounds), a sample passes only where the stored depth lies in [minDepthBounds, maxDepthBounds], "
+        "with each draw's bounds",
+        FO_COMMANDS "vkCmdSetDepthBounds vkCmdSetDepthBoundsTestEnable")
+{
+    struct ct_scene s;
+    struct ct_target c, d;
+    struct ct_gfx g;
+    VkPipeline write, bounded;
+    VkCommandBuffer cb;
+    int enabled;
+
+    ct_scene_init(t, &s);
+    enabled = s.f.f2.features.depthBounds != VK_FALSE;
+    ct_scene_color(t, &s, &c);
+    ct_target(t, &s.e, VK_FORMAT_D16_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+              &d);
+    ct_gfx_init(&g, s.vs, s.fs, s.layout, W, H);
+    g.rendering.depthAttachmentFormat = VK_FORMAT_D16_UNORM;
+    g.ds.depthTestEnable = g.ds.depthWriteEnable = VK_TRUE;
+    g.ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    g.blend[0].colorWriteMask = 0;
+    write = ct_gfx_pipeline(t, &s.e, &g);
+    g.blend[0].colorWriteMask = 0xf;
+    g.ds.depthTestEnable = g.ds.depthWriteEnable = VK_FALSE;
+    g.dynamic[g.dynamic_count++] = VK_DYNAMIC_STATE_DEPTH_BOUNDS;
+    g.dynamic[g.dynamic_count++] = VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE;
+    bounded = ct_gfx_pipeline(t, &s.e, &g);
+    cb = ct_begin_commands(t, &s.e);
+    ct_begin_rendering(cb, &c, 1, ct_black, &d, 0.5f);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, write);
+    ct_draw_rect(cb, s.layout, -1.0f, -1.0f, 0.0f, 1.0f, NULL, 0.25f); /* left half: 0.25 */
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, bounded);
+    if (enabled) {
+        vkCmdSetDepthBoundsTestEnable(cb, VK_TRUE);
+        vkCmdSetDepthBounds(cb, 0.4f, 0.6f);
+        ct_draw_rect(cb, s.layout, -1.0f, 0.0f, 1.0f, 0.5f, ct_blue, 0.9f); /* band 2 */
+        vkCmdSetDepthBounds(cb, 0.2f, 0.3f);
+        ct_draw_rect(cb, s.layout, -1.0f, 0.5f, 1.0f, 1.0f, ct_white, 0.9f); /* band 3 */
+    }
+    vkCmdSetDepthBoundsTestEnable(cb, VK_FALSE);
+    vkCmdSetDepthBounds(cb, 0.0f, 0.1f);
+    ct_draw_rect(cb, s.layout, -1.0f, -1.0f, 1.0f, -0.5f, ct_red, 0.9f); /* band 0 */
+    vkCmdSetDepthBounds(cb, 0.9f, 1.0f);
+    ct_draw_rect(cb, s.layout, -1.0f, -0.5f, 1.0f, 0.0f, ct_green, 0.9f); /* band 1 */
+    vkCmdEndRendering(cb);
+    ct_scene_read(t, &s, cb, &c);
+    ct_check_rgba8(t, s.out.data, W, H, expect_bounds, &enabled, 0,
+                   enabled ? "bands: disabled, disabled, [0.4, 0.6], [0.2, 0.3]" : "bands drawn with the test disabled");
+    if (!enabled)
+        ct_note(t, "depthBounds is not supported: only the test disabled");
+    vkDestroyPipeline(s.e.device, write, NULL);
+    vkDestroyPipeline(s.e.device, bounded, NULL);
+    ct_target_fini(&s.e, &d);
+    ct_target_fini(&s.e, &c);
+    ct_scene_fini(&s);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(scissor_test),
     CT_REF(depth_compare_ops),
@@ -401,6 +481,7 @@ static const struct ct_test *const tests[] = {
     CT_REF(depth_bounds_test),
     CT_REF(sample_mask_test),
     CT_REF(alpha_to_one),
+    CT_REF(depth_bounds_dynamic),
 };
 
 CT_SUITE(fragops, tests)

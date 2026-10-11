@@ -1,6 +1,7 @@
 /* Chapter "Additional Capabilities": vkGetPhysicalDeviceImageFormatProperties
  * and its rules (extents, mip levels, layers, sample counts, resource size,
- * monotonicity, host image copy) and the sparse image format query. */
+ * monotonicity, host image copy), the sparse image format query, and the
+ * external memory, semaphore and fence handle type queries. */
 #include "ct.h"
 
 #include <stdio.h>
@@ -414,10 +415,251 @@ CT_TEST(ycbcr_descriptor_count,
     ct_env_fini(&e);
 }
 
+/* ---- External memory, semaphore and fence capabilities ---- */
+
+/* A handle type bit no extension defines (bit 30; bit 31 is never a flag
+ * bit, Fundamentals > Valid Usage for Flags). */
+#define UNDEFINED_HANDLE_TYPE 0x40000000u
+
+/* An instance and device of Vulkan 1.1 or later (timelineSemaphore enabled
+ * from 1.2); *maintenance5: the feature is supported (Vulkan 1.4), which
+ * makes any value valid in a physical device query (Fundamentals > Valid
+ * Usage for Enumerated Types). */
+static void external_env(struct ct *t, struct ct_env *e, int *maintenance5)
+{
+    struct ct_features f;
+    VkPhysicalDeviceVulkan12Features v12;
+    ct_env_init(t, e);
+    if (e->version < VK_API_VERSION_1_1)
+        ct_skip(t, "external handle capabilities are Vulkan 1.1");
+    ct_get_features(e, &f, 0);
+    *maintenance5 = e->version >= VK_API_VERSION_1_4 && f.v14.maintenance5;
+    memset(&v12, 0, sizeof(v12));
+    v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    v12.timelineSemaphore = f.v12.timelineSemaphore;
+    ct_env_device(t, e, e->version >= VK_API_VERSION_1_2 ? &v12 : NULL);
+}
+
+static void query_buffer(const struct ct_env *e, VkBufferUsageFlags usage, VkExternalMemoryHandleTypeFlagBits type,
+                         unsigned char fill, VkExternalBufferProperties *p)
+{
+    VkPhysicalDeviceExternalBufferInfo info;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO;
+    info.usage = usage;
+    info.handleType = type;
+    memset(p, fill, sizeof(*p));
+    p->sType = VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES;
+    p->pNext = NULL;
+    vkGetPhysicalDeviceExternalBufferProperties(e->pd, &info, p);
+}
+
+CT_TEST(external_buffer_properties,
+        "Additional Capabilities > Additional Buffer Capabilities (vkGetPhysicalDeviceExternalBufferProperties, "
+        "Vulkan 1.1): for each core memory handle type and several usages, the properties are written (the same "
+        "whatever the output held before: queries are invariant, Fundamentals) with sType and pNext kept; a "
+        "supported type's compatibleHandleTypes includes it (External Memory Handle Types: \"must include at "
+        "least handleType\") and an exportable type can be given to VkExternalMemoryBufferCreateInfo; with "
+        "maintenance5, a handle type no extension defines reports no features",
+        "vkGetPhysicalDeviceExternalBufferProperties vkGetPhysicalDeviceFeatures2 vkCreateBuffer vkDestroyBuffer")
+{
+    static const VkBufferUsageFlags usage[4] = {
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+    };
+    struct ct_env e;
+    VkExternalBufferProperties a, b;
+    uint32_t type, u;
+    int maintenance5, supported = 0;
+
+    external_env(t, &e, &maintenance5);
+    for (type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT; type <= VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
+         type <<= 1)
+        for (u = 0; u < 4; u++) {
+            const VkExternalMemoryProperties *m = &a.externalMemoryProperties;
+            query_buffer(&e, usage[u], (VkExternalMemoryHandleTypeFlagBits)type, 0x00, &a);
+            query_buffer(&e, usage[u], (VkExternalMemoryHandleTypeFlagBits)type, 0xff, &b);
+            CT_CHECKF(t, a.sType == VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES && a.pNext == NULL,
+                      "handle type 0x%x: sType or pNext changed", type);
+            CT_CHECKF(t, memcmp(m, &b.externalMemoryProperties, sizeof(*m)) == 0,
+                      "handle type 0x%x, usage 0x%x: the properties depend on what the structure held", type,
+                      usage[u]);
+            if (!(m->externalMemoryFeatures &
+                  (VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT | VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT)))
+                continue;
+            supported++;
+            CT_CHECKF(t, m->compatibleHandleTypes & type, "handle type 0x%x: compatibleHandleTypes 0x%x lacks it",
+                      type, m->compatibleHandleTypes);
+            if (m->externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT) {
+                VkExternalMemoryBufferCreateInfo ext;
+                VkBufferCreateInfo info;
+                VkBuffer buffer = VK_NULL_HANDLE;
+                memset(&ext, 0, sizeof(ext));
+                ext.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
+                ext.handleTypes = type;
+                memset(&info, 0, sizeof(info));
+                info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                info.pNext = &ext;
+                info.size = 4096;
+                info.usage = usage[u];
+                CT_CHECK_VK(t, vkCreateBuffer(e.device, &info, NULL, &buffer), VK_SUCCESS);
+                vkDestroyBuffer(e.device, buffer, NULL);
+            }
+        }
+    if (maintenance5) {
+        query_buffer(&e, usage[0], (VkExternalMemoryHandleTypeFlagBits)UNDEFINED_HANDLE_TYPE, 0xff, &a);
+        CT_CHECKF(t, a.externalMemoryProperties.externalMemoryFeatures == 0,
+                  "an undefined handle type: externalMemoryFeatures 0x%x", a.externalMemoryProperties.externalMemoryFeatures);
+    }
+    ct_note(t, "%d supported (handle type, usage) pairs", supported);
+    ct_env_fini(&e);
+}
+
+static void query_semaphore(const struct ct_env *e, VkSemaphoreType stype, VkExternalSemaphoreHandleTypeFlagBits type,
+                            unsigned char fill, VkExternalSemaphoreProperties *p)
+{
+    VkSemaphoreTypeCreateInfo type_info;
+    VkPhysicalDeviceExternalSemaphoreInfo info;
+    memset(&type_info, 0, sizeof(type_info));
+    type_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+    type_info.semaphoreType = stype;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO;
+    info.pNext = e->version >= VK_API_VERSION_1_2 ? &type_info : NULL;
+    info.handleType = type;
+    memset(p, fill, sizeof(*p));
+    p->sType = VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES;
+    p->pNext = NULL;
+    vkGetPhysicalDeviceExternalSemaphoreProperties(e->pd, &info, p);
+}
+
+CT_TEST(external_semaphore_properties,
+        "Additional Capabilities > Optional Semaphore Capabilities (vkGetPhysicalDeviceExternalSemaphoreProperties, "
+        "Vulkan 1.1): for each core semaphore handle type, binary and (Vulkan 1.2) timeline, the properties are "
+        "written (invariant whatever the output held) with sType and pNext kept; an exportable type can be given "
+        "to VkExportSemaphoreCreateInfo (VUID-VkExportSemaphoreCreateInfo-handleTypes-01124); with maintenance5, a "
+        "handle type no extension defines is unsupported: externalSemaphoreFeatures is zero",
+        "vkGetPhysicalDeviceExternalSemaphoreProperties vkGetPhysicalDeviceFeatures2 vkCreateSemaphore "
+        "vkDestroySemaphore")
+{
+    struct ct_env e;
+    VkExternalSemaphoreProperties a, b;
+    uint32_t type, k;
+    int maintenance5, supported = 0;
+
+    external_env(t, &e, &maintenance5);
+    for (k = 0; k < (e.version >= VK_API_VERSION_1_2 ? 2u : 1u); k++) {
+        VkSemaphoreType stype = k ? VK_SEMAPHORE_TYPE_TIMELINE : VK_SEMAPHORE_TYPE_BINARY;
+        for (type = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT; type <= VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+             type <<= 1) {
+            query_semaphore(&e, stype, (VkExternalSemaphoreHandleTypeFlagBits)type, 0x00, &a);
+            query_semaphore(&e, stype, (VkExternalSemaphoreHandleTypeFlagBits)type, 0xff, &b);
+            CT_CHECKF(t, a.sType == VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES && a.pNext == NULL,
+                      "handle type 0x%x: sType or pNext changed", type);
+            CT_CHECKF(t, a.exportFromImportedHandleTypes == b.exportFromImportedHandleTypes &&
+                             a.compatibleHandleTypes == b.compatibleHandleTypes &&
+                             a.externalSemaphoreFeatures == b.externalSemaphoreFeatures,
+                      "%s, handle type 0x%x: the properties depend on what the structure held",
+                      k ? "timeline" : "binary", type);
+            if (a.externalSemaphoreFeatures)
+                supported++;
+            if (a.externalSemaphoreFeatures & VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT) {
+                VkSemaphoreTypeCreateInfo type_info;
+                VkExportSemaphoreCreateInfo export_info;
+                VkSemaphoreCreateInfo info;
+                VkSemaphore s = VK_NULL_HANDLE;
+                memset(&type_info, 0, sizeof(type_info));
+                type_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+                type_info.semaphoreType = stype;
+                memset(&export_info, 0, sizeof(export_info));
+                export_info.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+                export_info.pNext = k ? &type_info : NULL;
+                export_info.handleTypes = type;
+                memset(&info, 0, sizeof(info));
+                info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+                info.pNext = &export_info;
+                CT_CHECK_VK(t, vkCreateSemaphore(e.device, &info, NULL, &s), VK_SUCCESS);
+                vkDestroySemaphore(e.device, s, NULL);
+            }
+        }
+    }
+    if (maintenance5) {
+        query_semaphore(&e, VK_SEMAPHORE_TYPE_BINARY, (VkExternalSemaphoreHandleTypeFlagBits)UNDEFINED_HANDLE_TYPE, 0xff,
+                        &a);
+        CT_CHECKF(t, a.externalSemaphoreFeatures == 0, "an undefined handle type: externalSemaphoreFeatures 0x%x",
+                  a.externalSemaphoreFeatures);
+    }
+    ct_note(t, "%d supported (semaphore type, handle type) pairs", supported);
+    ct_env_fini(&e);
+}
+
+static void query_fence(const struct ct_env *e, VkExternalFenceHandleTypeFlagBits type, unsigned char fill,
+                        VkExternalFenceProperties *p)
+{
+    VkPhysicalDeviceExternalFenceInfo info;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_FENCE_INFO;
+    info.handleType = type;
+    memset(p, fill, sizeof(*p));
+    p->sType = VK_STRUCTURE_TYPE_EXTERNAL_FENCE_PROPERTIES;
+    p->pNext = NULL;
+    vkGetPhysicalDeviceExternalFenceProperties(e->pd, &info, p);
+}
+
+CT_TEST(external_fence_properties,
+        "Additional Capabilities > Optional Fence Capabilities (vkGetPhysicalDeviceExternalFenceProperties, Vulkan "
+        "1.1): for each core fence handle type, the properties are written (invariant whatever the output held) "
+        "with sType and pNext kept; an exportable type can be given to VkExportFenceCreateInfo "
+        "(VUID-VkExportFenceCreateInfo-handleTypes-01446); with maintenance5, a handle type no extension defines "
+        "is unsupported: externalFenceFeatures is zero",
+        "vkGetPhysicalDeviceExternalFenceProperties vkGetPhysicalDeviceFeatures2 vkCreateFence vkDestroyFence")
+{
+    struct ct_env e;
+    VkExternalFenceProperties a, b;
+    uint32_t type;
+    int maintenance5, supported = 0;
+
+    external_env(t, &e, &maintenance5);
+    for (type = VK_EXTERNAL_FENCE_HANDLE_TYPE_OPAQUE_FD_BIT; type <= VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT;
+         type <<= 1) {
+        query_fence(&e, (VkExternalFenceHandleTypeFlagBits)type, 0x00, &a);
+        query_fence(&e, (VkExternalFenceHandleTypeFlagBits)type, 0xff, &b);
+        CT_CHECKF(t, a.sType == VK_STRUCTURE_TYPE_EXTERNAL_FENCE_PROPERTIES && a.pNext == NULL,
+                  "handle type 0x%x: sType or pNext changed", type);
+        CT_CHECKF(t, a.exportFromImportedHandleTypes == b.exportFromImportedHandleTypes &&
+                         a.compatibleHandleTypes == b.compatibleHandleTypes &&
+                         a.externalFenceFeatures == b.externalFenceFeatures,
+                  "handle type 0x%x: the properties depend on what the structure held", type);
+        if (a.externalFenceFeatures)
+            supported++;
+        if (a.externalFenceFeatures & VK_EXTERNAL_FENCE_FEATURE_EXPORTABLE_BIT) {
+            VkExportFenceCreateInfo export_info;
+            VkFenceCreateInfo info;
+            VkFence f = VK_NULL_HANDLE;
+            memset(&export_info, 0, sizeof(export_info));
+            export_info.sType = VK_STRUCTURE_TYPE_EXPORT_FENCE_CREATE_INFO;
+            export_info.handleTypes = type;
+            memset(&info, 0, sizeof(info));
+            info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            info.pNext = &export_info;
+            CT_CHECK_VK(t, vkCreateFence(e.device, &info, NULL, &f), VK_SUCCESS);
+            vkDestroyFence(e.device, f, NULL);
+        }
+    }
+    if (maintenance5) {
+        query_fence(&e, (VkExternalFenceHandleTypeFlagBits)UNDEFINED_HANDLE_TYPE, 0xff, &a);
+        CT_CHECKF(t, a.externalFenceFeatures == 0, "an undefined handle type: externalFenceFeatures 0x%x",
+                  a.externalFenceFeatures);
+    }
+    ct_note(t, "%d supported handle types", supported);
+    ct_env_fini(&e);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(image_format_extents),       CT_REF(image_format_sample_counts), CT_REF(image_format_monotonic),
     CT_REF(image_format_host_transfer), CT_REF(image_format_properties2),   CT_REF(sparse_image_format_properties),
-    CT_REF(ycbcr_descriptor_count),
+    CT_REF(ycbcr_descriptor_count),     CT_REF(external_buffer_properties), CT_REF(external_semaphore_properties),
+    CT_REF(external_fence_properties),
 };
 
 CT_SUITE(capabilities, tests)

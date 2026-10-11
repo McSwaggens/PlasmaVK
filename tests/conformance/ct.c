@@ -74,6 +74,7 @@ void ct_register(struct ct_registry *r, const char *suite, const struct ct_test 
 /* One line per chapter file. */
 void ct_suite_initialization(struct ct_registry *r);
 void ct_suite_devsandqueues(struct ct_registry *r);
+void ct_suite_cmdbuffers(struct ct_registry *r);
 void ct_suite_memory(struct ct_registry *r);
 void ct_suite_resources(struct ct_registry *r);
 void ct_suite_extensions(struct ct_registry *r);
@@ -95,11 +96,15 @@ void ct_suite_drawing(struct ct_registry *r);
 void ct_suite_rasterization(struct ct_registry *r);
 void ct_suite_fragops(struct ct_registry *r);
 void ct_suite_framebuffer(struct ct_registry *r);
+void ct_suite_dispatch(struct ct_registry *r);
+void ct_suite_sparsemem(struct ct_registry *r);
+void ct_suite_debugging(struct ct_registry *r);
 
 static void ct_register_all(struct ct_registry *r)
 {
     ct_suite_initialization(r);
     ct_suite_devsandqueues(r);
+    ct_suite_cmdbuffers(r);
     ct_suite_memory(r);
     ct_suite_resources(r);
     ct_suite_extensions(r);
@@ -121,6 +126,9 @@ static void ct_register_all(struct ct_registry *r)
     ct_suite_rasterization(r);
     ct_suite_fragops(r);
     ct_suite_framebuffer(r);
+    ct_suite_dispatch(r);
+    ct_suite_sparsemem(r);
+    ct_suite_debugging(r);
 }
 
 /* ==========================================================================
@@ -1276,6 +1284,31 @@ void ct_scene_init(struct ct *t, struct ct_scene *s)
 {
     memset(s, 0, sizeof(*s));
     ct_env_render(t, &s->e, &s->f);
+    s->vs = ct_shader_module(t, &s->e, ct_rect_vert, ct_rect_vert_size);
+    s->fs = ct_shader_module(t, &s->e, ct_color_frag, ct_color_frag_size);
+    s->layout = ct_pipeline_layout(t, &s->e, NULL, 0, sizeof(struct ct_rect_pc));
+    ct_host_buffer(t, &s->e, 4 * CT_SIZE * CT_SIZE * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &s->out);
+}
+
+void ct_scene_init_ext(struct ct *t, struct ct_scene *s, const char *const *extensions, uint32_t extension_count,
+                       void *chain)
+{
+    uint32_t i;
+    memset(s, 0, sizeof(*s));
+    if (CT_VERSION(ct_instance_version()) < VK_API_VERSION_1_3)
+        ct_skip(t, "instance version below 1.3");
+    ct_env_init_ex(t, &s->e, VK_API_VERSION_1_3, NULL, 0);
+    if (s->e.version < VK_API_VERSION_1_3)
+        ct_skip(t, "device version below 1.3");
+    if (!s->e.graphics)
+        ct_skip(t, "no queue family supports graphics");
+    for (i = 0; i < extension_count; i++)
+        if (!ct_device_extension_supported(s->e.pd, extensions[i]))
+            ct_skip(t, "%s is not offered", extensions[i]);
+    ct_get_features(&s->e, &s->f, 0);
+    s->f.v13.pNext = chain;
+    ct_env_device_ex(t, &s->e, &s->f.f2, extensions, extension_count, NULL);
+    s->f.v13.pNext = NULL;
     s->vs = ct_shader_module(t, &s->e, ct_rect_vert, ct_rect_vert_size);
     s->fs = ct_shader_module(t, &s->e, ct_color_frag, ct_color_frag_size);
     s->layout = ct_pipeline_layout(t, &s->e, NULL, 0, sizeof(struct ct_rect_pc));

@@ -3,6 +3,7 @@
  * clipping and depth clamping, multiple viewports and layers selected by
  * the vertex shader, polygon culling, rasterizer discard, multisample
  * coverage at the standard sample locations, sample shading, wide points,
+ * line widths and line stipple (dynamic state),
  * flat (provoking vertex) and smooth interpolation.
  *
  * Shaders: GLSL in the comments, compiled with
@@ -989,6 +990,185 @@ CT_TEST(interpolation_flat_smooth,
     ct_scene_fini(&s);
 }
 
+/* ---- Lines ---- */
+
+/* A line list segment with ct_rect_vert: first 0 draws vertices 0 and 1,
+ * (x0, y0) to (x1, y0); first 1 draws vertices 1 and 2, (x1, y0) to
+ * (x0, y1). */
+static void draw_line(VkCommandBuffer cb, VkPipelineLayout layout, float x0, float y0, float x1, float y1,
+                      const float color[4], uint32_t first)
+{
+    struct ct_rect_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    pc.rect[0] = x0;
+    pc.rect[1] = y0;
+    pc.rect[2] = x1;
+    pc.rect[3] = y1;
+    memcpy(pc.color, color, sizeof(pc.color));
+    vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cb, 2, 1, first, 0);
+}
+
+/* NDC of the center of pixel column (or row) p. */
+static float center(uint32_t p)
+{
+    return ((float)p + 0.5f) / 8.0f - 1.0f;
+}
+
+/* Compares texels with want[y][x]; 0 means not checked (line ends, where
+ * the rasterization rules leave a choice). */
+static void check_lines(struct ct *t, const unsigned char *p, uint32_t want[H][W], const char *what)
+{
+    uint32_t x, y;
+    int bad = 0;
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            uint32_t got = ct_texel32(p, W, x, y);
+            if (want[y][x] && got != want[y][x] && bad++ < 4)
+                ct_fail(t, __FILE__, __LINE__, "%s: texel (%u, %u) is %08x, expected %08x", what, x, y, got,
+                        want[y][x]);
+        }
+    if (bad > 4)
+        ct_fail(t, __FILE__, __LINE__, "%s: %d texels differ in all", what, bad);
+}
+
+CT_TEST(line_width_dynamic,
+        "Rasterization > Line Segments (vkCmdSetLineWidth): with VK_DYNAMIC_STATE_LINE_WIDTH the pipeline's "
+        "lineWidth is ignored (here 4.0, VUID-VkGraphicsPipelineCreateInfo-pDynamicStates-00749) and "
+        "vkCmdSetLineWidth sets the width of later lines: 1.0 (the only width without wideLines, "
+        "VUID-vkCmdSetLineWidth-lineWidth-00788) rasterizes horizontal and vertical lines through pixel centers "
+        "one fragment wide; with wideLines, 3.0 (within lineWidthRange and its granularity) three fragments wide",
+        RA_COMMANDS "vkCmdSetLineWidth")
+{
+    static uint32_t want[H][W];
+    struct ct_scene s;
+    struct ct_target c;
+    struct ct_gfx g;
+    VkPipeline pipe;
+    VkCommandBuffer cb;
+    const VkPhysicalDeviceLimits *l;
+    uint32_t x, y;
+    int wide;
+
+    ct_scene_init(t, &s);
+    l = &s.e.props.limits;
+    wide = s.f.f2.features.wideLines && l->lineWidthRange[0] <= 3.0f && l->lineWidthRange[1] >= 3.0f &&
+           (l->lineWidthGranularity == 0.0f ||
+            (float)(int)((3.0f - l->lineWidthRange[0]) / l->lineWidthGranularity + 0.5f) * l->lineWidthGranularity ==
+                3.0f - l->lineWidthRange[0]);
+    ct_scene_color(t, &s, &c);
+    ct_gfx_init(&g, s.vs, s.fs, s.layout, W, H);
+    g.ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+    g.rs.lineWidth = 4.0f;
+    g.dynamic[g.dynamic_count++] = VK_DYNAMIC_STATE_LINE_WIDTH;
+    pipe = ct_gfx_pipeline(t, &s.e, &g);
+    cb = ct_begin_commands(t, &s.e);
+    ct_begin_rendering(cb, &c, 1, ct_black, NULL, 0.0f);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vkCmdSetLineWidth(cb, 1.0f);
+    draw_line(cb, s.layout, -1.0f, center(4), 1.0f, 0.0f, ct_red, 0);   /* row 4 */
+    draw_line(cb, s.layout, center(10), -1.0f, center(10), 1.0f, ct_green, 1); /* column 10 */
+    if (wide) {
+        vkCmdSetLineWidth(cb, 3.0f);
+        draw_line(cb, s.layout, -1.0f, center(12), 1.0f, 0.0f, ct_blue, 0); /* rows 11 .. 13 */
+    }
+    vkCmdEndRendering(cb);
+    ct_scene_read(t, &s, cb, &c);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            want[y][x] = CT_BLACK;
+            if (y == 4)
+                want[y][x] = x == 0 || x == W - 1 ? 0 : CT_RED;
+            if (wide && y >= 11 && y <= 13)
+                want[y][x] = x == 0 || x == W - 1 ? 0 : CT_BLUE;
+            if (x == 10)
+                want[y][x] = y == 0 || y == H - 1 ? 0 : CT_GREEN;
+        }
+    check_lines(t, s.out.data, want, wide ? "lines of width 1 (row 4, column 10) and 3 (rows 11 to 13)"
+                                          : "lines of width 1 (row 4, column 10)");
+    if (!wide)
+        ct_note(t, "wideLines (or a width of 3) is not supported: width 1 only");
+    vkDestroyPipeline(s.e.device, pipe, NULL);
+    ct_target_fini(&s.e, &c);
+    ct_scene_fini(&s);
+}
+
+CT_TEST(line_stipple_dynamic,
+        "Rasterization > Line Segments > Line Stipple (vkCmdSetLineStipple, Vulkan 1.4): with "
+        "VK_DYNAMIC_STATE_LINE_STIPPLE, vkCmdSetLineStipple sets the factor and pattern of later lines; with "
+        "stippledLineEnable VK_FALSE lines are not stippled, whatever the pattern; with it (Bresenham lines and "
+        "stippledBresenhamLines) a fragment is produced if bit floor(s / factor) mod 16 of the pattern is set, s "
+        "counting the segment's fragments from its start",
+        RA_COMMANDS "vkCmdSetLineStipple")
+{
+    static uint32_t want[H][W];
+    VkPipelineRasterizationLineStateCreateInfo line;
+    struct ct_scene s;
+    struct ct_target c;
+    struct ct_gfx g;
+    VkPipeline solid, stippled = VK_NULL_HANDLE;
+    VkCommandBuffer cb;
+    uint32_t x, y;
+
+    ct_scene_init(t, &s);
+    if (s.e.version < VK_API_VERSION_1_4)
+        ct_skip(t, "vkCmdSetLineStipple is Vulkan 1.4");
+    ct_scene_color(t, &s, &c);
+    memset(&line, 0, sizeof(line));
+    line.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO;
+    line.lineRasterizationMode =
+        s.f.v14.bresenhamLines ? VK_LINE_RASTERIZATION_MODE_BRESENHAM : VK_LINE_RASTERIZATION_MODE_DEFAULT;
+    line.lineStippleFactor = 1;
+    line.lineStipplePattern = 0xffff;
+    ct_gfx_init(&g, s.vs, s.fs, s.layout, W, H);
+    g.ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+    g.rs.pNext = &line;
+    g.dynamic[g.dynamic_count++] = VK_DYNAMIC_STATE_LINE_STIPPLE;
+    solid = ct_gfx_pipeline(t, &s.e, &g);
+    if (s.f.v14.bresenhamLines && s.f.v14.stippledBresenhamLines) {
+        line.stippledLineEnable = VK_TRUE;
+        stippled = ct_gfx_pipeline(t, &s.e, &g);
+    }
+    cb = ct_begin_commands(t, &s.e);
+    ct_begin_rendering(cb, &c, 1, ct_black, NULL, 0.0f);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, solid);
+    vkCmdSetLineStipple(cb, 1, 0x0f0f);
+    draw_line(cb, s.layout, -1.0f, center(2), 1.0f, 0.0f, ct_red, 0);
+    vkCmdSetLineStipple(cb, 3, 0x0001);
+    draw_line(cb, s.layout, -1.0f, center(5), 1.0f, 0.0f, ct_green, 0);
+    if (stippled) {
+        /* from the center of pixel 0 to that of pixel 15: fragments 0 .. 14, unclipped */
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, stippled);
+        vkCmdSetLineStipple(cb, 1, 0x0f0f);
+        draw_line(cb, s.layout, center(0), center(10), center(15), 0.0f, ct_blue, 0);
+        vkCmdSetLineStipple(cb, 2, 0x0005);
+        draw_line(cb, s.layout, center(0), center(13), center(15), 0.0f, ct_white, 0);
+    }
+    vkCmdEndRendering(cb);
+    ct_scene_read(t, &s, cb, &c);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            want[y][x] = CT_BLACK;
+            if (y == 2)
+                want[y][x] = x == 0 || x == W - 1 ? 0 : CT_RED;
+            if (y == 5)
+                want[y][x] = x == 0 || x == W - 1 ? 0 : CT_GREEN;
+            if (stippled && y == 10)
+                want[y][x] = x == W - 1 ? 0 : (0x0f0fu >> x) & 1 ? CT_BLUE : CT_BLACK;
+            if (stippled && y == 13)
+                want[y][x] = x == W - 1 ? 0 : (0x0005u >> ((x / 2) % 16)) & 1 ? CT_WHITE : CT_BLACK;
+        }
+    check_lines(t, s.out.data, want, stippled ? "unstippled rows 2 and 5, stippled rows 10 and 13"
+                                              : "unstippled rows 2 and 5");
+    if (!stippled)
+        ct_note(t, "stippledBresenhamLines is not supported: stippling disabled only");
+    vkDestroyPipeline(s.e.device, solid, NULL);
+    if (stippled)
+        vkDestroyPipeline(s.e.device, stippled, NULL);
+    ct_target_fini(&s.e, &c);
+    ct_scene_fini(&s);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(viewport_transform),
     CT_REF(viewport_depth_range),
@@ -1001,6 +1181,8 @@ static const struct ct_test *const tests[] = {
     CT_REF(sample_shading),
     CT_REF(wide_points),
     CT_REF(interpolation_flat_smooth),
+    CT_REF(line_width_dynamic),
+    CT_REF(line_stipple_dynamic),
 };
 
 CT_SUITE(rasterization, tests)
