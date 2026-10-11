@@ -35361,27 +35361,44 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  *   Bad input never crashes or reads outside words[0, word_count), and the
  *   output only depends on the input (deterministic).
  *
- * BINDING MODEL (provisional; decided in pvk_spv_assign_resources only)
- *   Metal 4 binds buffers by GPU address. Each descriptor set N the shader
- *   uses is one kernel parameter
- *       constant pvk_setN& setN [[buffer(N)]]          (N < 29)
- *   pointing at an array of 64-bit GPU addresses: binding b is the address
- *   at byte offset 8*b (options->binding_offsets overrides this per
- *   binding). A descriptor array of n elements uses n consecutive addresses.
- *   Storage buffers are `device T*`, uniform buffers `constant T*`, each the
- *   address of the descriptor's range (buffer address + offset).
- *   result->resources lists every binding used, sorted by (set, binding),
- *   with its byte offset; result->set_mask has bit N for each set used.
+ * BINDING MODEL (decided in pvk_spv_assign_resources and pvk_spv_emit_sets)
+ *   A descriptor set is a table in GPU memory in the format at the top of
+ *   section 11. Each set N the shader uses is one kernel parameter
+ *       constant pvk_setN& setN [[buffer(N)]]          (N < 30)
+ *   whose struct mirrors the set's layout: each binding the shader uses is a
+ *   member at the binding's byte offset (the rest is padding), an array when
+ *   the binding has several descriptors (pvk_padded<T, P> elements when the
+ *   stride is larger than T):
+ *     uniform/storage buffer (+ dynamic)   pvk_ubuf_T { constant T* p; ulong size; }
+ *                                          pvk_sbuf_T { device T* p; ulong size; }
+ *     sampled/storage image, texel buffer  texture2d<float>, depth2d<float>,
+ *                                          texture_buffer<uint, access::read_write> ...
+ *     sampler                              sampler
+ *     combined image sampler               pvk_sampled<texture2d<float>> { t, s }
+ *     inline uniform block                 the block's struct
+ *   (in such a struct, textures and samplers are their 8-byte MTLResourceID).
+ *   An image or sampler variable may also read its half of a combined
+ *   binding. Functions take the sets they use as parameters; variables that
+ *   alias one binding with other types reinterpret it. OpArrayLength reads
+ *   the size in the buffer descriptor.
+ *
+ *   The layout of set N is options->set_layouts[N] (what a descriptor set
+ *   layout computes: struct pvk_msl_binding). Without set_layouts, every set
+ *   gets a default layout: the bindings the entry point uses, by binding
+ *   number, each at the next 16-byte-aligned offset, with the descriptor type
+ *   the shader implies (combined when a sampled-image variable or both an
+ *   image and a sampler use the binding), the array length as count and the
+ *   section 11 stride; a runtime-sized array must then be its set's last
+ *   binding and gets a variable count of 0 (unbounded). result->resources
+ *   lists every binding used, sorted by (set, binding), with its layout;
+ *   result->set_mask has bit N for each set used. Images: 1D images are
+ *   texture1d (Metal: one mip level), or with options->image_1d_as_2d 2D
+ *   textures of height 1; cube storage images are texturecube(_array).
  *
  *   Push constants: `constant T& [[buffer(30)]]` (options->push_constant_
  *   buffer), the push-constant bytes from Vulkan offset 0. The shader reads
  *   [push_constant_offset, +push_constant_size); bind at least their end,
  *   rounded up to 16 bytes (the MSL struct's size).
- *
- *   Runtime-array lengths (OpArrayLength): `constant ulong* [[buffer(29)]]`
- *   (options->buffer_sizes_buffer) holding the byte size of the descriptor
- *   range of each resource with size_index >= 0: descriptor i of the binding
- *   at index size_index + i.
  *
  *   Dispatch base (options->dispatch_base, for vkCmdDispatchBase): the push-
  *   constant buffer is then `constant uchar*` and also holds the base
@@ -35396,7 +35413,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  *   them with their default and final values.
  *
  * COMPILING THE OUTPUT
- *   Needs MSL 3.2 or newer (atomic_thread_fence). Compile with
+ *   Needs MSL 3.2 or newer (atomic_thread_fence, texture atomics). Compile with
  *   MTLCompileOptions.mathMode = MTLMathModeSafe: fast math breaks the NaN,
  *   Inf and precision guarantees Vulkan gives. The kernel's name is
  *   result->entry_point; dispatch with result->workgroup_size threads per
@@ -35412,8 +35429,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  *   stored as arrays of lines and converted on access. Arrays are values
  *   (pvk_array<T, N>), so they load, store, copy and return like SPIR-V's.
  *   Storage: StorageBuffer, Uniform, PushConstant, Workgroup, Private,
- *   Function, Input (compute builtins), descriptor arrays of buffers,
- *   PhysicalStorageBuffer (buffer device addresses, below).
+ *   Function, Input (compute builtins), UniformConstant (images, samplers),
+ *   Image (texel pointers), PhysicalStorageBuffer (buffer device addresses,
+ *   below). Descriptor arrays of every descriptor type, also runtime-sized
+ *   (RuntimeDescriptorArray), indexed dynamically and non-uniformly (Metal
+ *   needs nothing for NonUniform: descriptors are per-thread data).
  *   Instructions: arithmetic, bit, logical, relational, conversion,
  *   composite, memory, GLSL.std.450, barriers, 32-bit integer atomics and
  *   float atomic add, function calls, OpArrayLength, specialization
@@ -35433,9 +35453,31 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  *   assume the alignment of the MSL type, so a vector reached through a
  *   pointer aligned to less than its size (a small buffer_reference_align)
  *   is not supported yet.
- *   Not yet: other stages, images/samplers, subgroup ops, 64-bit atomics,
- *   variable pointers, runtime descriptor arrays, OpCopyMemorySized,
- *   scalar-layout corner cases Metal cannot express.
+ *   Images and samplers: OpTypeImage (1D, 2D, 3D, cube, buffer; arrayed,
+ *   multisampled, sampled or storage, depth), OpTypeSampler,
+ *   OpTypeSampledImage, OpSampledImage and OpImage (a Depth that differs
+ *   between an image and its sampled image reinterprets the texture, as
+ *   glslang emits for separate shadow samplers); explicit-LOD sampling with
+ *   Lod or Grad, ConstOffset or Offset (not on cubes), MinLod, Proj and Dref
+ *   variants; OpImageFetch (Lod, Sample, offsets); OpImageGather and
+ *   OpImageDrefGather (ConstOffsets: four gathers); OpImageRead/Write with a
+ *   known or Unknown format (Metal converts from the texture's pixel format);
+ *   OpImageQuerySize(Lod)/Levels/Samples; OpImageTexelPointer with 32-bit
+ *   integer atomics. Vulkan's rules where Metal's differ: array layers are
+ *   clamp(RNE(layer), 0, layers - 1), depth images read as (D, 0, 0, 1),
+ *   cube storage images take (x, y, face) and cube arrays face + 6 * cube.
+ *   The sampler does the rest (filters, addressing, depth comparison). A
+ *   storage image's access (read, write, read_write) is what the variables
+ *   of its type allow; read_write writes are followed by fence(), so the
+ *   invocation's own later reads see them.
+ *   Not supported: implicit LOD and derivatives (compute has none), sparse
+ *   residency, atomics on cube images (not on Apple GPUs up to M4) and on
+ *   float or 64-bit images, image atomic min/max of the other signedness
+ *   than the image, writes to multisampled images, input attachments. A
+ *   texture1d has one mip level (image_1d_as_2d for mipmapped 1D images).
+ *   Not yet: other stages, subgroup ops, 64-bit atomics, variable pointers,
+ *   OpCopyMemorySized, scalar-layout corner cases Metal cannot express,
+ *   robust image access (out-of-bounds texels are whatever Metal does).
  *   Semantics to know: atomics are memory_order_relaxed (barriers carry the
  *   ordering); signed integer overflow is undefined in MSL where SPIR-V
  *   wraps; NoContraction is ignored.
@@ -35457,22 +35499,32 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
 #include <setjmp.h>
 
 #define PVK_MSL_PUSH_CONSTANT_BUFFER 30u
-#define PVK_MSL_BUFFER_SIZES_BUFFER 29u
-#define PVK_MSL_MAX_SETS 29u
+#define PVK_MSL_MAX_SETS 30u
 
-/* Overrides the byte offset of one binding inside its set's address table. */
-struct pvk_msl_binding_offset {
-    uint32_t set;
+/* One binding of a descriptor set layout: where its descriptors sit in the
+ * set's table (format: section 11). */
+struct pvk_msl_binding {
     uint32_t binding;
-    uint32_t offset; /* multiple of 8 */
+    VkDescriptorType type;
+    uint32_t count;  /* descriptors (inline uniform block: bytes); variable count: the maximum */
+    uint32_t offset; /* byte offset of the first descriptor */
+    uint32_t stride; /* bytes from one descriptor to the next, at least the type's size */
+    bool variable_count; /* VARIABLE_DESCRIPTOR_COUNT: the set's last binding */
+};
+
+struct pvk_msl_set_layout {
+    const struct pvk_msl_binding *bindings;
+    uint32_t binding_count;
 };
 
 struct pvk_msl_options {
     const VkSpecializationInfo *specialization;
-    const struct pvk_msl_binding_offset *binding_offsets;
-    uint32_t binding_offset_count;
+    /* Descriptor set layouts indexed by set number (the pipeline layout's);
+     * NULL: the default layout (see BINDING MODEL) for every set. */
+    const struct pvk_msl_set_layout *set_layouts;
+    uint32_t set_layout_count;
     uint32_t push_constant_buffer; /* 0: PVK_MSL_PUSH_CONSTANT_BUFFER */
-    uint32_t buffer_sizes_buffer;  /* 0: PVK_MSL_BUFFER_SIZES_BUFFER */
+    bool image_1d_as_2d; /* 1D images are 2D Metal textures of height 1 */
     /* vkCmdDispatchBase: the base workgroup (3 x uint32) is read from the
      * push-constant buffer at this byte offset (a multiple of 16, at or past
      * the end of the push constants). */
@@ -35480,19 +35532,15 @@ struct pvk_msl_options {
     uint32_t dispatch_base_offset;
 };
 
-enum pvk_msl_resource_type {
-    PVK_MSL_STORAGE_BUFFER,
-    PVK_MSL_UNIFORM_BUFFER
-};
-
 struct pvk_msl_resource {
-    enum pvk_msl_resource_type type;
+    VkDescriptorType type; /* the layout's */
     uint32_t set;
     uint32_t binding;
-    uint32_t count;     /* descriptors (1 unless the binding is an array) */
-    uint32_t offset;    /* byte offset of the first address in the set table */
-    bool writable;      /* storage buffer not decorated NonWritable */
-    int32_t size_index; /* first of `count` entries in the buffer-sizes array, -1 if not needed */
+    uint32_t count;  /* descriptors (inline uniform block: bytes); 0: unbounded */
+    uint32_t offset; /* byte offset of the first descriptor in the set table */
+    uint32_t stride; /* bytes between descriptors */
+    bool variable_count;
+    bool writable; /* storage buffer or image the shader may write */
 };
 
 enum pvk_msl_scalar_type {
@@ -35524,8 +35572,6 @@ struct pvk_msl_result {
     uint32_t push_constant_size;
     bool dispatch_base; /* kernel reads the base workgroup (options->dispatch_base) */
     uint32_t dispatch_base_offset; /* where: options->dispatch_base_offset or past the push constants */
-    uint32_t buffer_size_count; /* > 0: kernel takes the buffer-sizes array */
-    uint32_t buffer_sizes_buffer;
     struct pvk_msl_spec_constant *spec_constants;
     uint32_t spec_constant_count;
     uint32_t threadgroup_memory_size; /* static threadgroup memory, bytes */
@@ -35587,6 +35633,7 @@ enum {
     PVK_SPV_OpFunctionEnd = 56,
     PVK_SPV_OpFunctionCall = 57,
     PVK_SPV_OpVariable = 59,
+    PVK_SPV_OpImageTexelPointer = 60,
     PVK_SPV_OpLoad = 61,
     PVK_SPV_OpStore = 62,
     PVK_SPV_OpCopyMemory = 63,
@@ -35607,6 +35654,26 @@ enum {
     PVK_SPV_OpCompositeInsert = 82,
     PVK_SPV_OpCopyObject = 83,
     PVK_SPV_OpTranspose = 84,
+    PVK_SPV_OpSampledImage = 86,
+    PVK_SPV_OpImageSampleImplicitLod = 87,
+    PVK_SPV_OpImageSampleExplicitLod = 88,
+    PVK_SPV_OpImageSampleDrefImplicitLod = 89,
+    PVK_SPV_OpImageSampleDrefExplicitLod = 90,
+    PVK_SPV_OpImageSampleProjImplicitLod = 91,
+    PVK_SPV_OpImageSampleProjExplicitLod = 92,
+    PVK_SPV_OpImageSampleProjDrefImplicitLod = 93,
+    PVK_SPV_OpImageSampleProjDrefExplicitLod = 94,
+    PVK_SPV_OpImageFetch = 95,
+    PVK_SPV_OpImageGather = 96,
+    PVK_SPV_OpImageDrefGather = 97,
+    PVK_SPV_OpImageRead = 98,
+    PVK_SPV_OpImageWrite = 99,
+    PVK_SPV_OpImage = 100,
+    PVK_SPV_OpImageQuerySizeLod = 103,
+    PVK_SPV_OpImageQuerySize = 104,
+    PVK_SPV_OpImageQueryLod = 105,
+    PVK_SPV_OpImageQueryLevels = 106,
+    PVK_SPV_OpImageQuerySamples = 107,
     PVK_SPV_OpConvertFToU = 109,
     PVK_SPV_OpConvertFToS = 110,
     PVK_SPV_OpConvertSToF = 111,
@@ -35738,6 +35805,7 @@ enum {
     PVK_SPV_StoragePrivate = 6,
     PVK_SPV_StorageFunction = 7,
     PVK_SPV_StoragePushConstant = 9,
+    PVK_SPV_StorageImage = 11,
     PVK_SPV_StorageStorageBuffer = 12,
     PVK_SPV_StoragePhysicalStorageBuffer = 5349
 };
@@ -35754,9 +35822,41 @@ enum {
     PVK_SPV_DecoMatrixStride = 7,
     PVK_SPV_DecoBuiltIn = 11,
     PVK_SPV_DecoNonWritable = 24,
+    PVK_SPV_DecoNonReadable = 25,
     PVK_SPV_DecoBinding = 33,
     PVK_SPV_DecoDescriptorSet = 34,
     PVK_SPV_DecoOffset = 35
+};
+
+/* OpTypeImage Dim */
+enum {
+    PVK_SPV_Dim1D = 0,
+    PVK_SPV_Dim2D = 1,
+    PVK_SPV_Dim3D = 2,
+    PVK_SPV_DimCube = 3,
+    PVK_SPV_DimRect = 4,
+    PVK_SPV_DimBuffer = 5,
+    PVK_SPV_DimSubpassData = 6
+};
+
+/* Image Operands */
+enum {
+    PVK_SPV_ImgBias = 0x1,
+    PVK_SPV_ImgLod = 0x2,
+    PVK_SPV_ImgGrad = 0x4,
+    PVK_SPV_ImgConstOffset = 0x8,
+    PVK_SPV_ImgOffset = 0x10,
+    PVK_SPV_ImgConstOffsets = 0x20,
+    PVK_SPV_ImgSample = 0x40,
+    PVK_SPV_ImgMinLod = 0x80,
+    PVK_SPV_ImgMakeTexelAvailable = 0x100,
+    PVK_SPV_ImgMakeTexelVisible = 0x200,
+    PVK_SPV_ImgNonPrivateTexel = 0x400,
+    PVK_SPV_ImgVolatileTexel = 0x800,
+    PVK_SPV_ImgSignExtend = 0x1000,
+    PVK_SPV_ImgZeroExtend = 0x2000,
+    PVK_SPV_ImgNontemporal = 0x4000,
+    PVK_SPV_ImgOffsets = 0x10000
 };
 
 enum {
@@ -35835,6 +35935,7 @@ enum pvk_spv_kind {
 #define PVK_SPV_F_NONSEMANTIC 0x80u /* OpExtInstImport of a NonSemantic.* set */
 #define PVK_SPV_F_PHI 0x100u
 #define PVK_SPV_F_CROSS_BLOCK 0x200u /* value used outside its defining block */
+#define PVK_SPV_F_NON_READABLE 0x400u
 /* member flags */
 #define PVK_SPV_M_OFFSET 0x1u
 #define PVK_SPV_M_ROW_MAJOR 0x2u
@@ -35871,6 +35972,12 @@ struct pvk_spv_type {
     bool pad_conflict;
     uint32_t tail_pad;
     uint32_t end;           /* struct: end of the last member */
+    /* OpTypeImage (elem: sampled type); access: PVK_SPV_ACCESS_* bits */
+    struct {
+        uint32_t dim, depth, arrayed, ms, sampled, format, access;
+    } img;
+    bool opaque; /* image, sampler, sampled image, or an array of them: descriptors */
+    uint32_t desc_emitted; /* block struct: bit 0 pvk_ubuf_, bit 1 pvk_sbuf_ declared */
     /* MSL value type */
     const char *msl;
     uint32_t size, align;
@@ -35907,8 +36014,18 @@ struct pvk_spv_ptr {
     const struct pvk_spv_node *node; /* NULL: stored as the MSL value type */
     const char *rm_col; /* column of a row-major matrix (node): not addressable */
     uint32_t var;       /* root variable */
-    bool desc_array;    /* expr is an array of buffer addresses */
-    const char *desc_index; /* index that selected an element of a descriptor array */
+    /* Descriptor arrays: expr points at the first element; indexing appends
+     * desc_suffix (padding, combined half) to reach a descriptor's object. */
+    bool desc_array;
+    bool desc_buffer;        /* elements are buffer descriptors: the object is *(desc.p) */
+    const char *desc_index;  /* flattened index so far (arrays of arrays) */
+    const char *desc_suffix;
+    const char *desc;        /* buffer descriptor of the block expr designates (OpArrayLength) */
+    const char *decl;        /* descriptor variables: declaration of expr in each function */
+    /* OpImageTexelPointer (storage Image): texture and coordinate arguments */
+    const char *texel_image;
+    const char *texel_args;
+    uint32_t texel_type; /* image type */
 };
 
 struct pvk_spv_id {
@@ -35949,7 +36066,6 @@ struct pvk_spv_func {
     uint32_t *callees;
     uint32_t ncallees, cap_callees;
     uint32_t *globals; /* bitset over ctx->globals, transitive after analysis */
-    bool uses_sizes;   /* needs the buffer-sizes array (transitive) */
     uint32_t state;    /* call-graph walk */
     const char *msl;
 };
@@ -35971,6 +36087,21 @@ struct pvk_spv_chunk {
     struct pvk_spv_chunk *next;
     size_t used, size;
     uint64_t data[];
+};
+
+/* A binding the entry point uses: its layout, and its member of the set
+ * struct (pvk_spv_emit_sets): `elem b<binding>` or `elem b<binding>[n]`. */
+struct pvk_spv_binding {
+    struct pvk_msl_binding layout;
+    uint32_t set;
+    uint32_t var;     /* first variable at the binding: it types the member */
+    bool array;       /* the member is an array */
+    uint32_t size;    /* of one descriptor in MSL (inline uniform block: the block) */
+    uint32_t align;
+    uint32_t pad;     /* stride - size: elements are pvk_padded<.., pad> */
+    const char *wrap; /* descriptor type without padding */
+    const char *elem; /* element type of the member */
+    const char *tex;  /* combined: texture type of the t half */
 };
 
 struct pvk_spv {
@@ -36011,13 +36142,20 @@ struct pvk_spv {
     uint32_t *order; /* reachable functions, callees first */
     uint32_t norder;
     uint32_t total_blocks;
+    struct pvk_spv_binding *bindings; /* used by the entry point, sorted by (set, binding) */
+    uint32_t nbindings;
 
     /* output */
     struct pvk_sb head, types, consts, text, body; /* text: functions; body: the one being emitted */
     struct pvk_sb *out; /* where pvk_spv_line writes */
     uint32_t indent;
     bool use_array, use_padded; /* emit the pvk_array / pvk_padded templates */
+    bool use_sampled, use_cast; /* emit pvk_sampled / pvk_tex_cast */
+    bool types_ready;           /* structs are declared: buffer descriptor types may follow */
+    bool inline_consts;         /* pvk_spv_const_expr writes constants out (program-scope initializers) */
+    uint32_t const_budget;      /* constituents left to write out that way */
     bool use_psb;               /* PhysicalStorageBuffer pointers: declare structs up front */
+    bool image_1d_as_2d;        /* options->image_1d_as_2d */
     uint32_t helper_mask;       /* PVK_SPV_H_* helper functions used */
     uint32_t budget;           /* blocks left to emit */
     uint32_t aggregate_budget; /* elements left for storage aggregates */
@@ -36868,7 +37006,7 @@ static int pvk_spv_shape(uint32_t op)
     case PVK_SPV_OpReturnValue: case PVK_SPV_OpUnreachable: case PVK_SPV_OpNoLine:
     case PVK_SPV_OpModuleProcessed: case PVK_SPV_OpExecutionModeId: case PVK_SPV_OpDecorateId:
     case PVK_SPV_OpTerminateInvocation: case PVK_SPV_OpDecorateString: case PVK_SPV_OpMemberDecorateString:
-    case PVK_SPV_OpFunctionEnd: case PVK_SPV_OpTypeForwardPointer:
+    case PVK_SPV_OpFunctionEnd: case PVK_SPV_OpTypeForwardPointer: case PVK_SPV_OpImageWrite:
         return 0;
     case PVK_SPV_OpString: case PVK_SPV_OpExtInstImport: case PVK_SPV_OpLabel: case PVK_SPV_OpDecorationGroup:
         return 1;
@@ -36877,10 +37015,15 @@ static int pvk_spv_shape(uint32_t op)
     case PVK_SPV_OpInBoundsAccessChain: case PVK_SPV_OpArrayLength: case PVK_SPV_OpPhi:
     case PVK_SPV_OpCopyLogical: case PVK_SPV_OpAtomicLoad: case PVK_SPV_OpAtomicFAddEXT:
     case PVK_SPV_OpPtrAccessChain: case PVK_SPV_OpConvertPtrToU: case PVK_SPV_OpConvertUToPtr:
+    case PVK_SPV_OpImageTexelPointer: case PVK_SPV_OpImage: case PVK_SPV_OpImageQuerySizeLod:
+    case PVK_SPV_OpImageQuerySize: case PVK_SPV_OpImageQueryLod: case PVK_SPV_OpImageQueryLevels:
+    case PVK_SPV_OpImageQuerySamples:
         return 2;
     default:
         break;
     }
+    if (op >= PVK_SPV_OpSampledImage && op <= PVK_SPV_OpImageRead)
+        return 2;
     if (op >= PVK_SPV_OpTypeVoid && op <= 38) /* OpType* */
         return 1;
     if ((op >= PVK_SPV_OpConstantTrue && op <= PVK_SPV_OpConstantNull) ||
@@ -36898,8 +37041,10 @@ static int pvk_spv_shape(uint32_t op)
 
 static const char *pvk_spv_unsupported_reason(uint32_t op)
 {
-    if ((op >= 86 && op <= 107) || op == 60 || (op >= 4500 && op <= 4504))
-        return "image instructions are not supported yet";
+    if (op >= 305 && op <= 320)
+        return "sparse image instructions are not supported";
+    if (op == 101 || op == 102 || op == 45 || (op >= 4500 && op <= 4504))
+        return "unsupported image instruction";
     if ((op >= 333 && op <= 366) || (op >= 4421 && op <= 4432))
         return "subgroup instructions are not supported yet";
     if (op >= 207 && op <= 215)
@@ -36954,6 +37099,7 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         if (e->op == PVK_SPV_OpTypeVoid || e->op == PVK_SPV_OpTypeRuntimeArray || e->op == PVK_SPV_OpTypeFunction ||
             (e->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(e)))
             pvk_spv_fail(ctx, "unsupported array element type");
+        t->opaque = e->opaque;
         if (in->op == PVK_SPV_OpTypeArray) {
             uint64_t len = pvk_spv_const_uint(ctx, pvk_spv_arg(ctx, in, 3));
             if (len == 0 || len > PVK_SPV_MAX_ARRAY_LENGTH)
@@ -36969,7 +37115,7 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         for (i = 0; i < t->nmembers; i++) {
             t->members[i].type = in->w[2 + i];
             e = pvk_spv_type(ctx, in->w[2 + i]);
-            if (e->op == PVK_SPV_OpTypeVoid || e->op == PVK_SPV_OpTypeFunction ||
+            if (e->op == PVK_SPV_OpTypeVoid || e->op == PVK_SPV_OpTypeFunction || e->opaque ||
                 (e->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(e)) ||
                 (e->op == PVK_SPV_OpTypeRuntimeArray && i + 1 != t->nmembers))
                 pvk_spv_fail(ctx, "unsupported struct member type");
@@ -36995,9 +37141,45 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
             pvk_spv_type(ctx, t->params[i]);
         break;
     case PVK_SPV_OpTypeImage:
+        t->elem = pvk_spv_arg(ctx, in, 2);
+        e = pvk_spv_type(ctx, t->elem);
+        t->img.dim = pvk_spv_arg(ctx, in, 3);
+        t->img.depth = pvk_spv_arg(ctx, in, 4);
+        t->img.arrayed = pvk_spv_arg(ctx, in, 5);
+        t->img.ms = pvk_spv_arg(ctx, in, 6);
+        t->img.sampled = pvk_spv_arg(ctx, in, 7);
+        t->img.format = pvk_spv_arg(ctx, in, 8);
+        t->opaque = true;
+        if (t->img.dim == PVK_SPV_DimSubpassData)
+            pvk_spv_fail(ctx, "input attachments are only available in fragment shaders");
+        if (t->img.dim == PVK_SPV_DimRect)
+            pvk_spv_fail(ctx, "rectangle images are not supported (Vulkan has none)");
+        if (t->img.dim > PVK_SPV_DimBuffer)
+            pvk_spv_fail(ctx, "unsupported image dimensionality %u", t->img.dim);
+        if (e->op == PVK_SPV_OpTypeInt && e->width == 64)
+            pvk_spv_fail(ctx, "64-bit integer images are not supported");
+        if ((e->op != PVK_SPV_OpTypeInt && e->op != PVK_SPV_OpTypeFloat) || e->width != 32)
+            pvk_spv_fail(ctx, "images must have a 32-bit integer or float sampled type");
+        if (t->img.sampled != 1 && t->img.sampled != 2)
+            pvk_spv_fail(ctx, "images must be known to be sampled or storage images");
+        if (t->img.depth > 2 || t->img.arrayed > 1 || t->img.ms > 1 || t->img.format > 41 || in->wc > 9)
+            pvk_spv_fail(ctx, "malformed OpTypeImage");
+        if ((t->img.ms && t->img.dim != PVK_SPV_Dim2D) ||
+            (t->img.arrayed && (t->img.dim == PVK_SPV_Dim3D || t->img.dim == PVK_SPV_DimBuffer)))
+            pvk_spv_fail(ctx, "unsupported image type (multisampled or arrayed)");
+        if (t->img.depth == 1 && e->op != PVK_SPV_OpTypeFloat)
+            pvk_spv_fail(ctx, "depth images must have a float sampled type");
+        break;
     case PVK_SPV_OpTypeSampler:
+        t->opaque = true;
+        break;
     case PVK_SPV_OpTypeSampledImage:
-        pvk_spv_fail(ctx, "images and samplers are not supported yet");
+        t->elem = pvk_spv_arg(ctx, in, 2);
+        e = pvk_spv_type(ctx, t->elem);
+        if (e->op != PVK_SPV_OpTypeImage || e->img.sampled != 1 || e->img.dim == PVK_SPV_DimBuffer)
+            pvk_spv_fail(ctx, "OpTypeSampledImage of an image that cannot be sampled");
+        t->opaque = true;
+        break;
     default:
         pvk_spv_fail(ctx, "unsupported type (opcode %u)", in->op);
     }
@@ -37046,6 +37228,9 @@ static void pvk_spv_decorate(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         break;
     case PVK_SPV_DecoNonWritable:
         x->flags |= PVK_SPV_F_NON_WRITABLE;
+        break;
+    case PVK_SPV_DecoNonReadable:
+        x->flags |= PVK_SPV_F_NON_READABLE;
         break;
     case PVK_SPV_DecoBinding:
         x->flags |= PVK_SPV_F_BINDING;
@@ -37107,7 +37292,14 @@ static void pvk_spv_capability(struct pvk_spv *ctx, uint32_t cap)
     case 0: case 1: /* Matrix, Shader */
     case 8: case 9: case 10: case 11: case 12: /* Float16Buffer, Float16, Float64, Int64, Int64Atomics */
     case 22: case 39: /* Int16, Int8 */
-    case 28: case 30: /* Uniform/StorageBufferArrayDynamicIndexing */
+    case 28: case 29: case 30: case 31: /* Uniform/SampledImage/StorageBuffer/StorageImageArrayDynamicIndexing */
+    case 25: case 27: case 34: /* ImageGatherExtended, StorageImageMultisample, ImageCubeArray */
+    case 42: case 43: case 44: case 45: /* MinLod, Sampled1D, Image1D, SampledCubeArray */
+    case 46: case 47: case 48: case 49: /* SampledBuffer, ImageBuffer, ImageMSArray, StorageImageExtendedFormats */
+    case 50: /* ImageQuery */
+    case 55: case 56: /* StorageImageRead/WriteWithoutFormat */
+    case 5301: case 5302: case 5304: case 5305: case 5306: case 5307: /* descriptor indexing (not input */
+    case 5308: case 5309: case 5311: case 5312:                       /* attachments) */
     case 4433: case 4434: case 4435: /* 16-bit storage */
     case 4448: case 4449: case 4450: /* 8-bit storage */
     case 4464: case 4465: case 4466: case 4467: case 4468: /* float controls: Metal defaults */
@@ -37121,6 +37313,14 @@ static void pvk_spv_capability(struct pvk_spv *ctx, uint32_t cap)
         pvk_spv_fail(ctx, "subgroup operations are not supported yet");
     case 4441: case 4442:
         pvk_spv_fail(ctx, "variable pointers are not supported");
+    case 40: case 5303: case 5310:
+        pvk_spv_fail(ctx, "input attachments are only available in fragment shaders");
+    case 41:
+        pvk_spv_fail(ctx, "sparse residency is not supported");
+    case 36: case 37:
+        pvk_spv_fail(ctx, "rectangle images are not supported (Vulkan has none)");
+    case 51: case 5288: case 5350:
+        pvk_spv_fail(ctx, "derivatives (and implicit-LOD sampling) are not supported in compute shaders");
     default:
         pvk_spv_fail(ctx, "unsupported SPIR-V capability %u", cap);
     }
@@ -37253,9 +37453,8 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         switch (storage) {
         case PVK_SPV_StorageInput: case PVK_SPV_StorageUniform: case PVK_SPV_StorageWorkgroup:
         case PVK_SPV_StoragePrivate: case PVK_SPV_StoragePushConstant: case PVK_SPV_StorageStorageBuffer:
-            break;
         case PVK_SPV_StorageUniformConstant:
-            pvk_spv_fail(ctx, "images and samplers are not supported yet");
+            break;
         case PVK_SPV_StorageOutput:
             pvk_spv_fail(ctx, "output variables are not supported in compute shaders");
         default:
@@ -37264,6 +37463,8 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         pvk_spv_new_ptr(ctx, x, rid, in->w[1], rid);
         if (x->p->storage != storage)
             pvk_spv_fail(ctx, "variable %u: storage class mismatch", rid);
+        if ((storage == PVK_SPV_StorageUniformConstant) != pvk_spv_type(ctx, x->p->type)->opaque)
+            pvk_spv_fail(ctx, "variable %u: images and samplers must be UniformConstant variables (and only they)", rid);
         if (in->wc > 4) {
             pvk_spv_const(ctx, in->w[4]);
             if (storage != PVK_SPV_StoragePrivate)
@@ -37391,6 +37592,8 @@ static void pvk_spv_parse_body(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         pvk_spv_new_ptr(ctx, x, in->w[2], in->w[1], in->w[2]);
         if (x->p->storage != PVK_SPV_StorageFunction)
             pvk_spv_fail(ctx, "variable %u: storage class mismatch", in->w[2]);
+        if (pvk_spv_type(ctx, x->p->type)->opaque)
+            pvk_spv_fail(ctx, "variable %u: images and samplers cannot be function variables", in->w[2]);
         if (in->wc > 4) {
             struct pvk_spv_id *init = pvk_spv_get(ctx, in->w[4]);
             if (init->kind != PVK_SPV_K_CONST)
@@ -37424,7 +37627,8 @@ static void pvk_spv_parse_body(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     } else if (shape == 1) {
         pvk_spv_fail(ctx, "unexpected instruction (opcode %u) in a function", in->op);
     } else if (in->op != PVK_SPV_OpStore && in->op != PVK_SPV_OpCopyMemory && in->op != PVK_SPV_OpControlBarrier &&
-               in->op != PVK_SPV_OpMemoryBarrier && in->op != PVK_SPV_OpAtomicStore && in->op != PVK_SPV_OpNop) {
+               in->op != PVK_SPV_OpMemoryBarrier && in->op != PVK_SPV_OpAtomicStore && in->op != PVK_SPV_OpNop &&
+               in->op != PVK_SPV_OpImageWrite) {
         pvk_spv_fail(ctx, "unexpected instruction (opcode %u) in a function", in->op);
     }
 }
@@ -37572,7 +37776,7 @@ static void pvk_spv_psb_layout(struct pvk_spv *ctx, struct pvk_spv_type *t)
     else if (pvk_spv_is_psb(e) && e->msl)
         t->msl = pvk_spv_fmt(ctx, "%s device*", e->msl);
     else if (e->msl && e->op != PVK_SPV_OpTypeVoid && e->op != PVK_SPV_OpTypeBool && e->op != PVK_SPV_OpTypePointer &&
-             e->op != PVK_SPV_OpTypeFunction && e->op != PVK_SPV_OpTypeRuntimeArray)
+             e->op != PVK_SPV_OpTypeFunction && e->op != PVK_SPV_OpTypeRuntimeArray && !e->opaque)
         t->msl = pvk_spv_fmt(ctx, "device %s*", e->msl);
     else
         pvk_spv_fail(ctx, "unsupported physical pointer type (pointee %u)", t->elem);
@@ -37665,11 +37869,93 @@ static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_
     }
 }
 
+#define PVK_SPV_ACCESS_READ 1u
+#define PVK_SPV_ACCESS_WRITE 2u
+
+/* Arrays of descriptors down to the descriptor type. */
+static struct pvk_spv_type *pvk_spv_strip_arrays(struct pvk_spv *ctx, uint32_t *tid)
+{
+    struct pvk_spv_type *t = pvk_spv_type(ctx, *tid);
+    while (t->op == PVK_SPV_OpTypeArray || t->op == PVK_SPV_OpTypeRuntimeArray) {
+        *tid = t->elem;
+        t = pvk_spv_type(ctx, *tid);
+    }
+    return t;
+}
+
+/* An image type as a 2D one: 1D images with options->image_1d_as_2d. */
+static bool pvk_spv_image_as_2d(struct pvk_spv *ctx, const struct pvk_spv_type *t)
+{
+    return t->img.dim == PVK_SPV_Dim1D && ctx->image_1d_as_2d;
+}
+
+/* depth2d... for depth images that are sampled (Depth 1); Depth 2
+ * (unknown) is a color texture, reinterpreted where a Dref needs a depth one. */
+static const char *pvk_spv_image_msl(struct pvk_spv *ctx, const struct pvk_spv_type *t, bool depth)
+{
+    const char *base, *access = "", *elem = pvk_spv_type(ctx, t->elem)->msl;
+    bool ms = t->img.ms != 0, arr = t->img.arrayed != 0;
+    depth = depth && t->img.sampled == 1 && t->img.dim != PVK_SPV_Dim3D && t->img.dim != PVK_SPV_DimBuffer &&
+            (t->img.dim != PVK_SPV_Dim1D || pvk_spv_image_as_2d(ctx, t));
+    switch (pvk_spv_image_as_2d(ctx, t) ? PVK_SPV_Dim2D : t->img.dim) {
+    case PVK_SPV_Dim1D:
+        base = arr ? "texture1d_array" : "texture1d";
+        break;
+    case PVK_SPV_Dim2D:
+        base = ms ? (arr ? "2d_ms_array" : "2d_ms") : (arr ? "2d_array" : "2d");
+        break;
+    case PVK_SPV_Dim3D:
+        base = "texture3d";
+        break;
+    case PVK_SPV_DimCube:
+        base = arr ? "cube_array" : "cube";
+        break;
+    default:
+        base = "texture_buffer";
+        break;
+    }
+    if (base[0] != 't')
+        base = pvk_spv_fmt(ctx, "%s%s", depth ? "depth" : "texture", base);
+    if (t->img.sampled == 2) {
+        uint32_t a = t->img.access;
+        access = ms || a == PVK_SPV_ACCESS_READ ? ", access::read"
+                 : a == PVK_SPV_ACCESS_WRITE    ? ", access::write"
+                                                : ", access::read_write";
+    } else if (t->img.dim == PVK_SPV_DimBuffer) {
+        access = ", access::read";
+    }
+    return pvk_spv_fmt(ctx, "%s<%s%s>", base, elem, access);
+}
+
+/* Storage images get the access their variables allow (NonReadable /
+ * NonWritable); types no variable restricts are read_write. */
+static void pvk_spv_image_access(struct pvk_spv *ctx)
+{
+    uint32_t g, i;
+    for (g = 0; g < ctx->nglobals; g++) {
+        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+        uint32_t tid = x->p->type;
+        struct pvk_spv_type *t;
+        if (x->p->storage != PVK_SPV_StorageUniformConstant)
+            continue;
+        t = pvk_spv_strip_arrays(ctx, &tid);
+        if (t->op == PVK_SPV_OpTypeImage && t->img.sampled == 2)
+            t->img.access |= ((x->flags & PVK_SPV_F_NON_READABLE) ? 0 : PVK_SPV_ACCESS_READ) |
+                             ((x->flags & PVK_SPV_F_NON_WRITABLE) ? 0 : PVK_SPV_ACCESS_WRITE);
+    }
+    for (i = 0; i < ctx->ntypes; i++) {
+        struct pvk_spv_type *t = ctx->ids[ctx->type_order[i]].t;
+        if (t->op == PVK_SPV_OpTypeImage && t->img.sampled == 2 && !t->img.access)
+            t->img.access = PVK_SPV_ACCESS_READ | PVK_SPV_ACCESS_WRITE;
+    }
+}
+
 /* MSL value types for every type, in definition order (components first). */
 static void pvk_spv_layout_types(struct pvk_spv *ctx)
 {
     uint32_t i;
 
+    pvk_spv_image_access(ctx);
     /* Structs used as array elements are padded up to the stride. */
     for (i = 0; i < ctx->ntypes; i++) {
         struct pvk_spv_type *t = ctx->ids[ctx->type_order[i]].t, *e;
@@ -37716,8 +38002,24 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
             if (pvk_spv_is_psb(t))
                 pvk_spv_psb_layout(ctx, t);
             break;
+        case PVK_SPV_OpTypeImage:
+            t->msl = pvk_spv_image_msl(ctx, t, t->img.depth == 1);
+            t->size = t->align = 8; /* an MTLResourceID in a set */
+            break;
+        case PVK_SPV_OpTypeSampler:
+            t->msl = "sampler";
+            t->size = t->align = 8;
+            break;
+        case PVK_SPV_OpTypeSampledImage:
+            t->msl = pvk_spv_fmt(ctx, "pvk_sampled<%s>", pvk_spv_type(ctx, t->elem)->msl);
+            t->size = 16;
+            t->align = 8;
+            ctx->use_sampled = true;
+            break;
         case PVK_SPV_OpTypeArray:
         case PVK_SPV_OpTypeRuntimeArray:
+            if (t->opaque)
+                break; /* descriptor arrays: only variables */
             e = pvk_spv_type(ctx, t->elem);
             if (pvk_spv_is_psb(e))
                 pvk_spv_psb_layout(ctx, e);
@@ -37918,12 +38220,16 @@ static const char *pvk_spv_storage_expr(struct pvk_spv *ctx, const struct pvk_sp
 /* MSL text of a constant's value (not its name). */
 static const char *pvk_spv_const_text(struct pvk_spv *ctx, uint32_t cid, uint32_t depth);
 
-/* The expression for a constant operand: its name when declared, else its text. */
+/* The expression for a constant operand: its name when declared, else its
+ * text. Program-scope initializers inline other constants (ctx->
+ * inline_consts): MSL before 4.1 would need global constructors for them. */
 static const char *pvk_spv_const_expr(struct pvk_spv *ctx, uint32_t cid, uint32_t depth)
 {
     struct pvk_spv_id *x = pvk_spv_get(ctx, cid);
-    if (x->msl)
+    if (x->msl && !ctx->inline_consts)
         return x->msl;
+    if (ctx->inline_consts && ctx->const_budget-- == 0)
+        pvk_spv_fail(ctx, "constants are too large");
     return pvk_spv_const_text(ctx, cid, depth);
 }
 
@@ -37976,7 +38282,9 @@ static void pvk_spv_emit_constants(struct pvk_spv *ctx)
             continue;
         if (!x->c->spec && t->op != PVK_SPV_OpTypeArray && t->op != PVK_SPV_OpTypeStruct)
             continue;
+        ctx->inline_consts = true;
         text = pvk_spv_const_text(ctx, cid, 0);
+        ctx->inline_consts = false;
         x->msl = pvk_spv_name(ctx, cid);
         if (x->flags & PVK_SPV_F_SPEC_ID)
             pvk_sb_printf(ctx, &ctx->consts, "constant %s %s = %s; /* SpecId %u */\n", t->msl, x->msl, text,
@@ -38078,6 +38386,26 @@ static void pvk_spv_id_range(const struct pvk_spv_insn *in, int shape, uint32_t 
     *end = e;
 }
 
+/* Word index of an image instruction's Image Operands mask (a literal among
+ * the ids), 0 if it has none. */
+static uint32_t pvk_spv_image_mask_word(uint32_t op)
+{
+    switch (op) {
+    case PVK_SPV_OpImageSampleImplicitLod: case PVK_SPV_OpImageSampleExplicitLod:
+    case PVK_SPV_OpImageSampleProjImplicitLod: case PVK_SPV_OpImageSampleProjExplicitLod: case PVK_SPV_OpImageFetch:
+    case PVK_SPV_OpImageRead:
+        return 5;
+    case PVK_SPV_OpImageSampleDrefImplicitLod: case PVK_SPV_OpImageSampleDrefExplicitLod:
+    case PVK_SPV_OpImageSampleProjDrefImplicitLod: case PVK_SPV_OpImageSampleProjDrefExplicitLod:
+    case PVK_SPV_OpImageGather: case PVK_SPV_OpImageDrefGather:
+        return 6;
+    case PVK_SPV_OpImageWrite:
+        return 4;
+    default:
+        return 0;
+    }
+}
+
 static bool pvk_spv_bit(const uint32_t *set, uint32_t i)
 {
     return (set[i / 32] >> (i % 32)) & 1u;
@@ -38124,9 +38452,11 @@ static void pvk_spv_analyze(struct pvk_spv *ctx, uint32_t fidx)
                        (pvk_spv_get(ctx, in.w[3])->flags & PVK_SPV_F_NONSEMANTIC)) {
                 /* debug info */
             } else {
+                uint32_t mask = pvk_spv_image_mask_word(in.op);
                 pvk_spv_id_range(&in, shape, &b, &e);
                 for (i = b; i < e; i++)
-                    pvk_spv_use(ctx, fn, fidx, in.w[i], bi);
+                    if (i != mask)
+                        pvk_spv_use(ctx, fn, fidx, in.w[i], bi);
                 if (in.op == PVK_SPV_OpFunctionCall) {
                     uint32_t callee = pvk_spv_get(ctx, pvk_spv_arg(ctx, &in, 3))->func, k;
                     if (pvk_spv_get(ctx, in.w[3])->kind != PVK_SPV_K_FUNC)
@@ -38136,10 +38466,9 @@ static void pvk_spv_analyze(struct pvk_spv *ctx, uint32_t fidx)
                     if (k == fn->ncallees)
                         PVK_SPV_PUSH(ctx, fn->callees, fn->ncallees, fn->cap_callees, callee);
                 }
-                if (in.op == PVK_SPV_OpArrayLength)
-                    fn->uses_sizes = true;
                 if ((in.op == PVK_SPV_OpAccessChain || in.op == PVK_SPV_OpInBoundsAccessChain ||
-                     in.op == PVK_SPV_OpPtrAccessChain || in.op == PVK_SPV_OpCopyObject) && shape == 2 &&
+                     in.op == PVK_SPV_OpPtrAccessChain || in.op == PVK_SPV_OpCopyObject ||
+                     in.op == PVK_SPV_OpImageTexelPointer) && shape == 2 &&
                     pvk_spv_get(ctx, in.w[2])->kind == PVK_SPV_K_PTR)
                     PVK_SPV_PUSH(ctx, ptrs, nptrs, cap_ptrs, off);
             }
@@ -38195,7 +38524,6 @@ static void pvk_spv_call_graph(struct pvk_spv *ctx)
             uint32_t k;
             for (k = 0; k < words; k++)
                 fn->globals[k] |= callee->globals[k];
-            fn->uses_sizes |= callee->uses_sizes;
         }
         fn->state = 2;
         ctx->order[ctx->norder++] = stack[n - 2];
@@ -38205,54 +38533,18 @@ static void pvk_spv_call_graph(struct pvk_spv *ctx)
 
 /* ---- Resources (the binding model) ---- */
 
-static uint32_t pvk_spv_binding_offset(struct pvk_spv *ctx, uint32_t set, uint32_t binding)
+/* A descriptor variable: buffer blocks, images, samplers (or arrays of them). */
+static bool pvk_spv_is_resource(const struct pvk_spv_ptr *p)
 {
-    const struct pvk_msl_options *o = ctx->options;
-    uint32_t i;
-    if (o && o->binding_offset_count) {
-        if (!o->binding_offsets)
-            pvk_spv_fail(ctx, "binding_offset_count without binding_offsets");
-        for (i = 0; i < o->binding_offset_count; i++) {
-            if (o->binding_offsets[i].set != set || o->binding_offsets[i].binding != binding)
-                continue;
-            if (o->binding_offsets[i].offset % 8)
-                pvk_spv_fail(ctx, "binding offset for set %u binding %u is not a multiple of 8", set, binding);
-            return o->binding_offsets[i].offset;
-        }
-    }
-    if (binding >= (1u << 24))
-        pvk_spv_fail(ctx, "binding %u too large", binding);
-    return binding * 8;
+    return p->storage == PVK_SPV_StorageStorageBuffer || p->storage == PVK_SPV_StorageUniform ||
+           p->storage == PVK_SPV_StorageUniformConstant;
 }
 
-static int pvk_spv_resource_cmp(const void *a, const void *b)
+/* The block struct of a buffer variable (below its descriptor arrays). */
+static struct pvk_spv_type *pvk_spv_buffer_block(struct pvk_spv *ctx, uint32_t var, uint32_t *block_id)
 {
-    const struct pvk_msl_resource *x = a, *y = b;
-    if (x->set != y->set)
-        return x->set < y->set ? -1 : 1;
-    return x->binding < y->binding ? -1 : x->binding > y->binding;
-}
-
-static bool pvk_spv_is_buffer(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
-{
-    (void)ctx;
-    return p->storage == PVK_SPV_StorageStorageBuffer || p->storage == PVK_SPV_StorageUniform;
-}
-
-/* The block struct of a buffer variable, and its descriptor count. */
-static struct pvk_spv_type *pvk_spv_buffer_block(struct pvk_spv *ctx, uint32_t var, uint32_t *count, uint32_t *block_id)
-{
-    struct pvk_spv_ptr *p = pvk_spv_get(ctx, var)->p;
-    struct pvk_spv_type *t = pvk_spv_type(ctx, p->type);
-    uint32_t tid = p->type;
-    *count = 1;
-    if (t->op == PVK_SPV_OpTypeRuntimeArray)
-        pvk_spv_fail(ctx, "runtime-sized descriptor arrays are not supported yet");
-    if (t->op == PVK_SPV_OpTypeArray) {
-        *count = t->count;
-        tid = t->elem;
-        t = pvk_spv_type(ctx, tid);
-    }
+    uint32_t tid = pvk_spv_get(ctx, var)->p->type;
+    struct pvk_spv_type *t = pvk_spv_strip_arrays(ctx, &tid);
     if (t->op != PVK_SPV_OpTypeStruct || !t->explicit_layout)
         pvk_spv_fail(ctx, "buffer variable %u is not a block with explicit layout", var);
     *block_id = tid;
@@ -38261,78 +38553,334 @@ static struct pvk_spv_type *pvk_spv_buffer_block(struct pvk_spv *ctx, uint32_t v
 
 static bool pvk_spv_is_storage_block(struct pvk_spv *ctx, uint32_t var)
 {
-    uint32_t count, block;
-    pvk_spv_buffer_block(ctx, var, &count, &block);
+    uint32_t block;
+    pvk_spv_buffer_block(ctx, var, &block);
     return pvk_spv_get(ctx, var)->p->storage == PVK_SPV_StorageStorageBuffer ||
            (ctx->ids[block].flags & PVK_SPV_F_BUFFER_BLOCK);
+}
+
+/* Descriptors a variable declares: 1, the product of its array lengths, or
+ * 0 for a runtime-sized array. */
+static uint32_t pvk_spv_desc_count(struct pvk_spv *ctx, uint32_t var, bool *is_array)
+{
+    struct pvk_spv_type *t = pvk_spv_type(ctx, pvk_spv_get(ctx, var)->p->type);
+    uint64_t n = 1;
+    bool runtime = false;
+    *is_array = false;
+    while (t->op == PVK_SPV_OpTypeArray || t->op == PVK_SPV_OpTypeRuntimeArray) {
+        *is_array = true;
+        if (t->op == PVK_SPV_OpTypeRuntimeArray)
+            runtime = true;
+        else
+            n *= t->count;
+        if (n > PVK_SPV_MAX_ARRAY_LENGTH)
+            pvk_spv_fail(ctx, "descriptor array of variable %u is too large", var);
+        t = pvk_spv_type(ctx, t->elem);
+    }
+    return runtime ? 0 : (uint32_t)n;
+}
+
+/* What a descriptor variable needs, as the descriptor type a default layout
+ * gives it; *obj receives its descriptor's type (block, image, ...). */
+static VkDescriptorType pvk_spv_resource_kind(struct pvk_spv *ctx, uint32_t var, uint32_t *obj)
+{
+    struct pvk_spv_id *x = pvk_spv_get(ctx, var);
+    uint32_t tid = x->p->type;
+    struct pvk_spv_type *t = pvk_spv_strip_arrays(ctx, &tid);
+    *obj = tid;
+    switch (x->p->storage) {
+    case PVK_SPV_StorageStorageBuffer:
+    case PVK_SPV_StorageUniform:
+        pvk_spv_buffer_block(ctx, var, obj);
+        return pvk_spv_is_storage_block(ctx, var) ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    default:
+        break;
+    }
+    switch (t->op) {
+    case PVK_SPV_OpTypeSampler:
+        return VK_DESCRIPTOR_TYPE_SAMPLER;
+    case PVK_SPV_OpTypeSampledImage:
+        return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    case PVK_SPV_OpTypeImage:
+        if (t->img.dim == PVK_SPV_DimBuffer)
+            return t->img.sampled == 1 ? VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+        return t->img.sampled == 1 ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    default:
+        pvk_spv_fail(ctx, "variable %u is not a supported descriptor", var);
+    }
+}
+
+static bool pvk_spv_is_buffer_type(VkDescriptorType type)
+{
+    return type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER || type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
+           type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC || type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+}
+
+/* Whether a variable of kind `kind` may use a binding of type `type`
+ * (Vulkan's shader resource / descriptor type correspondence). */
+static bool pvk_spv_kind_matches(VkDescriptorType kind, VkDescriptorType type, bool is_array)
+{
+    switch (kind) {
+    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+        return type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER || type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+        return type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER || type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
+               (type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK && !is_array);
+    case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+    case VK_DESCRIPTOR_TYPE_SAMPLER:
+        return type == kind || type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    default:
+        return type == kind;
+    }
+}
+
+/* Size of one descriptor in a set table (section 11), 0 if unsupported. */
+static uint32_t pvk_spv_desc_size(VkDescriptorType type)
+{
+    switch (type) {
+    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC: case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+    case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+        return 16;
+    case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+    case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER: case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+    case VK_DESCRIPTOR_TYPE_SAMPLER: case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+        return 8;
+    default:
+        return 0;
+    }
+}
+
+static struct pvk_spv_binding *pvk_spv_binding_of(struct pvk_spv *ctx, uint32_t set, uint32_t binding)
+{
+    uint32_t i;
+    for (i = 0; i < ctx->nbindings; i++)
+        if (ctx->bindings[i].set == set && ctx->bindings[i].layout.binding == binding)
+            return &ctx->bindings[i];
+    pvk_spv_fail(ctx, "internal: set %u binding %u is not bound", set, binding);
+}
+
+static int pvk_spv_binding_cmp(const void *a, const void *b)
+{
+    const struct pvk_spv_binding *x = a, *y = b;
+    if (x->set != y->set)
+        return x->set < y->set ? -1 : 1;
+    return x->layout.binding < y->layout.binding ? -1 : x->layout.binding > y->layout.binding;
+}
+
+/* pvk_ubuf_<Block> / pvk_sbuf_<Block>: a buffer descriptor whose pointer
+ * has the block's type, declared once. */
+static const char *pvk_spv_buffer_desc_type(struct pvk_spv *ctx, uint32_t block, bool storage)
+{
+    struct pvk_spv_type *t = pvk_spv_type(ctx, block);
+    const char *name = pvk_spv_fmt(ctx, "pvk_%cbuf_%s", storage ? 's' : 'u', t->msl);
+    uint32_t bit = storage ? 2u : 1u;
+    if (ctx->types_ready && !(t->desc_emitted & bit)) { /* (after the block's own declaration) */
+        t->desc_emitted |= bit;
+        pvk_sb_printf(ctx, &ctx->types, "struct %s\n{\n    %s %s* p;\n    ulong size;\n};\n\n", name,
+                      storage ? "device" : "constant", t->msl);
+    }
+    return name;
+}
+
+/* The default layout of set `set` (BINDING MODEL), for the bindings
+ * [first, end) of ctx->bindings (sorted, all in that set). */
+static void pvk_spv_default_layout(struct pvk_spv *ctx, uint32_t first, uint32_t end)
+{
+    uint64_t cur = 0;
+    uint32_t i, g;
+    for (i = first; i < end; i++) {
+        struct pvk_spv_binding *b = &ctx->bindings[i];
+        VkDescriptorType type = (VkDescriptorType)0;
+        bool any = false, image = false, sampler = false, combined = false, runtime = false;
+        uint32_t count = 1;
+        for (g = 0; g < ctx->nglobals; g++) {
+            struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+            VkDescriptorType k;
+            uint32_t obj, n;
+            bool arr;
+            if (!x->msl || !pvk_spv_is_resource(x->p) || x->set != b->set || x->binding != b->layout.binding)
+                continue;
+            k = pvk_spv_resource_kind(ctx, ctx->globals[g], &obj);
+            n = pvk_spv_desc_count(ctx, ctx->globals[g], &arr);
+            if (!any)
+                type = k;
+            any = true;
+            image |= k == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            sampler |= k == VK_DESCRIPTOR_TYPE_SAMPLER;
+            combined |= k == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            if (n == 0)
+                runtime = true;
+            else if (n > count)
+                count = n;
+        }
+        if (combined || (image && sampler))
+            type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        if (runtime && i + 1 != end)
+            pvk_spv_fail(ctx, "set %u binding %u: a runtime descriptor array must be the set's last binding "
+                              "(or give the set's layout)", b->set, b->layout.binding);
+        b->layout.type = type;
+        b->layout.count = runtime ? 0 : count;
+        b->layout.variable_count = runtime;
+        b->layout.stride = pvk_spv_desc_size(type);
+        b->layout.offset = (uint32_t)pvk_spv_round((uint32_t)cur, 16);
+        cur = (uint64_t)b->layout.offset + (uint64_t)b->layout.stride * count;
+        if (cur > (1u << 30))
+            pvk_spv_fail(ctx, "set %u is too large", b->set);
+    }
+}
+
+/* The layout of one binding from options->set_layouts. */
+static void pvk_spv_given_layout(struct pvk_spv *ctx, struct pvk_spv_binding *b)
+{
+    const struct pvk_msl_options *o = ctx->options;
+    const struct pvk_msl_set_layout *sl;
+    uint32_t i;
+    if (b->set >= o->set_layout_count)
+        pvk_spv_fail(ctx, "the shader uses descriptor set %u, which the layout does not have", b->set);
+    sl = &o->set_layouts[b->set];
+    if (sl->binding_count && !sl->bindings)
+        pvk_spv_fail(ctx, "set layout %u has binding_count but no bindings", b->set);
+    for (i = 0; i < sl->binding_count; i++)
+        if (sl->bindings[i].binding == b->layout.binding)
+            break;
+    if (i == sl->binding_count)
+        pvk_spv_fail(ctx, "set %u binding %u is not in the set layout", b->set, b->layout.binding);
+    b->layout = sl->bindings[i];
+}
+
+/* The set struct member of each binding, checked against the shader's
+ * variables: type, count, alignment, overlap. */
+static void pvk_spv_binding_members(struct pvk_spv *ctx)
+{
+    uint32_t i, g;
+    uint64_t end = 0;
+    for (i = 0; i < ctx->nbindings; i++) {
+        struct pvk_spv_binding *b = &ctx->bindings[i];
+        const struct pvk_msl_binding *l = &b->layout;
+        uint32_t obj0, tex = 0;
+        bool inline_block = l->type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK;
+
+        for (g = 0; g < ctx->nglobals; g++) {
+            struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+            VkDescriptorType k;
+            uint32_t obj, n;
+            bool arr;
+            if (!x->msl || !pvk_spv_is_resource(x->p) || x->set != b->set || x->binding != l->binding)
+                continue;
+            k = pvk_spv_resource_kind(ctx, ctx->globals[g], &obj);
+            n = pvk_spv_desc_count(ctx, ctx->globals[g], &arr);
+            if (!pvk_spv_kind_matches(k, l->type, arr))
+                pvk_spv_fail(ctx, "set %u binding %u: variable %u does not match the binding's descriptor type %d",
+                             b->set, l->binding, ctx->globals[g], (int)l->type);
+            if (!inline_block && !l->variable_count && n > l->count)
+                pvk_spv_fail(ctx, "set %u binding %u: variable %u has %u descriptors, the binding %u", b->set,
+                             l->binding, ctx->globals[g], n, l->count);
+            if (!tex && k == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
+                tex = obj;
+            if (!tex && k == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                tex = pvk_spv_type(ctx, obj)->elem;
+        }
+
+        pvk_spv_resource_kind(ctx, b->var, &obj0);
+        b->array = !inline_block && (l->count != 1 || l->variable_count);
+        b->size = inline_block ? pvk_spv_type(ctx, obj0)->size : pvk_spv_desc_size(l->type);
+        b->align = inline_block ? pvk_spv_type(ctx, obj0)->align : 8;
+        if (!b->size)
+            pvk_spv_fail(ctx, "set %u binding %u: unsupported descriptor type %d", b->set, l->binding, (int)l->type);
+        switch (l->type) {
+        case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+        case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC: case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+            b->wrap = pvk_spv_buffer_desc_type(ctx, obj0, pvk_spv_is_storage_block(ctx, b->var));
+            break;
+        case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+            b->tex = tex ? pvk_spv_type(ctx, tex)->msl : "texture2d<float>";
+            b->wrap = pvk_spv_fmt(ctx, "pvk_sampled<%s>", b->tex);
+            ctx->use_sampled = true;
+            break;
+        default: /* images, samplers, inline uniform blocks: the object itself */
+            b->wrap = pvk_spv_type(ctx, obj0)->msl;
+            break;
+        }
+        b->elem = b->wrap;
+        if (b->array) {
+            if (l->stride < b->size || l->stride % b->align || l->stride > (1u << 20))
+                pvk_spv_fail(ctx, "set %u binding %u: stride %u does not fit a %u-byte descriptor", b->set, l->binding,
+                             l->stride, b->size);
+            b->pad = l->stride - b->size;
+            if (b->pad) {
+                b->elem = pvk_spv_fmt(ctx, "pvk_padded<%s, %u>", b->wrap, b->pad);
+                ctx->use_padded = true;
+            }
+        }
+
+        /* Members in offset order (bindings in binding order): no overlap. */
+        if (i == 0 || ctx->bindings[i - 1].set != b->set)
+            end = 0;
+        if (l->offset % b->align || l->offset > (1u << 30))
+            pvk_spv_fail(ctx, "set %u binding %u: offset %u is not aligned to %u", b->set, l->binding, l->offset,
+                         b->align);
+        if (l->offset < end)
+            pvk_spv_fail(ctx, "set %u binding %u at offset %u overlaps the previous binding (bindings must be in "
+                              "offset order)", b->set, l->binding, l->offset);
+        if (b->array && (l->variable_count || !l->count))
+            end = UINT64_MAX; /* must be last */
+        else if (b->array)
+            end = (uint64_t)l->offset + (uint64_t)l->stride * l->count;
+        else
+            end = (uint64_t)l->offset + (inline_block && l->count > b->size ? l->count : b->size);
+        if (end != UINT64_MAX && end > (1u << 30))
+            pvk_spv_fail(ctx, "set %u binding %u: the table is too large", b->set, l->binding);
+    }
 }
 
 static void pvk_spv_assign_resources(struct pvk_spv *ctx)
 {
     struct pvk_msl_result *res = ctx->result;
     struct pvk_spv_func *entry = ctx->funcs[pvk_spv_get(ctx, ctx->entry_fid)->func - 1];
+    const struct pvk_msl_options *o = ctx->options;
     uint32_t g, i, cap = 0;
 
     for (g = 0; g < ctx->nglobals; g++) {
-        uint32_t var = ctx->globals[g], count, block;
+        uint32_t var = ctx->globals[g];
         struct pvk_spv_id *x = &ctx->ids[var];
         struct pvk_spv_type *t;
         if (!pvk_spv_bit(entry->globals, g))
             continue;
         x->msl = pvk_spv_name(ctx, var);
         if (x->msl[0] == '_') { /* anonymous block: name it after its type */
-            struct pvk_spv_type *pt = pvk_spv_type(ctx, x->p->type);
-            uint32_t tid = pt->op == PVK_SPV_OpTypeArray ? pt->elem : x->p->type;
+            uint32_t tid = x->p->type;
             char buf[48];
+            pvk_spv_strip_arrays(ctx, &tid);
             pvk_spv_sanitize(pvk_spv_get(ctx, tid)->name, buf, sizeof(buf));
             if (buf[0])
                 x->msl = pvk_spv_fmt(ctx, "%s_%u", buf, var);
         }
         switch (x->p->storage) {
         case PVK_SPV_StorageStorageBuffer:
-        case PVK_SPV_StorageUniform: {
-            struct pvk_msl_resource r;
-            bool storage;
-            t = pvk_spv_buffer_block(ctx, var, &count, &block);
-            storage = pvk_spv_is_storage_block(ctx, var);
+        case PVK_SPV_StorageUniform:
+        case PVK_SPV_StorageUniformConstant: {
+            struct pvk_spv_binding b;
+            uint32_t obj;
+            bool arr;
+            pvk_spv_resource_kind(ctx, var, &obj);
+            pvk_spv_desc_count(ctx, var, &arr);
             if ((x->flags & (PVK_SPV_F_SET | PVK_SPV_F_BINDING)) != (PVK_SPV_F_SET | PVK_SPV_F_BINDING))
-                pvk_spv_fail(ctx, "buffer variable %u has no DescriptorSet/Binding", var);
+                pvk_spv_fail(ctx, "descriptor variable %u has no DescriptorSet/Binding", var);
             if (x->set >= PVK_MSL_MAX_SETS)
                 pvk_spv_fail(ctx, "descriptor set %u is out of range (max %u)", x->set, PVK_MSL_MAX_SETS - 1);
-            for (i = 0; i < res->resource_count; i++)
-                if (res->resources[i].set == x->set && res->resources[i].binding == x->binding)
+            for (i = 0; i < ctx->nbindings; i++)
+                if (ctx->bindings[i].set == x->set && ctx->bindings[i].layout.binding == x->binding)
                     break;
-            if (i < res->resource_count) {
-                if (res->resources[i].count != count ||
-                    res->resources[i].type != (storage ? PVK_MSL_STORAGE_BUFFER : PVK_MSL_UNIFORM_BUFFER))
-                    pvk_spv_fail(ctx, "set %u binding %u is declared twice with different types", x->set, x->binding);
+            if (i < ctx->nbindings)
                 break;
-            }
-            memset(&r, 0, sizeof(r));
-            r.type = storage ? PVK_MSL_STORAGE_BUFFER : PVK_MSL_UNIFORM_BUFFER;
-            r.set = x->set;
-            r.binding = x->binding;
-            r.count = count;
-            r.offset = pvk_spv_binding_offset(ctx, x->set, x->binding);
-            r.writable = storage && !(x->flags & PVK_SPV_F_NON_WRITABLE);
-            if (r.writable && t->nmembers) {
-                uint32_t k;
-                for (k = 0; k < t->nmembers && (t->members[k].flags & PVK_SPV_M_NON_WRITABLE); k++)
-                    ;
-                r.writable = k < t->nmembers;
-            }
-            r.size_index = -1;
-            if (res->resource_count == 4096)
-                pvk_spv_fail(ctx, "too many buffer bindings");
-            if (res->resource_count == cap) {
-                void *p;
-                cap = cap ? cap * 2 : 8;
-                p = realloc(res->resources, cap * sizeof(r));
-                if (!p)
-                    pvk_spv_oom(ctx);
-                res->resources = p;
-            }
-            res->resources[res->resource_count++] = r;
+            if (ctx->nbindings == 65536)
+                pvk_spv_fail(ctx, "too many descriptor bindings");
+            memset(&b, 0, sizeof(b));
+            b.set = x->set;
+            b.layout.binding = x->binding;
+            b.var = var;
+            PVK_SPV_PUSH(ctx, ctx->bindings, ctx->nbindings, cap, b);
             res->set_mask |= 1u << x->set;
             break;
         }
@@ -38374,67 +38922,148 @@ static void pvk_spv_assign_resources(struct pvk_spv *ctx)
             break;
         }
     }
-    if (res->resource_count)
-        qsort(res->resources, res->resource_count, sizeof(*res->resources), pvk_spv_resource_cmp);
-    for (i = 0; i < res->resource_count; i++) {
-        uint32_t j;
-        for (j = i + 1; j < res->resource_count; j++) {
-            const struct pvk_msl_resource *a = &res->resources[i], *b = &res->resources[j];
-            if (a->set == b->set && ((uint64_t)a->offset < (uint64_t)b->offset + 8u * b->count &&
-                                     (uint64_t)b->offset < (uint64_t)a->offset + 8u * a->count))
-                pvk_spv_fail(ctx, "set %u: bindings %u and %u overlap in the address table", a->set, a->binding,
-                             b->binding);
+    if (!ctx->nbindings)
+        return;
+    qsort(ctx->bindings, ctx->nbindings, sizeof(*ctx->bindings), pvk_spv_binding_cmp);
+
+    /* Layouts: given, or the default one per set. */
+    if (o && (o->set_layouts || o->set_layout_count)) {
+        if (!o->set_layouts)
+            pvk_spv_fail(ctx, "set_layout_count without set_layouts");
+        for (i = 0; i < ctx->nbindings; i++)
+            pvk_spv_given_layout(ctx, &ctx->bindings[i]);
+    } else {
+        uint32_t first = 0;
+        for (i = 1; i <= ctx->nbindings; i++) {
+            if (i < ctx->nbindings && ctx->bindings[i].set == ctx->bindings[first].set)
+                continue;
+            pvk_spv_default_layout(ctx, first, i);
+            first = i;
+        }
+    }
+    pvk_spv_binding_members(ctx);
+
+    res->resources = calloc(ctx->nbindings, sizeof(*res->resources));
+    if (!res->resources)
+        pvk_spv_oom(ctx);
+    res->resource_count = ctx->nbindings;
+    for (i = 0; i < ctx->nbindings; i++) {
+        const struct pvk_spv_binding *b = &ctx->bindings[i];
+        struct pvk_msl_resource *r = &res->resources[i];
+        r->type = b->layout.type;
+        r->set = b->set;
+        r->binding = b->layout.binding;
+        r->count = b->layout.count;
+        r->offset = b->layout.offset;
+        r->stride = b->layout.stride;
+        r->variable_count = b->layout.variable_count;
+        for (g = 0; g < ctx->nglobals; g++) {
+            uint32_t var = ctx->globals[g], obj;
+            struct pvk_spv_id *x = &ctx->ids[var];
+            VkDescriptorType k;
+            if (!x->msl || !pvk_spv_is_resource(x->p) || x->set != b->set || x->binding != b->layout.binding)
+                continue;
+            k = pvk_spv_resource_kind(ctx, var, &obj);
+            if (k == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER && !(x->flags & PVK_SPV_F_NON_WRITABLE)) {
+                struct pvk_spv_type *bt = pvk_spv_type(ctx, obj);
+                uint32_t m;
+                for (m = 0; m < bt->nmembers && (bt->members[m].flags & PVK_SPV_M_NON_WRITABLE); m++)
+                    ;
+                r->writable |= m < bt->nmembers;
+            }
+            if ((k == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE || k == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER) &&
+                !(x->flags & PVK_SPV_F_NON_WRITABLE) && !pvk_spv_type(ctx, obj)->img.ms)
+                r->writable = true;
         }
     }
 }
 
-static struct pvk_msl_resource *pvk_spv_resource_of(struct pvk_spv *ctx, uint32_t var)
+/* How descriptor variable `var` reaches its descriptor: x->p->expr names a
+ * reference to it (or, for arrays, a pointer to the first element), declared
+ * by x->p->decl at the top of each function that uses it. */
+static void pvk_spv_resource_view(struct pvk_spv *ctx, uint32_t var)
 {
     struct pvk_spv_id *x = pvk_spv_get(ctx, var);
-    uint32_t i;
-    for (i = 0; i < ctx->result->resource_count; i++)
-        if (ctx->result->resources[i].set == x->set && ctx->result->resources[i].binding == x->binding)
-            return &ctx->result->resources[i];
-    pvk_spv_fail(ctx, "variable %u is not a bound buffer", var);
+    struct pvk_spv_binding *b = pvk_spv_binding_of(ctx, x->set, x->binding);
+    struct pvk_spv_ptr *p = x->p;
+    uint32_t obj, block;
+    VkDescriptorType kind = pvk_spv_resource_kind(ctx, var, &obj);
+    const char *member = pvk_spv_fmt(ctx, "set%u.b%u", x->set, x->binding), *wrap, *elem, *part = "", *sfx;
+    bool is_array, buffer = pvk_spv_is_buffer_type(b->layout.type), cast;
+
+    pvk_spv_desc_count(ctx, var, &is_array);
+    if (buffer) {
+        wrap = pvk_spv_buffer_desc_type(ctx, obj, pvk_spv_is_storage_block(ctx, var));
+    } else if (b->layout.type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && kind == VK_DESCRIPTOR_TYPE_SAMPLER) {
+        wrap = b->wrap;
+        part = ".s";
+    } else if (b->layout.type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && kind == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
+        wrap = pvk_spv_fmt(ctx, "pvk_sampled<%s>", pvk_spv_type(ctx, obj)->msl);
+        part = ".t";
+    } else {
+        wrap = pvk_spv_type(ctx, obj)->msl;
+    }
+    elem = b->pad ? pvk_spv_fmt(ctx, "pvk_padded<%s, %u>", wrap, b->pad) : wrap;
+    cast = strcmp(elem, b->elem) != 0;
+    sfx = pvk_spv_fmt(ctx, "%s%s", b->pad ? ".v" : "", part);
+    p->expr = x->msl;
+    if (is_array) {
+        const char *base = b->array ? member : pvk_spv_fmt(ctx, "&%s", member);
+        p->desc_array = true;
+        p->desc_buffer = buffer;
+        p->desc_suffix = sfx;
+        p->decl = cast ? pvk_spv_fmt(ctx, "constant %s* %s = (constant %s*)%s;", elem, x->msl, elem, base)
+                       : pvk_spv_fmt(ctx, "constant %s* %s = %s;", elem, x->msl, base);
+        return;
+    }
+    if (b->array)
+        member = pvk_spv_fmt(ctx, "%s[0]", member);
+    if (cast)
+        member = pvk_spv_fmt(ctx, "(*(constant %s*)&%s)", elem, member);
+    member = pvk_spv_fmt(ctx, "%s%s", member, sfx);
+    if (buffer) {
+        struct pvk_spv_type *bt = pvk_spv_buffer_block(ctx, var, &block);
+        p->desc = member;
+        p->decl = pvk_spv_fmt(ctx, "%s %s& %s = *%s.p;", pvk_spv_is_storage_block(ctx, var) ? "device" : "constant",
+                              bt->msl, x->msl, member);
+    } else {
+        p->decl = pvk_spv_fmt(ctx, "constant %s& %s = %s;", pvk_spv_type(ctx, obj)->msl, x->msl, member);
+    }
 }
 
-/* The set structs: one 64-bit address per descriptor, at its offset. */
+/* The set structs: each used binding at its offset (section 11 format). */
 static void pvk_spv_emit_sets(struct pvk_spv *ctx)
 {
     const struct pvk_msl_result *res = ctx->result;
-    uint32_t set, i, g;
+    uint32_t set, i, block;
+    ctx->types_ready = true;
+    for (i = 0; i < ctx->nbindings; i++) /* declare the buffer descriptor types */
+        if (pvk_spv_is_buffer_type(ctx->bindings[i].layout.type)) {
+            pvk_spv_buffer_block(ctx, ctx->bindings[i].var, &block);
+            pvk_spv_buffer_desc_type(ctx, block, pvk_spv_is_storage_block(ctx, ctx->bindings[i].var));
+        }
     for (set = 0; set < PVK_MSL_MAX_SETS; set++) {
         uint32_t cur = 0;
         if (!(res->set_mask & (1u << set)))
             continue;
         pvk_sb_printf(ctx, &ctx->types, "struct pvk_set%u\n{\n", set);
-        for (;;) {
-            const struct pvk_msl_resource *r = NULL;
-            const char *type = NULL, *space;
-            /* next binding by offset (they do not overlap) */
-            for (i = 0; i < res->resource_count; i++)
-                if (res->resources[i].set == set && res->resources[i].offset >= cur &&
-                    (!r || res->resources[i].offset < r->offset))
-                    r = &res->resources[i];
-            if (!r)
-                break;
-            space = r->type == PVK_MSL_STORAGE_BUFFER ? "device" : "constant";
-            /* Typed by the first variable at this binding (others cast). */
-            for (g = 0; g < ctx->nglobals && !type; g++) {
-                struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
-                uint32_t count, block;
-                if (x->msl && pvk_spv_is_buffer(ctx, x->p) && x->set == r->set && x->binding == r->binding)
-                    type = pvk_spv_buffer_block(ctx, ctx->globals[g], &count, &block)->msl;
-            }
-            if (r->offset > cur)
-                pvk_sb_printf(ctx, &ctx->types, "    ulong pvk_unused%u[%u];\n", cur, (r->offset - cur) / 8);
-            if (r->count > 1)
-                pvk_sb_printf(ctx, &ctx->types, "    %s %s* b%u[%u]; /* binding %u, offset %u */\n", space, type,
-                              r->binding, r->count, r->binding, r->offset);
+        for (i = 0; i < ctx->nbindings; i++) {
+            const struct pvk_spv_binding *b = &ctx->bindings[i];
+            const struct pvk_msl_binding *l = &b->layout;
+            if (b->set != set)
+                continue;
+            if (l->offset > cur)
+                pvk_sb_printf(ctx, &ctx->types, "    char pvk_unused%u[%u];\n", cur, l->offset - cur);
+            if (b->array && (l->variable_count || !l->count))
+                pvk_sb_printf(ctx, &ctx->types, "    %s b%u[1]; /* binding %u, offset %u, stride %u, variable count */\n",
+                              b->elem, l->binding, l->binding, l->offset, l->stride);
+            else if (b->array)
+                pvk_sb_printf(ctx, &ctx->types, "    %s b%u[%u]; /* binding %u, offset %u, stride %u */\n", b->elem,
+                              l->binding, l->count, l->binding, l->offset, l->stride);
             else
-                pvk_sb_printf(ctx, &ctx->types, "    %s %s* b%u; /* binding %u, offset %u */\n", space, type,
-                              r->binding, r->binding, r->offset);
-            cur = r->offset + 8 * r->count;
+                pvk_sb_printf(ctx, &ctx->types, "    %s b%u; /* binding %u, offset %u */\n", b->elem, l->binding,
+                              l->binding, l->offset);
+            cur = l->offset + (b->array ? l->stride * (l->count ? l->count : 1) : b->size);
         }
         pvk_sb_append(ctx, &ctx->types, "};\n\n", 4);
     }
@@ -38453,7 +39082,8 @@ static struct pvk_spv_type *pvk_spv_data_type(struct pvk_spv *ctx, uint32_t tid)
     struct pvk_spv_type *t = pvk_spv_type(ctx, tid);
     switch (t->op) {
     case PVK_SPV_OpTypeBool: case PVK_SPV_OpTypeInt: case PVK_SPV_OpTypeFloat: case PVK_SPV_OpTypeVector:
-    case PVK_SPV_OpTypeMatrix: case PVK_SPV_OpTypeArray: case PVK_SPV_OpTypeStruct:
+    case PVK_SPV_OpTypeMatrix: case PVK_SPV_OpTypeArray: case PVK_SPV_OpTypeStruct: case PVK_SPV_OpTypeImage:
+    case PVK_SPV_OpTypeSampler: case PVK_SPV_OpTypeSampledImage:
         if (t->msl)
             return t;
         break;
@@ -38631,12 +39261,28 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
 {
     struct pvk_spv_type *t = pvk_spv_type(ctx, p->type);
     if (p->desc_array) {
-        p->expr = pvk_spv_fmt(ctx, "(*%s[%s])", p->expr, idx);
-        p->desc_index = idx;
-        p->desc_array = false;
+        /* Arrays of arrays are flattened, row-major. */
+        if (t->op != PVK_SPV_OpTypeArray && t->op != PVK_SPV_OpTypeRuntimeArray)
+            pvk_spv_fail(ctx, "internal: descriptor array mismatch");
+        if (p->desc_index)
+            idx = pvk_spv_fmt(ctx, "(%s * %uu + %s)", p->desc_index, t->count, idx);
         p->type = t->elem;
+        t = pvk_spv_type(ctx, t->elem);
+        if (t->op == PVK_SPV_OpTypeArray || t->op == PVK_SPV_OpTypeRuntimeArray) {
+            p->desc_index = idx;
+            return;
+        }
+        p->desc_array = false;
+        p->desc_index = NULL;
+        if (p->desc_buffer) {
+            p->desc = pvk_spv_fmt(ctx, "%s[%s]%s", p->expr, idx, p->desc_suffix);
+            p->expr = pvk_spv_fmt(ctx, "(*%s.p)", p->desc);
+        } else {
+            p->expr = pvk_spv_fmt(ctx, "%s[%s]%s", p->expr, idx, p->desc_suffix);
+        }
         return;
     }
+    p->desc = NULL; /* below the block */
     switch (t->op) {
     case PVK_SPV_OpTypeStruct: {
         const struct pvk_spv_member *m;
@@ -38692,6 +39338,8 @@ static void pvk_spv_load(struct pvk_spv *ctx, uint32_t rid, const struct pvk_spv
         pvk_spv_fail(ctx, "load of %u: type mismatch", rid);
     if (p->desc_array)
         pvk_spv_fail(ctx, "cannot load a whole descriptor array");
+    if (p->storage == PVK_SPV_StorageImage)
+        pvk_spv_fail(ctx, "image texel pointers are only supported in atomics");
     if (p->rm_col) {
         struct pvk_spv_type *t = pvk_spv_type(ctx, p->type);
         const char *e = pvk_spv_fmt(ctx, "%s(", t->msl);
@@ -38711,6 +39359,8 @@ static bool pvk_spv_writable(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
     switch (p->storage) {
     case PVK_SPV_StorageInput:
     case PVK_SPV_StoragePushConstant:
+    case PVK_SPV_StorageUniformConstant:
+    case PVK_SPV_StorageImage:
         return false;
     case PVK_SPV_StorageUniform:
         return pvk_spv_get(ctx, p->var)->func == 0 && pvk_spv_is_storage_block(ctx, p->var);
@@ -39072,6 +39722,92 @@ static void pvk_spv_barrier(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     }
 }
 
+/* Atomics on a texel (OpImageTexelPointer): Metal texture atomics, on
+ * 32-bit integer storage images and texel buffers. */
+static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in, const struct pvk_spv_ptr *p)
+{
+    bool store = in->op == PVK_SPV_OpAtomicStore, sg, tsg;
+    uint32_t rid = store ? 0 : in->w[2], first = store ? 4 : 6;
+    struct pvk_spv_type *t = pvk_spv_type(ctx, p->type), *it = pvk_spv_type(ctx, p->texel_type);
+    struct pvk_spv_type *st = pvk_spv_type(ctx, it->elem);
+    const char *img = p->texel_image, *args = p->texel_args, *t4, *e = NULL, *v = NULL, *what = NULL;
+
+    if (t->op == PVK_SPV_OpTypeFloat)
+        pvk_spv_fail(ctx, "float image atomics are not supported (Metal texture atomics are integer)");
+    if (t->op != PVK_SPV_OpTypeInt || t->width != 32 || st->op != PVK_SPV_OpTypeInt)
+        pvk_spv_fail(ctx, "image atomics need a 32-bit integer image");
+    if (it->img.sampled != 2 || it->img.ms || it->img.access != (PVK_SPV_ACCESS_READ | PVK_SPV_ACCESS_WRITE))
+        pvk_spv_fail(ctx, "image atomics need a readable and writable storage image");
+    if (it->img.dim == PVK_SPV_DimCube) /* MSL 4 has them, Apple GPUs up to M4 do not */
+        pvk_spv_fail(ctx, "atomics on cube images are not supported");
+    if (!store && pvk_spv_get(ctx, rid)->type != p->type)
+        pvk_spv_fail(ctx, "atomic result type differs from the pointee type");
+    pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 2 : 4)); /* scope */
+    tsg = sg = st->is_signed;
+    if (in->op == PVK_SPV_OpAtomicSMin || in->op == PVK_SPV_OpAtomicSMax)
+        sg = true;
+    if (in->op == PVK_SPV_OpAtomicUMin || in->op == PVK_SPV_OpAtomicUMax)
+        sg = false;
+    t4 = pvk_spv_fmt(ctx, "%s4", st->msl);
+    if (in->wc > first && in->op != PVK_SPV_OpAtomicIIncrement && in->op != PVK_SPV_OpAtomicIDecrement &&
+        in->op != PVK_SPV_OpAtomicLoad && in->op != PVK_SPV_OpAtomicCompareExchange &&
+        in->op != PVK_SPV_OpAtomicCompareExchangeWeak)
+        v = pvk_spv_ival(ctx, in->w[first], sg);
+
+    switch (in->op) {
+    case PVK_SPV_OpAtomicLoad:
+        e = pvk_spv_fmt(ctx, "%s.atomic_load(%s).x", img, args);
+        break;
+    case PVK_SPV_OpAtomicStore:
+        if (!v)
+            pvk_spv_fail(ctx, "OpAtomicStore without a value");
+        pvk_spv_line(ctx, "%s.atomic_store(%s(%s), %s);", img, t4, v, args);
+        return;
+    case PVK_SPV_OpAtomicCompareExchange:
+    case PVK_SPV_OpAtomicCompareExchangeWeak: {
+        const char *val = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 7), tsg);
+        const char *cmp = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 8), tsg);
+        const char *name = pvk_spv_result(ctx, rid);
+        pvk_spv_line(ctx, "{");
+        ctx->indent++;
+        pvk_spv_line(ctx, "%s pvk_expected = %s(%s);", t4, t4, cmp);
+        pvk_spv_line(ctx, "while (!%s.atomic_compare_exchange_weak(%s, &pvk_expected, %s(%s)) && pvk_expected.x == %s)",
+                     img, args, t4, val, cmp);
+        pvk_spv_line(ctx, "{");
+        pvk_spv_line(ctx, "}");
+        if (pvk_spv_signed_int(ctx, pvk_spv_vtype(ctx, rid)) != tsg)
+            pvk_spv_line(ctx, "%s = as_type<%s>(pvk_expected.x);", name, pvk_spv_vtype(ctx, rid)->msl);
+        else
+            pvk_spv_line(ctx, "%s = pvk_expected.x;", name);
+        ctx->indent--;
+        pvk_spv_line(ctx, "}");
+        return;
+    }
+    case PVK_SPV_OpAtomicIIncrement:
+    case PVK_SPV_OpAtomicIDecrement:
+        e = pvk_spv_fmt(ctx, "%s.atomic_fetch_%s(%s, %s(1)).x", img,
+                        in->op == PVK_SPV_OpAtomicIIncrement ? "add" : "sub", args, t4);
+        break;
+    case PVK_SPV_OpAtomicExchange: what = "exchange"; break;
+    case PVK_SPV_OpAtomicIAdd: what = "fetch_add"; break;
+    case PVK_SPV_OpAtomicISub: what = "fetch_sub"; break;
+    case PVK_SPV_OpAtomicSMin: case PVK_SPV_OpAtomicUMin: what = "fetch_min"; break;
+    case PVK_SPV_OpAtomicSMax: case PVK_SPV_OpAtomicUMax: what = "fetch_max"; break;
+    case PVK_SPV_OpAtomicAnd: what = "fetch_and"; break;
+    case PVK_SPV_OpAtomicOr: what = "fetch_or"; break;
+    case PVK_SPV_OpAtomicXor: what = "fetch_xor"; break;
+    default:
+        pvk_spv_fail(ctx, "unsupported image atomic (opcode %u)", in->op);
+    }
+    if (what && !v)
+        pvk_spv_fail(ctx, "atomic without a value operand");
+    if (sg != tsg) /* Metal compares as the texture's element type */
+        pvk_spv_fail(ctx, "image atomic min/max with the other signedness than the image is not supported");
+    if (what)
+        e = pvk_spv_fmt(ctx, "%s.atomic_%s(%s, %s(%s)).x", img, what, args, t4, v);
+    pvk_spv_set_int(ctx, rid, e, tsg);
+}
+
 static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     bool store = in->op == PVK_SPV_OpAtomicStore, sg;
@@ -39082,6 +39818,10 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     const char *space, *atype, *obj, *e = NULL, *v = NULL;
     const char *ord = "memory_order_relaxed";
 
+    if (p->storage == PVK_SPV_StorageImage) {
+        pvk_spv_image_atomic(ctx, in, p);
+        return;
+    }
     if (p->node || p->rm_col || p->desc_array)
         pvk_spv_fail(ctx, "atomic on an unsupported location");
     if (!store && pvk_spv_get(ctx, rid)->type != p->type)
@@ -39311,33 +40051,34 @@ static void pvk_spv_array_length(struct pvk_spv *ctx, const struct pvk_spv_insn 
     uint32_t rid = in->w[2], m = pvk_spv_arg(ctx, in, 4), stride;
     const struct pvk_spv_ptr *p = pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 3));
     struct pvk_spv_type *t = pvk_spv_type(ctx, p->type);
-    struct pvk_spv_id *var = pvk_spv_get(ctx, p->var);
-    struct pvk_msl_resource *r;
-    const char *index;
 
     if (t->op != PVK_SPV_OpTypeStruct || m + 1 != t->nmembers || !t->members[m].runtime)
         pvk_spv_fail(ctx, "OpArrayLength of a non-runtime array");
-    if (var->func != 0 || !pvk_spv_is_buffer(ctx, var->p) ||
-        strcmp(p->expr, var->p->desc_array ? pvk_spv_fmt(ctx, "(*%s[%s])", var->p->expr, p->desc_index ? p->desc_index : "")
-                                           : var->p->expr) != 0)
+    if (!p->desc || p->node || p->desc_array)
         pvk_spv_fail(ctx, "OpArrayLength is only supported on buffer variables");
-    r = pvk_spv_resource_of(ctx, p->var);
-    if (r->size_index < 0) {
-        r->size_index = (int32_t)ctx->result->buffer_size_count;
-        ctx->result->buffer_size_count += r->count; /* one size per descriptor */
-    }
-    index = var->p->desc_array ? pvk_spv_fmt(ctx, "%d + %s", r->size_index, p->desc_index)
-                               : pvk_spv_fmt(ctx, "%d", r->size_index);
     stride = ctx->ids[t->members[m].type].array_stride;
     if (!stride)
         pvk_spv_fail(ctx, "runtime array without ArrayStride");
-    pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "uint((max(pvk_buffer_sizes[%s], %uul) - %uul) / %uul)", index,
-                                      t->members[m].offset, t->members[m].offset, stride));
+    /* The descriptor's range size, in elements past the array's offset. */
+    pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "uint((max(%s.size, %uul) - %uul) / %uul)", p->desc, t->members[m].offset,
+                                      t->members[m].offset, stride));
+}
+
+/* Descriptor sets a function (transitively) uses. */
+static uint32_t pvk_spv_func_sets(struct pvk_spv *ctx, const struct pvk_spv_func *fn)
+{
+    uint32_t g, sets = 0;
+    for (g = 0; g < ctx->nglobals; g++) {
+        const struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+        if (pvk_spv_bit(fn->globals, g) && pvk_spv_is_resource(x->p))
+            sets |= 1u << x->set;
+    }
+    return sets;
 }
 
 static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
-    uint32_t rid = in->w[2], i, g;
+    uint32_t rid = in->w[2], i, g, sets;
     struct pvk_spv_func *callee = pvk_spv_func_of(ctx, pvk_spv_arg(ctx, in, 3));
     struct pvk_spv_type *ft = pvk_spv_type(ctx, callee->ftype);
     const char *args, **list;
@@ -39345,13 +40086,14 @@ static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 
     if (in->wc - 4 != ft->count)
         pvk_spv_fail(ctx, "OpFunctionCall: wrong number of arguments");
-    list = pvk_spv_alloc(ctx, sizeof(*list) * (ft->count + ctx->nglobals + 1));
+    list = pvk_spv_alloc(ctx, sizeof(*list) * (ft->count + ctx->nglobals + PVK_MSL_MAX_SETS));
     for (i = 0; i < ft->count; i++) {
         struct pvk_spv_type *pt = pvk_spv_type(ctx, ft->params[i]);
         const char *arg;
         if (pt->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(pt)) {
             const struct pvk_spv_ptr *p = pvk_spv_ptr_of(ctx, in->w[4 + i]);
-            if (p->node || p->rm_col || p->desc_array || p->type != pt->elem || p->storage != pt->storage)
+            if (p->node || p->rm_col || p->desc_array || p->type != pt->elem || p->storage != pt->storage ||
+                p->storage == PVK_SPV_StorageImage)
                 pvk_spv_fail(ctx, "OpFunctionCall: unsupported pointer argument");
             arg = p->expr;
         } else {
@@ -39361,11 +40103,14 @@ static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         }
         list[n++] = arg;
     }
+    /* Globals the callee uses: descriptors through their sets. */
     for (g = 0; g < ctx->nglobals; g++)
-        if (pvk_spv_bit(callee->globals, g))
+        if (pvk_spv_bit(callee->globals, g) && !pvk_spv_is_resource(ctx->ids[ctx->globals[g]].p))
             list[n++] = ctx->ids[ctx->globals[g]].msl;
-    if (callee->uses_sizes)
-        list[n++] = "pvk_buffer_sizes";
+    sets = pvk_spv_func_sets(ctx, callee);
+    for (g = 0; g < PVK_MSL_MAX_SETS; g++)
+        if (sets & (1u << g))
+            list[n++] = pvk_spv_fmt(ctx, "set%u", g);
     args = pvk_spv_join(ctx, "", list, n, ", ", "");
     if (pvk_spv_type(ctx, callee->ret)->op == PVK_SPV_OpTypeVoid)
         pvk_spv_line(ctx, "%s(%s);", callee->msl, args);
@@ -39396,6 +40141,527 @@ static const char *pvk_spv_binary_op(uint32_t op)
     case PVK_SPV_OpLogicalOr: return "||";
     case PVK_SPV_OpLogicalAnd: return "&&";
     default: return NULL;
+    }
+}
+
+/* ---- Images ---- */
+
+struct pvk_spv_imgops {
+    uint32_t mask;
+    uint32_t lod, dx, dy, const_offset, offset, const_offsets, sample, min_lod;
+};
+
+/* Image Operands starting at word `at` (absent when at == wc). */
+static void pvk_spv_image_operands(struct pvk_spv *ctx, const struct pvk_spv_insn *in, uint32_t at,
+                                   struct pvk_spv_imgops *o)
+{
+    uint32_t i = at + 1, m;
+    memset(o, 0, sizeof(*o));
+    if (at >= in->wc)
+        return;
+    m = o->mask = in->w[at];
+    if (m & PVK_SPV_ImgBias)
+        pvk_spv_fail(ctx, "Bias needs implicit-LOD sampling, which compute shaders do not have");
+    if (m & ~(uint32_t)(PVK_SPV_ImgLod | PVK_SPV_ImgGrad | PVK_SPV_ImgConstOffset | PVK_SPV_ImgOffset |
+                        PVK_SPV_ImgConstOffsets | PVK_SPV_ImgSample | PVK_SPV_ImgMinLod | PVK_SPV_ImgMakeTexelAvailable |
+                        PVK_SPV_ImgMakeTexelVisible | PVK_SPV_ImgNonPrivateTexel | PVK_SPV_ImgVolatileTexel |
+                        PVK_SPV_ImgSignExtend | PVK_SPV_ImgZeroExtend | PVK_SPV_ImgNontemporal))
+        pvk_spv_fail(ctx, "unsupported image operands 0x%x", m);
+    if (m & PVK_SPV_ImgLod)
+        o->lod = pvk_spv_arg(ctx, in, i++);
+    if (m & PVK_SPV_ImgGrad) {
+        o->dx = pvk_spv_arg(ctx, in, i++);
+        o->dy = pvk_spv_arg(ctx, in, i++);
+    }
+    if (m & PVK_SPV_ImgConstOffset)
+        o->const_offset = pvk_spv_arg(ctx, in, i++);
+    if (m & PVK_SPV_ImgOffset)
+        o->offset = pvk_spv_arg(ctx, in, i++);
+    if (m & PVK_SPV_ImgConstOffsets)
+        o->const_offsets = pvk_spv_arg(ctx, in, i++);
+    if (m & PVK_SPV_ImgSample)
+        o->sample = pvk_spv_arg(ctx, in, i++);
+    if (m & PVK_SPV_ImgMinLod)
+        o->min_lod = pvk_spv_arg(ctx, in, i++);
+    if (m & PVK_SPV_ImgMakeTexelAvailable)
+        pvk_spv_arg(ctx, in, i++); /* scope */
+    if (m & PVK_SPV_ImgMakeTexelVisible)
+        pvk_spv_arg(ctx, in, i++);
+    if (i != in->wc)
+        pvk_spv_fail(ctx, "malformed image operands (opcode %u)", in->op);
+    if ((m & PVK_SPV_ImgLod) && (m & PVK_SPV_ImgGrad))
+        pvk_spv_fail(ctx, "image operands Lod and Grad together");
+}
+
+/* The OpTypeImage of an image or sampled-image operand. */
+static struct pvk_spv_type *pvk_spv_image_type(struct pvk_spv *ctx, uint32_t v, bool sampled_image)
+{
+    struct pvk_spv_type *t = pvk_spv_vtype(ctx, v);
+    if (sampled_image && t->op == PVK_SPV_OpTypeSampledImage)
+        return pvk_spv_type(ctx, t->elem);
+    if (!sampled_image && t->op == PVK_SPV_OpTypeImage)
+        return t;
+    pvk_spv_fail(ctx, "id %u is not %s", v, sampled_image ? "a sampled image" : "an image");
+}
+
+/* Components [first, first + n) of a scalar or vector operand. */
+static const char *pvk_spv_comps(struct pvk_spv *ctx, uint32_t v, uint32_t first, uint32_t n)
+{
+    struct pvk_spv_type *t = pvk_spv_vtype(ctx, v);
+    uint32_t have = pvk_spv_components(t);
+    const char *e = pvk_spv_val(ctx, v);
+    if (!pvk_spv_scalar_of(ctx, t) || first + n > have)
+        pvk_spv_fail(ctx, "image coordinate %u has too few components", v);
+    if (have == 1 || (first == 0 && n == have))
+        return e;
+    return pvk_spv_fmt(ctx, "%s.%.*s", e, (int)n, &"xyzw"[first]);
+}
+
+/* Spatial coordinate components for sampling: 1D 1, 2D 2, 3D and cube 3. */
+static uint32_t pvk_spv_sample_dims(const struct pvk_spv_type *it)
+{
+    return it->img.dim == PVK_SPV_Dim1D || it->img.dim == PVK_SPV_DimBuffer ? 1
+           : it->img.dim == PVK_SPV_Dim2D                                   ? 2
+                                                                            : 3;
+}
+
+/* A float sampling coordinate: the spatial part (divided by q for the Proj
+ * instructions, *q receives it) and the array layer, Vulkan's
+ * clamp(RNE(layer), 0, layers - 1) (*layer, NULL when not arrayed). */
+static const char *pvk_spv_sample_coord(struct pvk_spv *ctx, const struct pvk_spv_type *it, const char *tex,
+                                        uint32_t coord, bool proj, const char **layer, const char **q)
+{
+    uint32_t n = pvk_spv_sample_dims(it);
+    struct pvk_spv_type *cs = pvk_spv_scalar_of(ctx, pvk_spv_vtype(ctx, coord));
+    const char *c = pvk_spv_comps(ctx, coord, 0, n);
+    if (!cs || cs->op != PVK_SPV_OpTypeFloat || cs->width != 32)
+        pvk_spv_fail(ctx, "sampling coordinates must be 32-bit floats");
+    *layer = *q = NULL;
+    if (proj) {
+        if (it->img.arrayed || it->img.dim == PVK_SPV_DimCube)
+            pvk_spv_fail(ctx, "projective sampling of an arrayed or cube image");
+        *q = pvk_spv_comps(ctx, coord, n, 1);
+        c = pvk_spv_fmt(ctx, "(%s / %s)", c, *q);
+    }
+    if (it->img.arrayed)
+        *layer = pvk_spv_fmt(ctx, "uint(clamp(rint(%s), 0.0f, float(%s.get_array_size() - 1u)))",
+                             pvk_spv_comps(ctx, coord, n, 1), tex);
+    if (pvk_spv_image_as_2d(ctx, it))
+        c = pvk_spv_fmt(ctx, "float2(%s, 0.5f)", c);
+    return c;
+}
+
+/* An integer texel coordinate as Metal's arguments: "uint2(x, y)[, face][, layer]".
+ * off: an offset operand added first (0: none). */
+static const char *pvk_spv_texel_args(struct pvk_spv *ctx, const struct pvk_spv_type *it, uint32_t coord, uint32_t off)
+{
+    struct pvk_spv_type *cs = pvk_spv_scalar_of(ctx, pvk_spv_vtype(ctx, coord));
+    uint32_t n = it->img.dim == PVK_SPV_Dim3D ? 3 : it->img.dim == PVK_SPV_Dim2D || it->img.dim == PVK_SPV_DimCube ? 2 : 1;
+    const char *c = pvk_spv_comps(ctx, coord, 0, n), *e;
+    if (!cs || cs->op != PVK_SPV_OpTypeInt)
+        pvk_spv_fail(ctx, "texel coordinates must be integers");
+    if (off) {
+        const char *iv = n == 1 ? "int" : pvk_spv_fmt(ctx, "int%u", n);
+        if (it->img.dim == PVK_SPV_DimCube || it->img.dim == PVK_SPV_DimBuffer)
+            pvk_spv_fail(ctx, "offsets are not allowed on cube and buffer images");
+        if (pvk_spv_components(pvk_spv_vtype(ctx, off)) != n)
+            pvk_spv_fail(ctx, "image offset %u has the wrong number of components", off);
+        c = pvk_spv_fmt(ctx, "%s(%s) + %s(%s)", iv, c, iv, pvk_spv_val(ctx, off));
+    }
+    e = n == 1 ? pvk_spv_fmt(ctx, "uint(%s)", c) : pvk_spv_fmt(ctx, "uint%u(%s)", n, c);
+    if (pvk_spv_image_as_2d(ctx, it))
+        e = pvk_spv_fmt(ctx, "uint2(%s, 0u)", e);
+    if (it->img.dim == PVK_SPV_DimCube) {
+        const char *z = pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_comps(ctx, coord, 2, 1));
+        return it->img.arrayed ? pvk_spv_fmt(ctx, "%s, %s %% 6u, %s / 6u", e, z, z) : pvk_spv_fmt(ctx, "%s, %s", e, z);
+    }
+    if (it->img.arrayed)
+        return pvk_spv_fmt(ctx, "%s, uint(%s)", e, pvk_spv_comps(ctx, coord, n, 1));
+    return e;
+}
+
+/* Result rid from a texel e: 4 components of the image's sampled type, or
+ * a depth texture's scalar (n == 1), which reads as (d, 0, 0, 1). */
+static void pvk_spv_texel_result(struct pvk_spv *ctx, uint32_t rid, const char *e, uint32_t n,
+                                 const struct pvk_spv_type *it)
+{
+    struct pvk_spv_type *r = pvk_spv_vtype(ctx, rid), *rs = pvk_spv_scalar_of(ctx, r);
+    struct pvk_spv_type *s = pvk_spv_type(ctx, it->elem);
+    uint32_t rn = pvk_spv_components(r);
+    if (!rs || rs->op == PVK_SPV_OpTypeBool || (rs->op == PVK_SPV_OpTypeFloat) != (s->op == PVK_SPV_OpTypeFloat))
+        pvk_spv_fail(ctx, "image result %u does not match the image's sampled type", rid);
+    if (n == 1 && rn > 1)
+        e = pvk_spv_fmt(ctx, "float4(%s, 0.0f, 0.0f, 1.0f)", e);
+    else if (n == 1)
+        rn = 4; /* already a scalar */
+    if (rn < 4)
+        e = pvk_spv_fmt(ctx, "%s.%.*s", e, (int)rn, "xyzw");
+    if (strcmp(rs->msl, s->msl) != 0)
+        e = rs->width == s->width ? pvk_spv_fmt(ctx, "as_type<%s>(%s)", r->msl, e) : pvk_spv_fmt(ctx, "%s(%s)", r->msl, e);
+    pvk_spv_set(ctx, rid, e);
+}
+
+/* tex as the depth texture type of image type it (a Dref on an image not
+ * declared Depth 1). */
+static const char *pvk_spv_as_depth(struct pvk_spv *ctx, const struct pvk_spv_type *it, const char *tex)
+{
+    const char *d;
+    if (it->img.depth == 1)
+        return tex;
+    d = pvk_spv_image_msl(ctx, it, true);
+    if (strncmp(d, "depth", 5) != 0)
+        pvk_spv_fail(ctx, "depth comparison on an image Metal has no depth type for (1D: use image_1d_as_2d)");
+    ctx->use_cast = true;
+    return pvk_spv_fmt(ctx, "pvk_tex_cast<%s>(%s)", d, tex);
+}
+
+/* An offset operand as Metal's int2/int3 offset argument. */
+static const char *pvk_spv_offset_arg(struct pvk_spv *ctx, const struct pvk_spv_type *it, uint32_t off)
+{
+    uint32_t n = pvk_spv_sample_dims(it);
+    if (it->img.dim == PVK_SPV_DimCube || it->img.dim == PVK_SPV_DimBuffer || it->img.ms)
+        pvk_spv_fail(ctx, "offsets are not allowed on cube, buffer and multisampled images");
+    if (pvk_spv_components(pvk_spv_vtype(ctx, off)) != n)
+        pvk_spv_fail(ctx, "image offset %u has the wrong number of components", off);
+    if (pvk_spv_image_as_2d(ctx, it))
+        return pvk_spv_fmt(ctx, "int2(int(%s), 0)", pvk_spv_val(ctx, off));
+    return pvk_spv_fmt(ctx, n == 1 ? "int(%s)" : n == 2 ? "int2(%s)" : "int3(%s)", pvk_spv_val(ctx, off));
+}
+
+/* OpImageSample*ExplicitLod (Dref, Proj). */
+static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    uint32_t op = in->op, rid = in->w[2], si = pvk_spv_arg(ctx, in, 3), coord = pvk_spv_arg(ctx, in, 4);
+    bool dref = op == PVK_SPV_OpImageSampleDrefExplicitLod || op == PVK_SPV_OpImageSampleProjDrefExplicitLod;
+    bool proj = op == PVK_SPV_OpImageSampleProjExplicitLod || op == PVK_SPV_OpImageSampleProjDrefExplicitLod;
+    struct pvk_spv_type *it = pvk_spv_image_type(ctx, si, true);
+    struct pvk_spv_imgops o;
+    const char *tex = pvk_spv_fmt(ctx, "%s.t", pvk_spv_val(ctx, si)), *smp = pvk_spv_fmt(ctx, "%s.s", pvk_spv_val(ctx, si));
+    const char *c, *layer, *q, *opt = NULL, *off = NULL, *d = NULL, *e;
+    bool native_1d = it->img.dim == PVK_SPV_Dim1D && !pvk_spv_image_as_2d(ctx, it);
+    uint32_t n = pvk_spv_sample_dims(it);
+
+    pvk_spv_image_operands(ctx, in, dref ? 6 : 5, &o);
+    if (!(o.mask & (PVK_SPV_ImgLod | PVK_SPV_ImgGrad)))
+        pvk_spv_fail(ctx, "explicit-LOD sampling without Lod or Grad");
+    if (o.mask & (PVK_SPV_ImgSample | PVK_SPV_ImgConstOffsets))
+        pvk_spv_fail(ctx, "unsupported image operands for sampling");
+    if (it->img.ms)
+        pvk_spv_fail(ctx, "multisampled images cannot be sampled");
+    c = pvk_spv_sample_coord(ctx, it, tex, coord, proj, &layer, &q);
+    if (dref) {
+        d = pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 5));
+        if (pvk_spv_vtype(ctx, in->w[5])->op != PVK_SPV_OpTypeFloat)
+            pvk_spv_fail(ctx, "Dref must be a float");
+        if (q)
+            d = pvk_spv_fmt(ctx, "(%s / %s)", d, q);
+        tex = pvk_spv_as_depth(ctx, it, tex);
+    }
+    if (o.lod) {
+        const char *l = pvk_spv_val(ctx, o.lod);
+        if (o.min_lod)
+            l = pvk_spv_fmt(ctx, "max(%s, %s)", l, pvk_spv_val(ctx, o.min_lod));
+        opt = pvk_spv_fmt(ctx, "level(%s)", l);
+    } else if (!native_1d) {
+        const char *dx = pvk_spv_comps(ctx, o.dx, 0, n), *dy = pvk_spv_comps(ctx, o.dy, 0, n);
+        if (pvk_spv_image_as_2d(ctx, it))
+            opt = pvk_spv_fmt(ctx, "gradient2d(float2(%s, 0.0f), float2(%s, 0.0f))", dx, dy);
+        else
+            opt = pvk_spv_fmt(ctx, "%s(%s, %s)",
+                              it->img.dim == PVK_SPV_Dim2D ? "gradient2d"
+                              : it->img.dim == PVK_SPV_Dim3D ? "gradient3d"
+                                                             : "gradientcube",
+                              dx, dy);
+        if (o.min_lod)
+            opt = pvk_spv_fmt(ctx, "%s, min_lod_clamp(%s)", opt, pvk_spv_val(ctx, o.min_lod));
+    }
+    if (o.const_offset || o.offset) {
+        uint32_t id = o.const_offset ? o.const_offset : o.offset;
+        if (native_1d) /* texture1d takes no offset: one level, so in texels of level 0 */
+            c = pvk_spv_fmt(ctx, "(%s + float(%s) / float(%s.get_width()))", c, pvk_spv_val(ctx, id), tex);
+        else
+            off = pvk_spv_offset_arg(ctx, it, id);
+    }
+    if (o.const_offset && o.offset)
+        pvk_spv_fail(ctx, "image operands ConstOffset and Offset together");
+
+    /* texture1d: sample(s, x[, layer]) only (a single level). */
+    if (native_1d)
+        opt = NULL;
+    e = pvk_spv_fmt(ctx, "%s.%s(%s, %s", tex, dref ? "sample_compare" : "sample", smp, c);
+    if (layer)
+        e = pvk_spv_fmt(ctx, "%s, %s", e, layer);
+    if (d)
+        e = pvk_spv_fmt(ctx, "%s, %s", e, d);
+    if (opt)
+        e = pvk_spv_fmt(ctx, "%s, %s", e, opt);
+    if (off)
+        e = pvk_spv_fmt(ctx, "%s, %s", e, off);
+    e = pvk_spv_fmt(ctx, "%s)", e);
+    if (dref) {
+        if (pvk_spv_vtype(ctx, rid)->op != PVK_SPV_OpTypeFloat)
+            pvk_spv_fail(ctx, "a depth comparison returns a float");
+        pvk_spv_set(ctx, rid, e);
+        return;
+    }
+    pvk_spv_texel_result(ctx, rid, e, strncmp(tex, "depth", 5) == 0 || strncmp(it->msl, "depth", 5) == 0 ? 1 : 4, it);
+}
+
+/* OpImageGather / OpImageDrefGather. */
+static void pvk_spv_image_gather(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    uint32_t rid = in->w[2], si = pvk_spv_arg(ctx, in, 3), coord = pvk_spv_arg(ctx, in, 4), k;
+    bool dref = in->op == PVK_SPV_OpImageDrefGather;
+    struct pvk_spv_type *it = pvk_spv_image_type(ctx, si, true);
+    struct pvk_spv_imgops o;
+    const char *tex = pvk_spv_fmt(ctx, "%s.t", pvk_spv_val(ctx, si)), *smp = pvk_spv_fmt(ctx, "%s.s", pvk_spv_val(ctx, si));
+    const char *c, *layer, *q, *d = NULL, *comp = NULL, *g[4], *offs[4];
+    bool depth = it->img.depth == 1 || dref, cube = it->img.dim == PVK_SPV_DimCube;
+    uint32_t noffs = 1;
+
+    pvk_spv_image_operands(ctx, in, 6, &o);
+    if ((it->img.dim != PVK_SPV_Dim2D && !cube) || it->img.ms)
+        pvk_spv_fail(ctx, "gather needs a 2D or cube image");
+    if (o.mask & (PVK_SPV_ImgLod | PVK_SPV_ImgGrad | PVK_SPV_ImgSample | PVK_SPV_ImgMinLod))
+        pvk_spv_fail(ctx, "unsupported image operands for gather");
+    c = pvk_spv_sample_coord(ctx, it, tex, coord, false, &layer, &q);
+    if (dref) {
+        d = pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 5));
+        tex = pvk_spv_as_depth(ctx, it, tex);
+    } else {
+        uint32_t cid = pvk_spv_arg(ctx, in, 5);
+        uint64_t cv;
+        if (pvk_spv_get(ctx, cid)->kind != PVK_SPV_K_CONST || (cv = pvk_spv_const_uint(ctx, cid)) > 3)
+            pvk_spv_fail(ctx, "the gather component must be a constant 0-3");
+        if (!depth)
+            comp = pvk_spv_fmt(ctx, "component::%c", "xyzw"[cv]);
+    }
+    offs[0] = NULL;
+    if (o.const_offset || o.offset) {
+        if (o.const_offset && o.offset)
+            pvk_spv_fail(ctx, "image operands ConstOffset and Offset together");
+        offs[0] = pvk_spv_offset_arg(ctx, it, o.const_offset ? o.const_offset : o.offset);
+    } else if (o.const_offsets) {
+        /* four gathers, each giving its i0j0 texel (.w) */
+        struct pvk_spv_type *at = pvk_spv_vtype(ctx, o.const_offsets);
+        if (cube || at->op != PVK_SPV_OpTypeArray || at->count != 4)
+            pvk_spv_fail(ctx, "ConstOffsets must be an array of four offsets on a 2D image");
+        for (k = 0; k < 4; k++)
+            offs[k] = pvk_spv_fmt(ctx, "int2(%s[%u]%s)", pvk_spv_val(ctx, o.const_offsets), k, at->slot_padded ? ".v" : "");
+        noffs = 4;
+    }
+    if (!offs[0] && comp && !cube)
+        offs[0] = "int2(0)"; /* Metal: offset before component */
+    for (k = 0; k < noffs; k++) {
+        const char *e = pvk_spv_fmt(ctx, "%s.%s(%s, %s", tex, dref ? "gather_compare" : "gather", smp, c);
+        if (layer)
+            e = pvk_spv_fmt(ctx, "%s, %s", e, layer);
+        if (d)
+            e = pvk_spv_fmt(ctx, "%s, %s", e, d);
+        if (offs[k])
+            e = pvk_spv_fmt(ctx, "%s, %s", e, offs[k]);
+        if (comp)
+            e = pvk_spv_fmt(ctx, "%s, %s", e, comp);
+        g[k] = pvk_spv_fmt(ctx, "%s)", e);
+    }
+    if (noffs == 4)
+        g[0] = pvk_spv_fmt(ctx, "%s4(%s.w, %s.w, %s.w, %s.w)", pvk_spv_type(ctx, it->elem)->msl, g[0], g[1], g[2], g[3]);
+    pvk_spv_texel_result(ctx, rid, g[0], 4, it);
+}
+
+/* OpImageFetch (sampled images) and OpImageRead (storage images). */
+static void pvk_spv_image_read(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    uint32_t rid = in->w[2], img = pvk_spv_arg(ctx, in, 3), coord = pvk_spv_arg(ctx, in, 4);
+    bool fetch = in->op == PVK_SPV_OpImageFetch;
+    struct pvk_spv_type *it = pvk_spv_image_type(ctx, img, false);
+    struct pvk_spv_imgops o;
+    const char *tex = pvk_spv_val(ctx, img), *args, *e;
+
+    pvk_spv_image_operands(ctx, in, 5, &o);
+    if (o.mask & (PVK_SPV_ImgGrad | PVK_SPV_ImgConstOffsets | PVK_SPV_ImgMinLod))
+        pvk_spv_fail(ctx, "unsupported image operands for a texel read");
+    if (fetch && it->img.sampled != 1)
+        pvk_spv_fail(ctx, "OpImageFetch needs a sampled image");
+    if (!fetch && (it->img.sampled != 2 || !(it->img.access & PVK_SPV_ACCESS_READ)))
+        pvk_spv_fail(ctx, "OpImageRead needs a readable storage image");
+    if (fetch && it->img.dim == PVK_SPV_DimCube)
+        pvk_spv_fail(ctx, "OpImageFetch of a cube image");
+    if (!fetch && (o.lod || o.const_offset || o.offset))
+        pvk_spv_fail(ctx, "storage image reads take no Lod or offset");
+    if (it->img.ms != (o.sample != 0))
+        pvk_spv_fail(ctx, "the Sample operand goes with multisampled images (only)");
+    args = pvk_spv_texel_args(ctx, it, coord, o.const_offset ? o.const_offset : o.offset);
+    if (o.sample)
+        e = pvk_spv_fmt(ctx, "%s.read(%s, uint(%s))", tex, args, pvk_spv_val(ctx, o.sample));
+    else if (fetch && it->img.dim != PVK_SPV_DimBuffer)
+        e = pvk_spv_fmt(ctx, "%s.read(%s, %s)", tex, args, o.lod ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.lod)) : "0u");
+    else
+        e = pvk_spv_fmt(ctx, "%s.read(%s)", tex, args);
+    pvk_spv_texel_result(ctx, rid, e, strncmp(it->msl, "depth", 5) == 0 ? 1 : 4, it);
+}
+
+static void pvk_spv_image_write(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    uint32_t img = pvk_spv_arg(ctx, in, 1), coord = pvk_spv_arg(ctx, in, 2), texel = pvk_spv_arg(ctx, in, 3), n;
+    struct pvk_spv_type *it = pvk_spv_image_type(ctx, img, false), *s = pvk_spv_type(ctx, it->elem);
+    struct pvk_spv_type *tt = pvk_spv_vtype(ctx, texel), *ts = pvk_spv_scalar_of(ctx, tt);
+    struct pvk_spv_imgops o;
+    const char *tex = pvk_spv_val(ctx, img), *v = pvk_spv_val(ctx, texel);
+
+    pvk_spv_image_operands(ctx, in, 4, &o);
+    if (o.mask & (PVK_SPV_ImgLod | PVK_SPV_ImgGrad | PVK_SPV_ImgConstOffset | PVK_SPV_ImgOffset |
+                  PVK_SPV_ImgConstOffsets | PVK_SPV_ImgMinLod | PVK_SPV_ImgSample))
+        pvk_spv_fail(ctx, "unsupported image operands for OpImageWrite");
+    if (it->img.sampled != 2 || !(it->img.access & PVK_SPV_ACCESS_WRITE))
+        pvk_spv_fail(ctx, "OpImageWrite needs a writable storage image");
+    if (it->img.ms)
+        pvk_spv_fail(ctx, "writes to multisampled storage images are not supported (Metal has none)");
+    if (!ts || ts->op == PVK_SPV_OpTypeBool || (ts->op == PVK_SPV_OpTypeFloat) != (s->op == PVK_SPV_OpTypeFloat))
+        pvk_spv_fail(ctx, "OpImageWrite texel does not match the image's sampled type");
+    n = pvk_spv_components(tt);
+    if (strcmp(ts->msl, s->msl) != 0)
+        v = ts->width == s->width ? pvk_spv_fmt(ctx, "as_type<%s>(%s)", pvk_spv_vec_msl(ctx, s, n, s->is_signed), v)
+                                  : pvk_spv_fmt(ctx, "%s(%s)", pvk_spv_vec_msl(ctx, s, n, s->is_signed), v);
+    if (n < 4) /* components past the format's are ignored */
+        v = pvk_spv_fmt(ctx, "%s4(%s%s)", s->msl, v, n == 1 ? ", 0, 0, 0" : n == 2 ? ", 0, 0" : ", 0");
+    pvk_spv_line(ctx, "%s.write(%s, %s);", tex, v, pvk_spv_texel_args(ctx, it, coord, 0));
+    if (it->img.access == (PVK_SPV_ACCESS_READ | PVK_SPV_ACCESS_WRITE))
+        pvk_spv_line(ctx, "%s.fence();", tex); /* this invocation's later reads see the write */
+}
+
+static void pvk_spv_image_query(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    uint32_t rid = in->w[2], img = pvk_spv_arg(ctx, in, 3), n = 0, i;
+    struct pvk_spv_type *it = pvk_spv_image_type(ctx, img, false), *r = pvk_spv_vtype(ctx, rid);
+    struct pvk_spv_type *rs = pvk_spv_scalar_of(ctx, r);
+    const char *tex = pvk_spv_val(ctx, img), *lod = "", *parts[4], *e;
+    bool native_1d = it->img.dim == PVK_SPV_Dim1D && !pvk_spv_image_as_2d(ctx, it);
+
+    if (!rs || rs->op != PVK_SPV_OpTypeInt)
+        pvk_spv_fail(ctx, "image queries return integers");
+    switch (in->op) {
+    case PVK_SPV_OpImageQueryLevels:
+        e = native_1d ? "1u" : pvk_spv_fmt(ctx, "%s.get_num_mip_levels()", tex);
+        n = 1;
+        break;
+    case PVK_SPV_OpImageQuerySamples:
+        if (!it->img.ms)
+            pvk_spv_fail(ctx, "OpImageQuerySamples of a single-sampled image");
+        e = pvk_spv_fmt(ctx, "%s.get_num_samples()", tex);
+        n = 1;
+        break;
+    default: /* QuerySize(Lod) */
+        if (in->op == PVK_SPV_OpImageQuerySizeLod) {
+            if (it->img.ms || it->img.dim == PVK_SPV_DimBuffer)
+                pvk_spv_fail(ctx, "OpImageQuerySizeLod of a multisampled or buffer image");
+            if (!native_1d)
+                lod = pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 4)));
+        }
+        parts[n++] = pvk_spv_fmt(ctx, "%s.get_width(%s)", tex, lod);
+        if (it->img.dim == PVK_SPV_Dim2D || it->img.dim == PVK_SPV_Dim3D || it->img.dim == PVK_SPV_DimCube)
+            parts[n++] = pvk_spv_fmt(ctx, "%s.get_height(%s)", tex, lod);
+        if (it->img.dim == PVK_SPV_Dim3D)
+            parts[n++] = pvk_spv_fmt(ctx, "%s.get_depth(%s)", tex, lod);
+        if (it->img.arrayed)
+            parts[n++] = pvk_spv_fmt(ctx, "%s.get_array_size()", tex);
+        e = n == 1 ? parts[0] : pvk_spv_fmt(ctx, "uint%u(", n);
+        for (i = 0; n > 1 && i < n; i++)
+            e = pvk_spv_fmt(ctx, "%s%s%s", e, i ? ", " : "", parts[i]);
+        if (n > 1)
+            e = pvk_spv_fmt(ctx, "%s)", e);
+        break;
+    }
+    if (pvk_spv_components(r) != n)
+        pvk_spv_fail(ctx, "image query result %u has the wrong number of components", rid);
+    pvk_spv_set(ctx, rid, rs->is_signed || rs->width != 32 ? pvk_spv_fmt(ctx, "%s(%s)", r->msl, e) : e);
+}
+
+/* Image operand v as image type `want` (a cast when only the Depth differs). */
+static const char *pvk_spv_image_as(struct pvk_spv *ctx, uint32_t v, const struct pvk_spv_type *want)
+{
+    struct pvk_spv_type *t = pvk_spv_vtype(ctx, v);
+    if (t->op != PVK_SPV_OpTypeImage || want->op != PVK_SPV_OpTypeImage || t->elem != want->elem ||
+        t->img.dim != want->img.dim || t->img.arrayed != want->img.arrayed || t->img.ms != want->img.ms ||
+        t->img.sampled != want->img.sampled)
+        pvk_spv_fail(ctx, "image %u does not have the expected type", v);
+    if (strcmp(t->msl, want->msl) == 0)
+        return pvk_spv_val(ctx, v);
+    ctx->use_cast = true;
+    return pvk_spv_fmt(ctx, "pvk_tex_cast<%s>(%s)", want->msl, pvk_spv_val(ctx, v));
+}
+
+static void pvk_spv_image_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    uint32_t rid = in->op == PVK_SPV_OpImageWrite ? 0 : in->w[2];
+    switch (in->op) {
+    case PVK_SPV_OpSampledImage: {
+        struct pvk_spv_type *r = pvk_spv_vtype(ctx, rid);
+        uint32_t smp = pvk_spv_arg(ctx, in, 4);
+        if (r->op != PVK_SPV_OpTypeSampledImage || pvk_spv_vtype(ctx, smp)->op != PVK_SPV_OpTypeSampler)
+            pvk_spv_fail(ctx, "malformed OpSampledImage");
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s{%s, %s}", r->msl,
+                                          pvk_spv_image_as(ctx, pvk_spv_arg(ctx, in, 3), pvk_spv_type(ctx, r->elem)),
+                                          pvk_spv_val(ctx, smp)));
+        return;
+    }
+    case PVK_SPV_OpImage: {
+        struct pvk_spv_type *r = pvk_spv_vtype(ctx, rid), *it = pvk_spv_image_type(ctx, pvk_spv_arg(ctx, in, 3), true);
+        const char *e = pvk_spv_fmt(ctx, "%s.t", pvk_spv_val(ctx, in->w[3]));
+        if (r->op != PVK_SPV_OpTypeImage || r->elem != it->elem || r->img.dim != it->img.dim ||
+            r->img.arrayed != it->img.arrayed || r->img.ms != it->img.ms)
+            pvk_spv_fail(ctx, "malformed OpImage");
+        if (strcmp(r->msl, it->msl) != 0) {
+            ctx->use_cast = true;
+            e = pvk_spv_fmt(ctx, "pvk_tex_cast<%s>(%s)", r->msl, e);
+        }
+        pvk_spv_set(ctx, rid, e);
+        return;
+    }
+    case PVK_SPV_OpImageTexelPointer: {
+        struct pvk_spv_type *rt = pvk_spv_type(ctx, in->w[1]), *it, *et;
+        const struct pvk_spv_ptr *ip = pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 3));
+        struct pvk_spv_ptr *p = pvk_spv_alloc(ctx, sizeof(*p));
+        pvk_spv_arg(ctx, in, 5); /* sample */
+        it = pvk_spv_type(ctx, ip->type);
+        if (ip->storage != PVK_SPV_StorageUniformConstant || ip->desc_array || it->op != PVK_SPV_OpTypeImage)
+            pvk_spv_fail(ctx, "OpImageTexelPointer needs a pointer to an image variable");
+        if (rt->op != PVK_SPV_OpTypePointer || rt->storage != PVK_SPV_StorageImage)
+            pvk_spv_fail(ctx, "OpImageTexelPointer must return an Image pointer");
+        et = pvk_spv_type(ctx, rt->elem);
+        if (!pvk_spv_is_scalar(et) || et->op != pvk_spv_type(ctx, it->elem)->op)
+            pvk_spv_fail(ctx, "OpImageTexelPointer: pointee does not match the image's sampled type");
+        if (it->img.ms)
+            pvk_spv_fail(ctx, "atomics on multisampled images are not supported");
+        p->type = rt->elem;
+        p->storage = PVK_SPV_StorageImage;
+        p->var = ip->var;
+        p->expr = p->texel_image = ip->expr;
+        p->texel_args = pvk_spv_texel_args(ctx, it, pvk_spv_arg(ctx, in, 4), 0);
+        p->texel_type = ip->type;
+        pvk_spv_get(ctx, rid)->p = p;
+        return;
+    }
+    case PVK_SPV_OpImageSampleExplicitLod: case PVK_SPV_OpImageSampleDrefExplicitLod:
+    case PVK_SPV_OpImageSampleProjExplicitLod: case PVK_SPV_OpImageSampleProjDrefExplicitLod:
+        pvk_spv_image_sample(ctx, in);
+        return;
+    case PVK_SPV_OpImageSampleImplicitLod: case PVK_SPV_OpImageSampleDrefImplicitLod:
+    case PVK_SPV_OpImageSampleProjImplicitLod: case PVK_SPV_OpImageSampleProjDrefImplicitLod:
+    case PVK_SPV_OpImageQueryLod:
+        pvk_spv_fail(ctx, "implicit-LOD sampling needs derivatives, which compute shaders do not have");
+    case PVK_SPV_OpImageGather: case PVK_SPV_OpImageDrefGather:
+        pvk_spv_image_gather(ctx, in);
+        return;
+    case PVK_SPV_OpImageFetch: case PVK_SPV_OpImageRead:
+        pvk_spv_image_read(ctx, in);
+        return;
+    case PVK_SPV_OpImageWrite:
+        pvk_spv_image_write(ctx, in);
+        return;
+    default: /* queries */
+        pvk_spv_image_query(ctx, in);
+        return;
     }
 }
 
@@ -39433,7 +40699,8 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
     case PVK_SPV_OpCopyMemory: {
         const struct pvk_spv_ptr *d = pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 1));
         const struct pvk_spv_ptr *sp = pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 2));
-        if (d->type != sp->type || d->rm_col || sp->rm_col || d->desc_array || sp->desc_array)
+        if (d->type != sp->type || d->rm_col || sp->rm_col || d->desc_array || sp->desc_array ||
+            sp->storage == PVK_SPV_StorageImage || pvk_spv_type(ctx, sp->type)->opaque)
             pvk_spv_fail(ctx, "unsupported OpCopyMemory");
         if (!pvk_spv_writable(ctx, d))
             pvk_spv_fail(ctx, "store to read-only memory");
@@ -39735,7 +41002,15 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
     case PVK_SPV_OpAtomicFAddEXT:
         pvk_spv_atomic(ctx, in);
         return;
+    case PVK_SPV_OpImageTexelPointer:
+        pvk_spv_image_insn(ctx, in);
+        return;
     default:
+        if ((op >= PVK_SPV_OpSampledImage && op <= PVK_SPV_OpImage) ||
+            (op >= PVK_SPV_OpImageQuerySizeLod && op <= PVK_SPV_OpImageQuerySamples)) {
+            pvk_spv_image_insn(ctx, in);
+            return;
+        }
         pvk_spv_fail(ctx, "%s (opcode %u)", pvk_spv_unsupported_reason(op), op);
     }
 }
@@ -40201,6 +41476,7 @@ static const char *pvk_spv_space(struct pvk_spv *ctx, const struct pvk_spv_ptr *
         return p->var && pvk_spv_get(ctx, p->var)->func == 0 && pvk_spv_is_storage_block(ctx, p->var) ? "device"
                                                                                                     : "constant";
     case PVK_SPV_StoragePushConstant:
+    case PVK_SPV_StorageUniformConstant:
         return "constant";
     case PVK_SPV_StorageInput:
         return "thread const";
@@ -40219,19 +41495,12 @@ static const char *pvk_spv_qualified(struct pvk_spv *ctx, const char *space, uin
     return pvk_spv_fmt(ctx, "%s %s", space, t->msl);
 }
 
-/* A global variable as a parameter of a helper function. */
+/* A global variable (not a descriptor) as a parameter of a helper function. */
 static const char *pvk_spv_global_param(struct pvk_spv *ctx, uint32_t var)
 {
     struct pvk_spv_id *x = pvk_spv_get(ctx, var);
     struct pvk_spv_type *t = pvk_spv_type(ctx, x->p->type);
-    uint32_t count, block;
     switch (x->p->storage) {
-    case PVK_SPV_StorageStorageBuffer:
-    case PVK_SPV_StorageUniform:
-        t = pvk_spv_buffer_block(ctx, var, &count, &block);
-        if (x->p->desc_array)
-            return pvk_spv_fmt(ctx, "%s %s* constant* %s", pvk_spv_space(ctx, x->p), t->msl, x->msl);
-        return pvk_spv_fmt(ctx, "%s %s& %s", pvk_spv_space(ctx, x->p), t->msl, x->msl);
     case PVK_SPV_StorageInput:
         return pvk_spv_fmt(ctx, "%s %s", t->msl, x->msl);
     default:
@@ -40258,25 +41527,13 @@ static bool pvk_spv_based(struct pvk_spv *ctx, const struct pvk_spv_id *x)
            (x->builtin == PVK_SPV_BuiltInWorkgroupId || x->builtin == PVK_SPV_BuiltInGlobalInvocationId);
 }
 
-/* Type of the address-table entry of a binding: the first variable's block. */
-static const char *pvk_spv_binding_type(struct pvk_spv *ctx, uint32_t set, uint32_t binding)
-{
-    uint32_t g, count, block;
-    for (g = 0; g < ctx->nglobals; g++) {
-        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
-        if (x->msl && pvk_spv_is_buffer(ctx, x->p) && x->set == set && x->binding == binding)
-            return pvk_spv_buffer_block(ctx, ctx->globals[g], &count, &block)->msl;
-    }
-    pvk_spv_fail(ctx, "internal: unbound binding");
-}
-
 static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
 {
     bool entry = fn->fid == ctx->entry_fid;
     struct pvk_msl_result *res = ctx->result;
     struct pvk_sb *out = &ctx->text;
     const char **params = NULL;
-    uint32_t nparams = 0, cap = 0, i, g, bi;
+    uint32_t nparams = 0, cap = 0, i, g, bi, set, sets = pvk_spv_func_sets(ctx, fn);
 
     ctx->fn = fn;
     for (i = 0; i < fn->nparams; i++) {
@@ -40299,7 +41556,7 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
         }
     }
 
-    /* Body first: it decides the buffer-size indices the signature needs. */
+    /* Body first (the declarations follow from it). */
     ctx->body.len = 0;
     ctx->out = &ctx->body;
     ctx->indent = 1;
@@ -40319,7 +41576,6 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
     }
     if (entry) {
         uint64_t threads;
-        uint32_t set;
         for (set = 0; set < PVK_MSL_MAX_SETS; set++)
             if (res->set_mask & (1u << set))
                 PVK_SPV_PUSH(ctx, params, nparams, cap,
@@ -40336,9 +41592,6 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
                              pvk_spv_fmt(ctx, "constant %s& %s [[buffer(%u)]]", pvk_spv_type(ctx, x->p->type)->msl,
                                          x->msl, res->push_constant_buffer));
         }
-        if (res->buffer_size_count)
-            PVK_SPV_PUSH(ctx, params, nparams, cap,
-                         pvk_spv_fmt(ctx, "constant ulong* pvk_buffer_sizes [[buffer(%u)]]", res->buffer_sizes_buffer));
         for (g = 0; g < ctx->nglobals; g++) {
             struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
             if (pvk_spv_bit(fn->globals, g) && x->p->storage == PVK_SPV_StorageInput)
@@ -40353,10 +41606,11 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
         pvk_sb_printf(ctx, out, "kernel void %s(", fn->msl);
     } else {
         for (g = 0; g < ctx->nglobals; g++)
-            if (pvk_spv_bit(fn->globals, g))
+            if (pvk_spv_bit(fn->globals, g) && !pvk_spv_is_resource(ctx->ids[ctx->globals[g]].p))
                 PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_global_param(ctx, ctx->globals[g]));
-        if (fn->uses_sizes)
-            PVK_SPV_PUSH(ctx, params, nparams, cap, "constant ulong* pvk_buffer_sizes");
+        for (set = 0; set < PVK_MSL_MAX_SETS; set++)
+            if (sets & (1u << set))
+                PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_fmt(ctx, "constant pvk_set%u& set%u", set, set));
         pvk_sb_printf(ctx, out, "static inline %s %s(", pvk_spv_type(ctx, fn->ret)->msl, fn->msl);
     }
     for (i = 0; i < nparams; i++)
@@ -40386,29 +41640,13 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
                              x->msl, t, res->workgroup_size[0], res->workgroup_size[1], res->workgroup_size[2]);
         }
         for (g = 0; g < ctx->nglobals; g++) {
-            uint32_t var = ctx->globals[g], count, block;
+            uint32_t var = ctx->globals[g];
             struct pvk_spv_id *x = &ctx->ids[var];
             struct pvk_spv_type *t;
             if (!pvk_spv_bit(fn->globals, g))
                 continue;
             t = pvk_spv_type(ctx, x->p->type);
             switch (x->p->storage) {
-            case PVK_SPV_StorageStorageBuffer:
-            case PVK_SPV_StorageUniform: {
-                const char *space = pvk_spv_space(ctx, x->p), *bt = pvk_spv_binding_type(ctx, x->set, x->binding);
-                t = pvk_spv_buffer_block(ctx, var, &count, &block);
-                if (x->p->desc_array) {
-                    if (strcmp(bt, t->msl) != 0)
-                        pvk_spv_fail(ctx, "aliased descriptor arrays with different types are not supported");
-                    pvk_spv_line(ctx, "%s %s* constant* %s = set%u.b%u;", space, t->msl, x->msl, x->set, x->binding);
-                } else if (strcmp(bt, t->msl) == 0) {
-                    pvk_spv_line(ctx, "%s %s& %s = *set%u.b%u;", space, t->msl, x->msl, x->set, x->binding);
-                } else {
-                    pvk_spv_line(ctx, "%s %s& %s = *(%s %s*)set%u.b%u;", space, t->msl, x->msl, space, t->msl, x->set,
-                                 x->binding);
-                }
-                break;
-            }
             case PVK_SPV_StorageWorkgroup:
                 pvk_spv_line(ctx, "%s %s;", pvk_spv_qualified(ctx, "threadgroup", x->p->type), x->msl);
                 break;
@@ -40425,6 +41663,9 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             }
         }
     }
+    for (g = 0; g < ctx->nglobals; g++) /* descriptors, from their sets */
+        if (pvk_spv_bit(fn->globals, g) && pvk_spv_is_resource(ctx->ids[ctx->globals[g]].p))
+            pvk_spv_line(ctx, "%s", ctx->ids[ctx->globals[g]].p->decl);
     for (i = 0; i < fn->nvars; i++) {
         struct pvk_spv_id *x = pvk_spv_get(ctx, fn->vars[i]);
         struct pvk_spv_insn in = pvk_spv_insn_at(ctx, x->insn);
@@ -40477,6 +41718,23 @@ static const char pvk_spv_padded_template[] =
     "    T v;\n"
     "    char pad[P];\n"
     "};\n\n";
+
+static const char pvk_spv_sampled_template[] =
+    "/* A combined image sampler. */\n"
+    "template <typename T>\n"
+    "struct pvk_sampled\n"
+    "{\n"
+    "    T t;\n"
+    "    sampler s;\n"
+    "};\n\n";
+
+static const char pvk_spv_cast_template[] =
+    "/* The same texture as another texture type (depth and color views of one image). */\n"
+    "template <typename T, typename U>\n"
+    "inline T pvk_tex_cast(U u)\n"
+    "{\n"
+    "    return *(thread T*)&u;\n"
+    "}\n\n";
 
 static void pvk_spv_workgroup_size(struct pvk_spv *ctx)
 {
@@ -40595,36 +41853,30 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         if (res->dispatch_base_offset < end)
             res->dispatch_base_offset = end;
     }
-    for (g = 0; g < ctx->nglobals; g++) {
-        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
-        uint32_t count, block;
-        if (!x->msl)
-            continue;
-        x->p->expr = x->msl;
-        if (pvk_spv_is_buffer(ctx, x->p)) {
-            pvk_spv_buffer_block(ctx, ctx->globals[g], &count, &block);
-            x->p->desc_array = pvk_spv_type(ctx, x->p->type)->op == PVK_SPV_OpTypeArray;
-        }
-    }
     ctx->budget = 32 * ctx->total_blocks + 1024;
     ctx->aggregate_budget = 1u << 20;
+    ctx->const_budget = 1u << 22;
 
     pvk_spv_emit_types(ctx);
     pvk_spv_emit_sets(ctx);
+    for (g = 0; g < ctx->nglobals; g++) {
+        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+        if (!x->msl)
+            continue;
+        x->p->expr = x->msl;
+        if (pvk_spv_is_resource(x->p))
+            pvk_spv_resource_view(ctx, ctx->globals[g]);
+    }
     pvk_spv_emit_constants(ctx);
     for (i = 0; i < ctx->norder; i++)
         pvk_spv_emit_function(ctx, ctx->funcs[ctx->order[i] - 1]);
 
-    /* Metal has buffer indices 0-30; the extra buffers must not hit a set. */
-    if (res->push_constant_buffer > 30 || res->buffer_sizes_buffer > 30)
+    /* Metal has buffer indices 0-30; the push constants must not hit a set. */
+    if (res->push_constant_buffer > 30)
         pvk_spv_fail(ctx, "buffer index out of range (Metal has 0-30)");
     if ((res->has_push_constants || res->dispatch_base) && (res->set_mask >> res->push_constant_buffer) & 1u)
         pvk_spv_fail(ctx, "push-constant buffer %u is also descriptor set %u", res->push_constant_buffer,
                      res->push_constant_buffer);
-    if (res->buffer_size_count && (((res->set_mask >> res->buffer_sizes_buffer) & 1u) ||
-                                   ((res->has_push_constants || res->dispatch_base) &&
-                                    res->buffer_sizes_buffer == res->push_constant_buffer)))
-        pvk_spv_fail(ctx, "buffer-sizes buffer %u collides with another buffer", res->buffer_sizes_buffer);
 
     pvk_sb_printf(ctx, out, "/* Generated by PlasmaVK from SPIR-V. Kernel: %s */\n\n#include <metal_stdlib>\n\n"
                             "using namespace metal;\n\n", kernel);
@@ -40632,6 +41884,10 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         pvk_sb_append(ctx, out, pvk_spv_templates, sizeof(pvk_spv_templates) - 1);
     if (ctx->use_padded)
         pvk_sb_append(ctx, out, pvk_spv_padded_template, sizeof(pvk_spv_padded_template) - 1);
+    if (ctx->use_sampled)
+        pvk_sb_append(ctx, out, pvk_spv_sampled_template, sizeof(pvk_spv_sampled_template) - 1);
+    if (ctx->use_cast)
+        pvk_sb_append(ctx, out, pvk_spv_cast_template, sizeof(pvk_spv_cast_template) - 1);
     if (ctx->types.len)
         pvk_sb_append(ctx, out, ctx->types.data, ctx->types.len);
     if (ctx->consts.len)
@@ -40672,8 +41928,6 @@ static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const
     memset(result, 0, sizeof(*result));
     result->push_constant_buffer =
         options && options->push_constant_buffer ? options->push_constant_buffer : PVK_MSL_PUSH_CONSTANT_BUFFER;
-    result->buffer_sizes_buffer =
-        options && options->buffer_sizes_buffer ? options->buffer_sizes_buffer : PVK_MSL_BUFFER_SIZES_BUFFER;
     ctx = calloc(1, sizeof(*ctx));
     if (!ctx) {
         snprintf(result->error, sizeof(result->error), "out of memory");
@@ -40682,6 +41936,7 @@ static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const
     ctx->result = result;
     ctx->options = options;
     ctx->want_entry = entry_point;
+    ctx->image_1d_as_2d = options && options->image_1d_as_2d;
     if (setjmp(ctx->fail) == 0)
         pvk_spv_translate(ctx, words, word_count);
     else
@@ -43587,8 +44842,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkWaitSemaphores(VkDevice device, const VkSemapho
  * A compute pipeline is translated (section 13) and compiled when created:
  * MSL 3.2, MTLMathModeSafe, maxTotalThreadsPerThreadgroup = the workgroup
  * size (so the compiler fits it). Push constants are bound by GPU address at
- * the translator's push-constant index; descriptor sets will be address
- * tables at indices 0..N. The pipeline cache is not used yet.
+ * the translator's push-constant index; descriptor sets will be tables
+ * (section 11 format) at indices 0..N. The pipeline cache is not used yet.
  * ========================================================================== */
 
 struct pvk_shader_module {
@@ -43764,7 +45019,7 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, const VkC
         pvk_msl_result_free(&res);
         return result == VK_ERROR_OUT_OF_HOST_MEMORY ? result : VK_ERROR_UNKNOWN;
     }
-    if (res.set_mask || res.buffer_size_count) {
+    if (res.set_mask) {
         pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: descriptor sets are not implemented yet");
         pvk_msl_result_free(&res);
         return VK_ERROR_UNKNOWN;

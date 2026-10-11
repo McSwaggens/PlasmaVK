@@ -1,9 +1,11 @@
 /* Running translated compute shaders on Metal, for the translator tests.
  *
  * Include after plasmavk.h (with PLASMAVK_IMPLEMENTATION) and pvk_test.h.
- * Uses the legacy Metal 3 compute encoder through raw messages; buffers
- * reached only through the set tables' GPU addresses are made resident with
- * useResource:usage:. */
+ * Uses the legacy Metal 3 compute encoder through raw messages. Descriptor
+ * set tables are filled in the section 11 format from the translator's
+ * reflection; buffers and textures reached only through them are made
+ * resident with useResource:usage:. Textures are shared-storage (CPU
+ * writable), samplers support argument buffers. */
 #ifndef PVK_MSL_TEST_H
 #define PVK_MSL_TEST_H
 
@@ -62,8 +64,9 @@ static bool mt_translate(const uint32_t *words, size_t count, const struct pvk_m
     return true;
 }
 
-/* Compiles the MSL and builds a compute pipeline (retained), NULL on failure
- * after printing the compiler error and the numbered source. */
+/* Compiles the MSL as section 16 does (MSL 3.2, safe math) and builds a
+ * compute pipeline (retained), NULL on failure after printing the compiler
+ * error and the numbered source. */
 static id mt_pipeline(const struct pvk_msl_result *res)
 {
     void *pool = objc_autoreleasePoolPush();
@@ -71,6 +74,7 @@ static id mt_pipeline(const struct pvk_msl_result *res)
 
     options = PVK_MSG(id, (id, SEL))((id)objc_getClass("MTLCompileOptions"), sel_registerName("new"));
     PVK_MSG(void, (id, SEL, long))(options, sel_registerName("setMathMode:"), PVK_MTLMathModeSafe);
+    PVK_MSG(void, (id, SEL, unsigned long))(options, sel_registerName("setLanguageVersion:"), PVK_MTLLanguageVersion3_2);
     library = PVK_MSG(id, (id, SEL, id, id, id *))(mt_device, sel_registerName("newLibraryWithSource:options:error:"),
                                                    mt_string(res->msl), options, &error);
     pvk_release(options);
@@ -127,48 +131,214 @@ static void mt_buffer_free(struct mt_buffer *b)
     memset(b, 0, sizeof(*b));
 }
 
-/* One descriptor: element `index` of (set, binding) is buf + offset. */
+/* ---- Textures and samplers ---- */
+
+/* A shared-storage texture: type, format, width/height/depth, array length
+ * (cube arrays: cubes), mip levels, sample count. */
+static id mt_texture(pvk_MTLTextureType type, pvk_MTLPixelFormat format, unsigned long w, unsigned long h,
+                     unsigned long d, unsigned long layers, unsigned long mips, unsigned long samples)
+{
+    id desc = PVK_MSG(id, (id, SEL))((id)objc_getClass("MTLTextureDescriptor"), sel_registerName("new")), tex;
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setTextureType:"), type);
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setPixelFormat:"), format);
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setWidth:"), w);
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setHeight:"), h);
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setDepth:"), d);
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setArrayLength:"), layers);
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setMipmapLevelCount:"), mips);
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setSampleCount:"), samples);
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setStorageMode:"),
+                                            samples > 1 ? PVK_MTLStorageModePrivate : PVK_MTLStorageModeShared);
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setUsage:"),
+                                            PVK_MTLTextureUsageShaderRead | PVK_MTLTextureUsageShaderWrite |
+                                                (samples > 1 ? PVK_MTLTextureUsageRenderTarget : 0) |
+                                                ((format == PVK_MTLPixelFormatR32Uint || format == PVK_MTLPixelFormatR32Sint)
+                                                     ? PVK_MTLTextureUsageShaderAtomic
+                                                     : 0));
+    tex = PVK_MSG(id, (id, SEL, id))(mt_device, sel_registerName("newTextureWithDescriptor:"), desc);
+    pvk_release(desc);
+    return tex;
+}
+
+/* Uploads one image (w x h x d texels of `bpp` bytes) to mip level / slice. */
+static void mt_upload(id tex, unsigned long level, unsigned long slice, unsigned long w, unsigned long h,
+                      unsigned long d, unsigned long bpp, const void *data)
+{
+    pvk_MTLRegion r;
+    memset(&r, 0, sizeof(r));
+    r.size.width = w;
+    r.size.height = h;
+    r.size.depth = d;
+    PVK_MSG(void, (id, SEL, pvk_MTLRegion, unsigned long, unsigned long, const void *, unsigned long, unsigned long))(
+        tex, sel_registerName("replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:"), r, level, slice,
+        data, w * bpp, w * h * bpp);
+}
+
+static void mt_download(id tex, unsigned long level, unsigned long slice, unsigned long w, unsigned long h,
+                        unsigned long d, unsigned long bpp, void *data)
+{
+    pvk_MTLRegion r;
+    memset(&r, 0, sizeof(r));
+    r.size.width = w;
+    r.size.height = h;
+    r.size.depth = d;
+    PVK_MSG(void, (id, SEL, void *, unsigned long, unsigned long, pvk_MTLRegion, unsigned long, unsigned long))(
+        tex, sel_registerName("getBytes:bytesPerRow:bytesPerImage:fromRegion:mipmapLevel:slice:"), data, w * bpp,
+        w * h * bpp, r, level, slice);
+}
+
+/* A texture buffer over buf (offset 0), width texels. */
+static id mt_texture_buffer(struct mt_buffer *buf, pvk_MTLPixelFormat format, unsigned long width, unsigned long bpp)
+{
+    id desc = PVK_MSG(id, (id, SEL, unsigned long, unsigned long, unsigned long, unsigned long))(
+        (id)objc_getClass("MTLTextureDescriptor"),
+        sel_registerName("textureBufferDescriptorWithPixelFormat:width:resourceOptions:usage:"), format, width, 0,
+        PVK_MTLTextureUsageShaderRead | PVK_MTLTextureUsageShaderWrite |
+            ((format == PVK_MTLPixelFormatR32Uint || format == PVK_MTLPixelFormatR32Sint) ? PVK_MTLTextureUsageShaderAtomic
+                                                                                         : 0));
+    return PVK_MSG(id, (id, SEL, id, unsigned long, unsigned long))(
+        buf->buffer, sel_registerName("newTextureWithDescriptor:offset:bytesPerRow:"), desc, 0, width * bpp);
+}
+
+/* Fills every sample of a multisampled color texture with a clear color. */
+static void mt_clear(id tex, double r, double g, double b, double a)
+{
+    void *pool = objc_autoreleasePoolPush();
+    id rp = PVK_MSG(id, (id, SEL))((id)objc_getClass("MTLRenderPassDescriptor"), sel_registerName("renderPassDescriptor"));
+    id att = PVK_MSG(id, (id, SEL, unsigned long))(
+        PVK_MSG(id, (id, SEL))(rp, sel_registerName("colorAttachments")), sel_registerName("objectAtIndexedSubscript:"), 0);
+    struct { double r, g, b, a; } color = { r, g, b, a };
+    id cb, enc;
+    PVK_MSG(void, (id, SEL, id))(att, sel_registerName("setTexture:"), tex);
+    PVK_MSG(void, (id, SEL, unsigned long))(att, sel_registerName("setLoadAction:"), 2 /* clear */);
+    PVK_MSG(void, (id, SEL, unsigned long))(att, sel_registerName("setStoreAction:"), 1 /* store */);
+    PVK_MSG(void, (id, SEL, double, double, double, double))(att, sel_registerName("setClearColor:"), color.r, color.g,
+                                                             color.b, color.a);
+    cb = PVK_MSG(id, (id, SEL))(mt_queue, sel_registerName("commandBuffer"));
+    enc = PVK_MSG(id, (id, SEL, id))(cb, sel_registerName("renderCommandEncoderWithDescriptor:"), rp);
+    PVK_MSG(void, (id, SEL))(enc, sel_registerName("endEncoding"));
+    PVK_MSG(void, (id, SEL))(cb, sel_registerName("commit"));
+    PVK_MSG(void, (id, SEL))(cb, sel_registerName("waitUntilCompleted"));
+    objc_autoreleasePoolPop(pool);
+}
+
+struct mt_sampler_desc {
+    pvk_MTLSamplerMinMagFilter filter;  /* min and mag */
+    unsigned long mip;                  /* MTLSamplerMipFilter: 0 not mipmapped, 1 nearest, 2 linear */
+    pvk_MTLSamplerAddressMode address;  /* s, t, r */
+    bool unnormalized;
+    pvk_MTLCompareFunction compare;     /* 0 (never): no comparison */
+};
+
+static id mt_sampler(const struct mt_sampler_desc *s)
+{
+    id desc = PVK_MSG(id, (id, SEL))((id)objc_getClass("MTLSamplerDescriptor"), sel_registerName("new")), smp;
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setMinFilter:"), s->filter);
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setMagFilter:"), s->filter);
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setMipFilter:"), s->mip);
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setSAddressMode:"), s->address);
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setTAddressMode:"), s->address);
+    PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setRAddressMode:"), s->address);
+    PVK_MSG(void, (id, SEL, bool))(desc, sel_registerName("setNormalizedCoordinates:"), !s->unnormalized);
+    if (s->compare)
+        PVK_MSG(void, (id, SEL, unsigned long))(desc, sel_registerName("setCompareFunction:"), s->compare);
+    PVK_MSG(void, (id, SEL, bool))(desc, sel_registerName("setSupportArgumentBuffers:"), true);
+    smp = PVK_MSG(id, (id, SEL, id))(mt_device, sel_registerName("newSamplerStateWithDescriptor:"), desc);
+    pvk_release(desc);
+    return smp;
+}
+
+/* ---- Descriptors ---- */
+
+/* One descriptor: element `index` of (set, binding). Buffers are buf +
+ * offset with `range` bytes (0: to the end); textures and samplers are
+ * Metal objects (both for a combined image sampler); inline uniform blocks
+ * copy `bytes` to the binding's offset + index. */
 struct mt_binding {
     uint32_t set, binding, index;
     struct mt_buffer *buf;
-    uint64_t offset;
+    uint64_t offset, range;
+    id texture, sampler;
+    const void *bytes;
+    size_t nbytes;
 };
+
+static const struct pvk_msl_resource *mt_resource(const struct pvk_msl_result *res, uint32_t set, uint32_t binding)
+{
+    uint32_t i;
+    for (i = 0; i < res->resource_count; i++)
+        if (res->resources[i].set == set && res->resources[i].binding == binding)
+            return &res->resources[i];
+    return NULL;
+}
 
 /* Fills the set tables from the reflection, binds everything and runs
  * groups[0..2] threadgroups of res->workgroup_size threads. */
 static bool mt_dispatch(id pipeline, const struct pvk_msl_result *res, const struct mt_binding *bindings,
                         uint32_t nbindings, const void *push, size_t push_size, uint32_t gx, uint32_t gy, uint32_t gz)
 {
-    struct mt_buffer sets[PVK_MSL_MAX_SETS], sizes;
+    struct mt_buffer sets[PVK_MSL_MAX_SETS];
     void *pool = objc_autoreleasePoolPush();
     id cb, enc;
     pvk_MTLSize groups, threads;
-    uint32_t s, i, j;
+    uint32_t s, i;
     unsigned long status;
     bool ok = true;
 
     memset(sets, 0, sizeof(sets));
-    memset(&sizes, 0, sizeof(sizes));
     for (s = 0; s < PVK_MSL_MAX_SETS; s++) {
-        size_t size = 8;
+        size_t size = 16;
         if (!(res->set_mask & (1u << s)))
             continue;
-        for (i = 0; i < res->resource_count; i++)
-            if (res->resources[i].set == s && res->resources[i].offset + 8u * res->resources[i].count > size)
-                size = res->resources[i].offset + 8u * res->resources[i].count;
+        for (i = 0; i < res->resource_count; i++) {
+            const struct pvk_msl_resource *r = &res->resources[i];
+            size_t end = r->type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK ? r->offset + r->count
+                                                                             : r->offset + (size_t)r->stride * r->count;
+            if (r->set == s && end > size)
+                size = end;
+        }
+        for (i = 0; i < nbindings; i++) { /* variable counts: as many as bound */
+            const struct pvk_msl_resource *r = mt_resource(res, s, bindings[i].binding);
+            if (bindings[i].set == s && r && r->offset + (size_t)r->stride * (bindings[i].index + 1) > size)
+                size = r->offset + (size_t)r->stride * (bindings[i].index + 1);
+        }
         sets[s] = mt_buffer(size, NULL, 0);
     }
-    if (res->buffer_size_count)
-        sizes = mt_buffer(8u * res->buffer_size_count, NULL, 0);
     for (i = 0; i < nbindings; i++) {
         const struct mt_binding *b = &bindings[i];
-        for (j = 0; j < res->resource_count; j++) {
-            const struct pvk_msl_resource *r = &res->resources[j];
-            if (r->set != b->set || r->binding != b->binding || b->index >= r->count)
-                continue;
-            ((uint64_t *)sets[b->set].data)[(r->offset / 8u) + b->index] = b->buf->address + b->offset;
-            if (r->size_index >= 0)
-                ((uint64_t *)sizes.data)[r->size_index + (int32_t)b->index] = b->buf->size - b->offset;
+        const struct pvk_msl_resource *r = mt_resource(res, b->set, b->binding);
+        unsigned char *p;
+        if (!r || b->set >= PVK_MSL_MAX_SETS || !sets[b->set].data)
+            continue; /* the shader does not use it: only made resident */
+        p = (unsigned char *)sets[b->set].data + r->offset + (size_t)r->stride * b->index;
+        switch (r->type) {
+        case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+        case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC: case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: {
+            uint64_t desc[2];
+            desc[0] = b->buf->address + b->offset;
+            desc[1] = b->range ? b->range : b->buf->size - b->offset;
+            memcpy(p, desc, 16);
+            break;
+        }
+        case VK_DESCRIPTOR_TYPE_SAMPLER: {
+            pvk_MTLResourceID rid = pvk_MTLSamplerState_gpuResourceID(b->sampler);
+            memcpy(p, &rid, 8);
+            break;
+        }
+        case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
+            pvk_MTLResourceID t = pvk_MTLTexture_gpuResourceID(b->texture), sm = pvk_MTLSamplerState_gpuResourceID(b->sampler);
+            memcpy(p, &t, 8);
+            memcpy(p + 8, &sm, 8);
+            break;
+        }
+        case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK:
+            memcpy((unsigned char *)sets[b->set].data + r->offset + b->index, b->bytes, b->nbytes);
+            break;
+        default: { /* images, texel buffers */
+            pvk_MTLResourceID t = pvk_MTLTexture_gpuResourceID(b->texture);
+            memcpy(p, &t, 8);
+            break;
+        }
         }
     }
 
@@ -179,15 +349,17 @@ static bool mt_dispatch(id pipeline, const struct pvk_msl_result *res, const str
         if (sets[s].buffer)
             PVK_MSG(void, (id, SEL, id, unsigned long, unsigned long))(enc, sel_registerName("setBuffer:offset:atIndex:"),
                                                                        sets[s].buffer, 0, s);
-    if (sizes.buffer)
-        PVK_MSG(void, (id, SEL, id, unsigned long, unsigned long))(enc, sel_registerName("setBuffer:offset:atIndex:"),
-                                                                   sizes.buffer, 0, res->buffer_sizes_buffer);
     if (push && push_size)
         PVK_MSG(void, (id, SEL, const void *, unsigned long, unsigned long))(enc, sel_registerName("setBytes:length:atIndex:"),
                                                                              push, push_size, res->push_constant_buffer);
-    for (i = 0; i < nbindings; i++)
-        PVK_MSG(void, (id, SEL, id, unsigned long))(enc, sel_registerName("useResource:usage:"), bindings[i].buf->buffer,
-                                                    PVK_MTLResourceUsageRead | PVK_MTLResourceUsageWrite);
+    for (i = 0; i < nbindings; i++) {
+        if (bindings[i].buf)
+            PVK_MSG(void, (id, SEL, id, unsigned long))(enc, sel_registerName("useResource:usage:"), bindings[i].buf->buffer,
+                                                        PVK_MTLResourceUsageRead | PVK_MTLResourceUsageWrite);
+        if (bindings[i].texture)
+            PVK_MSG(void, (id, SEL, id, unsigned long))(enc, sel_registerName("useResource:usage:"), bindings[i].texture,
+                                                        PVK_MTLResourceUsageRead | PVK_MTLResourceUsageWrite);
+    }
     groups.width = gx;
     groups.height = gy;
     groups.depth = gz;
@@ -207,7 +379,6 @@ static bool mt_dispatch(id pipeline, const struct pvk_msl_result *res, const str
     objc_autoreleasePoolPop(pool);
     for (s = 0; s < PVK_MSL_MAX_SETS; s++)
         mt_buffer_free(&sets[s]);
-    mt_buffer_free(&sizes);
     return ok;
 }
 
