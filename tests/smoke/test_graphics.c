@@ -3706,9 +3706,9 @@ static uint32_t expect_column0_black(uint32_t x, uint32_t y)
 
 /* pSampleMask with 4 samples: alone; with a shader reading SampleMask (the
  * coverage after the mask) and writing it (ANDed); with alpha to coverage
- * (both apply); with sample shading; with EarlyFragmentTests (colors); on
- * depth writes, with and without a fragment shader; with one sample; and
- * samples it clears are not shaded (their atomics do not happen). */
+ * (both apply); with sample shading; with EarlyFragmentTests; on depth
+ * writes, with and without a fragment shader; with one sample; and samples
+ * it clears are not shaded (their atomics do not happen). */
 static void test_sample_mask(void)
 {
     static const float black[4] = { 0, 0, 0, 1 };
@@ -3809,39 +3809,44 @@ static void test_sample_mask(void)
     for (k = 0; k < 3; k++)
         vkDestroyPipeline(device, pipes[k], NULL);
 
-    /* depth: mask 0x2 on depth 0.25 without a fragment shader (left) and
-     * with one (right), then red at depth 0.5 where it is less: samples 0,
-     * 2 and 3 */
-    for (k = 0; k < 3; k++) {
-        pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), k == 0 ? NULL : spv_rect_fs, k == 0 ? 0 : sizeof(spv_rect_fs));
+    /* depth: mask 0x2 on depth 0.25 without a fragment shader (top left),
+     * with one (top right), with one with EarlyFragmentTests (bottom: no
+     * stores or discards, so it runs with late tests), then red at depth 0.5
+     * where it is less: samples 0, 2 and 3 */
+    for (k = 0; k < 4; k++) {
+        static const uint32_t *const fss[4] = { NULL, spv_rect_fs, spv_early_fs, spv_rect_fs };
+        static const size_t fs_sizes[4] = { 0, sizeof(spv_rect_fs), sizeof(spv_early_fs), sizeof(spv_rect_fs) };
+        pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), fss[k], fs_sizes[k]);
         p.samples = VK_SAMPLE_COUNT_4_BIT;
         p.depth_format = VK_FORMAT_D32_SFLOAT;
         p.has_ds = true;
         p.ds.depthTestEnable = VK_TRUE;
-        p.ds.depthWriteEnable = k < 2;
+        p.ds.depthWriteEnable = k < 3;
         p.ds.depthCompareOp = VK_COMPARE_OP_LESS;
-        if (k < 2) {
+        if (k < 3) {
             p.sample_mask = &m2;
             p.has_blend = true;
             memset(p.blend, 0, sizeof(p.blend)); /* no color writes */
         }
         pipes[k] = make_pipe(&p);
     }
-    REQUIRE(pipes[0] && pipes[1] && pipes[2]);
+    REQUIRE(pipes[0] && pipes[1] && pipes[2] && pipes[3]);
     cb = begin_cmd();
     begin_resolved(cb, &ms, &resolved, black, &msd);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[0]);
-    rect(cb, -1, -1, 0, 1, 0, 0, 0, 1, 0.25f);
+    rect(cb, -1, -1, 0, 0, 0, 0, 0, 1, 0.25f);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[1]);
-    rect(cb, 0, -1, 1, 1, 0, 0, 0, 1, 0.25f);
+    rect(cb, 0, -1, 1, 0, 0, 0, 0, 1, 0.25f);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[2]);
+    rect(cb, -1, 0, 1, 1, 0, 0, 0, 1, 0.25f);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[3]);
     rect(cb, -1, -1, 1, 1, 1, 0, 0, 1, 0.5f);
     vkCmdEndRendering(cb);
     download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
     submit(cb);
     quad_want[0] = quad_want[1] = quad_want[2] = quad_want[3] = RGBA(191, 0, 0, 255);
     CHECK(count_far(&out, expect_quads, 1, "sample mask, depth") == 0);
-    for (k = 0; k < 3; k++)
+    for (k = 0; k < 4; k++)
         vkDestroyPipeline(device, pipes[k], NULL);
 
     /* one sample: mask 0 draws nothing (left), no mask draws (right) */
@@ -4235,6 +4240,194 @@ static void test_logic_op_msaa(void)
     free_img(&resolved);
 }
 
+/* The bytes of an RGBA8 SNORM color with components k / 127. */
+static void snorm_color(float out[4], int r, int g, int b, int a)
+{
+    out[0] = (float)r / 127.0f;
+    out[1] = (float)g / 127.0f;
+    out[2] = (float)b / 127.0f;
+    out[3] = (float)a / 127.0f;
+}
+
+static uint32_t snorm_want[4]; /* top left, top right, bottom left, bottom right */
+
+static uint32_t expect_snorm_quads(uint32_t x, uint32_t y)
+{
+    return snorm_want[(y >= H / 2) * 2 + (x >= W / 2)];
+}
+
+/* Logical operations on SNORM attachments are bit-exact: render passes bind
+ * them through SINT views for such pipelines, so -128 (0x80) is written and
+ * read as itself (COPY_INVERTED of 1.0 = 0x7f gives 0x80; XOR 0x7f of a
+ * stored 0x80 gives 0xff), in the pass and in the next; plain SNORM draws of
+ * the same pass convert as usual (the pass is split around them). With 4
+ * samples and a resolve, and (no SINT views: the pipeline's SNORM variant)
+ * with a memoryless depth attachment in the pass. */
+static void test_logic_op_snorm_exact(void)
+{
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_SNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img ms = make_img(VK_FORMAT_R8G8B8A8_SNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img lazy_depth = make_img_mem(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT,
+                                         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                             VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+                                         lazy_type != UINT32_MAX ? lazy_type : device_type);
+    struct buf out = make_buf(W * H * 4);
+    float clear[4], color[4];
+    VkPipeline inverted, xor_pipe, plain, ms_xor, ms_plain, ds_inverted, ds_plain;
+    VkClearAttachment ca;
+    VkClearRect cr;
+    struct pipe p;
+    VkCommandBuffer cb;
+
+    if (!features.logicOp) {
+        fprintf(stderr, "logicOp is not supported: skipped\n");
+        free_buf(&out);
+        free_img(&target);
+        free_img(&ms);
+        free_img(&lazy_depth);
+        return;
+    }
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.color_formats[0] = VK_FORMAT_R8G8B8A8_SNORM;
+    plain = make_pipe(&p);
+    p.logic_op_enable = VK_TRUE;
+    p.logic_op = VK_LOGIC_OP_COPY_INVERTED;
+    inverted = make_pipe(&p);
+    p.logic_op = VK_LOGIC_OP_XOR;
+    xor_pipe = make_pipe(&p);
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    ms_xor = make_pipe(&p);
+    p.logic_op_enable = VK_FALSE;
+    ms_plain = make_pipe(&p);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.color_formats[0] = VK_FORMAT_R8G8B8A8_SNORM;
+    p.depth_format = VK_FORMAT_D32_SFLOAT;
+    ds_plain = make_pipe(&p);
+    p.logic_op_enable = VK_TRUE;
+    p.logic_op = VK_LOGIC_OP_COPY_INVERTED;
+    ds_inverted = make_pipe(&p);
+    REQUIRE(plain && inverted && xor_pipe && ms_xor && ms_plain && ds_plain && ds_inverted);
+
+    /* A pass of logical operations and a clear (never split, bound through
+     * the SINT view throughout): COPY_INVERTED of (1, -1, 0, 64/127) on the
+     * left gives 0x80; a clear (bottom right); XOR 0x7f over the bottom half
+     * reads the 0x80s. Then a pass loading the image: XOR 0x7f again (top
+     * left) reads them across passes. */
+    snorm_color(clear, 127, -127, 64, 0);
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, clear, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, inverted);
+    snorm_color(color, 127, -127, 0, 64);
+    rect(cb, -1, -1, 0, 1, color[0], color[1], color[2], color[3], 0); /* ~(0x7f, 0x81, 0x00, 0x40) */
+    memset(&ca, 0, sizeof(ca));
+    ca.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    snorm_color(ca.clearValue.color.float32, 1, 2, 3, 4);
+    cr.rect.offset.x = W / 2;
+    cr.rect.offset.y = H / 2;
+    cr.rect.extent.width = W / 2;
+    cr.rect.extent.height = H / 2;
+    cr.baseArrayLayer = 0;
+    cr.layerCount = 1;
+    vkCmdClearAttachments(cb, 1, &ca, 1, &cr);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, xor_pipe);
+    snorm_color(color, 127, 0, 0, 0);
+    rect(cb, -1, 0, 1, 1, color[0], color[1], color[2], color[3], 0);
+    vkCmdEndRendering(cb);
+    begin_rendering(cb, &target, 1, NULL, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, xor_pipe);
+    snorm_color(color, 127, 127, 127, 127);
+    rect(cb, -1, -1, 0, 0, color[0], color[1], color[2], color[3], 0);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    snorm_want[0] = RGBA(0xff, 0x01, 0x80, 0xc0); /* (0x80, 0x7e, 0xff, 0xbf) ^ 0x7f */
+    snorm_want[1] = RGBA(0x7f, 0x81, 0x40, 0x00); /* the clear */
+    snorm_want[2] = RGBA(0xff, 0x7e, 0xff, 0xbf); /* 0x80 ^ 0x7f */
+    snorm_want[3] = RGBA(0x7e, 0x02, 0x03, 0x04); /* 0x01 ^ 0x7f */
+    CHECK(count_bad(&out, expect_snorm_quads, "SNORM logic op bits") == 0);
+
+    /* A pass mixing a plain draw (top right) and XOR 0x40 (right half): the
+     * pass is split, the plain draw SNORM, the logical operation raw (0xc0 ^
+     * 0x40 = 0x80). (Its SNORM part loads and stores the image as SNORM,
+     * which turns a stored -128 into -127: the top left is not checked.) */
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, NULL, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plain);
+    snorm_color(color, -64, 32, 0, 127);
+    rect(cb, 0, -1, 1, 0, color[0], color[1], color[2], color[3], 0);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, xor_pipe);
+    snorm_color(color, 64, 64, 64, 64);
+    rect(cb, 0, -1, 1, 1, color[0], color[1], color[2], color[3], 0);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    snorm_want[1] = RGBA(0x80, 0x60, 0x40, 0x3f);
+    snorm_want[2] = RGBA(0xff, 0x7e, 0xff, 0xbf);
+    snorm_want[3] = RGBA(0x3e, 0x42, 0x43, 0x44);
+    {
+        uint32_t x, y;
+        int bad = 0;
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++) {
+                uint32_t got = px(&out, x, y), want = expect_snorm_quads(x, y);
+                if ((x < W / 2 && y < H / 2) || got == want)
+                    continue;
+                if (bad++ < 4)
+                    fprintf(stderr, "SNORM logic op, split pass: pixel (%u, %u) is %08x, expected %08x\n", x, y, got, want);
+            }
+        CHECK(bad == 0);
+    }
+
+    /* 4 samples, resolved: a plain draw (top left), then XOR 0x40 everywhere */
+    snorm_color(clear, 0, 0, 0, 0);
+    cb = begin_cmd();
+    begin_resolved(cb, &ms, &target, clear, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, ms_plain);
+    snorm_color(color, 32, -32, 16, 8);
+    rect(cb, -1, -1, 0, 0, color[0], color[1], color[2], color[3], 0);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, ms_xor);
+    snorm_color(color, 64, 64, 64, 64);
+    rect(cb, -1, -1, 1, 1, color[0], color[1], color[2], color[3], 0);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    snorm_want[0] = RGBA(0x60, 0xa0, 0x50, 0x48);
+    snorm_want[1] = snorm_want[2] = snorm_want[3] = RGBA(0x40, 0x40, 0x40, 0x40);
+    CHECK(count_bad(&out, expect_snorm_quads, "SNORM logic op, 4 samples resolved") == 0);
+
+    /* a memoryless depth attachment: the pass cannot be split, the
+     * pipelines' SNORM variants draw (values away from -128 are exact) */
+    if (lazy_type != UINT32_MAX) {
+        snorm_color(clear, 0, 0, 0, 0);
+        cb = begin_cmd();
+        begin_rendering(cb, &target, 1, clear, &lazy_depth);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, ds_plain);
+        snorm_color(color, 10, 20, 30, 40);
+        rect(cb, -1, -1, 1, 0, color[0], color[1], color[2], color[3], 0);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, ds_inverted);
+        snorm_color(color, 64, -64, 1, 0);
+        rect(cb, -1, 0, 0, 1, color[0], color[1], color[2], color[3], 0);
+        vkCmdEndRendering(cb);
+        download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        snorm_want[0] = snorm_want[1] = RGBA(10, 20, 30, 40);
+        snorm_want[2] = RGBA(0xbf, 0x3f, 0xfe, 0xff);
+        snorm_want[3] = RGBA(0, 0, 0, 0);
+        CHECK(count_bad(&out, expect_snorm_quads, "SNORM logic op, memoryless depth") == 0);
+    }
+    vkDestroyPipeline(device, plain, NULL);
+    vkDestroyPipeline(device, inverted, NULL);
+    vkDestroyPipeline(device, xor_pipe, NULL);
+    vkDestroyPipeline(device, ms_xor, NULL);
+    vkDestroyPipeline(device, ms_plain, NULL);
+    vkDestroyPipeline(device, ds_plain, NULL);
+    vkDestroyPipeline(device, ds_inverted, NULL);
+    free_buf(&out);
+    free_img(&target);
+    free_img(&ms);
+    free_img(&lazy_depth);
+}
+
 /* Specialization constants folded through floating-point OpSpecConstantOp
  * (Select, FConvert, CompositeExtract, VectorShuffle) in a fragment shader,
  * with the defaults and specialized. */
@@ -4616,6 +4809,7 @@ int main(void)
     RUN(test_sample_mask);
     RUN(test_logic_ops);
     RUN(test_logic_op_msaa);
+    RUN(test_logic_op_snorm_exact);
     RUN(test_spec_fragment);
     RUN(test_pipeline_cache);
     RUN(test_ycbcr_fragment);

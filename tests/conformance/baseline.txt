@@ -623,6 +623,7 @@ framebuffer.dual_source_blend
 framebuffer.srgb_blending
 framebuffer.logic_op
 framebuffer.logic_op_uint_ops
+framebuffer.logic_op_snorm_bits
 
 dispatch.dispatch_indirect
 dispatch.dispatch_base
