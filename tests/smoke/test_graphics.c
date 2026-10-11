@@ -1,6 +1,7 @@
 /* Graphics (sections 15-17): render passes, dynamic rendering (local read
- * included), graphics pipelines with every state block, draws of every
- * kind, dynamic state, clears of attachments, sample masks, logical
+ * included), depth and stencil input attachments, graphics pipelines with
+ * every state block, draws of every kind (multi-draws with DrawIndex),
+ * dynamic state, clears of attachments, depth bounds, sample masks, logical
  * operations, specialization constant operations and pipeline caches,
  * checked on offscreen images, pixel by pixel.
  *
@@ -3718,10 +3719,30 @@ static int ds_compare(const float *got, const void *depth, VkFormat format, cons
     return bad;
 }
 
+/* code without its InputAttachmentIndex decorations (at most 512 words) */
+static size_t strip_input_indices(const uint32_t *code, size_t size, uint32_t *out)
+{
+    size_t n = size / 4, i = 5, o = 5;
+    memcpy(out, code, 20);
+    while (i < n && i < 512) {
+        uint32_t wc = code[i] >> 16;
+        if (!wc || i + wc > n)
+            break;
+        if (!((code[i] & 0xffffu) == 71 && wc == 4 && code[i + 2] == 43)) { /* OpDecorate InputAttachmentIndex */
+            memcpy(out + o, code + i, wc * 4);
+            o += wc;
+        }
+        i += wc;
+    }
+    return o * 4;
+}
+
 /* Dynamic rendering local read of depth (and stencil): depth and stencil
  * input attachment indices 0 and 1 (VkRenderingInputAttachmentIndexInfo,
- * vkCmdSetRenderingInputAttachmentIndices). */
-static void ds_local_read_case(VkFormat format)
+ * vkCmdSetRenderingInputAttachmentIndices), or (undecorated) input
+ * attachments without InputAttachmentIndex, which read the depth (float)
+ * and stencil (integer) by default. */
+static void ds_local_read_case(VkFormat format, bool undecorated)
 {
     static const uint32_t color_inputs[1] = { VK_ATTACHMENT_UNUSED };
     static const uint32_t depth_index = 0, stencil_index = 1;
@@ -3737,6 +3758,7 @@ static void ds_local_read_case(VkFormat format)
     VkPipeline scene[3], reader;
     VkCommandBuffer cb;
     static const float zero[4] = { 0, 0, 0, 0 };
+    static uint32_t stripped[512];
 
     ds_setup_init(&s, &ds);
     memset(&idx, 0, sizeof(idx));
@@ -3752,10 +3774,14 @@ static void ds_local_read_case(VkFormat format)
     ds_scene_pipelines(&s, &p, has_stencil, scene);
     p.fs = has_stencil ? spv_ds_read_fs : spv_depth_read_fs;
     p.fs_size = has_stencil ? sizeof(spv_ds_read_fs) : sizeof(spv_depth_read_fs);
+    if (undecorated) {
+        p.fs_size = strip_input_indices(p.fs, p.fs_size, stripped);
+        p.fs = stripped;
+    }
     p.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     p.vertex = &s.vi;
     p.layout = s.layout;
-    p.next = &idx;
+    p.next = undecorated ? NULL : &idx;
     reader = make_pipe(&p);
     REQUIRE(scene[0] && scene[1] && scene[2] && reader);
     memset(&mb, 0, sizeof(mb));
@@ -3773,7 +3799,8 @@ static void ds_local_read_case(VkFormat format)
     begin_rendering(cb, &out, 1, zero, &ds);
     ds_scene_draw(cb, &s, scene);
     vkCmdPipelineBarrier2(cb, &dep);
-    vkCmdSetRenderingInputAttachmentIndices(cb, &idx);
+    if (!undecorated)
+        vkCmdSetRenderingInputAttachmentIndices(cb, &idx);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, reader);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s.layout, 0, 1, &s.set, 0, NULL);
     vkCmdDraw(cb, 6, 1, 0, 0);
@@ -3784,7 +3811,9 @@ static void ds_local_read_case(VkFormat format)
         download(cb, &ds, 0, VK_IMAGE_ASPECT_STENCIL_BIT, &stencil);
     submit(cb);
     CHECK(ds_compare((const float *)got.data, depth.data, format, has_stencil ? stencil.data : NULL, 0.0f,
-                     format == VK_FORMAT_D16_UNORM ? "local read of D16" : "local read of D32S8") == 0);
+                     undecorated                     ? "local read without input attachment indices"
+                     : format == VK_FORMAT_D16_UNORM ? "local read of D16"
+                                                     : "local read of D32S8") == 0);
     vkDestroyPipeline(device, reader, NULL);
     vkDestroyPipeline(device, scene[0], NULL);
     vkDestroyPipeline(device, scene[1], NULL);
@@ -3799,8 +3828,9 @@ static void ds_local_read_case(VkFormat format)
 
 static void test_ds_local_read(void)
 {
-    ds_local_read_case(VK_FORMAT_D32_SFLOAT_S8_UINT);
-    ds_local_read_case(VK_FORMAT_D16_UNORM);
+    ds_local_read_case(VK_FORMAT_D32_SFLOAT_S8_UINT, false);
+    ds_local_read_case(VK_FORMAT_D16_UNORM, false);
+    ds_local_read_case(VK_FORMAT_D32_SFLOAT_S8_UINT, true);
 }
 
 /* The copies of the depth and stencil survive a pass split into several

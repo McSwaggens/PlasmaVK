@@ -32594,7 +32594,7 @@ static void pvk_physical_device_init_descriptor_features(struct pvk_physical_dev
  *                          covered: a pass with a memoryless attachment (no
  *                          views, no splitting) draws them through SNORM,
  *                          -2^(b-1) reading and writing as -(2^(b-1) - 1).
- *   depthBounds           the pass keeps a copy of the depth attachment in a
+ *   depthBounds            the pass keeps a copy of the depth attachment in a
  *                          color attachment (section 15, DEPTH/STENCIL INPUT
  *                          ATTACHMENTS); a draw testing depth bounds uses a
  *                          pipeline variant whose fragment function reads the
@@ -37895,6 +37895,8 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
 #define PVK_MSL_VERTEX_TABLE_BUFFER 29u
 #define PVK_MSL_DRAW_INDEX_BUFFER 28u
 #define PVK_MSL_DEPTH_BOUNDS_BUFFER 27u
+#define PVK_MSL_MAX_SETS 30u
+#define PVK_MSL_MAX_LOCATIONS 32u /* stage input/output locations */
 
 /* pvk_msl_options.input_attachment_colors entries beyond color attachments,
  * and input_attachment_undecorated bits (DEPTH/STENCIL INPUT ATTACHMENTS). */
@@ -37937,8 +37939,6 @@ static const char *pvk_msl_depth_expr(uint32_t bits, uint32_t samples)
                             "+ dfdy(pvk_frag_coord.z) * (get_sample_position(pvk_sample_id).y - 0.5f))";
     return bits == 16 ? "pvk_d16(pvk_frag_coord.z)" : "pvk_frag_coord.z";
 }
-#define PVK_MSL_MAX_SETS 30u
-#define PVK_MSL_MAX_LOCATIONS 32u /* stage input/output locations */
 
 /* One binding's entry in the vertex buffer table (VERTEX INPUT), 24 bytes. */
 struct pvk_msl_vertex_buffer {
@@ -51655,10 +51655,8 @@ struct pvk_render {
     struct pvk_pass_attachment resolve_depth, resolve_stencil;
     /* Depth/stencil copies (section 15, DEPTH/STENCIL INPUT ATTACHMENTS) */
     uint32_t hidden;            /* PVK_HIDDEN_* copies the Metal pass keeps */
-    id hidden_tex[2];           /* their memoryless textures (not retained: the device keeps them) */
     uint8_t hidden_slot[2];     /* their color slots */
     uint8_t hidden_logical[2];  /* the subpass's logical indices for them */
-    uint32_t depth_bits;        /* the depth attachment's format: 16 (D16_UNORM) or 32 */
     bool stencil_dirty;         /* the stencil copy may be out of date */
     VkRect2D area;              /* the render area */
     id pso_set;                 /* the MTLRenderPipelineState set (NULL: unknown) */
@@ -54200,7 +54198,6 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
             cc.green = cc.blue = cc.alpha = 0.0;
             pvk_MTLRenderPassColorAttachmentDescriptor_setClearColor(att, cc);
         }
-        r->hidden_tex[k] = tex;
         r->hidden_slot[k] = (uint8_t)s++;
     }
     pvk_MTL4RenderPassDescriptor_setSupportColorAttachmentMapping(pass, true);
@@ -54381,7 +54378,6 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     r->depth = r->stencil = false;
     r->pending_count = 0;
     memset(r->hidden_logical, PVK_NO_SLOT, sizeof(r->hidden_logical));
-    r->depth_bits = c->depth.texture && c->depth.fmt->mtl == PVK_MTLPixelFormatDepth16Unorm ? 16 : 32;
     r->stencil_dirty = true; /* rebuilt before a draw reads it */
     r->area = c->area;
     pvk_render_takeover(e, enc);
