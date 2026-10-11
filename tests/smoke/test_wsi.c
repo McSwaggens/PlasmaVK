@@ -1,0 +1,868 @@
+/* Window system integration (section 18): Metal surfaces, swapchains,
+ * acquire and present. The CAMetalLayers are not in a window: such layers
+ * still vend drawables, so this runs headless. Presented contents are read
+ * back from the drawables, which a CAMetalLayer subclass records. */
+#define PLASMAVK_IMPLEMENTATION
+#include "../../plasmavk.h"
+
+#include <string.h>
+#include <time.h>
+
+#include "../pvk_test.h"
+
+static VkInstance instance;
+static VkPhysicalDevice pd;
+static VkDevice device;
+static VkQueue queues[2]; /* family 0 (graphics), family 1 (compute) */
+static VkCommandPool pools[2];
+static uint32_t shared_type = UINT32_MAX;
+
+/* ---- Layers ---- */
+
+static Class test_layer_class; /* CAMetalLayer subclass recording nextDrawable */
+static id last_drawable;       /* retained */
+
+static id test_next_drawable(id self, SEL cmd)
+{
+    struct objc_super super_ = { self, (Class)objc_getClass("CAMetalLayer") };
+    id drawable = ((id(*)(struct objc_super *, SEL))objc_msgSendSuper)(&super_, cmd);
+    pvk_release(last_drawable);
+    last_drawable = pvk_retain(drawable);
+    return drawable;
+}
+
+static id make_layer(double w, double h, double scale)
+{
+    pvk_CGRect frame;
+    id layer;
+    if (!test_layer_class) {
+        test_layer_class = objc_allocateClassPair((Class)objc_getClass("CAMetalLayer"), "PVKTestMetalLayer", 0);
+        class_addMethod(test_layer_class, sel_registerName("nextDrawable"), (IMP)test_next_drawable, "@@:");
+        objc_registerClassPair(test_layer_class);
+    }
+    layer = PVK_MSG(id, (id, SEL))((id)test_layer_class, sel_registerName("new"));
+    frame.origin.x = frame.origin.y = 0;
+    frame.size.width = w;
+    frame.size.height = h;
+    PVK_MSG(void, (id, SEL, pvk_CGRect))(layer, sel_registerName("setFrame:"), frame);
+    PVK_MSG(void, (id, SEL, pvk_CGFloat))(layer, sel_registerName("setContentsScale:"), scale);
+    return layer;
+}
+
+static VkSurfaceKHR make_surface(id layer)
+{
+    VkMetalSurfaceCreateInfoEXT info;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
+    info.pLayer = layer;
+    if (vkCreateMetalSurfaceEXT(instance, &info, NULL, &surface) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    return surface;
+}
+
+/* ---- Setup ---- */
+
+static uint64_t now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+}
+
+static void setup(void)
+{
+    const char *instance_exts[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_METAL_SURFACE_EXTENSION_NAME,
+                                    VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME };
+    const char *device_exts[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    VkPhysicalDeviceVulkan12Features v12;
+    VkPhysicalDeviceMemoryProperties mem;
+    VkInstanceCreateInfo instance_info;
+    VkApplicationInfo app;
+    VkDeviceQueueCreateInfo queue_info[2];
+    VkDeviceCreateInfo device_info;
+    VkCommandPoolCreateInfo pool_info;
+    float priority = 1.0f;
+    uint32_t count = 1, i;
+
+    memset(&app, 0, sizeof(app));
+    app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    app.apiVersion = VK_API_VERSION_1_4;
+    memset(&instance_info, 0, sizeof(instance_info));
+    instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    instance_info.pApplicationInfo = &app;
+    instance_info.enabledExtensionCount = 3;
+    instance_info.ppEnabledExtensionNames = instance_exts;
+    REQUIRE_VK(vkCreateInstance(&instance_info, NULL, &instance));
+    REQUIRE_VK(vkEnumeratePhysicalDevices(instance, &count, &pd));
+
+    memset(queue_info, 0, sizeof(queue_info));
+    for (i = 0; i < 2; i++) {
+        queue_info[i].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queue_info[i].queueFamilyIndex = i;
+        queue_info[i].queueCount = 1;
+        queue_info[i].pQueuePriorities = &priority;
+    }
+    memset(&v12, 0, sizeof(v12));
+    v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    v12.timelineSemaphore = VK_TRUE;
+    memset(&device_info, 0, sizeof(device_info));
+    device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    device_info.pNext = &v12;
+    device_info.queueCreateInfoCount = 2;
+    device_info.pQueueCreateInfos = queue_info;
+    device_info.enabledExtensionCount = 1;
+    device_info.ppEnabledExtensionNames = device_exts;
+    REQUIRE_VK(vkCreateDevice(pd, &device_info, NULL, &device));
+    vkGetPhysicalDeviceMemoryProperties(pd, &mem);
+    for (i = 0; i < mem.memoryTypeCount && shared_type == UINT32_MAX; i++)
+        if (mem.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+            shared_type = i;
+    for (i = 0; i < 2; i++) {
+        vkGetDeviceQueue(device, i, 0, &queues[i]);
+        memset(&pool_info, 0, sizeof(pool_info));
+        pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        pool_info.queueFamilyIndex = i;
+        REQUIRE_VK(vkCreateCommandPool(device, &pool_info, NULL, &pools[i]));
+    }
+}
+
+static void teardown(void)
+{
+    vkDestroyCommandPool(device, pools[0], NULL);
+    vkDestroyCommandPool(device, pools[1], NULL);
+    vkDestroyDevice(device, NULL);
+    vkDestroyInstance(instance, NULL);
+    pvk_release(last_drawable);
+    last_drawable = NULL;
+}
+
+static VkSwapchainCreateInfoKHR swapchain_info(VkSurfaceKHR surface, VkFormat format, VkColorSpaceKHR space,
+                                               uint32_t w, uint32_t h, uint32_t images)
+{
+    VkSwapchainCreateInfoKHR info;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    info.surface = surface;
+    info.minImageCount = images;
+    info.imageFormat = format;
+    info.imageColorSpace = space;
+    info.imageExtent.width = w;
+    info.imageExtent.height = h;
+    info.imageArrayLayers = 1;
+    info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    info.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    info.clipped = VK_TRUE;
+    return info;
+}
+
+static VkCommandBuffer begin(uint32_t family)
+{
+    VkCommandBufferAllocateInfo alloc;
+    VkCommandBufferBeginInfo info;
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc.commandPool = pools[family];
+    alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc.commandBufferCount = 1;
+    if (vkAllocateCommandBuffers(device, &alloc, &cb) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    vkBeginCommandBuffer(cb, &info);
+    return cb;
+}
+
+static void barrier(VkCommandBuffer cb, VkImage image, VkImageLayout from, VkImageLayout to)
+{
+    VkImageMemoryBarrier b;
+    memset(&b, 0, sizeof(b));
+    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    b.oldLayout = from;
+    b.newLayout = to;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = image;
+    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    b.subresourceRange.levelCount = 1;
+    b.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, NULL, 0, NULL,
+                         1, &b);
+}
+
+/* Records a clear of the image to `color` (UNDEFINED -> PRESENT_SRC). */
+static void record_clear(VkCommandBuffer cb, VkImage image, float r, float g, float b, float a)
+{
+    VkClearColorValue color;
+    VkImageSubresourceRange range;
+    memset(&range, 0, sizeof(range));
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+    color.float32[0] = r;
+    color.float32[1] = g;
+    color.float32[2] = b;
+    color.float32[3] = a;
+    barrier(cb, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vkCmdClearColorImage(cb, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
+    barrier(cb, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+}
+
+static VkResult submit(uint32_t family, VkCommandBuffer cb, VkSemaphore wait, VkSemaphore signal, VkFence fence)
+{
+    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    VkSubmitInfo info;
+    vkEndCommandBuffer(cb);
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    info.waitSemaphoreCount = wait ? 1 : 0;
+    info.pWaitSemaphores = &wait;
+    info.pWaitDstStageMask = &stage;
+    info.commandBufferCount = 1;
+    info.pCommandBuffers = &cb;
+    info.signalSemaphoreCount = signal ? 1 : 0;
+    info.pSignalSemaphores = &signal;
+    return vkQueueSubmit(queues[family], 1, &info, fence);
+}
+
+static VkResult present(uint32_t family, VkSwapchainKHR swapchain, uint32_t index, VkSemaphore wait)
+{
+    VkPresentInfoKHR info;
+    VkResult result = VK_ERROR_UNKNOWN, r;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    info.waitSemaphoreCount = wait ? 1 : 0;
+    info.pWaitSemaphores = &wait;
+    info.swapchainCount = 1;
+    info.pSwapchains = &swapchain;
+    info.pImageIndices = &index;
+    info.pResults = &result;
+    r = vkQueuePresentKHR(queues[family], &info);
+    if (r != result)
+        PVK_TEST_FAIL("vkQueuePresentKHR returned %d, pResults %d", (int)r, (int)result);
+    return r;
+}
+
+static VkSemaphore make_semaphore(VkSemaphoreType type)
+{
+    VkSemaphoreTypeCreateInfo t;
+    VkSemaphoreCreateInfo info;
+    VkSemaphore s = VK_NULL_HANDLE;
+    memset(&t, 0, sizeof(t));
+    t.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+    t.semaphoreType = type;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    info.pNext = &t;
+    vkCreateSemaphore(device, &info, NULL, &s);
+    return s;
+}
+
+static VkFence make_fence(void)
+{
+    VkFenceCreateInfo info;
+    VkFence f = VK_NULL_HANDLE;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    vkCreateFence(device, &info, NULL, &f);
+    return f;
+}
+
+/* ---- Tests ---- */
+
+static void test_surface_queries(void)
+{
+    id layer = make_layer(64, 48, 2.0), bare = make_layer(0, 0, 1.0);
+    VkSurfaceKHR surface = make_surface(layer), unsized = make_surface(bare);
+    VkSurfaceCapabilitiesKHR caps;
+    VkSurfaceFormatKHR formats[64];
+    VkPresentModeKHR modes[8];
+    VkDeviceGroupPresentCapabilitiesKHR group;
+    VkDeviceGroupPresentModeFlagsKHR group_modes = 0;
+    VkRect2D rect;
+    VkBool32 supported;
+    uint32_t count, i, fifo = 0, immediate = 0;
+
+    REQUIRE(surface && unsized);
+    for (i = 0; i < 2; i++) {
+        supported = VK_FALSE;
+        CHECK_VK(vkGetPhysicalDeviceSurfaceSupportKHR(pd, i, surface, &supported), VK_SUCCESS);
+        CHECK(supported == VK_TRUE);
+    }
+    CHECK_VK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(pd, surface, &caps), VK_SUCCESS);
+    CHECK(caps.minImageCount == 2 && caps.maxImageCount == 3);
+    CHECK(caps.currentExtent.width == 128 && caps.currentExtent.height == 96);
+    CHECK(caps.minImageExtent.width == 1 && caps.maxImageExtent.width >= 16384);
+    CHECK(caps.maxImageArrayLayers == 1);
+    CHECK(caps.currentTransform == VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR);
+    CHECK(caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR);
+    CHECK(caps.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+    /* A layer with no area: the swapchain decides. */
+    CHECK_VK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(pd, unsized, &caps), VK_SUCCESS);
+    CHECK(caps.currentExtent.width == 0xFFFFFFFFu && caps.currentExtent.height == 0xFFFFFFFFu);
+
+    /* VK_EXT_swapchain_colorspace is enabled: extended color spaces too. */
+    count = 64;
+    CHECK_VK(vkGetPhysicalDeviceSurfaceFormatsKHR(pd, surface, &count, formats), VK_SUCCESS);
+    CHECK(count > 5);
+    CHECK(formats[0].format == VK_FORMAT_B8G8R8A8_UNORM && formats[0].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
+    for (i = 0, supported = 0; i < count; i++)
+        supported |= formats[i].format == VK_FORMAT_R16G16B16A16_SFLOAT &&
+                     formats[i].colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT;
+    CHECK(supported);
+    count = 2;
+    CHECK_VK(vkGetPhysicalDeviceSurfaceFormatsKHR(pd, surface, &count, formats), VK_INCOMPLETE);
+    CHECK(count == 2);
+
+    count = 8;
+    CHECK_VK(vkGetPhysicalDeviceSurfacePresentModesKHR(pd, surface, &count, modes), VK_SUCCESS);
+    for (i = 0; i < count; i++) {
+        fifo |= modes[i] == VK_PRESENT_MODE_FIFO_KHR;
+        immediate |= modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR;
+    }
+    CHECK(fifo && immediate); /* macOS: displaySyncEnabled */
+
+    count = 1;
+    CHECK_VK(vkGetPhysicalDevicePresentRectanglesKHR(pd, surface, &count, &rect), VK_SUCCESS);
+    CHECK(count == 1 && rect.offset.x == 0 && rect.extent.width == 128 && rect.extent.height == 96);
+    CHECK_VK(vkGetPhysicalDevicePresentRectanglesKHR(pd, unsized, &count, &rect), VK_SUCCESS);
+    CHECK(rect.extent.width == 0xFFFFFFFFu);
+
+    memset(&group, 0, sizeof(group));
+    group.sType = VK_STRUCTURE_TYPE_DEVICE_GROUP_PRESENT_CAPABILITIES_KHR;
+    CHECK_VK(vkGetDeviceGroupPresentCapabilitiesKHR(device, &group), VK_SUCCESS);
+    CHECK(group.presentMask[0] == 1 && group.presentMask[1] == 0);
+    CHECK(group.modes == VK_DEVICE_GROUP_PRESENT_MODE_LOCAL_BIT_KHR);
+    CHECK_VK(vkGetDeviceGroupSurfacePresentModesKHR(device, surface, &group_modes), VK_SUCCESS);
+    CHECK(group_modes == VK_DEVICE_GROUP_PRESENT_MODE_LOCAL_BIT_KHR);
+
+    vkDestroySurfaceKHR(instance, surface, NULL);
+    vkDestroySurfaceKHR(instance, unsized, NULL);
+    vkDestroySurfaceKHR(instance, VK_NULL_HANDLE, NULL);
+    pvk_release(layer);
+    pvk_release(bare);
+}
+
+/* Without VK_EXT_swapchain_colorspace only sRGB; WSI commands follow the
+ * enabled extensions in vkGet*ProcAddr. */
+static void test_extension_scoping(void)
+{
+    const char *surface_ext[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_METAL_SURFACE_EXTENSION_NAME };
+    VkInstanceCreateInfo info;
+    VkDeviceQueueCreateInfo queue;
+    VkDeviceCreateInfo dinfo;
+    VkSurfaceFormatKHR formats[64];
+    VkMetalSurfaceCreateInfoEXT sinfo;
+    VkInstance inst;
+    VkPhysicalDevice phys;
+    VkSurfaceKHR surface;
+    VkDevice dev;
+    id layer = make_layer(16, 16, 1.0);
+    float priority = 1.0f;
+    uint32_t count = 1, i;
+
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    REQUIRE_VK(vkCreateInstance(&info, NULL, &inst));
+    CHECK(vkGetInstanceProcAddr(inst, "vkCreateMetalSurfaceEXT") == NULL);
+    CHECK(vkGetInstanceProcAddr(inst, "vkGetPhysicalDeviceSurfaceFormatsKHR") == NULL);
+    CHECK(vkGetInstanceProcAddr(inst, "vkCreateSwapchainKHR") == NULL); /* VK_KHR_swapchain needs VK_KHR_surface */
+    vkDestroyInstance(inst, NULL);
+
+    info.enabledExtensionCount = 2;
+    info.ppEnabledExtensionNames = surface_ext;
+    REQUIRE_VK(vkCreateInstance(&info, NULL, &inst)); /* apiVersion 1.0 */
+    CHECK(vkGetInstanceProcAddr(inst, "vkCreateMetalSurfaceEXT") != NULL);
+    CHECK(vkGetInstanceProcAddr(inst, "vkQueuePresentKHR") != NULL);
+    REQUIRE_VK(vkEnumeratePhysicalDevices(inst, &count, &phys));
+    memset(&sinfo, 0, sizeof(sinfo));
+    sinfo.sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
+    sinfo.pLayer = layer;
+    REQUIRE_VK(vkCreateMetalSurfaceEXT(inst, &sinfo, NULL, &surface));
+    count = 64;
+    CHECK_VK(vkGetPhysicalDeviceSurfaceFormatsKHR(phys, surface, &count, formats), VK_SUCCESS);
+    CHECK(count == 5);
+    for (i = 0; i < count; i++)
+        CHECK(formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
+
+    memset(&queue, 0, sizeof(queue));
+    queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queue.queueCount = 1;
+    queue.pQueuePriorities = &priority;
+    memset(&dinfo, 0, sizeof(dinfo));
+    dinfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    dinfo.queueCreateInfoCount = 1;
+    dinfo.pQueueCreateInfos = &queue;
+    REQUIRE_VK(vkCreateDevice(phys, &dinfo, NULL, &dev));
+    CHECK(vkGetDeviceProcAddr(dev, "vkQueuePresentKHR") == NULL); /* VK_KHR_swapchain not enabled */
+    vkDestroyDevice(dev, NULL);
+    dinfo.enabledExtensionCount = 1;
+    dinfo.ppEnabledExtensionNames = (const char *const[]){ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    REQUIRE_VK(vkCreateDevice(phys, &dinfo, NULL, &dev));
+    CHECK(vkGetDeviceProcAddr(dev, "vkQueuePresentKHR") != NULL);
+    CHECK(vkGetDeviceProcAddr(dev, "vkAcquireNextImageKHR") != NULL);
+    CHECK(vkGetDeviceProcAddr(dev, "vkAcquireNextImage2KHR") == NULL); /* needs Vulkan 1.1 */
+    vkDestroyDevice(dev, NULL);
+    vkDestroySurfaceKHR(inst, surface, NULL);
+    vkDestroyInstance(inst, NULL);
+    pvk_release(layer);
+}
+
+/* Frames with acquire semaphores and fences; images keep their handles;
+ * the layer is configured as asked. */
+static void test_present_cycles(void)
+{
+    id layer = make_layer(32, 32, 1.0);
+    VkSurfaceKHR surface = make_surface(layer);
+    VkSwapchainCreateInfoKHR info = swapchain_info(surface, VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+                                                   32, 32, 3);
+    VkSwapchainKHR swapchain;
+    VkImage images[4], again[4];
+    VkSemaphore acquired = make_semaphore(VK_SEMAPHORE_TYPE_BINARY), rendered = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
+    VkFence fence = make_fence(), done = make_fence();
+    uint32_t count = 4, n = 0, frame, index;
+    pvk_CGSize size;
+
+    REQUIRE(surface);
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchain));
+    REQUIRE_VK(vkGetSwapchainImagesKHR(device, swapchain, &count, images));
+    CHECK(count == 3);
+    n = 1;
+    CHECK_VK(vkGetSwapchainImagesKHR(device, swapchain, &n, again), VK_INCOMPLETE);
+    CHECK(n == 1 && again[0] == images[0]);
+    size = pvk_CAMetalLayer_drawableSize(layer);
+    CHECK(size.width == 32 && size.height == 32);
+    CHECK(pvk_CAMetalLayer_pixelFormat(layer) == PVK_MTLPixelFormatBGRA8Unorm_sRGB);
+    CHECK(PVK_MSG(unsigned long, (id, SEL))(layer, sel_registerName("maximumDrawableCount")) == 3);
+    CHECK(!PVK_MSG(bool, (id, SEL))(layer, sel_registerName("framebufferOnly")));
+    CHECK(PVK_MSG(bool, (id, SEL))(layer, sel_registerName("displaySyncEnabled")));
+
+    for (frame = 0; frame < 30; frame++) {
+        VkCommandBuffer cb;
+        uint32_t i;
+        index = UINT32_MAX;
+        REQUIRE_VK(vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired, fence, &index));
+        REQUIRE(index < count);
+        REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+        REQUIRE_VK(vkResetFences(device, 1, &fence));
+        cb = begin(0);
+        REQUIRE(cb);
+        record_clear(cb, images[index], (float)frame / 30.0f, 0.5f, 0.25f, 1.0f);
+        REQUIRE_VK(submit(0, cb, acquired, rendered, frame == 29 ? done : VK_NULL_HANDLE));
+        CHECK_VK(present(0, swapchain, index, rendered), VK_SUCCESS);
+        n = 4;
+        vkGetSwapchainImagesKHR(device, swapchain, &n, again);
+        for (i = 0; i < count; i++)
+            CHECK(again[i] == images[i]);
+    }
+    CHECK_VK(vkWaitForFences(device, 1, &done, VK_TRUE, 2000000000ull), VK_SUCCESS);
+    CHECK_VK(vkQueueWaitIdle(queues[0]), VK_SUCCESS);
+    vkResetCommandPool(device, pools[0], 0);
+    vkDestroySwapchainKHR(device, swapchain, NULL);
+    vkDestroySwapchainKHR(device, VK_NULL_HANDLE, NULL);
+    vkDestroySemaphore(device, acquired, NULL);
+    vkDestroySemaphore(device, rendered, NULL);
+    vkDestroyFence(device, fence, NULL);
+    vkDestroyFence(device, done, NULL);
+    vkDestroySurfaceKHR(instance, surface, NULL);
+    pvk_release(layer);
+}
+
+/* What reaches the drawable is the image: a buffer copied into the image,
+ * presented, read back from the drawable's texture. */
+static void check_contents(VkFormat format, VkColorSpaceKHR space, uint32_t texel_bytes, uint32_t family)
+{
+    const uint32_t w = 40, h = 24;
+    id layer = make_layer(w, h, 1.0);
+    VkSurfaceKHR surface = make_surface(layer);
+    VkSwapchainCreateInfoKHR info = swapchain_info(surface, format, space, w, h, 2);
+    VkBufferCreateInfo binfo;
+    VkMemoryAllocateInfo alloc;
+    VkMemoryRequirements req;
+    VkBufferImageCopy region;
+    VkSwapchainKHR swapchain;
+    VkImage images[3];
+    VkBuffer buffer;
+    VkDeviceMemory memory;
+    VkFence fence = make_fence();
+    VkSemaphore rendered = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
+    VkCommandBuffer cb;
+    unsigned char *data = NULL, *readback;
+    uint32_t count = 3, index, i;
+    pvk_MTLRegion r;
+
+    REQUIRE(surface);
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchain));
+    REQUIRE_VK(vkGetSwapchainImagesKHR(device, swapchain, &count, images));
+    memset(&binfo, 0, sizeof(binfo));
+    binfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    binfo.size = (VkDeviceSize)w * h * texel_bytes;
+    binfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    REQUIRE_VK(vkCreateBuffer(device, &binfo, NULL, &buffer));
+    vkGetBufferMemoryRequirements(device, buffer, &req);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = shared_type;
+    REQUIRE_VK(vkAllocateMemory(device, &alloc, NULL, &memory));
+    REQUIRE_VK(vkBindBufferMemory(device, buffer, memory, 0));
+    REQUIRE_VK(vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, (void **)&data));
+    for (i = 0; i < w * h * texel_bytes; i++)
+        data[i] = (unsigned char)(i * 7 + i / 13);
+    if (format == VK_FORMAT_R16G16B16A16_SFLOAT) /* finite halves: exponents below 31 */
+        for (i = 1; i < w * h * texel_bytes; i += 2)
+            data[i] &= 0x3F;
+
+    REQUIRE_VK(vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, VK_NULL_HANDLE, fence, &index));
+    REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+    cb = begin(family);
+    REQUIRE(cb);
+    memset(&region, 0, sizeof(region));
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent.width = w;
+    region.imageExtent.height = h;
+    region.imageExtent.depth = 1;
+    barrier(cb, images[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vkCmdCopyBufferToImage(cb, buffer, images[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    barrier(cb, images[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    REQUIRE_VK(submit(family, cb, VK_NULL_HANDLE, rendered, VK_NULL_HANDLE));
+    pvk_release(last_drawable);
+    last_drawable = NULL;
+    CHECK_VK(present(family, swapchain, index, rendered), VK_SUCCESS);
+    CHECK_VK(vkQueueWaitIdle(queues[family]), VK_SUCCESS);
+    REQUIRE(last_drawable != NULL);
+    readback = calloc(1, w * h * texel_bytes);
+    REQUIRE(readback);
+    memset(&r, 0, sizeof(r));
+    r.size.width = w;
+    r.size.height = h;
+    r.size.depth = 1;
+    pvk_MTLTexture_getBytes_bytesPerRow_bytesPerImage_fromRegion_mipmapLevel_slice(
+        pvk_CAMetalDrawable_texture(last_drawable), readback, w * texel_bytes, w * h * texel_bytes, r, 0, 0);
+    CHECK(memcmp(readback, data, w * h * texel_bytes) == 0);
+    free(readback);
+    pvk_release(last_drawable);
+    last_drawable = NULL;
+
+    vkResetCommandPool(device, pools[family], 0);
+    vkDestroySwapchainKHR(device, swapchain, NULL);
+    vkDestroyBuffer(device, buffer, NULL);
+    vkFreeMemory(device, memory, NULL);
+    vkDestroyFence(device, fence, NULL);
+    vkDestroySemaphore(device, rendered, NULL);
+    vkDestroySurfaceKHR(instance, surface, NULL);
+    pvk_release(layer);
+}
+
+static void test_present_contents(void)
+{
+    check_contents(VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 4, 0);
+    check_contents(VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 4, 0);
+    check_contents(VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT, 8, 0);
+    check_contents(VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 4, 1); /* the compute family presents */
+}
+
+/* Resizing: bounds -> suboptimal, drawableSize -> out of date; recreation
+ * with oldSwapchain; presenting an image of the retired swapchain. */
+static void test_resize(void)
+{
+    id layer = make_layer(32, 32, 1.0);
+    VkSurfaceKHR surface = make_surface(layer);
+    VkSwapchainCreateInfoKHR info = swapchain_info(surface, VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+                                                   32, 32, 2);
+    VkSwapchainKHR swapchain, newer, third;
+    VkImage images[3];
+    VkFence fence = make_fence();
+    VkCommandBuffer cb;
+    uint32_t index, held, count = 3;
+    pvk_CGRect frame;
+    pvk_CGSize size;
+
+    REQUIRE(surface);
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchain));
+    REQUIRE_VK(vkGetSwapchainImagesKHR(device, swapchain, &count, images));
+    /* The window grows: presents still work, scaled. */
+    memset(&frame, 0, sizeof(frame));
+    frame.size.width = 50;
+    frame.size.height = 40;
+    PVK_MSG(void, (id, SEL, pvk_CGRect))(layer, sel_registerName("setFrame:"), frame);
+    CHECK_VK(vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, VK_NULL_HANDLE, fence, &index), VK_SUBOPTIMAL_KHR);
+    REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+    vkResetFences(device, 1, &fence);
+    cb = begin(0);
+    record_clear(cb, images[index], 1, 0, 0, 1);
+    REQUIRE_VK(submit(0, cb, VK_NULL_HANDLE, VK_NULL_HANDLE, fence));
+    REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+    vkResetFences(device, 1, &fence);
+    CHECK_VK(present(0, swapchain, index, VK_NULL_HANDLE), VK_SUBOPTIMAL_KHR);
+
+    /* Hold an image, then a view resizes the drawables: out of date. */
+    CHECK_VK(vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, VK_NULL_HANDLE, fence, &held), VK_SUBOPTIMAL_KHR);
+    REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+    vkResetFences(device, 1, &fence);
+    size.width = 50;
+    size.height = 40;
+    pvk_CAMetalLayer_setDrawableSize(layer, size);
+    CHECK_VK(vkAcquireNextImageKHR(device, swapchain, 0, VK_NULL_HANDLE, fence, &index), VK_ERROR_OUT_OF_DATE_KHR);
+
+    /* Without oldSwapchain the layer is in use; with it, a new swapchain. */
+    info.imageExtent.width = 50;
+    info.imageExtent.height = 40;
+    CHECK_VK(vkCreateSwapchainKHR(device, &info, NULL, &newer), VK_ERROR_NATIVE_WINDOW_IN_USE_KHR);
+    info.oldSwapchain = swapchain;
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &newer));
+    CHECK_VK(vkAcquireNextImageKHR(device, newer, UINT64_MAX, VK_NULL_HANDLE, fence, &index), VK_SUCCESS);
+    REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+    vkResetFences(device, 1, &fence);
+    count = 3;
+    REQUIRE_VK(vkGetSwapchainImagesKHR(device, newer, &count, images));
+    cb = begin(0);
+    record_clear(cb, images[index], 0, 1, 0, 1);
+    REQUIRE_VK(submit(0, cb, VK_NULL_HANDLE, VK_NULL_HANDLE, fence));
+    REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+    vkResetFences(device, 1, &fence);
+    CHECK_VK(present(0, newer, index, VK_NULL_HANDLE), VK_SUCCESS);
+    /* The image held from the retired swapchain no longer fits the layer. */
+    CHECK_VK(present(0, swapchain, held, VK_NULL_HANDLE), VK_ERROR_OUT_OF_DATE_KHR);
+    vkDestroySwapchainKHR(device, swapchain, NULL);
+
+    /* A second retirement, at the same size: no layer change. */
+    info.oldSwapchain = newer;
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &third));
+    CHECK_VK(vkAcquireNextImageKHR(device, third, UINT64_MAX, VK_NULL_HANDLE, fence, &index), VK_SUCCESS);
+    REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+    CHECK_VK(vkQueueWaitIdle(queues[0]), VK_SUCCESS);
+    vkResetCommandPool(device, pools[0], 0);
+    vkDestroySwapchainKHR(device, newer, NULL);
+    vkDestroySwapchainKHR(device, third, NULL); /* with an image acquired: allowed */
+    vkDestroyFence(device, fence, NULL);
+    vkDestroySurfaceKHR(instance, surface, NULL);
+    pvk_release(layer);
+}
+
+/* Timeouts: with every image held nothing comes back; a presented image is
+ * returned at once, its fence and semaphore signalled when the copy is done. */
+static void test_acquire_timeouts(void)
+{
+    id layer = make_layer(16, 16, 1.0);
+    VkSurfaceKHR surface = make_surface(layer);
+    VkSwapchainCreateInfoKHR info = swapchain_info(surface, VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+                                                   16, 16, 2);
+    VkSwapchainKHR swapchain;
+    VkFence fences[3];
+    VkSemaphore sem = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
+    VkImage images[2];
+    VkCommandBuffer cb;
+    uint32_t idx[3], count = 2, i, index;
+    uint64_t start;
+
+    REQUIRE(surface);
+    for (i = 0; i < 3; i++)
+        fences[i] = make_fence();
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchain));
+    REQUIRE_VK(vkGetSwapchainImagesKHR(device, swapchain, &count, images));
+    for (i = 0; i < 2; i++) {
+        CHECK_VK(vkAcquireNextImageKHR(device, swapchain, 0, VK_NULL_HANDLE, fences[i], &idx[i]), VK_SUCCESS);
+        CHECK_VK(vkWaitForFences(device, 1, &fences[i], VK_TRUE, 0), VK_SUCCESS); /* never presented: free */
+    }
+    CHECK(idx[0] != idx[1]);
+    CHECK_VK(vkAcquireNextImageKHR(device, swapchain, 0, VK_NULL_HANDLE, fences[2], &index), VK_NOT_READY);
+    start = now_ns();
+    CHECK_VK(vkAcquireNextImageKHR(device, swapchain, 3000000, VK_NULL_HANDLE, fences[2], &index), VK_TIMEOUT);
+    CHECK(now_ns() - start >= 3000000);
+    CHECK_VK(vkGetFenceStatus(device, fences[2]), VK_NOT_READY); /* untouched */
+
+    /* Present both; acquire again right away: images on their way back. */
+    cb = begin(0);
+    record_clear(cb, images[idx[0]], 0, 0, 1, 1);
+    record_clear(cb, images[idx[1]], 0, 0, 1, 1);
+    REQUIRE_VK(submit(0, cb, VK_NULL_HANDLE, VK_NULL_HANDLE, fences[2]));
+    REQUIRE_VK(vkWaitForFences(device, 1, &fences[2], VK_TRUE, 2000000000ull));
+    vkResetFences(device, 3, fences);
+    CHECK_VK(present(0, swapchain, idx[0], VK_NULL_HANDLE), VK_SUCCESS);
+    CHECK_VK(present(0, swapchain, idx[1], VK_NULL_HANDLE), VK_SUCCESS);
+    CHECK_VK(vkAcquireNextImageKHR(device, swapchain, 0, VK_NULL_HANDLE, fences[0], &index), VK_SUCCESS);
+    CHECK(index == idx[0]); /* presented first */
+    CHECK_VK(vkAcquireNextImageKHR(device, swapchain, 0, sem, VK_NULL_HANDLE, &index), VK_SUCCESS);
+    CHECK(index == idx[1]);
+    CHECK_VK(vkWaitForFences(device, 1, &fences[0], VK_TRUE, 2000000000ull), VK_SUCCESS);
+    /* The semaphore: a submission waits for it. */
+    cb = begin(0);
+    record_clear(cb, images[idx[1]], 1, 1, 1, 1);
+    REQUIRE_VK(submit(0, cb, sem, VK_NULL_HANDLE, fences[1]));
+    CHECK_VK(vkWaitForFences(device, 1, &fences[1], VK_TRUE, 2000000000ull), VK_SUCCESS);
+
+    CHECK_VK(vkQueueWaitIdle(queues[0]), VK_SUCCESS);
+    vkResetCommandPool(device, pools[0], 0);
+    vkDestroySwapchainKHR(device, swapchain, NULL);
+    for (i = 0; i < 3; i++)
+        vkDestroyFence(device, fences[i], NULL);
+    vkDestroySemaphore(device, sem, NULL);
+    vkDestroySurfaceKHR(instance, surface, NULL);
+    pvk_release(layer);
+}
+
+/* A present whose semaphore is signalled late (behind a timeline wait the
+ * host resolves): the queue's thread presents. Acquiring the image back
+ * returns before that; its fence waits for the copy. */
+static void test_deferred_present(void)
+{
+    id layer = make_layer(16, 16, 1.0);
+    VkSurfaceKHR surface = make_surface(layer);
+    VkSwapchainCreateInfoKHR info = swapchain_info(surface, VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+                                                   16, 16, 2);
+    VkSemaphore timeline = make_semaphore(VK_SEMAPHORE_TYPE_TIMELINE), rendered = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
+    VkTimelineSemaphoreSubmitInfo values;
+    VkSemaphoreSignalInfo signal;
+    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    VkSubmitInfo submit_info;
+    VkSwapchainKHR swapchain;
+    VkImage images[2];
+    VkFence fence = make_fence();
+    VkCommandBuffer cb;
+    uint64_t one = 1, zero = 0;
+    uint32_t count = 2, index, other, again;
+
+    REQUIRE(surface);
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchain));
+    REQUIRE_VK(vkGetSwapchainImagesKHR(device, swapchain, &count, images));
+    REQUIRE_VK(vkAcquireNextImageKHR(device, swapchain, 0, VK_NULL_HANDLE, fence, &index));
+    REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+    vkResetFences(device, 1, &fence);
+    cb = begin(0);
+    record_clear(cb, images[index], 1, 0, 1, 1);
+    vkEndCommandBuffer(cb);
+    memset(&values, 0, sizeof(values));
+    values.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+    values.waitSemaphoreValueCount = 1;
+    values.pWaitSemaphoreValues = &one;
+    values.signalSemaphoreValueCount = 1;
+    values.pSignalSemaphoreValues = &zero;
+    memset(&submit_info, 0, sizeof(submit_info));
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.pNext = &values;
+    submit_info.waitSemaphoreCount = 1;
+    submit_info.pWaitSemaphores = &timeline;
+    submit_info.pWaitDstStageMask = &stage;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &cb;
+    submit_info.signalSemaphoreCount = 1;
+    submit_info.pSignalSemaphores = &rendered;
+    REQUIRE_VK(vkQueueSubmit(queues[0], 1, &submit_info, VK_NULL_HANDLE));
+    CHECK_VK(present(0, swapchain, index, rendered), VK_SUCCESS);
+    /* The other image, then this one again: it is not back yet. */
+    REQUIRE_VK(vkAcquireNextImageKHR(device, swapchain, 0, VK_NULL_HANDLE, fence, &other));
+    CHECK(other != index);
+    vkResetFences(device, 1, &fence);
+    CHECK_VK(vkAcquireNextImageKHR(device, swapchain, 0, VK_NULL_HANDLE, fence, &again), VK_SUCCESS);
+    CHECK(again == index);
+    CHECK_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 20000000), VK_TIMEOUT);
+    memset(&signal, 0, sizeof(signal));
+    signal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
+    signal.semaphore = timeline;
+    signal.value = 1;
+    REQUIRE_VK(vkSignalSemaphore(device, &signal));
+    CHECK_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull), VK_SUCCESS);
+    CHECK_VK(vkQueueWaitIdle(queues[0]), VK_SUCCESS);
+    vkResetCommandPool(device, pools[0], 0);
+    vkDestroySwapchainKHR(device, swapchain, NULL);
+    vkDestroySemaphore(device, timeline, NULL);
+    vkDestroySemaphore(device, rendered, NULL);
+    vkDestroyFence(device, fence, NULL);
+    vkDestroySurfaceKHR(instance, surface, NULL);
+    pvk_release(layer);
+}
+
+/* Present modes, color spaces, composite alpha and two swapchains in one
+ * present (vkAcquireNextImage2KHR for one of them). */
+static void test_layer_configuration(void)
+{
+    id layers[2] = { make_layer(16, 16, 1.0), make_layer(24, 8, 1.0) };
+    VkSurfaceKHR surfaces[2] = { make_surface(layers[0]), make_surface(layers[1]) };
+    VkSwapchainCreateInfoKHR info;
+    VkAcquireNextImageInfoKHR acquire;
+    VkPresentInfoKHR present_info;
+    VkSwapchainKHR swapchains[2];
+    VkImage images[2][3];
+    VkFence fence = make_fence();
+    VkResult results[2] = { VK_ERROR_UNKNOWN, VK_ERROR_UNKNOWN };
+    VkCommandBuffer cb;
+    uint32_t indices[2], count, i;
+
+    REQUIRE(surfaces[0] && surfaces[1]);
+    info = swapchain_info(surfaces[0], VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT, 16, 16, 3);
+    info.presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+    info.compositeAlpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchains[0]));
+    CHECK(!PVK_MSG(bool, (id, SEL))(layers[0], sel_registerName("displaySyncEnabled")));
+    CHECK(PVK_MSG(bool, (id, SEL))(layers[0], sel_registerName("wantsExtendedDynamicRangeContent")));
+    CHECK(PVK_MSG(void *, (id, SEL))(layers[0], sel_registerName("colorspace")) != NULL);
+    CHECK(!PVK_MSG(bool, (id, SEL))(layers[0], sel_registerName("isOpaque")));
+    info = swapchain_info(surfaces[1], VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_PASS_THROUGH_EXT, 24, 8, 2);
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchains[1]));
+    CHECK(PVK_MSG(void *, (id, SEL))(layers[1], sel_registerName("colorspace")) == NULL);
+    CHECK(PVK_MSG(bool, (id, SEL))(layers[1], sel_registerName("isOpaque")));
+
+    cb = begin(0);
+    for (i = 0; i < 2; i++) {
+        count = 3;
+        REQUIRE_VK(vkGetSwapchainImagesKHR(device, swapchains[i], &count, images[i]));
+    }
+    REQUIRE_VK(vkAcquireNextImageKHR(device, swapchains[0], UINT64_MAX, VK_NULL_HANDLE, fence, &indices[0]));
+    REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+    vkResetFences(device, 1, &fence);
+    memset(&acquire, 0, sizeof(acquire));
+    acquire.sType = VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR;
+    acquire.swapchain = swapchains[1];
+    acquire.timeout = UINT64_MAX;
+    acquire.fence = fence;
+    acquire.deviceMask = 1;
+    REQUIRE_VK(vkAcquireNextImage2KHR(device, &acquire, &indices[1]));
+    REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+    vkResetFences(device, 1, &fence);
+    record_clear(cb, images[0][indices[0]], 0.5f, 0.5f, 0.5f, 0.5f);
+    record_clear(cb, images[1][indices[1]], 0.5f, 0.5f, 0.5f, 1.0f);
+    REQUIRE_VK(submit(0, cb, VK_NULL_HANDLE, VK_NULL_HANDLE, fence));
+    REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+    memset(&present_info, 0, sizeof(present_info));
+    present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    present_info.swapchainCount = 2;
+    present_info.pSwapchains = swapchains;
+    present_info.pImageIndices = indices;
+    present_info.pResults = results;
+    CHECK_VK(vkQueuePresentKHR(queues[0], &present_info), VK_SUCCESS);
+    CHECK(results[0] == VK_SUCCESS && results[1] == VK_SUCCESS);
+    CHECK_VK(vkQueueWaitIdle(queues[0]), VK_SUCCESS);
+    vkResetCommandPool(device, pools[0], 0);
+    for (i = 0; i < 2; i++) {
+        vkDestroySwapchainKHR(device, swapchains[i], NULL);
+        vkDestroySurfaceKHR(instance, surfaces[i], NULL);
+        pvk_release(layers[i]);
+    }
+    vkDestroyFence(device, fence, NULL);
+}
+
+int main(void)
+{
+    void *pool = objc_autoreleasePoolPush();
+    setup();
+    RUN(test_surface_queries);
+    RUN(test_extension_scoping);
+    RUN(test_present_cycles);
+    RUN(test_present_contents);
+    RUN(test_resize);
+    RUN(test_acquire_timeouts);
+    RUN(test_deferred_present);
+    RUN(test_layer_configuration);
+    teardown();
+    objc_autoreleasePoolPop(pool);
+    return TEST_RESULT();
+}
