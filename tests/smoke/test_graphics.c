@@ -190,41 +190,6 @@ static const uint32_t spv_rect_fs[] = {
 
 /*
  * #version 450
- * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
- * layout(location = 0) out uvec4 o_color;
- * void main()
- * {
- *     o_color = uvec4(pc.color);
- * }
- */
-static const uint32_t spv_rect_uint_fs[] = {
-    0x07230203, 0x00010600, 0x0008000b, 0x00000015, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
-    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
-    0x0007000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000f, 0x00030010,
-    0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d,
-    0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c, 0x00030005, 0x0000000d, 0x00000050,
-    0x00050006, 0x0000000d, 0x00000000, 0x74636572, 0x00000000, 0x00050006, 0x0000000d, 0x00000001,
-    0x6f6c6f63, 0x00000072, 0x00050006, 0x0000000d, 0x00000002, 0x74706564, 0x00000068, 0x00050006,
-    0x0000000d, 0x00000003, 0x6579616c, 0x00000072, 0x00060006, 0x0000000d, 0x00000004, 0x77656976,
-    0x74726f70, 0x00000000, 0x00030005, 0x0000000f, 0x00006370, 0x00040047, 0x00000009, 0x0000001e,
-    0x00000000, 0x00030047, 0x0000000d, 0x00000002, 0x00050048, 0x0000000d, 0x00000000, 0x00000023,
-    0x00000000, 0x00050048, 0x0000000d, 0x00000001, 0x00000023, 0x00000010, 0x00050048, 0x0000000d,
-    0x00000002, 0x00000023, 0x00000020, 0x00050048, 0x0000000d, 0x00000003, 0x00000023, 0x00000024,
-    0x00050048, 0x0000000d, 0x00000004, 0x00000023, 0x00000028, 0x00020013, 0x00000002, 0x00030021,
-    0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000000, 0x00040017, 0x00000007,
-    0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008,
-    0x00000009, 0x00000003, 0x00030016, 0x0000000a, 0x00000020, 0x00040017, 0x0000000b, 0x0000000a,
-    0x00000004, 0x00040015, 0x0000000c, 0x00000020, 0x00000001, 0x0007001e, 0x0000000d, 0x0000000b,
-    0x0000000b, 0x0000000a, 0x0000000c, 0x0000000c, 0x00040020, 0x0000000e, 0x00000009, 0x0000000d,
-    0x0004003b, 0x0000000e, 0x0000000f, 0x00000009, 0x0004002b, 0x0000000c, 0x00000010, 0x00000001,
-    0x00040020, 0x00000011, 0x00000009, 0x0000000b, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
-    0x00000003, 0x000200f8, 0x00000005, 0x00050041, 0x00000011, 0x00000012, 0x0000000f, 0x00000010,
-    0x0004003d, 0x0000000b, 0x00000013, 0x00000012, 0x0004006d, 0x00000007, 0x00000014, 0x00000013,
-    0x0003003e, 0x00000009, 0x00000014, 0x000100fd, 0x00010038,
-};
-
-/*
- * #version 450
  * #extension GL_ARB_shader_viewport_layer_array : require
  * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
  * void main()
@@ -703,6 +668,39 @@ static const uint32_t spv_rect2_fs[] = {
     0x00000007, 0x00000011, 0x00000010, 0x0003003e, 0x00000009, 0x00000011, 0x00050041, 0x0000000f,
     0x00000013, 0x0000000d, 0x0000000e, 0x0004003d, 0x00000007, 0x00000014, 0x00000013, 0x0003003e,
     0x00000012, 0x00000014, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 450
+ * layout(set = 0, binding = 0) uniform sampler2D u_tex;
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = texture(u_tex, gl_FragCoord.xy / 16.0);
+ * }
+ */
+static const uint32_t spv_ycbcr_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000018, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0008000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000d, 0x00000010,
+    0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004,
+    0x6e69616d, 0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c, 0x00040005, 0x0000000d,
+    0x65745f75, 0x00000078, 0x00060005, 0x00000010, 0x465f6c67, 0x43676172, 0x64726f6f, 0x00000000,
+    0x00040047, 0x00000009, 0x0000001e, 0x00000000, 0x00040047, 0x0000000d, 0x00000021, 0x00000000,
+    0x00040047, 0x0000000d, 0x00000022, 0x00000000, 0x00040047, 0x00000010, 0x0000000b, 0x0000000f,
+    0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020,
+    0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007,
+    0x0004003b, 0x00000008, 0x00000009, 0x00000003, 0x00090019, 0x0000000a, 0x00000006, 0x00000001,
+    0x00000000, 0x00000000, 0x00000000, 0x00000001, 0x00000000, 0x0003001b, 0x0000000b, 0x0000000a,
+    0x00040020, 0x0000000c, 0x00000000, 0x0000000b, 0x0004003b, 0x0000000c, 0x0000000d, 0x00000000,
+    0x00040020, 0x0000000f, 0x00000001, 0x00000007, 0x0004003b, 0x0000000f, 0x00000010, 0x00000001,
+    0x00040017, 0x00000011, 0x00000006, 0x00000002, 0x0004002b, 0x00000006, 0x00000014, 0x41800000,
+    0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003d,
+    0x0000000b, 0x0000000e, 0x0000000d, 0x0004003d, 0x00000007, 0x00000012, 0x00000010, 0x0007004f,
+    0x00000011, 0x00000013, 0x00000012, 0x00000012, 0x00000000, 0x00000001, 0x00050050, 0x00000011,
+    0x00000015, 0x00000014, 0x00000014, 0x00050088, 0x00000011, 0x00000016, 0x00000013, 0x00000015,
+    0x00050057, 0x00000007, 0x00000017, 0x0000000e, 0x00000016, 0x0003003e, 0x00000009, 0x00000017,
+    0x000100fd, 0x00010038,
 };
 
 /* ==========================================================================
@@ -3476,6 +3474,215 @@ static void test_pipeline_cache(void)
     vkDestroyPipelineCache(device, bogus, NULL);
 }
 
+/* ==========================================================================
+ * Y'CbCr conversion in fragment shaders
+ * ========================================================================== */
+
+/* A 2-plane 4:2:0 image (Y 128, Cb 200, Cr 192) sampled through a combined
+ * image sampler with an immutable Y'CbCr sampler by a fragment shader:
+ * YCBCR_IDENTITY, full range, so each pixel is (Cr - 128, Y, Cb - 128, 1)
+ * (range expansion centers the chroma). */
+static void test_ycbcr_fragment(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    const VkFormat format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+    VkFormatProperties fp;
+    VkSamplerYcbcrConversionCreateInfo ci;
+    VkSamplerYcbcrConversionInfo cinfo;
+    VkSamplerYcbcrConversion conv = VK_NULL_HANDLE;
+    VkSamplerCreateInfo si;
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkImageCreateInfo ii;
+    VkImageViewCreateInfo vi;
+    VkMemoryRequirements req;
+    VkMemoryAllocateInfo ai;
+    VkImage image = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDescriptorSetLayoutBinding binding;
+    VkDescriptorSetLayoutCreateInfo sli;
+    VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
+    VkPushConstantRange range;
+    VkPipelineLayoutCreateInfo pli;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkDescriptorPoolSize size = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 };
+    VkDescriptorPoolCreateInfo dpi;
+    VkDescriptorPool dpool = VK_NULL_HANDLE;
+    VkDescriptorSetAllocateInfo dsa;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VkDescriptorImageInfo dii;
+    VkWriteDescriptorSet w;
+    VkBufferImageCopy regions[2];
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4), staging = make_buf(W * H + W * H / 2);
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t i;
+
+    vkGetPhysicalDeviceFormatProperties(pd, format, &fp);
+    if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) ||
+        !(fp.optimalTilingFeatures & (VK_FORMAT_FEATURE_COSITED_CHROMA_SAMPLES_BIT |
+                                      VK_FORMAT_FEATURE_MIDPOINT_CHROMA_SAMPLES_BIT))) {
+        fprintf(stderr, "G8_B8R8_2PLANE_420_UNORM cannot be sampled with a conversion: skipped\n");
+        free_buf(&out);
+        free_buf(&staging);
+        free_img(&target);
+        return;
+    }
+    memset(&ci, 0, sizeof(ci));
+    ci.sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO;
+    ci.format = format;
+    ci.ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_IDENTITY;
+    ci.ycbcrRange = VK_SAMPLER_YCBCR_RANGE_ITU_FULL;
+    ci.xChromaOffset = ci.yChromaOffset = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_COSITED_CHROMA_SAMPLES_BIT)
+                                              ? VK_CHROMA_LOCATION_COSITED_EVEN
+                                              : VK_CHROMA_LOCATION_MIDPOINT;
+    ci.chromaFilter = VK_FILTER_NEAREST;
+    REQUIRE_VK(vkCreateSamplerYcbcrConversion(device, &ci, NULL, &conv));
+    memset(&cinfo, 0, sizeof(cinfo));
+    cinfo.sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO;
+    cinfo.conversion = conv;
+    memset(&si, 0, sizeof(si));
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.pNext = &cinfo;
+    si.magFilter = si.minFilter = VK_FILTER_NEAREST;
+    si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    REQUIRE_VK(vkCreateSampler(device, &si, NULL, &sampler));
+    memset(&ii, 0, sizeof(ii));
+    ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ii.imageType = VK_IMAGE_TYPE_2D;
+    ii.format = format;
+    ii.extent.width = W;
+    ii.extent.height = H;
+    ii.extent.depth = 1;
+    ii.mipLevels = ii.arrayLayers = 1;
+    ii.samples = VK_SAMPLE_COUNT_1_BIT;
+    ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    REQUIRE_VK(vkCreateImage(device, &ii, NULL, &image));
+    vkGetImageMemoryRequirements(device, image, &req);
+    memset(&ai, 0, sizeof(ai));
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = device_type;
+    REQUIRE_VK(vkAllocateMemory(device, &ai, NULL, &memory));
+    REQUIRE_VK(vkBindImageMemory(device, image, memory, 0));
+    memset(&vi, 0, sizeof(vi));
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.pNext = &cinfo;
+    vi.image = image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = format;
+    vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    vi.subresourceRange.levelCount = vi.subresourceRange.layerCount = 1;
+    REQUIRE_VK(vkCreateImageView(device, &vi, NULL, &view));
+
+    memset(&binding, 0, sizeof(binding));
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    binding.pImmutableSamplers = &sampler;
+    memset(&sli, 0, sizeof(sli));
+    sli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    sli.bindingCount = 1;
+    sli.pBindings = &binding;
+    REQUIRE_VK(vkCreateDescriptorSetLayout(device, &sli, NULL, &set_layout));
+    range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    range.offset = 0;
+    range.size = sizeof(struct pc);
+    memset(&pli, 0, sizeof(pli));
+    pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pli.setLayoutCount = 1;
+    pli.pSetLayouts = &set_layout;
+    pli.pushConstantRangeCount = 1;
+    pli.pPushConstantRanges = &range;
+    REQUIRE_VK(vkCreatePipelineLayout(device, &pli, NULL, &layout));
+    memset(&dpi, 0, sizeof(dpi));
+    dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpi.maxSets = 1;
+    dpi.poolSizeCount = 1;
+    dpi.pPoolSizes = &size;
+    REQUIRE_VK(vkCreateDescriptorPool(device, &dpi, NULL, &dpool));
+    memset(&dsa, 0, sizeof(dsa));
+    dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsa.descriptorPool = dpool;
+    dsa.descriptorSetCount = 1;
+    dsa.pSetLayouts = &set_layout;
+    REQUIRE_VK(vkAllocateDescriptorSets(device, &dsa, &set));
+    memset(&dii, 0, sizeof(dii));
+    dii.imageView = view;
+    dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    memset(&w, 0, sizeof(w));
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = set;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = &dii;
+    vkUpdateDescriptorSets(device, 1, &w, 0, NULL);
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_ycbcr_fs, sizeof(spv_ycbcr_fs));
+    p.layout = layout;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+
+    memset(staging.data, 128, W * H); /* Y */
+    for (i = 0; i < W * H / 4; i++) { /* (Cb, Cr) */
+        staging.data[W * H + 2 * i] = 200;
+        staging.data[W * H + 2 * i + 1] = 192;
+    }
+    memset(regions, 0, sizeof(regions));
+    for (i = 0; i < 2; i++) {
+        regions[i].bufferOffset = i ? W * H : 0;
+        regions[i].imageSubresource.aspectMask = i ? VK_IMAGE_ASPECT_PLANE_1_BIT : VK_IMAGE_ASPECT_PLANE_0_BIT;
+        regions[i].imageSubresource.layerCount = 1;
+        regions[i].imageExtent.width = i ? W / 2 : W;
+        regions[i].imageExtent.height = i ? H / 2 : H;
+        regions[i].imageExtent.depth = 1;
+    }
+    cb = begin_cmd();
+    vkCmdCopyBufferToImage(cb, staging.buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, regions);
+    barrier(cb);
+    begin_rendering(cb, &target, 1, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, NULL);
+    {
+        struct pc pc;
+        memset(&pc, 0, sizeof(pc));
+        pc.rect[0] = pc.rect[1] = -1;
+        pc.rect[2] = pc.rect[3] = 1;
+        vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    }
+    vkCmdDraw(cb, 4, 1, 0, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    {
+        uint32_t x, y;
+        int bad = 0;
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++)
+                if (!near(px(&out, x, y), RGBA(64, 128, 72, 255), 2)) {
+                    if (bad < 4)
+                        fprintf(stderr, "ycbcr: pixel (%u, %u) is %08x\n", x, y, px(&out, x, y));
+                    bad++;
+                }
+        CHECK(bad == 0);
+    }
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyDescriptorPool(device, dpool, NULL);
+    vkDestroyPipelineLayout(device, layout, NULL);
+    vkDestroyDescriptorSetLayout(device, set_layout, NULL);
+    vkDestroyImageView(device, view, NULL);
+    vkDestroyImage(device, image, NULL);
+    vkFreeMemory(device, memory, NULL);
+    vkDestroySampler(device, sampler, NULL);
+    vkDestroySamplerYcbcrConversion(device, conv, NULL);
+    free_buf(&out);
+    free_buf(&staging);
+    free_img(&target);
+}
+
 int main(void)
 {
     setup();
@@ -3502,6 +3709,7 @@ int main(void)
     RUN(test_dual_source);
     RUN(test_alpha_coverage);
     RUN(test_pipeline_cache);
+    RUN(test_ycbcr_fragment);
     teardown();
     return TEST_RESULT();
 }
