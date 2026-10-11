@@ -2431,6 +2431,58 @@ static void test_sparse_binding_3d_tail(void)
     }
 }
 
+/* A partially resident 3D image bound like Vulkan's mip tail rules say:
+ * levels before the tail by region, the tail with one bind of
+ * imageMipTailSize from memory of its own. Metal's tail of 1024x128x8
+ * 32-bit texels takes a tile more than it reports: the image reserves it. */
+static void test_sparse_residency_3d_tail(void)
+{
+    const uint32_t W = 1024, H = 128, D = 8, levels = 11;
+    const VkDeviceSize back = (VkDeviceSize)W * H * D * 4;
+    VkImageCreateInfo info = image_info(VK_IMAGE_TYPE_3D, VK_FORMAT_R32_UINT, W, H, D, levels, 1,
+                                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                        VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT);
+    VkSparseImageMemoryRequirements sr;
+    VkDeviceMemory memories[PVK_SPARSE_MAX_LEVELS + 1];
+    VkImage image;
+    struct buf host;
+    uint32_t n = 0, lv, k;
+
+    if (!has_sparse() || !supported.sparseResidencyImage3D)
+        return;
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &image));
+    sr = sparse_requirements(image);
+    REQUIRE(sr.imageMipTailFirstLod < levels);
+    CHECK(sr.imageMipTailSize >= 11 * BLOCK);
+    for (lv = 0; lv < sr.imageMipTailFirstLod; lv++) {
+        VkExtent3D g = sr.formatProperties.imageGranularity;
+        uint32_t w = W >> lv, h = H >> lv, d = D >> lv;
+        memories[n] = allocate(private_type, (VkDeviceSize)((w + g.width - 1) / g.width) *
+                                                 ((h + g.height - 1) / g.height) * ((d + g.depth - 1) / g.depth) * BLOCK);
+        bind_region(image, VK_IMAGE_ASPECT_COLOR_BIT, lv, 0, 0, 0, 0, w, h, d, memories[n++], 0);
+    }
+    memories[n] = allocate(private_type, sr.imageMipTailSize);
+    bind_opaque(image, sr.imageMipTailOffset, sr.imageMipTailSize, memories[n++], 0);
+    host = host_buf(2 * back);
+    REQUIRE(host.data);
+    for (lv = 0; lv < levels; lv++) {
+        uint32_t w = W >> lv ? W >> lv : 1, h = H >> lv ? H >> lv : 1, d = D >> lv ? D >> lv : 1;
+        uint32_t *words = (uint32_t *)host.data;
+        for (k = 0; k < w * h * d; k++)
+            words[k] = pattern(k, lv + 60);
+        memset(words + back / 4, 0, (size_t)w * h * d * 4);
+        upload_download(image, &host, back, lv, 0, w, h, d);
+        for (k = 0; k < w * h * d && words[back / 4 + k] == pattern(k, lv + 60); k++)
+            ;
+        if (k < w * h * d)
+            PVK_TEST_FAIL("level %u: texel %u of %u", lv, k, w * h * d);
+    }
+    vkDestroyImage(device, image, NULL);
+    for (lv = 0; lv < n; lv++)
+        vkFreeMemory(device, memories[lv], NULL);
+    free_buf(&host);
+}
+
 /* spv_storage_tail on an 11x37 storage image without residency, every level
  * in Metal's tail: sparse loads of a ShaderWrite texture's tail hang the GPU
  * on macOS 27.2, so PlasmaVK reads storage images plainly. All resident,
@@ -2582,6 +2634,7 @@ int main(void)
     RUN(test_sparse_device_requirements);
     RUN(test_sparse_storage_formats);
     RUN(test_sparse_binding_3d_tail);
+    RUN(test_sparse_residency_3d_tail);
     RUN(test_sparse_storage_tail);
     teardown();
     return TEST_RESULT();

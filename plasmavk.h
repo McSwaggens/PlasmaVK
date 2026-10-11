@@ -34182,8 +34182,11 @@ static uint32_t pvk_mip_levels(uint32_t w, uint32_t h, uint32_t d)
  *     VK_SPARSE_IMAGE_FORMAT_ALIGNED_MIP_SIZE_BIT (residencyAlignedMipSize):
  *     their tail starts at the first level that is not a whole number of
  *     blocks, never after Metal's (section 11, SPARSE IMAGES). A 3D
- *     texture's tail holds every slice of its levels and may be many tiles
- *     (10 for 1024x128x8 32-bit texels).
+ *     texture's tail holds every slice of its levels and may be many tiles,
+ *     and it takes a tile more than tailSizeInBytes says for each of its
+ *     levels more than one slice deep (1024x128x8 32-bit texels: 11 tiles,
+ *     said 10; 16-bit: 7, said 6): with less heap past the mapping, data
+ *     reads wrong or the GPU faults. Images reserve those tiles.
  *   - A tail's tiles are a row along x at its first level: an operation on
  *     tiles (0, 0, 0) + (n, 1, 1) maps them onto n consecutive heap tiles.
  *     Mapped piece by piece from several places, a tail of many tiles reads
@@ -37307,6 +37310,7 @@ struct pvk_sparse_layout {
     uint32_t tail_first;     /* imageMipTailFirstLod; levels: no tail */
     uint32_t metal_tail;     /* MTLTexture.firstMipmapInTail; levels: no Metal tail */
     VkDeviceSize metal_tail_size; /* tailSizeInBytes, per slice */
+    uint32_t tail_tiles;          /* blocks the tail takes (more than metal_tail_size for 3D) */
     VkDeviceSize level_offset[PVK_SPARSE_MAX_LEVELS + 1]; /* in a layer, for levels up to metal_tail */
     VkDeviceSize layer_size; /* bytes of a layer's blocks: level_offset[metal_tail] + metal_tail_size, aligned */
     VkDeviceSize align;      /* of binds: a block, or without residency a whole tail's power of two */
@@ -37646,8 +37650,14 @@ static bool pvk_sparse_layout_init(const struct pvk_physical_device *pd, const s
         off += (VkDeviceSize)((w + l->block.width - 1) / l->block.width) * ((h + l->block.height - 1) / l->block.height) *
                ((d + l->block.depth - 1) / l->block.depth) * PVK_SPARSE_BLOCK;
     }
-    /* Without residency, binds hold whole tails (SPARSE IMAGES). */
+    /* A 3D tail takes a tile more than tailSizeInBytes says for each of its
+     * levels more than one slice deep (section 7). Without residency, binds
+     * hold whole tails (SPARSE IMAGES). */
     tail = pvk_round_up(l->metal_tail_size, PVK_SPARSE_BLOCK);
+    for (lv = l->metal_tail; image->type == VK_IMAGE_TYPE_3D && lv < l->levels; lv++)
+        if ((image->extent.depth >> lv) > 1)
+            tail += PVK_SPARSE_BLOCK;
+    l->tail_tiles = (uint32_t)(tail / PVK_SPARSE_BLOCK);
     l->align = PVK_SPARSE_BLOCK;
     if (!(image->flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT))
         while (l->align < tail)
@@ -59380,9 +59390,8 @@ static uint32_t pvk_sparse_opaque_ops(const struct pvk_image *image, const VkSpa
             run = per_layer - local < left ? per_layer - local : left;
             if (local == l->level_offset[lv] / PVK_SPARSE_BLOCK && lv < l->levels) {
                 if (ops)
-                    pvk_sparse_texture_op(&ops[n], image->mtl_texture, heap, lv, layer, 0, 0, 0,
-                                          (uint32_t)((l->metal_tail_size + PVK_SPARSE_BLOCK - 1) / PVK_SPARSE_BLOCK), 1,
-                                          1, tile);
+                    pvk_sparse_texture_op(&ops[n], image->mtl_texture, heap, lv, layer, 0, 0, 0, l->tail_tiles, 1, 1,
+                                          tile);
                 n++;
             }
             continue;
