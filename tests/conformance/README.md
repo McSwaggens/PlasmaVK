@@ -178,7 +178,6 @@ a required behaviour.
 |---|---|
 | `devsandqueues.get_device_queue2_protected`, `features.pipelineProtectedAccess`, `devsandqueues.queue_families_sparse_protected` | Apple GPUs have no protected memory; sparse resources are not implemented. |
 | `resources.buffer_capture_replay` | Metal cannot place a resource at a requested GPU address, so `bufferDeviceAddressCaptureReplay` is unsupported. |
-| `memory.noncoherent_flush_invalidate_gpu` | Unified memory: every host-visible type is coherent. |
 | `extensions.instance_layer_extensions` | No layers: PlasmaVK is linked directly, without a loader. |
 | `features.shaderInt64` | Required only with 64-bit shader atomics, which Apple7/Apple8 GPUs lack. |
 | `features.descriptorIndexing` and the 12 descriptor-indexing features, the 14 update-after-bind limits | Required only with descriptor indexing, which needs descriptor sets, images and texel buffers (not implemented yet). |

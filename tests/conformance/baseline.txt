@@ -64,6 +64,7 @@ devsandqueues.device_allocation_failure
 
 memory.memory_counts
 memory.memory_commitment
+memory.noncoherent_flush_invalidate_gpu
 memory.memory_heap_device_local
 memory.memory_heap_size
 memory.memory_type_heap_index

@@ -36,12 +36,14 @@
  *    8. Instance
  *    9. Device and queues
  *   10. Memory and buffers
- *   11. Shader translator (SPIR-V -> MSL)
- *   12. Command buffers
- *   13. Queue submission and synchronization
- *   14. Pipelines
- *   15. Unimplemented commands
- *   16. Entry points
+ *   11. Images, views and samplers
+ *   12. Descriptor sets
+ *   13. Shader translator (SPIR-V -> MSL)
+ *   14. Command buffers
+ *   15. Queue submission and synchronization
+ *   16. Pipelines
+ *   17. Unimplemented commands
+ *   18. Entry points
  *   Licenses
  *
  * LICENSE
@@ -31446,7 +31448,7 @@ static void pvk_log(enum pvk_log_level level, const char *fmt, ...)
     fputc('\n', stderr);
 }
 
-/* Body of every stub in section 15. */
+/* Body of every stub in section 17. */
 #ifdef PLASMAVK_ABORT_ON_UNIMPLEMENTED
 #define PVK_UNIMPLEMENTED() (pvk_log(PVK_LOG_ERROR, "%s is not implemented", __func__), abort())
 #else
@@ -31527,8 +31529,8 @@ static VkResult pvk_enumerate(const void *items, size_t item_size, uint32_t coun
 /* ==========================================================================
  * 6. Extensions
  *
- * Advertised extensions. Their commands get stubs in section 15 and entries
- * in section 16 until implemented.
+ * Advertised extensions. Their commands get stubs in section 17 and entries
+ * in section 18 until implemented.
  * ========================================================================== */
 
 enum pvk_instance_extension {
@@ -31560,7 +31562,7 @@ static const VkExtensionProperties pvk_device_extensions[] = {
  * Dependencies: a device extension whose instance extension dependency was
  * not enabled by vkCreateInstance is unsupported, so it is neither listed by
  * vkEnumerateDeviceExtensionProperties nor accepted by vkCreateDevice, and
- * its commands are not available (section 16). */
+ * its commands are not available (section 18). */
 static const int pvk_device_extension_needs[PVK_DEVICE_EXTENSION_COUNT] = {
     PVK_INSTANCE_EXT_KHR_surface, /* VK_KHR_swapchain */
     -1,                           /* VK_KHR_maintenance5 */
@@ -31620,7 +31622,7 @@ struct pvk_queue {
     uint32_t family_index;
     uint32_t index;
     VkDeviceQueueCreateFlags flags;
-    /* Submission (section 13). vkQueueSubmit is externally synchronized, so
+    /* Submission (section 15). vkQueueSubmit is externally synchronized, so
      * only it, vkQueueWaitIdle and vkDeviceWaitIdle touch these. */
     id timeline;          /* MTLSharedEvent: reaches N when submission N is done */
     uint64_t serial;      /* value of the last submission */
@@ -31630,7 +31632,7 @@ struct pvk_queue {
     struct pvk_upload_chunk *upload;               /* being filled */
     struct pvk_upload_chunk *retired, *retired_tail; /* full, in flight, oldest first */
     struct pvk_upload_chunk *free_chunks;
-    /* Batches whose semaphore waits the host resolves (section 13): the
+    /* Batches whose semaphore waits the host resolves (section 15): the
      * queue's thread commits them in order. */
     pthread_mutex_t lock;
     pthread_cond_t cond;
@@ -31650,7 +31652,7 @@ struct pvk_device {
     struct pvk_queue queues[PVK_MAX_QUEUES];
     id residency_set; /* MTLResidencySet attached to every queue (section 9) */
     pthread_mutex_t residency_lock;
-    /* GPU execution (sections 12-14) */
+    /* GPU execution (sections 14-16) */
     int lost;              /* a command buffer failed: VK_ERROR_DEVICE_LOST (atomic) */
     long feedback_pending; /* commit feedback handlers still to run (atomic) */
     id fill_pipeline;      /* internal kernel of vkCmdFillBuffer, made on first use */
@@ -31698,13 +31700,13 @@ static const VkAllocationCallbacks *pvk_device_alloc(const struct pvk_device *de
  *
  * Where Metal's own limit is below what Vulkan requires, a limit is what
  * PlasmaVK's design provides. Descriptor sets are tables of GPU addresses and
- * resource IDs in buffer memory (section 11's binding model), so descriptor
+ * resource IDs in buffer memory (section 13's binding model), so descriptor
  * counts are not bound by Metal's per-stage argument-table slots (FST: 31
  * buffers, 128 textures, 16 samplers) but by what a shader may reach through
  * such tables (FST "Argument buffers", per stage: buffers unlimited, 1 M
  * textures, 996 samplers on Apple7/8 and 500 K from Apple9). */
 #define PVK_MAX_DESCRIPTORS 1000000u /* of one type, or in all, per stage or set */
-/* Set N is argument-table buffer N (section 11), and push constants and
+/* Set N is argument-table buffer N (section 13), and push constants and
  * runtime-array sizes take two more of the 31 buffer slots (FST). 8 sets
  * (Vulkan 1.4 requires 7) leave 21 slots, room for the vertex buffers. */
 #define PVK_MAX_BOUND_SETS 8u
@@ -32007,7 +32009,7 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
     snprintf(p12->driverInfo, sizeof(p12->driverInfo), "PlasmaVK %s on Metal 4", version);
     /* conformanceVersion stays 0.0.0.0: PlasmaVK is not conformant. */
 
-    /* Shaders are compiled with MTLMathModeSafe (section 11): signed zeros,
+    /* Shaders are compiled with MTLMathModeSafe (section 13): signed zeros,
      * Inf and NaN are kept and results rounded to nearest even. MSL offers
      * no control over denormals and has no 64-bit floats. */
     p12->denormBehaviorIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE;
@@ -32113,7 +32115,7 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
  * optional feature is reported.
  *
  * Most of these have no implementation yet (their commands are stubs in
- * section 15): reporting them follows from claiming 1.4, and each subsystem
+ * section 17): reporting them follows from claiming 1.4, and each subsystem
  * must honour them as it lands. */
 static void pvk_physical_device_init_features(struct pvk_features *f)
 {
@@ -32210,22 +32212,30 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     pvk_physical_device_init_properties_1x(pd);
     pvk_physical_device_init_features(&pd->features);
 
-    /* Apple GPUs have unified memory: one heap; private, shared and lazily
-     * allocated (memoryless tile memory) types. The order follows the spec's
-     * rule: a type whose flags are a strict subset of another's comes first. */
+    /* Apple GPUs have unified memory: one heap; private, shared (twice) and
+     * lazily allocated (memoryless tile memory) types. The order follows the
+     * spec's rule: a type whose flags are a strict subset of another's comes
+     * first. */
     m->memoryHeapCount = 1;
     m->memoryHeaps[0].size = pvk_MTLDevice_recommendedMaxWorkingSetSize(pd->mtl_device);
     m->memoryHeaps[0].flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
-    m->memoryTypeCount = 3;
+    m->memoryTypeCount = 4;
     m->memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT; /* MTLStorageModePrivate */
-    m->memoryTypes[1].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | /* MTLStorageModeShared */
+    /* MTLStorageModeShared without the coherence guarantee, for applications
+     * that pick a cached, non-coherent type for readback. The memory itself is
+     * coherent, so flushes and invalidations have nothing to do; the type only
+     * withholds a promise, it makes none it can't keep. */
+    m->memoryTypes[1].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                      VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    m->memoryTypes[2].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | /* MTLStorageModeShared */
                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
                                       VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
     /* MTLStorageModeMemoryless: only transient attachments may use it (their
      * contents live in tile memory and never reach RAM), so buffers exclude
      * it and allocating it reserves nothing (section 10). */
-    m->memoryTypes[2].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
+    m->memoryTypes[3].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
 }
 
 static VkResult pvk_physical_device_create(struct pvk_instance *instance)
@@ -33086,8 +33096,11 @@ struct pvk_buffer {
  * Metal 4 does not track, Vulkan barriers say what to wait for. */
 static const pvk_MTLResourceOptions pvk_memory_type_options[] = {
     PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked,
+    PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeDefaultCache | /* non-coherent */
+        PVK_MTLResourceHazardTrackingModeUntracked,
     PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeDefaultCache |
         PVK_MTLResourceHazardTrackingModeUntracked,
+    0, /* lazily allocated: no Metal allocation */
 };
 
 VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemoryAllocateInfo *pAllocateInfo,
@@ -33381,7 +33394,19 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
 }
 
 /* ==========================================================================
- * 11. Shader translator (SPIR-V -> MSL)
+ * 11. Images, views and samplers
+ *
+ * Formats, VkImage, VkImageView, VkBufferView, VkSampler and host image copy.
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 12. Descriptor sets
+ *
+ * Descriptor set layouts, pools, sets, updates and push descriptors.
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 13. Shader translator (SPIR-V -> MSL)
  *
  * Translates a SPIR-V module into Metal Shading Language source plus the
  * reflection a pipeline needs. Plain C: SPIR-V words in, MSL text out. It
@@ -38748,21 +38773,21 @@ static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const
 }
 
 /* ==========================================================================
- * 12. Command buffers
+ * 14. Command buffers
  *
  * Command pools and command buffers: recording vkCmd* commands.
  *
  * Recording is deferred. Each vkCmd* appends a compact packet to the command
  * buffer's blocks (memory from its pool, through the pool's allocation
  * callbacks) and touches no Metal object; vkQueueSubmit replays the packets
- * into a fresh MTL4CommandBuffer (section 13). So a command buffer can be
+ * into a fresh MTL4CommandBuffer (section 15). So a command buffer can be
  * submitted any number of times, also simultaneously, and is free to reset
  * as soon as vkQueueSubmit returns. Buffers are resolved to their memory's
  * MTLBuffer and GPU address when recorded (Vulkan requires them bound by
  * then).
  * ========================================================================== */
 
-/* Pipelines (section 14) as the commands see them. */
+/* Pipelines (section 16) as the commands see them. */
 struct pvk_pipeline_layout {
     uint32_t set_count;          /* descriptor sets will be tables at buffer indices 0.. */
     uint32_t push_constant_size; /* end of the highest push-constant range */
@@ -39338,7 +39363,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdExecuteCommands(VkCommandBuffer commandBuffer, u
 }
 
 /* ==========================================================================
- * 13. Queue submission and synchronization
+ * 15. Queue submission and synchronization
  *
  * vkQueueSubmit, fences, semaphores and waiting for idle.
  *
@@ -40544,11 +40569,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkWaitSemaphores(VkDevice device, const VkSemapho
 }
 
 /* ==========================================================================
- * 14. Pipelines
+ * 16. Pipelines
  *
  * Shader modules, pipeline layouts and pipelines.
  *
- * A compute pipeline is translated (section 11) and compiled when created:
+ * A compute pipeline is translated (section 13) and compiled when created:
  * MSL 3.2, MTLMathModeSafe, maxTotalThreadsPerThreadgroup = the workgroup
  * size (so the compiler fits it). Push constants are bound by GPU address at
  * the translator's push-constant index; descriptor sets will be address
@@ -40601,7 +40626,7 @@ static id pvk_compile_compute(struct pvk_device *device, const char *msl, const 
     return pso;
 }
 
-/* vkCmdFillBuffer for patterns whose four bytes differ (section 13): one
+/* vkCmdFillBuffer for patterns whose four bytes differ (section 15): one
  * 32-bit word per thread, arguments at the push-constant index. */
 static const char pvk_fill_msl[] =
     "#include <metal_stdlib>\n"
@@ -40815,11 +40840,11 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
 }
 
 /* ==========================================================================
- * 15. Unimplemented commands
+ * 17. Unimplemented commands
  *
  * Every other Vulkan 1.4 command, plus the commands of the extensions in
  * section 6. To implement one, delete its line here and write it in its
- * subsystem's section. Its entry in section 16 stays as is.
+ * subsystem's section. Its entry in section 18 stays as is.
  * ========================================================================== */
 
 #if defined(__clang__)
@@ -40998,7 +41023,7 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSets(VkDevice device, uint32_t desc
 #endif
 
 /* ==========================================================================
- * 16. Entry points
+ * 18. Entry points
  *
  * Every command vkGetInstanceProcAddr / vkGetDeviceProcAddr can return,
  * with its scope, the core version that added it and the extension it

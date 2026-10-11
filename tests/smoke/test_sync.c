@@ -1,5 +1,5 @@
 /* Fences, binary and timeline semaphores, queue and device idle waits
- * (section 13). The GPU is held back with a timeline semaphore wait that
+ * (section 15). The GPU is held back with a timeline semaphore wait that
  * the host signals later. */
 #define PLASMAVK_IMPLEMENTATION
 #include "../../plasmavk.h"

@@ -1,4 +1,4 @@
-/* The SPIR-V -> MSL translator (section 11): each shader is translated,
+/* The SPIR-V -> MSL translator (section 13): each shader is translated,
  * compiled by Metal, run on real data and compared with a CPU reference.
  * Then malformed and unsupported modules must fail cleanly.
  *
