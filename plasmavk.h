@@ -31706,6 +31706,7 @@ static inline id pvk_MTLRenderPipelineState_label(id self) { PVK_SEL_CACHE("labe
 #define PVK_MAX_QUEUES_PER_FAMILY 4
 #define PVK_QUEUE_FAMILY_COUNT 2 /* section 7 */
 #define PVK_MAX_QUEUES (PVK_MAX_QUEUES_PER_FAMILY * PVK_QUEUE_FAMILY_COUNT)
+#define PVK_MEMORY_TYPE_COUNT 4 /* section 7 */
 #define PVK_ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 /* ---- Logging ----
@@ -32049,6 +32050,10 @@ struct pvk_device {
     struct pvk_queue queues[PVK_MAX_QUEUES];
     id residency_set; /* MTLResidencySet attached to every queue (section 9) */
     pthread_mutex_t residency_lock;
+    uint32_t residency_changes; /* to the set since its last commit, under residency_lock */
+    /* Small VkDeviceMemory: blocks of shared heaps, by memory type (section 10) */
+    pthread_mutex_t pool_lock;
+    struct pvk_memory_chunk *chunks[PVK_MEMORY_TYPE_COUNT];
     /* GPU execution (sections 15-17) */
     /* What every barrier makes visible: the device coherence point, and with
      * sparseBinding the aliased virtual addresses too (GPU caches are
@@ -32448,9 +32453,13 @@ static void pvk_physical_device_init_memory_limits(struct pvk_physical_device *p
     uint32_t max_range = max_buffer > UINT32_MAX ? UINT32_MAX : (uint32_t)max_buffer;
     unsigned i;
 
-    /* Metal documents no limit on heaps (one per VkDeviceMemory). 150k heaps
-     * in one residency set worked on M4 Max; report the power of two below. */
-    l->maxMemoryAllocationCount = 131072;
+    /* Metal documents no limit on heaps, and small allocations share them
+     * (section 10). The spec's minimum, as most drivers report: every large
+     * allocation is a heap of its own, and each heap the kernel maps and
+     * unmaps in the GPU's page tables. Many processes doing that at once,
+     * tens of thousands of times each, panicked macOS 27.2 beta (a UAT lock
+     * timeout in the GPU driver). */
+    l->maxMemoryAllocationCount = 4096;
     /* A VkBuffer is a range of one MTLBuffer: MTLDevice.maxBufferLength. */
     l->maxStorageBufferRange = max_range;
     l->maxUniformBufferRange = max_range; /* FST lists no constant buffer size limit */
@@ -33080,7 +33089,7 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     m->memoryHeapCount = 1;
     m->memoryHeaps[0].size = pvk_MTLDevice_recommendedMaxWorkingSetSize(pd->mtl_device);
     m->memoryHeaps[0].flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
-    m->memoryTypeCount = 4;
+    m->memoryTypeCount = PVK_MEMORY_TYPE_COUNT;
     m->memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT; /* MTLStorageModePrivate */
     /* MTLStorageModeShared without the coherence guarantee, for applications
      * that pick a cached, non-coherent type for readback. The memory itself is
@@ -36012,10 +36021,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkSetDebugUtilsObjectTagEXT(VkDevice _device, con
     return VK_SUCCESS;
 }
 
+static void pvk_memory_pools_free(struct pvk_device *device); /* section 10 */
+
 static void pvk_device_free(struct pvk_device *device)
 {
     uint32_t i;
     pvk_device_finish(device);
+    pvk_memory_pools_free(device);
     pvk_private_data_free_reserve(device);
     pvk_release(device->sparse_flush_texture);
     pvk_release(device->sparse_flush_buffer);
@@ -36034,6 +36046,7 @@ static void pvk_device_free(struct pvk_device *device)
     }
     pvk_release(device->residency_set);
     pthread_mutex_destroy(&device->residency_lock);
+    pthread_mutex_destroy(&device->pool_lock);
     pvk_names_free(device);
     pvk_free(pvk_device_alloc(device), device);
 }
@@ -36059,11 +36072,17 @@ static id pvk_device_new_queue(id mtl, uint32_t family, uint32_t index)
  *
  * Metal 4 queues do not track resources: the GPU may only touch allocations
  * in a residency set attached to the queue or command buffer. Each device has
- * one set, attached to all its queues, holding every VkDeviceMemory's heap
- * (section 10). Changes are committed immediately: a commit costs ~0.3 us on
- * M4 Max regardless of the set's size (measured with 150k heaps). The lock is
- * there because MTLResidencySet is not documented as thread-safe while Vulkan
- * lets any thread allocate. */
+ * one set, attached to all its queues, holding the heaps of all VkDeviceMemory
+ * (section 10). Changes are committed in batches: before every command
+ * buffer commit and mapping update (pvk_device_commit_residency), so the GPU
+ * sees every allocation made before the submission, and after every
+ * PVK_RESIDENCY_BATCH changes. The set retains what it holds until a removal
+ * is committed (checked on M4 Max), so an evicted allocation released at
+ * once lives until then; a freed heap of its own commits at once, which
+ * returns its memory. The lock is there because MTLResidencySet is not
+ * documented as thread-safe while Vulkan lets any thread allocate. */
+
+#define PVK_RESIDENCY_BATCH 256
 
 static VkResult pvk_device_create_residency_set(struct pvk_device *device)
 {
@@ -36077,19 +36096,51 @@ static VkResult pvk_device_create_residency_set(struct pvk_device *device)
     return device->residency_set ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
 }
 
+/* Under residency_lock. */
+static void pvk_device_residency_changed(struct pvk_device *device, bool commit)
+{
+    if (++device->residency_changes >= PVK_RESIDENCY_BATCH || commit) {
+        pvk_MTLResidencySet_commit(device->residency_set);
+        device->residency_changes = 0;
+    }
+}
+
 static void pvk_device_make_resident(struct pvk_device *device, id allocation)
 {
     pthread_mutex_lock(&device->residency_lock);
     pvk_MTLResidencySet_addAllocation(device->residency_set, allocation);
-    pvk_MTLResidencySet_commit(device->residency_set);
+    pvk_device_residency_changed(device, false);
+    pthread_mutex_unlock(&device->residency_lock);
+}
+
+static void pvk_device_remove_resident(struct pvk_device *device, id allocation, bool commit)
+{
+    pthread_mutex_lock(&device->residency_lock);
+    pvk_MTLResidencySet_removeAllocation(device->residency_set, allocation);
+    pvk_device_residency_changed(device, commit);
     pthread_mutex_unlock(&device->residency_lock);
 }
 
 static void pvk_device_evict(struct pvk_device *device, id allocation)
 {
+    pvk_device_remove_resident(device, allocation, false);
+}
+
+/* For heaps: the set lets go now, so their memory is freed when the caller
+ * releases them. */
+static void pvk_device_evict_commit(struct pvk_device *device, id heap)
+{
+    pvk_device_remove_resident(device, heap, true);
+}
+
+/* Before the GPU runs anything: what was made resident before is. */
+static void pvk_device_commit_residency(struct pvk_device *device)
+{
     pthread_mutex_lock(&device->residency_lock);
-    pvk_MTLResidencySet_removeAllocation(device->residency_set, allocation);
-    pvk_MTLResidencySet_commit(device->residency_set);
+    if (device->residency_changes) {
+        pvk_MTLResidencySet_commit(device->residency_set);
+        device->residency_changes = 0;
+    }
     pthread_mutex_unlock(&device->residency_lock);
 }
 
@@ -36165,6 +36216,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
     if (!device)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     if (pthread_mutex_init(&device->residency_lock, NULL) != 0) {
+        pvk_free(alloc, device);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    if (pthread_mutex_init(&device->pool_lock, NULL) != 0) {
+        pthread_mutex_destroy(&device->residency_lock);
         pvk_free(alloc, device);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -36308,10 +36364,11 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, u
  *
  * VkDeviceMemory, VkBuffer and buffer device addresses.
  *
- * A VkDeviceMemory is a placement MTLHeap of the allocation's size plus one
- * MTLBuffer placed at heap offset 0 that covers all of it. Why a heap and not
- * just a buffer: images must later be bound into the same memory as
- * optimally tiled textures at any offset, which only a placement heap can do
+ * A large VkDeviceMemory is a placement MTLHeap of the allocation's size plus
+ * one MTLBuffer placed at heap offset 0 that covers all of it (small ones are
+ * blocks of shared heaps, below). Why a heap and not just a buffer: images
+ * must later be bound into the same memory as optimally tiled textures at
+ * any offset, which only a placement heap can do
  * (-[MTLHeap newTextureWithDescriptor:offset:]); a plain MTLBuffer can only
  * back linear textures. Checked on M4 Max: placement heaps accept both
  * storage modes (and textures in both); a heap is one contiguous range, so
@@ -36322,6 +36379,21 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, u
  *
  * The heap, not the buffer, joins the device's residency set (section 9), so
  * images placed in it later are resident too.
+ *
+ * Small allocations (PVK_POOL_LARGEST or less) don't get heaps of their own:
+ * they are blocks of shared PVK_POOL_CHUNK heaps, one list of them per
+ * memory type, handed out by a buddy allocator, with an MTLBuffer of their
+ * own placed at the block. Heaps are what the kernel maps into the GPU's page
+ * tables, so this spares it most of that work (CTS processes making and
+ * freeing tens of thousands of heaps each panicked macOS 27.2 beta, section
+ * 7, maxMemoryAllocationCount). A block of 2^k bytes sits at a multiple of
+ * 2^k, so any resource whose alignment the memory's offsets keep is aligned
+ * in the heap too: Vulkan alignments are powers of two no larger than the
+ * resource's size, which fits in the block. Blocks start at PVK_PAGE_SIZE:
+ * mapped pointers keep minMemoryMapAlignment, and Metal places buffers in
+ * heaps at 256 B. With sparseBinding, allocations of 64 KB or more keep
+ * heaps of their own (below), so sparse binds always map onto a heap at the
+ * memory's offset.
  *
  * A VkBuffer is only (memory, offset, size). Metal 4 binds buffers by GPU
  * address, so its device address is the memory's gpuAddress + offset;
@@ -36334,9 +36406,31 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, u
  * resources can map onto.
  * ========================================================================== */
 
+#define PVK_POOL_CHUNK_ORDER 23 /* 8 MB heaps */
+#define PVK_POOL_BLOCK_ORDER 14 /* blocks of PVK_PAGE_SIZE and up */
+#define PVK_POOL_CHUNK ((VkDeviceSize)1 << PVK_POOL_CHUNK_ORDER)
+#define PVK_POOL_LARGEST (PVK_POOL_CHUNK / 16) /* 512 KB */
+#define PVK_POOL_LEVELS (PVK_POOL_CHUNK_ORDER - PVK_POOL_BLOCK_ORDER + 1)
+#define PVK_POOL_NODES ((uint32_t)1 << PVK_POOL_LEVELS) /* of the buddy tree, from 1 */
+
+/* A heap small allocations are blocks of. The blocks form a binary tree,
+ * numbered from 1 like a binary heap: node n at level L (2^L <= n < 2^(L+1))
+ * is the block of PVK_POOL_CHUNK >> L bytes at (n - 2^L) times that, and
+ * its halves are 2n and 2n + 1. free marks the nodes that are whole free
+ * blocks, neither split nor allocated. */
+struct pvk_memory_chunk {
+    struct pvk_memory_chunk *next;
+    id heap;       /* MTLHeap, MTLHeapTypePlacement, PVK_POOL_CHUNK long, resident */
+    uint32_t used; /* blocks allocated */
+    uint64_t free[PVK_POOL_NODES / 64];
+};
+
 struct pvk_device_memory {
-    id mtl_heap;   /* MTLHeap, MTLHeapTypePlacement */
-    id mtl_buffer; /* MTLBuffer at heap offset 0, allocationSize long */
+    id mtl_heap;   /* MTLHeap, MTLHeapTypePlacement: its own, or its chunk's */
+    id mtl_buffer; /* MTLBuffer at heap_offset in mtl_heap, allocationSize long */
+    VkDeviceSize heap_offset;
+    struct pvk_memory_chunk *chunk; /* NULL: mtl_heap is the memory's own */
+    uint32_t block;                 /* the chunk's node */
     pvk_MTLGPUAddress gpu_address;
     char *contents; /* NULL unless host-visible */
     VkDeviceSize size;
@@ -36381,6 +36475,164 @@ static const pvk_MTLResourceOptions pvk_memory_type_options[] = {
     0, /* lazily allocated: no Metal allocation */
 };
 
+/* ---- Pools ---- */
+
+static void pvk_chunk_mark(struct pvk_memory_chunk *c, uint32_t node, bool free)
+{
+    if (free)
+        c->free[node / 64] |= (uint64_t)1 << (node % 64);
+    else
+        c->free[node / 64] &= ~((uint64_t)1 << (node % 64));
+}
+
+/* A free block at a level: its node, or 0. The levels below 6 share the
+ * first word; the others are whole words. */
+static uint32_t pvk_chunk_find(const struct pvk_memory_chunk *c, uint32_t level)
+{
+    uint32_t n = (uint32_t)1 << level, end = n << 1;
+    while (n < end) {
+        uint64_t w = c->free[n / 64] >> (n % 64);
+        if (w) {
+            n += (uint32_t)__builtin_ctzll(w);
+            return n < end ? n : 0;
+        }
+        n = (n / 64 + 1) * 64;
+    }
+    return 0;
+}
+
+/* A block at a level, halving a larger one if need be: its node, or 0. */
+static uint32_t pvk_chunk_alloc(struct pvk_memory_chunk *c, uint32_t level)
+{
+    uint32_t l = level, n;
+    while (!(n = pvk_chunk_find(c, l)))
+        if (l-- == 0)
+            return 0;
+    pvk_chunk_mark(c, n, false);
+    for (; l < level; l++) { /* keep the first half, free the second */
+        n *= 2;
+        pvk_chunk_mark(c, n + 1, true);
+    }
+    c->used++;
+    return n;
+}
+
+/* Frees a block, merging it with its free buddies; whether the chunk is now
+ * empty. */
+static bool pvk_chunk_free(struct pvk_memory_chunk *c, uint32_t n)
+{
+    while (n > 1 && (c->free[(n ^ 1) / 64] >> ((n ^ 1) % 64) & 1)) {
+        pvk_chunk_mark(c, n ^ 1, false);
+        n /= 2;
+    }
+    pvk_chunk_mark(c, n, true);
+    return --c->used == 0;
+}
+
+static struct pvk_memory_chunk *pvk_chunk_create(struct pvk_device *device, uint32_t type)
+{
+    struct pvk_memory_chunk *c = pvk_alloc(pvk_device_alloc(device), sizeof(*c), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+    void *pool;
+    id desc;
+
+    if (!c)
+        return NULL;
+    pool = objc_autoreleasePoolPush();
+    desc = pvk_MTLHeapDescriptor_new();
+    if (desc) {
+        pvk_MTLHeapDescriptor_setType(desc, PVK_MTLHeapTypePlacement);
+        pvk_MTLHeapDescriptor_setResourceOptions(desc, pvk_memory_type_options[type]);
+        pvk_MTLHeapDescriptor_setSize(desc, PVK_POOL_CHUNK);
+        c->heap = pvk_MTLDevice_newHeapWithDescriptor(device->physical_device->mtl_device, desc);
+        pvk_release(desc);
+    }
+    if (c->heap)
+        pvk_MTLHeap_setLabel(c->heap, pvk_NSString_stringWithUTF8String("PlasmaVK small VkDeviceMemory"));
+    objc_autoreleasePoolPop(pool);
+    if (!c->heap) {
+        pvk_free(pvk_device_alloc(device), c);
+        return NULL;
+    }
+    pvk_chunk_mark(c, 1, true);
+    pvk_device_make_resident(device, c->heap);
+    return c;
+}
+
+static void pvk_memory_block_free(struct pvk_device *device, struct pvk_device_memory *memory)
+{
+    struct pvk_memory_chunk *c = memory->chunk, *other = NULL, **p;
+
+    pthread_mutex_lock(&device->pool_lock);
+    if (pvk_chunk_free(c, memory->block)) {
+        /* One empty chunk per type stays for the next allocations. */
+        for (other = device->chunks[memory->type_index]; other && (other == c || other->used); other = other->next)
+            ;
+        if (other) {
+            for (p = &device->chunks[memory->type_index]; *p != c; p = &(*p)->next)
+                ;
+            *p = c->next;
+        }
+    }
+    pthread_mutex_unlock(&device->pool_lock);
+    if (other) {
+        pvk_device_evict_commit(device, c->heap);
+        pvk_release(c->heap);
+        pvk_free(pvk_device_alloc(device), c);
+    }
+}
+
+/* Makes the memory a block of a chunk of its type, with its own buffer. */
+static bool pvk_memory_block_alloc(struct pvk_device *device, struct pvk_device_memory *memory)
+{
+    pvk_MTLResourceOptions options = pvk_memory_type_options[memory->type_index];
+    struct pvk_memory_chunk *c, **list = &device->chunks[memory->type_index];
+    uint32_t level = PVK_POOL_LEVELS - 1, n = 0;
+    void *pool;
+
+    while (level > 0 && (PVK_POOL_CHUNK >> level) < memory->size)
+        level--;
+    pthread_mutex_lock(&device->pool_lock);
+    for (c = *list; c && !(n = pvk_chunk_alloc(c, level)); c = c->next)
+        ;
+    if (!c && (c = pvk_chunk_create(device, memory->type_index))) {
+        c->next = *list;
+        *list = c;
+        n = pvk_chunk_alloc(c, level);
+    }
+    pthread_mutex_unlock(&device->pool_lock);
+    if (!n)
+        return false;
+    memory->chunk = c;
+    memory->block = n;
+    memory->heap_offset = (n - ((uint32_t)1 << level)) * (PVK_POOL_CHUNK >> level);
+    pool = objc_autoreleasePoolPush();
+    memory->mtl_buffer = pvk_MTLHeap_newBufferWithLength_options_offset(c->heap, memory->size, options,
+                                                                        memory->heap_offset);
+    objc_autoreleasePoolPop(pool);
+    if (!memory->mtl_buffer) {
+        pvk_memory_block_free(device, memory);
+        memory->chunk = NULL;
+        memory->heap_offset = 0;
+        return false;
+    }
+    memory->mtl_heap = c->heap;
+    return true;
+}
+
+static void pvk_memory_pools_free(struct pvk_device *device)
+{
+    uint32_t t;
+    for (t = 0; t < PVK_MEMORY_TYPE_COUNT; t++) {
+        struct pvk_memory_chunk *c = device->chunks[t], *next;
+        for (; c; c = next) { /* the residency set lets go with the device */
+            next = c->next;
+            pvk_release(c->heap);
+            pvk_free(pvk_device_alloc(device), c);
+        }
+        device->chunks[t] = NULL;
+    }
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemoryAllocateInfo *pAllocateInfo,
                                                 const VkAllocationCallbacks *pAllocator, VkDeviceMemory *pMemory)
 {
@@ -36392,12 +36644,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemory
     uint32_t type = pAllocateInfo->memoryTypeIndex;
     struct pvk_device_memory *memory;
     pvk_MTLResourceOptions options;
+    bool sparse;
     void *pool;
     id desc;
 
     /* The pNext structs PlasmaVK accepts (dedicated allocation, allocate
-     * flags, capture address) need nothing: every allocation is its own heap
-     * and has a GPU address. */
+     * flags, capture address) need nothing: every allocation has a GPU
+     * address. */
     if (type >= types->memoryTypeCount || size == 0 || size > pvk_MTLDevice_maxBufferLength(mtl))
         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     memory = pvk_alloc(alloc, sizeof(*memory), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -36415,32 +36668,36 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemory
     }
     options = pvk_memory_type_options[type];
 
-    pool = objc_autoreleasePoolPush();
-    desc = pvk_MTLHeapDescriptor_new();
-    if (desc) {
-        pvk_MTLHeapDescriptor_setType(desc, PVK_MTLHeapTypePlacement);
-        pvk_MTLHeapDescriptor_setResourceOptions(desc, options);
-        pvk_MTLHeapDescriptor_setSize(desc, pvk_MTLDevice_heapBufferSizeAndAlignWithLength_options(mtl, size, options).size);
-        /* Memory sparse resources may map onto (SPARSE RESOURCES, section 7):
-         * the heap's size becomes a multiple of 64 KB. */
-        if (device->features.core.sparseBinding && size >= PVK_SPARSE_BLOCK)
-            pvk_MTLHeapDescriptor_setMaxCompatiblePlacementSparsePageSize(desc, PVK_SPARSE_PAGE);
-        memory->mtl_heap = pvk_MTLDevice_newHeapWithDescriptor(mtl, desc);
-        pvk_release(desc);
-    }
-    if (memory->mtl_heap)
-        memory->mtl_buffer = pvk_MTLHeap_newBufferWithLength_options_offset(memory->mtl_heap, size, options, 0);
-    objc_autoreleasePoolPop(pool);
-    if (!memory->mtl_buffer) {
-        pvk_release(memory->mtl_heap);
-        pvk_free(alloc, memory);
-        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    /* Memory sparse resources may map onto (SPARSE RESOURCES, section 7) is
+     * a heap of its own whose size becomes a multiple of 64 KB. */
+    sparse = device->features.core.sparseBinding && size >= PVK_SPARSE_BLOCK;
+    if (size > PVK_POOL_LARGEST || sparse || !pvk_memory_block_alloc(device, memory)) {
+        pool = objc_autoreleasePoolPush();
+        desc = pvk_MTLHeapDescriptor_new();
+        if (desc) {
+            pvk_MTLHeapDescriptor_setType(desc, PVK_MTLHeapTypePlacement);
+            pvk_MTLHeapDescriptor_setResourceOptions(desc, options);
+            pvk_MTLHeapDescriptor_setSize(desc,
+                                          pvk_MTLDevice_heapBufferSizeAndAlignWithLength_options(mtl, size, options).size);
+            if (sparse)
+                pvk_MTLHeapDescriptor_setMaxCompatiblePlacementSparsePageSize(desc, PVK_SPARSE_PAGE);
+            memory->mtl_heap = pvk_MTLDevice_newHeapWithDescriptor(mtl, desc);
+            pvk_release(desc);
+        }
+        if (memory->mtl_heap)
+            memory->mtl_buffer = pvk_MTLHeap_newBufferWithLength_options_offset(memory->mtl_heap, size, options, 0);
+        objc_autoreleasePoolPop(pool);
+        if (!memory->mtl_buffer) {
+            pvk_release(memory->mtl_heap);
+            pvk_free(alloc, memory);
+            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        }
+        pvk_device_make_resident(device, memory->mtl_heap);
     }
 
     memory->gpu_address = pvk_MTLBuffer_gpuAddress(memory->mtl_buffer);
     if (types->memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
         memory->contents = pvk_MTLBuffer_contents(memory->mtl_buffer);
-    pvk_device_make_resident(device, memory->mtl_heap);
     pvk_live_add(device, VK_OBJECT_TYPE_DEVICE_MEMORY, memory, NULL, pAllocator != NULL);
     *pMemory = (VkDeviceMemory)memory;
     return VK_SUCCESS;
@@ -36455,10 +36712,13 @@ VKAPI_ATTR void VKAPI_CALL vkFreeMemory(VkDevice _device, VkDeviceMemory _memory
     if (!memory || !pvk_live_destroy(device, VK_OBJECT_TYPE_DEVICE_MEMORY, memory, pAllocator))
         return;
     pool = objc_autoreleasePoolPush();
-    if (memory->mtl_heap) /* none for lazily allocated memory */
-        pvk_device_evict(device, memory->mtl_heap);
     pvk_release(memory->mtl_buffer);
-    pvk_release(memory->mtl_heap);
+    if (memory->chunk) {
+        pvk_memory_block_free(device, memory);
+    } else if (memory->mtl_heap) { /* none for lazily allocated memory */
+        pvk_device_evict_commit(device, memory->mtl_heap);
+        pvk_release(memory->mtl_heap);
+    }
     objc_autoreleasePoolPop(pool);
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc(device), memory);
 }
@@ -37617,7 +37877,7 @@ static VkResult pvk_image_bind_planes(struct pvk_image *image, struct pvk_device
             texture = pvk_MTLBuffer_newTextureWithDescriptor_offset_bytesPerRow(memory->mtl_buffer, desc, at,
                                                                                 pl->row_pitch);
         else if (desc && memory->mtl_heap)
-            texture = pvk_MTLHeap_newTextureWithDescriptor_offset(memory->mtl_heap, desc, at);
+            texture = pvk_MTLHeap_newTextureWithDescriptor_offset(memory->mtl_heap, desc, memory->heap_offset + at);
         pvk_release(desc);
         if (!texture) {
             result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -37657,7 +37917,7 @@ static VkResult pvk_image_bind(struct pvk_device *device, struct pvk_image *imag
             texture = pvk_MTLBuffer_newTextureWithDescriptor_offset_bytesPerRow(memory->mtl_buffer, desc, offset,
                                                                                 image->row_pitch);
         else if (desc)
-            texture = pvk_MTLHeap_newTextureWithDescriptor_offset(memory->mtl_heap, desc, offset);
+            texture = pvk_MTLHeap_newTextureWithDescriptor_offset(memory->mtl_heap, desc, memory->heap_offset + offset);
     }
     pvk_release(desc);
     objc_autoreleasePoolPop(pool);
@@ -38597,6 +38857,7 @@ static VkResult pvk_host_copy_blit(struct pvk_device *device, struct pvk_image *
         if (enc)
             pvk_MTL4CommandEncoder_endEncoding(enc);
         pvk_MTL4CommandBuffer_endCommandBuffer(cb);
+        pvk_device_commit_residency(device);
         pvk_MTL4CommandQueue_commit_count(device->host_queue, &cb, 1);
         pvk_MTL4CommandQueue_signalEvent_value(device->host_queue, device->host_event, ++device->host_serial);
         while (!pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(device->host_event, device->host_serial, 1000))
@@ -58462,6 +58723,7 @@ static void pvk_queue_commit(struct pvk_queue *queue, id cb)
     id options = pvk_MTL4CommitOptions_new();
     pvk_MTL4CommitOptions_addFeedbackHandler(options, &block);
     __atomic_add_fetch(&device->feedback_pending, 1, __ATOMIC_ACQ_REL);
+    pvk_device_commit_residency(device);
     pvk_MTL4CommandQueue_commit_count_options(queue->mtl_queue, &cb, 1, options);
     pvk_release(options);
 }
@@ -58533,6 +58795,7 @@ static void pvk_sparse_execute(struct pvk_queue *queue, const struct pvk_sparse_
     pvk_MTL4UpdateSparseTextureMappingOperation tops[64];
     uint32_t i = batch->first, end = batch->first + batch->count, n;
 
+    pvk_device_commit_residency(device);
     while (i < end) {
         const struct pvk_sparse_op *op = &binds->ops[i];
         for (n = 0; i < end && n < 64 && binds->ops[i].resource == op->resource && binds->ops[i].heap == op->heap;
@@ -59734,7 +59997,7 @@ static void pvk_debug_label(struct pvk_device *device, VkObjectType type, uint64
     switch (type) {
     case VK_OBJECT_TYPE_DEVICE_MEMORY: {
         struct pvk_device_memory *m = (struct pvk_device_memory *)(uintptr_t)handle;
-        if (m->mtl_heap)
+        if (m->mtl_heap && !m->chunk) /* a chunk keeps its own label */
             pvk_MTLHeap_setLabel(m->mtl_heap, label);
         if (m->mtl_buffer)
             pvk_MTLResource_setLabel(m->mtl_buffer, label);

@@ -153,7 +153,8 @@ static VkAllocationCallbacks counting_callbacks(struct counter *c)
 #define MSG0(R, obj, sel) PVK_MSG(R, (id, SEL))(obj, sel_registerName(sel))
 
 /* Copies between two MTLBuffers on the VkQueue's MTL4CommandQueue and waits.
- * Resources reach the GPU only through the device's residency set. */
+ * Resources reach the GPU only through the device's residency set, which
+ * PlasmaVK commits before each submission: so must this. */
 static bool gpu_copy(id src, unsigned long src_offset, id dst, unsigned long dst_offset, unsigned long size)
 {
     void *pool = objc_autoreleasePoolPush(); /* the encoder is autoreleased */
@@ -173,6 +174,7 @@ static bool gpu_copy(id src, unsigned long src_offset, id dst, unsigned long dst
             src, src_offset, dst, dst_offset, size);
         MSG0(void, encoder, "endEncoding");
         MSG0(void, cb, "endCommandBuffer");
+        pvk_device_commit_residency((struct pvk_device *)device);
         PVK_MSG(void, (id, SEL, const id *, unsigned long))(mtl_queue, sel_registerName("commit:count:"), &cb, 1);
         PVK_MSG(void, (id, SEL, id, uint64_t))(mtl_queue, sel_registerName("signalEvent:value:"), event, 1);
         done = PVK_MSG(bool, (id, SEL, uint64_t, uint64_t))(
@@ -568,6 +570,131 @@ static void test_gpu_sees_memory(void)
     vkFreeMemory(device, dst_mem, NULL);
 }
 
+/* Small allocations are blocks of shared heaps (section 10): each block is
+ * aligned to its power-of-two size, none overlap, mapped pointers keep
+ * minMemoryMapAlignment, large allocations keep heaps of their own, and
+ * empty heaps go but one per type. */
+#define SMALL_COUNT 300
+
+static uint32_t chunk_count(uint32_t type)
+{
+    struct pvk_memory_chunk *c;
+    uint32_t n = 0;
+    for (c = ((struct pvk_device *)device)->chunks[type]; c; c = c->next)
+        n++;
+    return n;
+}
+
+static VkDeviceSize small_size(unsigned i)
+{
+    static const VkDeviceSize sizes[] = { 1, 100, 4096, 16384, 16385, 65536, 100000, 262144, 524288 };
+    return sizes[i % PVK_ARRAY_SIZE(sizes)];
+}
+
+static void fill(VkDeviceMemory memory, VkDeviceSize size, unsigned seed)
+{
+    unsigned char *p = (unsigned char *)((struct pvk_device_memory *)memory)->contents;
+    VkDeviceSize i;
+    for (i = 0; i < size; i++)
+        p[i] = (unsigned char)(seed * 31 + i * 7);
+}
+
+static int filled(VkDeviceMemory memory, VkDeviceSize size, unsigned seed)
+{
+    const unsigned char *p = (const unsigned char *)((struct pvk_device_memory *)memory)->contents;
+    VkDeviceSize i;
+    for (i = 0; i < size; i++)
+        if (p[i] != (unsigned char)(seed * 31 + i * 7))
+            return 0;
+    return 1;
+}
+
+static void test_small_allocations(void)
+{
+    VkDeviceMemory memories[SMALL_COUNT], large;
+    const struct pvk_device_memory *m, *o;
+    int pooled = 1, aligned = 1, apart = 1, intact = 1;
+    unsigned i, j;
+    void *v;
+
+    REQUIRE(shared_type != UINT32_MAX);
+    memset(memories, 0, sizeof(memories));
+    for (i = 0; i < SMALL_COUNT; i++) {
+        VkDeviceSize block = 16384;
+        REQUIRE_VK(allocate(shared_type, small_size(i), NULL, &memories[i]));
+        m = (const struct pvk_device_memory *)memories[i];
+        while (block < small_size(i))
+            block *= 2;
+        pooled &= m->chunk != NULL && m->mtl_heap == m->chunk->heap;
+        aligned &= m->heap_offset % block == 0 && m->heap_offset + block <= PVK_POOL_CHUNK;
+        aligned &= (uintptr_t)m->contents % limits.minMemoryMapAlignment == 0;
+        fill(memories[i], small_size(i), i);
+    }
+    for (i = 0; i < SMALL_COUNT; i++) {
+        m = (const struct pvk_device_memory *)memories[i];
+        intact &= filled(memories[i], small_size(i), i);
+        for (j = i + 1; j < SMALL_COUNT; j++) {
+            o = (const struct pvk_device_memory *)memories[j];
+            if (o->chunk == m->chunk && o->heap_offset < m->heap_offset + m->size &&
+                m->heap_offset < o->heap_offset + o->size)
+                apart = 0;
+        }
+    }
+    CHECK(pooled);
+    CHECK(aligned);
+    CHECK(apart);
+    CHECK(intact);
+    CHECK(chunk_count(shared_type) > 1);
+
+    /* Freed blocks merge and are handed out again. */
+    for (i = 0; i < SMALL_COUNT; i += 2) {
+        vkFreeMemory(device, memories[i], NULL);
+        memories[i] = VK_NULL_HANDLE;
+    }
+    for (i = 0; i < SMALL_COUNT; i += 2) {
+        REQUIRE_VK(allocate(shared_type, small_size(i + 3), NULL, &memories[i]));
+        fill(memories[i], small_size(i + 3), i + 3);
+    }
+    intact = 1;
+    for (i = 0; i < SMALL_COUNT; i++)
+        intact &= filled(memories[i], small_size(i % 2 ? i : i + 3), i % 2 ? i : i + 3);
+    CHECK(intact);
+
+    REQUIRE_VK(allocate(shared_type, PVK_POOL_LARGEST + 1, NULL, &large));
+    m = (const struct pvk_device_memory *)large;
+    CHECK(!m->chunk && m->heap_offset == 0 && m->mtl_heap);
+    CHECK_VK(vkMapMemory(device, large, 0, VK_WHOLE_SIZE, 0, &v), VK_SUCCESS);
+    vkFreeMemory(device, large, NULL);
+
+    for (i = 0; i < SMALL_COUNT; i++)
+        vkFreeMemory(device, memories[i], NULL);
+    CHECK(chunk_count(shared_type) == 1);
+}
+
+/* The GPU copies between blocks of a private and a shared chunk. */
+static void test_small_allocations_on_gpu(void)
+{
+    const VkDeviceSize size = 20000;
+    VkDeviceMemory src, mid, dst;
+    const struct pvk_device_memory *s, *t, *d;
+
+    REQUIRE_VK(allocate(shared_type, size, NULL, &src));
+    REQUIRE_VK(allocate(private_type, size, NULL, &mid));
+    REQUIRE_VK(allocate(shared_type, size, NULL, &dst));
+    s = (const struct pvk_device_memory *)src;
+    t = (const struct pvk_device_memory *)mid;
+    d = (const struct pvk_device_memory *)dst;
+    CHECK(s->chunk && t->chunk && d->chunk);
+    fill(src, size, 9);
+    memset(d->contents, 0, (size_t)size);
+    CHECK(gpu_copy(s->mtl_buffer, 0, t->mtl_buffer, 0, (unsigned long)size));
+    CHECK(gpu_copy(t->mtl_buffer, 0, d->mtl_buffer, 0, (unsigned long)size));
+    CHECK(filled(dst, size, 9));
+    vkFreeMemory(device, src, NULL);
+    vkFreeMemory(device, mid, NULL);
+    vkFreeMemory(device, dst, NULL);
+}
+
 int main(void)
 {
     setup();
@@ -583,6 +710,8 @@ int main(void)
     RUN(test_oversized_allocation);
     RUN(test_allocation_callbacks);
     RUN(test_gpu_sees_memory);
+    RUN(test_small_allocations);
+    RUN(test_small_allocations_on_gpu);
     vkDestroyDevice(device, NULL);
     vkDestroyInstance(instance, NULL);
     return TEST_RESULT();

@@ -309,8 +309,15 @@ static void test_names_metal_labels(void)
 
     memset(&mai, 0, sizeof(mai));
     mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    mai.allocationSize = 65536;
+    mai.allocationSize = 65536; /* small: a block of a shared heap, which keeps its label */
     mai.memoryTypeIndex = memory_type(pd, ~0u, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+    REQUIRE_VK(vkAllocateMemory(device, &mai, NULL, &memory));
+    set_name(device, VK_OBJECT_TYPE_DEVICE_MEMORY, H(memory), "small");
+    CHECK(strcmp(label_of(pvk_MTLHeap_label(((struct pvk_device_memory *)memory)->mtl_heap)),
+                 "PlasmaVK small VkDeviceMemory") == 0);
+    CHECK(strcmp(label_of(pvk_MTLResource_label(((struct pvk_device_memory *)memory)->mtl_buffer)), "small") == 0);
+    vkFreeMemory(device, memory, NULL);
+    mai.allocationSize = 1u << 20; /* a heap of its own */
     REQUIRE_VK(vkAllocateMemory(device, &mai, NULL, &memory));
     set_name(device, VK_OBJECT_TYPE_DEVICE_MEMORY, H(memory), "pool of buffers");
     CHECK(strcmp(label_of(pvk_MTLHeap_label(((struct pvk_device_memory *)memory)->mtl_heap)), "pool of buffers") == 0);
