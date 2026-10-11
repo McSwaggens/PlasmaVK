@@ -455,6 +455,8 @@ static bool make_yimg(struct yimg *m, const struct yfmt *f, uint32_t w, uint32_t
 {
     VkImageCreateInfo info;
     VkMemoryAllocateInfo alloc;
+    VkBindImageMemoryInfo bind[3];
+    VkBindImagePlaneMemoryInfo bp[3];
     uint32_t p, n;
 
     memset(m, 0, sizeof(*m));
@@ -483,8 +485,6 @@ static bool make_yimg(struct yimg *m, const struct yfmt *f, uint32_t w, uint32_t
         VkImageMemoryRequirementsInfo2 ri;
         VkImagePlaneMemoryRequirementsInfo pi;
         VkMemoryRequirements2 req;
-        VkBindImageMemoryInfo bind;
-        VkBindImagePlaneMemoryInfo bp;
         memset(&pi, 0, sizeof(pi));
         pi.sType = VK_STRUCTURE_TYPE_IMAGE_PLANE_MEMORY_REQUIREMENTS_INFO;
         pi.planeAspect = plane_aspects[p];
@@ -502,18 +502,16 @@ static bool make_yimg(struct yimg *m, const struct yfmt *f, uint32_t w, uint32_t
                                            tiling == VK_IMAGE_TILING_LINEAR ? shared_type : private_type);
         if (!req.memoryRequirements.size || vkAllocateMemory(device, &alloc, NULL, &m->memory[p]) != VK_SUCCESS)
             return false;
-        memset(&bp, 0, sizeof(bp));
-        bp.sType = VK_STRUCTURE_TYPE_BIND_IMAGE_PLANE_MEMORY_INFO;
-        bp.planeAspect = plane_aspects[p];
-        memset(&bind, 0, sizeof(bind));
-        bind.sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO;
-        bind.pNext = (flags & VK_IMAGE_CREATE_DISJOINT_BIT) ? &bp : NULL;
-        bind.image = m->image;
-        bind.memory = m->memory[p];
-        if (vkBindImageMemory2(device, 1, &bind) != VK_SUCCESS)
-            return false;
+        memset(&bp[p], 0, sizeof(bp[p]));
+        bp[p].sType = VK_STRUCTURE_TYPE_BIND_IMAGE_PLANE_MEMORY_INFO;
+        bp[p].planeAspect = plane_aspects[p];
+        memset(&bind[p], 0, sizeof(bind[p]));
+        bind[p].sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO;
+        bind[p].pNext = (flags & VK_IMAGE_CREATE_DISJOINT_BIT) ? &bp[p] : NULL;
+        bind[p].image = m->image;
+        bind[p].memory = m->memory[p];
     }
-    return true;
+    return vkBindImageMemory2(device, n, bind) == VK_SUCCESS; /* disjoint: every plane in one call */
 }
 
 static void free_yimg(struct yimg *m)

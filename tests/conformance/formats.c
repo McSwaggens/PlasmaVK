@@ -556,10 +556,73 @@ CT_TEST(filter_minmax_formats,
     ct_env_fini(&e);
 }
 
+/* Whether the physical device supports samplerYcbcrConversion (Vulkan 1.1). */
+static int ycbcr_supported(const struct ct_env *e)
+{
+    VkPhysicalDeviceSamplerYcbcrConversionFeatures y;
+    VkPhysicalDeviceFeatures2 f2;
+    if (e->version < VK_API_VERSION_1_1)
+        return 0;
+    memset(&y, 0, sizeof(y));
+    y.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES;
+    memset(&f2, 0, sizeof(f2));
+    f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    f2.pNext = &y;
+    vkGetPhysicalDeviceFeatures2(e->pd, &f2);
+    return y.samplerYcbcrConversion != VK_FALSE;
+}
+
+CT_TEST(ycbcr_required_formats,
+        "Formats > Required Format Support (formats requiring sampler Y'CbCr conversion): with "
+        "samplerYcbcrConversion, G8_B8_R8_3PLANE_420_UNORM and G8_B8R8_2PLANE_420_UNORM must support SAMPLED_IMAGE, "
+        "TRANSFER_SRC, TRANSFER_DST and a chroma location (MIDPOINT_CHROMA_SAMPLES or COSITED_CHROMA_SAMPLES) in "
+        "optimalTilingFeatures",
+        "vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFormatProperties vkGetPhysicalDeviceFormatProperties2")
+{
+    static const VkFormat required[] = { VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM };
+    struct ct_env e;
+    unsigned i;
+    ct_env_init(t, &e);
+    if (!ycbcr_supported(&e))
+        ct_skip(t, "samplerYcbcrConversion is not supported");
+    for (i = 0; i < CT_ARRAY_SIZE(required); i++) {
+        VkFormatFeatureFlags2 f = ct_format_features(&e, required[i], 0);
+        VkFormatFeatureFlags2 need = S | VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
+        CT_CHECKF(t, (f & need) == need, "format %d: optimalTilingFeatures 0x%llx lack 0x%llx", (int)required[i],
+                  (unsigned long long)f, (unsigned long long)(need & ~f));
+        CT_CHECKF(t, f & (VK_FORMAT_FEATURE_2_MIDPOINT_CHROMA_SAMPLES_BIT | VK_FORMAT_FEATURE_2_COSITED_CHROMA_SAMPLES_BIT),
+                  "format %d: no chroma location", (int)required[i]);
+    }
+    ct_env_fini(&e);
+}
+
+CT_TEST(ycbcr_disjoint_multiplanar,
+        "Formats > Format Feature Flags: VK_FORMAT_FEATURE_DISJOINT_BIT specifies that a multi-planar image can be "
+        "made disjoint; an implementation must not set it for single-plane formats",
+        "vkGetPhysicalDeviceFormatProperties vkGetPhysicalDeviceFormatProperties2")
+{
+    static VkFormat formats[400];
+    struct ct_env e;
+    size_t n, i;
+    unsigned w;
+    ct_env_init(t, &e);
+    if (e.version < VK_API_VERSION_1_1)
+        ct_skip(t, "VK_FORMAT_FEATURE_DISJOINT_BIT is Vulkan 1.1");
+    n = all_formats(formats, CT_ARRAY_SIZE(formats));
+    for (i = 0; i < n; i++)
+        for (w = 0; w < 3; w++)
+            if (ct_ycbcr_planes(formats[i]) < 2)
+                CT_CHECKF(t, !(ct_format_features(&e, formats[i], (int)w) & VK_FORMAT_FEATURE_2_DISJOINT_BIT),
+                          "single-plane format %d reports DISJOINT (%s features)", (int)formats[i],
+                          w == 2 ? "buffer" : w ? "linear" : "optimal");
+    ct_env_fini(&e);
+}
+
 static const struct ct_test *const fixed_tests[] = {
     CT_REF(depth_stencil_attachment_one_of), CT_REF(compressed_family_one_of), CT_REF(compression_features_match_formats),
     CT_REF(format_properties_consistent),    CT_REF(depth_comparison),         CT_REF(host_image_transfer),
-    CT_REF(storage_without_format),          CT_REF(filter_minmax_formats),
+    CT_REF(storage_without_format),          CT_REF(filter_minmax_formats),    CT_REF(ycbcr_required_formats),
+    CT_REF(ycbcr_disjoint_multiplanar),
 };
 
 void ct_suite_formats(struct ct_registry *r);

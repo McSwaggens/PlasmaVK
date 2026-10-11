@@ -20,14 +20,14 @@ One file per chapter of the Vulkan specification:
 | `initialization.c` | Initialization: `vkGet*ProcAddr`, instances | 25 |
 | `devsandqueues.c` | Devices and Queues: physical devices, properties, features queries, queue families, devices, queues | 34 |
 | `memory.c` | Memory Allocation: memory properties, allocation, mapping, flushing, host/device visibility | 27 |
-| `resources.c` | Resource Creation: buffers, images, memory requirements, binding, device addresses, subresource layouts, image and buffer views | 29 |
+| `resources.c` | Resource Creation: buffers, images, memory requirements, binding, device addresses, subresource layouts, image and buffer views, multi-planar images (disjoint planes, linear plane layouts) | 31 |
 | `extensions.c` | Layers & Extensions: enumeration, extension dependencies | 12 |
 | `features.c` | Features > Feature Requirements: one test per required feature | 86 |
 | `limits.c` | Limits > Limit Requirements: one test per limit of the Required Limits table | 145 |
-| `formats.c` | Formats: one test per format of the Required Format Support tables (features, image types), and the chapter's other rules | 64 |
-| `capabilities.c` | Additional Capabilities: image format properties (extents, mip levels, layers, sample counts, monotonicity, host image copy), sparse image formats | 6 |
-| `samplers.c` | Samplers: creation with every parameter, maxSamplerAllocationCount | 6 |
-| `copies.c` | Copy Commands: buffer/image and image/image copies, blits, resolves, host image copies, texel by texel | 10 |
+| `formats.c` | Formats: one test per format of the Required Format Support tables (features, image types), the required Y'CbCr formats, and the chapter's other rules | 66 |
+| `capabilities.c` | Additional Capabilities: image format properties (extents, mip levels, layers, sample counts, monotonicity, host image copy, Y'CbCr descriptor counts), sparse image formats | 7 |
+| `samplers.c` | Samplers: creation with every parameter, maxSamplerAllocationCount, sampler Y'CbCr conversions (creation, sampling texel by texel) | 8 |
+| `copies.c` | Copy Commands: buffer/image and image/image copies (also of multi-planar image planes), blits, resolves, host image copies, texel by texel | 12 |
 | `clears.c` | Clear Commands: color and depth/stencil image clears, texel by texel | 4 |
 | `descriptorsets.c` | Resource Descriptors > Descriptor Sets: set layouts and support queries, pools and allocation, writes, copies, inline uniform blocks, update templates, dynamic offsets, push descriptors, update after bind, variable-count and partially bound bindings, every descriptor type read by a compute shader | 19 |
 | `queries.c` | Queries: pools, host and device resets, timestamp availability, order and period, `vkCmdWriteTimestamp2`, secondaries, results layout with every flag, waiting, unavailable occlusion queries with PARTIAL, `vkCmdCopyQueryPoolResults` (later submission, same command buffer, WAIT) | 15 |

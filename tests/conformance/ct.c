@@ -692,6 +692,81 @@ uint32_t ct_find_memory_type(const struct ct_env *e, uint32_t type_bits, VkMemor
     return UINT32_MAX;
 }
 
+void ct_env_device_ycbcr(struct ct *t, struct ct_env *e)
+{
+    VkPhysicalDeviceSamplerYcbcrConversionFeatures q, enable;
+    VkPhysicalDeviceFeatures2 f2;
+    if (e->version < VK_API_VERSION_1_1)
+        ct_skip(t, "sampler Y'CbCr conversion needs Vulkan 1.1");
+    memset(&q, 0, sizeof(q));
+    q.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES;
+    memset(&f2, 0, sizeof(f2));
+    f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    f2.pNext = &q;
+    vkGetPhysicalDeviceFeatures2(e->pd, &f2);
+    if (!q.samplerYcbcrConversion)
+        ct_skip(t, "samplerYcbcrConversion is not supported");
+    memset(&enable, 0, sizeof(enable));
+    enable.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES;
+    enable.samplerYcbcrConversion = VK_TRUE;
+    ct_env_device(t, e, &enable);
+}
+
+static const struct {
+    VkFormat format;
+    uint32_t planes;
+} ct_ycbcr_table[] = {
+    { VK_FORMAT_G8B8G8R8_422_UNORM, 1 },
+    { VK_FORMAT_B8G8R8G8_422_UNORM, 1 },
+    { VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM, 3 },
+    { VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, 2 },
+    { VK_FORMAT_G8_B8_R8_3PLANE_422_UNORM, 3 },
+    { VK_FORMAT_G8_B8R8_2PLANE_422_UNORM, 2 },
+    { VK_FORMAT_G8_B8_R8_3PLANE_444_UNORM, 3 },
+    { VK_FORMAT_G10X6B10X6G10X6R10X6_422_UNORM_4PACK16, 1 },
+    { VK_FORMAT_B10X6G10X6R10X6G10X6_422_UNORM_4PACK16, 1 },
+    { VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_420_UNORM_3PACK16, 3 },
+    { VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16, 2 },
+    { VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_422_UNORM_3PACK16, 3 },
+    { VK_FORMAT_G10X6_B10X6R10X6_2PLANE_422_UNORM_3PACK16, 2 },
+    { VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_444_UNORM_3PACK16, 3 },
+    { VK_FORMAT_G12X4B12X4G12X4R12X4_422_UNORM_4PACK16, 1 },
+    { VK_FORMAT_B12X4G12X4R12X4G12X4_422_UNORM_4PACK16, 1 },
+    { VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_420_UNORM_3PACK16, 3 },
+    { VK_FORMAT_G12X4_B12X4R12X4_2PLANE_420_UNORM_3PACK16, 2 },
+    { VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_422_UNORM_3PACK16, 3 },
+    { VK_FORMAT_G12X4_B12X4R12X4_2PLANE_422_UNORM_3PACK16, 2 },
+    { VK_FORMAT_G12X4_B12X4_R12X4_3PLANE_444_UNORM_3PACK16, 3 },
+    { VK_FORMAT_G16B16G16R16_422_UNORM, 1 },
+    { VK_FORMAT_B16G16R16G16_422_UNORM, 1 },
+    { VK_FORMAT_G16_B16_R16_3PLANE_420_UNORM, 3 },
+    { VK_FORMAT_G16_B16R16_2PLANE_420_UNORM, 2 },
+    { VK_FORMAT_G16_B16_R16_3PLANE_422_UNORM, 3 },
+    { VK_FORMAT_G16_B16R16_2PLANE_422_UNORM, 2 },
+    { VK_FORMAT_G16_B16_R16_3PLANE_444_UNORM, 3 },
+    { VK_FORMAT_G8_B8R8_2PLANE_444_UNORM, 2 },
+    { VK_FORMAT_G10X6_B10X6R10X6_2PLANE_444_UNORM_3PACK16, 2 },
+    { VK_FORMAT_G12X4_B12X4R12X4_2PLANE_444_UNORM_3PACK16, 2 },
+    { VK_FORMAT_G16_B16R16_2PLANE_444_UNORM, 2 },
+};
+
+uint32_t ct_ycbcr_planes(VkFormat format)
+{
+    size_t i;
+    for (i = 0; i < CT_ARRAY_SIZE(ct_ycbcr_table); i++)
+        if (ct_ycbcr_table[i].format == format)
+            return ct_ycbcr_table[i].planes;
+    return 0;
+}
+
+size_t ct_ycbcr_formats(VkFormat *out, size_t max)
+{
+    size_t i;
+    for (i = 0; i < CT_ARRAY_SIZE(ct_ycbcr_table) && i < max; i++)
+        out[i] = ct_ycbcr_table[i].format;
+    return i;
+}
+
 void ct_get_features(const struct ct_env *e, struct ct_features *f, unsigned char fill)
 {
     memset(f, fill, sizeof(*f));

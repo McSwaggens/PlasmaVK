@@ -287,6 +287,18 @@ void ct_allocator_fini(struct ct_allocator *a);
         (alloc)->in_command = 0;                                                              \
     } while (0)
 
+/* ---- Sampler Y'CbCr conversion ---- */
+
+/* ct_env_device with samplerYcbcrConversion enabled; skips the test on
+ * Vulkan 1.0 or when the device lacks the feature. */
+void ct_env_device_ycbcr(struct ct *t, struct ct_env *e);
+/* Formats requiring a sampler Y'CbCr conversion (Formats > Formats Requiring
+ * Sampler Y'CbCr Conversion: a _422 or _420 suffix, or multi-planar): the
+ * number of planes (1 for the packed 4:2:2 ones), 0 for other formats. */
+uint32_t ct_ycbcr_planes(VkFormat format);
+/* The ones of core Vulkan 1.4, n of them in out[] (at most max). */
+size_t ct_ycbcr_formats(VkFormat *out, size_t max);
+
 /* ---- Vulkan commands (commands.c), for coverage ---- */
 
 enum ct_level { CT_LEVEL_GLOBAL, CT_LEVEL_INSTANCE, CT_LEVEL_PHYSICAL, CT_LEVEL_DEVICE };

@@ -1588,6 +1588,246 @@ CT_TEST(create_buffer_views,
     ct_env_fini(&e);
 }
 
+/* ---- Multi-planar images ---- */
+
+/* Copies a pattern into every plane of a 3-plane 4:2:0 image (w x h, in
+ * layout `from`), reads the planes back and returns how many bytes differ. */
+static uint32_t planes_roundtrip(struct ct *t, struct ct_env *e, VkImage image, uint32_t w, uint32_t h,
+                                 VkImageLayout from)
+{
+    const VkImageAspectFlagBits bits[3] = { VK_IMAGE_ASPECT_PLANE_0_BIT, VK_IMAGE_ASPECT_PLANE_1_BIT,
+                                            VK_IMAGE_ASPECT_PLANE_2_BIT };
+    VkDeviceSize size = (VkDeviceSize)w * h + 2 * (VkDeviceSize)(w / 2) * (h / 2);
+    struct ct_buffer in, out;
+    VkBufferImageCopy r[3];
+    VkCommandBuffer cb;
+    uint32_t p, bad = 0;
+    VkDeviceSize i;
+
+    ct_host_buffer(t, e, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &in);
+    ct_host_buffer(t, e, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &out);
+    ct_fill_pattern(in.data, (size_t)size, 9);
+    memset(r, 0, sizeof(r));
+    for (p = 0; p < 3; p++) {
+        r[p].bufferOffset = p == 0 ? 0 : (VkDeviceSize)w * h + (p - 1) * (VkDeviceSize)(w / 2) * (h / 2);
+        r[p].imageSubresource.aspectMask = bits[p];
+        r[p].imageSubresource.layerCount = 1;
+        r[p].imageExtent.width = p ? w / 2 : w;
+        r[p].imageExtent.height = p ? h / 2 : h;
+        r[p].imageExtent.depth = 1;
+    }
+    cb = ct_begin_commands(t, e);
+    ct_image_barrier(cb, image, VK_IMAGE_ASPECT_COLOR_BIT, from, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vkCmdCopyBufferToImage(cb, in.buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 3, r);
+    ct_image_barrier(cb, image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, out.buffer, 3, r);
+    ct_host_read_barrier(cb);
+    ct_submit_and_wait(t, e, cb);
+    for (i = 0; i < size; i++)
+        bad += out.data[i] != in.data[i];
+    ct_buffer_fini(e, &in);
+    ct_buffer_fini(e, &out);
+    return bad;
+}
+
+CT_TEST(multiplanar_disjoint_memory,
+        "Resource Creation > Resource Memory Association: the planes of a disjoint multi-planar image "
+        "(VK_IMAGE_CREATE_DISJOINT_BIT, with the DISJOINT format feature) have their own memory requirements "
+        "(VkImagePlaneMemoryRequirementsInfo; vkGetDeviceImageMemoryRequirements with planeAspect agrees) and are "
+        "bound individually (VkBindImagePlaneMemoryInfo), here each to its own allocation; the planes then hold what "
+        "is copied to them",
+        "vkCreateImage vkDestroyImage vkGetImageMemoryRequirements2 vkGetDeviceImageMemoryRequirements "
+        "vkAllocateMemory vkBindImageMemory2 vkFreeMemory vkCmdCopyBufferToImage vkCmdCopyImageToBuffer "
+        "vkCmdPipelineBarrier vkCreateBuffer vkDestroyBuffer vkGetBufferMemoryRequirements vkBindBufferMemory "
+        "vkMapMemory vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFormatProperties "
+        "vkGetPhysicalDeviceFormatProperties2 vkGetPhysicalDeviceImageFormatProperties2")
+{
+    const VkImageAspectFlagBits bits[3] = { VK_IMAGE_ASPECT_PLANE_0_BIT, VK_IMAGE_ASPECT_PLANE_1_BIT,
+                                            VK_IMAGE_ASPECT_PLANE_2_BIT };
+    const VkFormat format = VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM;
+    VkFormatFeatureFlags2 need = VK_FORMAT_FEATURE_2_DISJOINT_BIT | VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT |
+                                 VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
+    struct ct_env e;
+    VkImageCreateInfo info;
+    VkPhysicalDeviceImageFormatInfo2 fi;
+    VkImageFormatProperties2 fp;
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory[3] = { VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE };
+    VkBindImagePlaneMemoryInfo bp[3];
+    VkBindImageMemoryInfo bind[3];
+    uint32_t p;
+
+    ct_env_init(t, &e);
+    ct_env_device_ycbcr(t, &e);
+    if ((ct_format_features(&e, format, 0) & need) != need)
+        ct_skip(t, "G8_B8_R8_3PLANE_420_UNORM images cannot be disjoint");
+    info = ct_image_info(VK_IMAGE_TYPE_2D, format, 32, 16, 1, 1, 1,
+                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    info.flags = VK_IMAGE_CREATE_DISJOINT_BIT;
+    memset(&fi, 0, sizeof(fi));
+    fi.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
+    fi.format = format;
+    fi.type = VK_IMAGE_TYPE_2D;
+    fi.tiling = VK_IMAGE_TILING_OPTIMAL;
+    fi.usage = info.usage;
+    fi.flags = info.flags;
+    memset(&fp, 0, sizeof(fp));
+    fp.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
+    if (vkGetPhysicalDeviceImageFormatProperties2(e.pd, &fi, &fp) != VK_SUCCESS)
+        ct_skip(t, "no disjoint G8_B8_R8_3PLANE_420_UNORM images with transfer usage");
+    CT_REQUIRE_VK(t, vkCreateImage(e.device, &info, NULL, &image));
+    for (p = 0; p < 3; p++) {
+        VkImagePlaneMemoryRequirementsInfo pi;
+        VkImageMemoryRequirementsInfo2 ri;
+        VkMemoryRequirements2 req, dreq;
+        VkDeviceImageMemoryRequirements di;
+        VkMemoryAllocateInfo alloc;
+        uint32_t type;
+        memset(&pi, 0, sizeof(pi));
+        pi.sType = VK_STRUCTURE_TYPE_IMAGE_PLANE_MEMORY_REQUIREMENTS_INFO;
+        pi.planeAspect = bits[p];
+        memset(&ri, 0, sizeof(ri));
+        ri.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2;
+        ri.pNext = &pi;
+        ri.image = image;
+        memset(&req, 0, sizeof(req));
+        req.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+        vkGetImageMemoryRequirements2(e.device, &ri, &req);
+        CT_CHECKF(t, req.memoryRequirements.size > 0 && ct_is_pow2(req.memoryRequirements.alignment) &&
+                         req.memoryRequirements.memoryTypeBits != 0,
+                  "plane %u: size %llu alignment %llu types 0x%x", p, (unsigned long long)req.memoryRequirements.size,
+                  (unsigned long long)req.memoryRequirements.alignment, req.memoryRequirements.memoryTypeBits);
+        if (e.version >= VK_API_VERSION_1_3) {
+            memset(&di, 0, sizeof(di));
+            di.sType = VK_STRUCTURE_TYPE_DEVICE_IMAGE_MEMORY_REQUIREMENTS;
+            di.pCreateInfo = &info;
+            di.planeAspect = bits[p];
+            memset(&dreq, 0, sizeof(dreq));
+            dreq.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+            vkGetDeviceImageMemoryRequirements(e.device, &di, &dreq);
+            CT_CHECKF(t, memcmp(&dreq.memoryRequirements, &req.memoryRequirements, sizeof(req.memoryRequirements)) == 0,
+                      "plane %u: vkGetDeviceImageMemoryRequirements differs", p);
+        }
+        type = ct_find_memory_type(&e, req.memoryRequirements.memoryTypeBits, 0,
+                                   VK_MEMORY_PROPERTY_PROTECTED_BIT | VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT);
+        CT_REQUIRE(t, type != UINT32_MAX);
+        memset(&alloc, 0, sizeof(alloc));
+        alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        alloc.allocationSize = req.memoryRequirements.size;
+        alloc.memoryTypeIndex = type;
+        CT_REQUIRE_VK(t, vkAllocateMemory(e.device, &alloc, NULL, &memory[p]));
+        memset(&bp[p], 0, sizeof(bp[p]));
+        bp[p].sType = VK_STRUCTURE_TYPE_BIND_IMAGE_PLANE_MEMORY_INFO;
+        bp[p].planeAspect = bits[p];
+        memset(&bind[p], 0, sizeof(bind[p]));
+        bind[p].sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO;
+        bind[p].pNext = &bp[p];
+        bind[p].image = image;
+        bind[p].memory = memory[p];
+    }
+    /* every plane in one call (VUID-vkBindImageMemory2-pBindInfos-02858) */
+    CT_REQUIRE_VK(t, vkBindImageMemory2(e.device, 3, bind));
+    CT_CHECKF(t, planes_roundtrip(t, &e, image, 32, 16, VK_IMAGE_LAYOUT_UNDEFINED) == 0,
+              "the planes do not hold what was copied to them");
+    vkDestroyImage(e.device, image, NULL);
+    for (p = 0; p < 3; p++)
+        vkFreeMemory(e.device, memory[p], NULL);
+    ct_env_fini(&e);
+}
+
+CT_TEST(multiplanar_linear_layout,
+        "Resource Creation > vkGetImageSubresourceLayout: for a linear multi-planar image each plane "
+        "(VK_IMAGE_ASPECT_PLANE_n_BIT) has its layout: rowPitch at least the plane's row of texels, offset from the "
+        "image's start, and (derived) the planes of a non-disjoint image do not overlap and lie within its memory; "
+        "texels written through a mapping at those offsets are the planes' (copied to a buffer)",
+        "vkCreateImage vkDestroyImage vkGetImageMemoryRequirements vkAllocateMemory vkBindImageMemory vkFreeMemory "
+        "vkMapMemory vkGetImageSubresourceLayout vkCmdCopyImageToBuffer vkCmdPipelineBarrier vkCreateBuffer "
+        "vkDestroyBuffer vkGetBufferMemoryRequirements vkBindBufferMemory vkGetPhysicalDeviceFeatures2 "
+        "vkGetPhysicalDeviceImageFormatProperties2")
+{
+    enum { W = 22, H = 10 };
+    const VkImageAspectFlagBits bits[3] = { VK_IMAGE_ASPECT_PLANE_0_BIT, VK_IMAGE_ASPECT_PLANE_1_BIT,
+                                            VK_IMAGE_ASPECT_PLANE_2_BIT };
+    const VkFormat format = VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM;
+    struct ct_env e;
+    VkImageCreateInfo info;
+    VkPhysicalDeviceImageFormatInfo2 fi;
+    VkImageFormatProperties2 fp;
+    VkMemoryRequirements req;
+    VkSubresourceLayout layout[3];
+    VkBufferImageCopy r[3];
+    VkCommandBuffer cb;
+    struct ct_image m;
+    struct ct_buffer out;
+    unsigned char *data;
+    VkDeviceSize at = 0;
+    uint32_t p, y, bad = 0;
+
+    ct_env_init(t, &e);
+    ct_env_device_ycbcr(t, &e);
+    info = ct_image_info(VK_IMAGE_TYPE_2D, format, W, H, 1, 1, 1, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    info.tiling = VK_IMAGE_TILING_LINEAR;
+    info.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
+    memset(&fi, 0, sizeof(fi));
+    fi.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
+    fi.format = format;
+    fi.type = VK_IMAGE_TYPE_2D;
+    fi.tiling = VK_IMAGE_TILING_LINEAR;
+    fi.usage = info.usage;
+    memset(&fp, 0, sizeof(fp));
+    fp.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
+    if (vkGetPhysicalDeviceImageFormatProperties2(e.pd, &fi, &fp) != VK_SUCCESS)
+        ct_skip(t, "no linear G8_B8_R8_3PLANE_420_UNORM images with TRANSFER_SRC usage");
+    ct_image(t, &e, &info, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &m);
+    vkGetImageMemoryRequirements(e.device, m.image, &req);
+    CT_REQUIRE_VK(t, vkMapMemory(e.device, m.memory, 0, VK_WHOLE_SIZE, 0, (void **)&data));
+    for (p = 0; p < 3; p++) {
+        VkImageSubresource sub;
+        uint32_t pw = p ? W / 2 : W, ph = p ? H / 2 : H;
+        memset(&sub, 0, sizeof(sub));
+        sub.aspectMask = bits[p];
+        memset(&layout[p], 0xA5, sizeof(layout[p]));
+        vkGetImageSubresourceLayout(e.device, m.image, &sub, &layout[p]);
+        CT_CHECKF(t, layout[p].rowPitch >= pw && layout[p].size >= layout[p].rowPitch * (ph - 1) + pw &&
+                         layout[p].offset >= at && layout[p].offset + layout[p].size <= req.size,
+                  "plane %u: offset %llu rowPitch %llu size %llu (previous plane ends at %llu, memory %llu)", p,
+                  (unsigned long long)layout[p].offset, (unsigned long long)layout[p].rowPitch,
+                  (unsigned long long)layout[p].size, (unsigned long long)at, (unsigned long long)req.size);
+        if (layout[p].offset < at || layout[p].offset + layout[p].size > req.size)
+            CT_REQUIRE(t, 0); /* writing there would be out of bounds */
+        at = layout[p].offset + layout[p].size;
+        for (y = 0; y < ph; y++)
+            ct_fill_pattern(data + layout[p].offset + y * layout[p].rowPitch, pw, p * 64 + y + 1);
+    }
+    ct_host_buffer(t, &e, W * H + 2 * (W / 2) * (H / 2), VK_BUFFER_USAGE_TRANSFER_DST_BIT, &out);
+    memset(r, 0, sizeof(r));
+    for (p = 0; p < 3; p++) {
+        r[p].bufferOffset = p == 0 ? 0 : W * H + (p - 1) * (W / 2) * (H / 2);
+        r[p].imageSubresource.aspectMask = bits[p];
+        r[p].imageSubresource.layerCount = 1;
+        r[p].imageExtent.width = p ? W / 2 : W;
+        r[p].imageExtent.height = p ? H / 2 : H;
+        r[p].imageExtent.depth = 1;
+    }
+    cb = ct_begin_commands(t, &e);
+    ct_image_barrier(cb, m.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_PREINITIALIZED,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    vkCmdCopyImageToBuffer(cb, m.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, out.buffer, 3, r);
+    ct_host_read_barrier(cb);
+    ct_submit_and_wait(t, &e, cb);
+    for (p = 0; p < 3; p++) {
+        uint32_t pw = p ? W / 2 : W, ph = p ? H / 2 : H;
+        for (y = 0; y < ph; y++)
+            if (memcmp(out.data + r[p].bufferOffset + y * pw, data + layout[p].offset + y * layout[p].rowPitch, pw))
+                bad++;
+    }
+    CT_CHECKF(t, bad == 0, "%u plane rows differ", bad);
+    ct_buffer_fini(&e, &out);
+    ct_image_fini(&e, &m);
+    ct_env_fini(&e);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(create_buffer),
     CT_REF(create_buffer_concurrent),
@@ -1618,6 +1858,8 @@ static const struct ct_test *const tests[] = {
     CT_REF(linear_image_layout),
     CT_REF(create_image_views),
     CT_REF(create_buffer_views),
+    CT_REF(multiplanar_disjoint_memory),
+    CT_REF(multiplanar_linear_layout),
 };
 
 CT_SUITE(resources, tests)
