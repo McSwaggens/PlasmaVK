@@ -970,7 +970,7 @@ static void test_pipeline_errors(void)
     VkResult r;
 
     CHECK(make_pipeline_ex(spv_set, sizeof(spv_set), 0, NULL, &r) == VK_NULL_HANDLE);
-    CHECK(r == VK_ERROR_UNKNOWN); /* descriptor sets are not implemented yet */
+    CHECK(r == VK_ERROR_UNKNOWN); /* the shader uses set 0; the pipeline layout has no sets */
     memset(&module_info, 0, sizeof(module_info));
     module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     module_info.codeSize = sizeof(spv_scale);

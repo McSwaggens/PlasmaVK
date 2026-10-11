@@ -33432,8 +33432,842 @@ struct pvk_sampler {
 /* ==========================================================================
  * 12. Descriptor sets
  *
- * Descriptor set layouts, pools, sets, updates and push descriptors.
+ * Descriptor set layouts, pools, sets, updates and update templates. Binding
+ * sets and push descriptors are recorded in section 14 and encoded in
+ * section 15.
+ *
+ * A descriptor set is a table in the section 11 format: GPU memory that
+ * shaders read through `constant pvk_setN&` (section 13), bound by address
+ * at argument-table buffer index N for set N. Writing a descriptor writes
+ * its bytes into the table from the CPU: a buffer is { GPU address of the
+ * range, its size }, an image, texel buffer or sampler the MTLResourceID of
+ * its Metal object, an inline uniform block its data.
+ *
+ * LAYOUTS
+ *   A layout orders its bindings by binding number and gives each a
+ *   16-byte-aligned offset and its type's stride (pvk_descriptor_stride);
+ *   section 16 hands exactly that to the translator (struct
+ *   pvk_msl_binding). The variable-count binding is the last one, so a
+ *   set's table is the layout's fixed size plus that binding's descriptors.
+ *   Layouts are reference counted: each set and pipeline layout made with
+ *   one keeps it alive, so the application may destroy it right after
+ *   using it. Since a layout can outlive vkDestroyDescriptorSetLayout, it
+ *   comes from the device's allocator, not the call's.
+ *
+ * POOLS
+ *   A pool owns one shared, cached, untracked MTLBuffer in the device's
+ *   residency set, large enough for the worst case of its pool sizes: 16
+ *   bytes per descriptor (an 8-byte descriptor alone in its binding still
+ *   takes 16 with the padding to the next binding) and, for inline uniform
+ *   blocks, their bytes plus 16 per binding (maxInlineUniformBlockBindings).
+ *   So any allocation within the pool sizes and maxSets fits. Sets are
+ *   ranges of the buffer in a list ordered by offset: allocation appends
+ *   after the last set or else takes the first gap that fits; freeing
+ *   unlinks. When all sets have one size, every gap is a multiple of it, so
+ *   fragmentation cannot fail an allocation the pool sizes allow (which
+ *   vkAllocateDescriptorSets requires).
+ *
+ * UPDATES
+ *   vkUpdateDescriptorSets and templates write straight into the table
+ *   (shared memory is coherent), so the GPU sees a set as soon as the call
+ *   returns. Update-after-bind needs nothing more: commands record the
+ *   table's address, and the GPU reads the table when it runs. A new set's
+ *   table is zeroed, then its immutable samplers are written. Writes and
+ *   copies continue into consecutive bindings as the specification says.
+ *
+ * DYNAMIC OFFSETS AND PUSH DESCRIPTORS (sections 14, 15)
+ *   Binding a set records its table address, plus, for dynamic buffers,
+ *   where their descriptors are and the offsets to add: at submit the table
+ *   is copied to the upload ring, the offsets added to the copy's
+ *   addresses, and the copy bound. Push descriptors are written into a table
+ *   the command buffer keeps per bind point; each push copies it into the
+ *   packet, uploaded at submit.
  * ========================================================================== */
+
+/* Largest set table: the translator's limit (section 13). */
+#define PVK_MAX_SET_SIZE (1u << 30)
+
+/* Bytes of one descriptor of a type in a set table (section 11); inline
+ * uniform blocks count bytes. 0: a type PlasmaVK does not offer. */
+static uint32_t pvk_descriptor_stride(VkDescriptorType type)
+{
+    switch (type) {
+    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+    case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+        return 16;
+    case VK_DESCRIPTOR_TYPE_SAMPLER:
+    case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+    case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+    case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+    case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+        return 8;
+    case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static bool pvk_descriptor_is_dynamic(VkDescriptorType type)
+{
+    return type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC || type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+}
+
+static bool pvk_descriptor_has_sampler(VkDescriptorType type)
+{
+    return type == VK_DESCRIPTOR_TYPE_SAMPLER || type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+}
+
+static uint64_t pvk_align16(uint64_t x)
+{
+    return (x + 15) & ~(uint64_t)15;
+}
+
+static pvk_MTLResourceID pvk_texture_id(id texture)
+{
+    pvk_MTLResourceID none = { 0 };
+    return texture ? pvk_MTLTexture_gpuResourceID(texture) : none;
+}
+
+static pvk_MTLResourceID pvk_sampler_id(VkSampler sampler)
+{
+    pvk_MTLResourceID none = { 0 };
+    const struct pvk_sampler *s = (const struct pvk_sampler *)sampler;
+    return s && s->mtl_sampler ? pvk_MTLSamplerState_gpuResourceID(s->mtl_sampler) : none;
+}
+
+/* ---- Layouts ---- */
+
+struct pvk_set_binding {
+    uint32_t binding;
+    VkDescriptorType type;
+    uint32_t count;  /* descriptors (inline uniform block: bytes); variable count: the maximum */
+    uint32_t offset; /* of the first descriptor in the table, 16-aligned */
+    uint32_t stride; /* pvk_descriptor_stride */
+    VkDescriptorBindingFlags flags;
+    VkShaderStageFlags stages;
+    uint32_t dynamic_index;             /* of its first descriptor among the set's dynamic offsets */
+    const pvk_MTLResourceID *immutable; /* count sampler IDs, or NULL */
+};
+
+struct pvk_descriptor_set_layout {
+    long refs; /* atomic: the application's, one per set and pipeline layout using it */
+    struct pvk_device *device;
+    VkDescriptorSetLayoutCreateFlags flags;
+    uint32_t binding_count;
+    struct pvk_set_binding *bindings; /* by binding number */
+    uint64_t size;           /* table bytes but the variable-count binding's descriptors, 16-aligned */
+    uint32_t dynamic_count;  /* dynamic offsets that binding a set takes */
+    uint32_t descriptor_count; /* in all bindings but inline uniform blocks */
+    bool variable;           /* the last binding has a variable count */
+};
+
+static struct pvk_descriptor_set_layout *pvk_set_layout_ref(struct pvk_descriptor_set_layout *layout)
+{
+    if (layout)
+        __atomic_add_fetch(&layout->refs, 1, __ATOMIC_RELAXED);
+    return layout;
+}
+
+static void pvk_set_layout_unref(struct pvk_descriptor_set_layout *layout)
+{
+    if (layout && __atomic_sub_fetch(&layout->refs, 1, __ATOMIC_ACQ_REL) == 0)
+        pvk_free(pvk_device_alloc(layout->device), layout);
+}
+
+/* Descriptors (bytes) binding b has in a set with variable count `variable`. */
+static uint32_t pvk_binding_count(const struct pvk_set_binding *b, uint32_t variable)
+{
+    if (!(b->flags & VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT))
+        return b->count;
+    return variable < b->count ? variable : b->count;
+}
+
+/* Index of binding number `binding`, or of the first one after it. */
+static uint32_t pvk_layout_find(const struct pvk_descriptor_set_layout *layout, uint32_t binding)
+{
+    uint32_t lo = 0, hi = layout->binding_count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (layout->bindings[mid].binding < binding)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+/* A VkDescriptorSetLayoutBinding with its binding flags. */
+struct pvk_binding_info {
+    const VkDescriptorSetLayoutBinding *b;
+    VkDescriptorBindingFlags flags;
+};
+
+static int pvk_binding_info_cmp(const void *a, const void *b)
+{
+    uint32_t x = ((const struct pvk_binding_info *)a)->b->binding;
+    uint32_t y = ((const struct pvk_binding_info *)b)->b->binding;
+    return x < y ? -1 : x > y;
+}
+
+/* The create info's bindings by binding number, with their flags, and
+ * their place in the table: offsets 16-aligned, in binding order (section
+ * 11). Returns the table size with every binding at its descriptorCount. */
+static uint64_t pvk_layout_bindings(const VkDescriptorSetLayoutCreateInfo *info, struct pvk_binding_info *sorted,
+                                    struct pvk_set_binding *out)
+{
+    const VkDescriptorSetLayoutBindingFlagsCreateInfo *flags = NULL;
+    const VkBaseInStructure *ext;
+    uint64_t cur = 0;
+    uint32_t i, n = info->bindingCount;
+
+    for (ext = info->pNext; ext; ext = ext->pNext)
+        if (ext->sType == VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO)
+            flags = (const VkDescriptorSetLayoutBindingFlagsCreateInfo *)ext;
+    for (i = 0; i < n; i++) {
+        sorted[i].b = &info->pBindings[i];
+        sorted[i].flags = flags && flags->bindingCount ? flags->pBindingFlags[i] : 0;
+    }
+    if (n > 1)
+        qsort(sorted, n, sizeof(*sorted), pvk_binding_info_cmp);
+    for (i = 0; i < n; i++) {
+        const VkDescriptorSetLayoutBinding *b = sorted[i].b;
+        uint32_t stride = pvk_descriptor_stride(b->descriptorType);
+        uint64_t offset = pvk_align16(cur);
+        if (!stride) /* not offered: room for the largest descriptor */
+            stride = 16;
+        cur = offset + (uint64_t)stride * b->descriptorCount;
+        memset(&out[i], 0, sizeof(out[i]));
+        out[i].binding = b->binding;
+        out[i].type = b->descriptorType;
+        out[i].count = b->descriptorCount;
+        out[i].offset = offset > PVK_MAX_SET_SIZE ? PVK_MAX_SET_SIZE : (uint32_t)offset;
+        out[i].stride = stride;
+        out[i].flags = sorted[i].flags;
+        out[i].stages = b->stageFlags;
+    }
+    return pvk_align16(cur);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
+                                                           const VkDescriptorSetLayoutCreateInfo *pCreateInfo,
+                                                           const VkAllocationCallbacks *pAllocator,
+                                                           VkDescriptorSetLayout *pSetLayout)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(device); /* see LAYOUTS */
+    uint32_t n = pCreateInfo->bindingCount, immutable = 0, dynamic = 0, i, j;
+    struct pvk_descriptor_set_layout *layout;
+    struct pvk_binding_info *sorted = NULL;
+    pvk_MTLResourceID *ids;
+    uint64_t total;
+
+    (void)pAllocator;
+    for (i = 0; i < n; i++)
+        if (pCreateInfo->pBindings[i].pImmutableSamplers &&
+            pvk_descriptor_has_sampler(pCreateInfo->pBindings[i].descriptorType))
+            immutable += pCreateInfo->pBindings[i].descriptorCount;
+    layout = pvk_alloc(alloc,
+                       sizeof(*layout) + sizeof(struct pvk_set_binding) * n + sizeof(pvk_MTLResourceID) * immutable,
+                       VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (n)
+        sorted = pvk_alloc(alloc, sizeof(*sorted) * n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+    if (!layout || (n && !sorted)) {
+        pvk_free(alloc, layout);
+        pvk_free(alloc, sorted);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    layout->refs = 1;
+    layout->device = device;
+    layout->flags = pCreateInfo->flags;
+    layout->binding_count = n;
+    layout->bindings = (struct pvk_set_binding *)(layout + 1);
+    ids = (pvk_MTLResourceID *)(layout->bindings + n);
+    total = pvk_layout_bindings(pCreateInfo, sorted, layout->bindings);
+    for (i = 0; i < n; i++) {
+        const VkDescriptorSetLayoutBinding *b = sorted[i].b;
+        struct pvk_set_binding *lb = &layout->bindings[i];
+        lb->dynamic_index = dynamic;
+        if (pvk_descriptor_is_dynamic(lb->type))
+            dynamic += lb->count;
+        if (lb->type != VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
+            layout->descriptor_count += lb->count;
+        if (b->pImmutableSamplers && pvk_descriptor_has_sampler(lb->type) && lb->count) {
+            lb->immutable = ids;
+            for (j = 0; j < lb->count; j++)
+                *ids++ = pvk_sampler_id(b->pImmutableSamplers[j]);
+        }
+    }
+    layout->dynamic_count = dynamic;
+    layout->variable = n && (layout->bindings[n - 1].flags & VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT);
+    layout->size = layout->variable ? layout->bindings[n - 1].offset : total;
+    pvk_free(alloc, sorted);
+    *pSetLayout = (VkDescriptorSetLayout)layout;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorSetLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout,
+                                                        const VkAllocationCallbacks *pAllocator)
+{
+    (void)device;
+    (void)pAllocator;
+    pvk_set_layout_unref((struct pvk_descriptor_set_layout *)descriptorSetLayout);
+}
+
+/* Supported: every type is one PlasmaVK offers, a push descriptor layout
+ * keeps the push descriptor rules, and the table, with the variable-count
+ * binding at the requested count, is within PVK_MAX_SET_SIZE. That holds
+ * for every layout within maxPerSetDescriptors (16 MB at most). The
+ * variable-count binding can grow to what fits in PVK_MAX_SET_SIZE (inline
+ * uniform blocks: maxInlineUniformBlockSize). */
+VKAPI_ATTR void VKAPI_CALL vkGetDescriptorSetLayoutSupport(VkDevice _device,
+                                                           const VkDescriptorSetLayoutCreateInfo *pCreateInfo,
+                                                           VkDescriptorSetLayoutSupport *pSupport)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(device);
+    uint32_t n = pCreateInfo->bindingCount, i, descriptors = 0, max_variable = 0;
+    bool push = (pCreateInfo->flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT) != 0;
+    struct pvk_binding_info *sorted = NULL;
+    struct pvk_set_binding *bindings = NULL;
+    VkBool32 supported = VK_TRUE;
+    VkBaseOutStructure *ext;
+    uint64_t total = 0;
+
+    if (n) {
+        sorted = pvk_alloc(alloc, (sizeof(*sorted) + sizeof(*bindings)) * n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+        if (!sorted)
+            supported = VK_FALSE;
+        else
+            bindings = (struct pvk_set_binding *)(sorted + n);
+    }
+    if (supported) {
+        total = pvk_layout_bindings(pCreateInfo, sorted, bindings);
+        for (i = 0; i < n; i++) {
+            const struct pvk_set_binding *b = &bindings[i];
+            if (!pvk_descriptor_stride(b->type) ||
+                (push && (pvk_descriptor_is_dynamic(b->type) || b->type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)))
+                supported = VK_FALSE;
+            if (b->type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK &&
+                b->count > device->physical_device->properties_1x.v13.maxInlineUniformBlockSize)
+                supported = VK_FALSE;
+            descriptors += b->count;
+        }
+        if (total > PVK_MAX_SET_SIZE || (push && descriptors > PVK_MAX_PUSH_DESCRIPTORS))
+            supported = VK_FALSE;
+        if (supported && n && (bindings[n - 1].flags & VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT)) {
+            const struct pvk_set_binding *b = &bindings[n - 1];
+            uint64_t room = (PVK_MAX_SET_SIZE - b->offset) / b->stride;
+            if (b->type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
+                room = device->physical_device->properties_1x.v13.maxInlineUniformBlockSize;
+            max_variable = room > UINT32_MAX ? UINT32_MAX : (uint32_t)room;
+        }
+    }
+    pvk_free(alloc, sorted);
+    pSupport->supported = supported;
+    for (ext = pSupport->pNext; ext; ext = ext->pNext)
+        if (ext->sType == VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_LAYOUT_SUPPORT)
+            ((VkDescriptorSetVariableDescriptorCountLayoutSupport *)ext)->maxVariableDescriptorCount =
+                device->features.v12.descriptorBindingVariableDescriptorCount ? max_variable : 0;
+}
+
+/* ---- Pools and sets ---- */
+
+struct pvk_descriptor_pool;
+
+struct pvk_descriptor_set {
+    struct pvk_descriptor_pool *pool;
+    struct pvk_descriptor_set_layout *layout; /* referenced */
+    struct pvk_descriptor_set *prev, *next;   /* the pool's sets, by offset */
+    VkDeviceSize offset, size;                /* the table in the pool's buffer; size 16-aligned */
+    char *contents;                           /* the table, for the CPU */
+    pvk_MTLGPUAddress address;                /* the table, for the GPU */
+    uint32_t variable_count;                  /* descriptors (bytes) of the variable-count binding */
+};
+
+struct pvk_descriptor_pool {
+    struct pvk_device *device;
+    VkAllocationCallbacks alloc;
+    bool has_alloc;
+    VkDescriptorPoolCreateFlags flags;
+    uint32_t max_sets, set_count;
+    id mtl_buffer; /* MTLBuffer: shared, cached, untracked, resident */
+    char *contents;
+    pvk_MTLGPUAddress address;
+    VkDeviceSize size, used;                 /* bytes of mtl_buffer; held by sets */
+    struct pvk_descriptor_set *first, *last; /* by offset; empty sets (offset 0) first */
+};
+
+static const VkAllocationCallbacks *pvk_descriptor_pool_alloc(const struct pvk_descriptor_pool *pool)
+{
+    return pool->has_alloc ? &pool->alloc : NULL;
+}
+
+/* Bytes that hold any allocation within the pool sizes (see POOLS). */
+static VkDeviceSize pvk_descriptor_pool_bytes(const VkDescriptorPoolCreateInfo *info)
+{
+    const VkBaseInStructure *ext;
+    VkDeviceSize bytes = 0;
+    uint32_t i;
+    for (ext = info->pNext; ext; ext = ext->pNext)
+        if (ext->sType == VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_INLINE_UNIFORM_BLOCK_CREATE_INFO)
+            bytes += 16 * (VkDeviceSize)((const VkDescriptorPoolInlineUniformBlockCreateInfo *)ext)
+                              ->maxInlineUniformBlockBindings;
+    for (i = 0; i < info->poolSizeCount; i++)
+        bytes += (info->pPoolSizes[i].type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK ? 1 : 16) *
+                 (VkDeviceSize)info->pPoolSizes[i].descriptorCount;
+    return bytes;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorPool(VkDevice _device, const VkDescriptorPoolCreateInfo *pCreateInfo,
+                                                      const VkAllocationCallbacks *pAllocator,
+                                                      VkDescriptorPool *pDescriptorPool)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    id mtl = device->physical_device->mtl_device;
+    VkDeviceSize bytes = pvk_descriptor_pool_bytes(pCreateInfo);
+    struct pvk_descriptor_pool *pool;
+
+    if (bytes < 16) /* sets of empty layouts only: a valid address all the same */
+        bytes = 16;
+    if (bytes > pvk_MTLDevice_maxBufferLength(mtl))
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    pool = pvk_alloc(alloc, sizeof(*pool), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!pool)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    pool->device = device;
+    if (alloc) { /* sets allocate through the pool's callbacks */
+        pool->alloc = *alloc;
+        pool->has_alloc = true;
+    }
+    pool->flags = pCreateInfo->flags;
+    pool->max_sets = pCreateInfo->maxSets;
+    pool->size = bytes;
+    pool->mtl_buffer = pvk_MTLDevice_newBufferWithLength_options(
+        mtl, bytes,
+        PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeDefaultCache |
+            PVK_MTLResourceHazardTrackingModeUntracked);
+    if (!pool->mtl_buffer) {
+        pvk_free(alloc, pool);
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    pool->contents = pvk_MTLBuffer_contents(pool->mtl_buffer);
+    pool->address = pvk_MTLBuffer_gpuAddress(pool->mtl_buffer);
+    pvk_device_make_resident(device, pool->mtl_buffer);
+    *pDescriptorPool = (VkDescriptorPool)pool;
+    return VK_SUCCESS;
+}
+
+static void pvk_descriptor_set_free(struct pvk_descriptor_set *set)
+{
+    struct pvk_descriptor_pool *pool = set->pool;
+    if (set->prev)
+        set->prev->next = set->next;
+    else
+        pool->first = set->next;
+    if (set->next)
+        set->next->prev = set->prev;
+    else
+        pool->last = set->prev;
+    pool->used -= set->size;
+    pool->set_count--;
+    pvk_set_layout_unref(set->layout);
+    pvk_free(pvk_descriptor_pool_alloc(pool), set);
+}
+
+/* Finds room for set->size bytes (see POOLS) and links the set in. */
+static VkResult pvk_descriptor_pool_place(struct pvk_descriptor_pool *pool, struct pvk_descriptor_set *set)
+{
+    struct pvk_descriptor_set *prev = NULL, *s;
+    VkDeviceSize at = 0;
+
+    if (set->size) {
+        at = pool->last ? pool->last->offset + pool->last->size : 0;
+        if (pool->size - at >= set->size) {
+            prev = pool->last;
+        } else {
+            at = 0;
+            for (s = pool->first; s; prev = s, s = s->next) {
+                if (s->offset >= at && s->offset - at >= set->size)
+                    break;
+                if (s->offset + s->size > at)
+                    at = s->offset + s->size;
+            }
+            if (!s) /* the end was checked first */
+                return pool->size - pool->used >= set->size ? VK_ERROR_FRAGMENTED_POOL : VK_ERROR_OUT_OF_POOL_MEMORY;
+        }
+    }
+    set->offset = at;
+    set->prev = prev;
+    set->next = prev ? prev->next : pool->first;
+    if (set->prev)
+        set->prev->next = set;
+    else
+        pool->first = set;
+    if (set->next)
+        set->next->prev = set;
+    else
+        pool->last = set;
+    pool->used += set->size;
+    return VK_SUCCESS;
+}
+
+/* Writes the immutable samplers of a layout into a table (the first
+ * `variable` of the variable-count binding's). */
+static void pvk_table_init_samplers(const struct pvk_descriptor_set_layout *layout, char *table, uint32_t variable)
+{
+    uint32_t i, e;
+    for (i = 0; i < layout->binding_count; i++) {
+        const struct pvk_set_binding *b = &layout->bindings[i];
+        uint32_t n = pvk_binding_count(b, variable), at = b->type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ? 8 : 0;
+        if (b->immutable)
+            for (e = 0; e < n; e++)
+                memcpy(table + b->offset + (size_t)e * b->stride + at, &b->immutable[e], 8);
+    }
+}
+
+static VkResult pvk_descriptor_set_create(struct pvk_descriptor_pool *pool, struct pvk_descriptor_set_layout *layout,
+                                          uint32_t variable, struct pvk_descriptor_set **out)
+{
+    struct pvk_descriptor_set *set;
+    uint64_t size = layout->size;
+    VkResult result;
+
+    if (layout->variable) {
+        const struct pvk_set_binding *b = &layout->bindings[layout->binding_count - 1];
+        if (variable > b->count)
+            variable = b->count;
+        size = pvk_align16(b->offset + (uint64_t)b->stride * variable);
+    }
+    if (pool->set_count >= pool->max_sets || size > pool->size)
+        return VK_ERROR_OUT_OF_POOL_MEMORY;
+    set = pvk_alloc(pvk_descriptor_pool_alloc(pool), sizeof(*set), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!set)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    set->size = size;
+    result = pvk_descriptor_pool_place(pool, set);
+    if (result != VK_SUCCESS) {
+        pvk_free(pvk_descriptor_pool_alloc(pool), set);
+        return result;
+    }
+    pool->set_count++;
+    set->pool = pool;
+    set->layout = pvk_set_layout_ref(layout);
+    set->contents = pool->contents + set->offset;
+    set->address = pool->address + set->offset;
+    set->variable_count = variable;
+    memset(set->contents, 0, (size_t)size);
+    pvk_table_init_samplers(layout, set->contents, variable);
+    *out = set;
+    return VK_SUCCESS;
+}
+
+static void pvk_descriptor_pool_reset(struct pvk_descriptor_pool *pool)
+{
+    while (pool->first)
+        pvk_descriptor_set_free(pool->first);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool,
+                                                   const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_descriptor_pool *pool = (struct pvk_descriptor_pool *)descriptorPool;
+    (void)device;
+    (void)pAllocator; /* must match creation; the stored copy is authoritative */
+    if (!pool)
+        return;
+    pvk_descriptor_pool_reset(pool);
+    pvk_device_evict(pool->device, pool->mtl_buffer);
+    pvk_release(pool->mtl_buffer);
+    pvk_free(pvk_descriptor_pool_alloc(pool), pool);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkResetDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool,
+                                                     VkDescriptorPoolResetFlags flags)
+{
+    (void)device;
+    (void)flags;
+    pvk_descriptor_pool_reset((struct pvk_descriptor_pool *)descriptorPool);
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkAllocateDescriptorSets(VkDevice device, const VkDescriptorSetAllocateInfo *pAllocateInfo,
+                                                        VkDescriptorSet *pDescriptorSets)
+{
+    struct pvk_descriptor_pool *pool = (struct pvk_descriptor_pool *)pAllocateInfo->descriptorPool;
+    const VkDescriptorSetVariableDescriptorCountAllocateInfo *counts = NULL;
+    const VkBaseInStructure *ext;
+    VkResult result = VK_SUCCESS;
+    uint32_t i, j;
+
+    (void)device;
+    for (ext = pAllocateInfo->pNext; ext; ext = ext->pNext)
+        if (ext->sType == VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO)
+            counts = (const VkDescriptorSetVariableDescriptorCountAllocateInfo *)ext;
+    for (i = 0; i < pAllocateInfo->descriptorSetCount && result == VK_SUCCESS; i++) {
+        struct pvk_descriptor_set_layout *layout = (struct pvk_descriptor_set_layout *)pAllocateInfo->pSetLayouts[i];
+        uint32_t variable = counts && i < counts->descriptorSetCount ? counts->pDescriptorCounts[i] : 0;
+        struct pvk_descriptor_set *set = NULL;
+        result = pvk_descriptor_set_create(pool, layout, variable, &set);
+        pDescriptorSets[i] = (VkDescriptorSet)set;
+    }
+    if (result != VK_SUCCESS) {
+        for (j = 0; j + 1 < i; j++)
+            pvk_descriptor_set_free((struct pvk_descriptor_set *)pDescriptorSets[j]);
+        for (j = 0; j < pAllocateInfo->descriptorSetCount; j++)
+            pDescriptorSets[j] = VK_NULL_HANDLE;
+    }
+    return result;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkFreeDescriptorSets(VkDevice device, VkDescriptorPool descriptorPool,
+                                                    uint32_t descriptorSetCount, const VkDescriptorSet *pDescriptorSets)
+{
+    uint32_t i;
+    (void)device;
+    (void)descriptorPool;
+    for (i = 0; i < descriptorSetCount; i++)
+        if (pDescriptorSets[i])
+            pvk_descriptor_set_free((struct pvk_descriptor_set *)pDescriptorSets[i]);
+    return VK_SUCCESS;
+}
+
+/* ---- Updates ---- */
+
+/* Writes one descriptor at dst from info: a VkDescriptorBufferInfo,
+ * VkDescriptorImageInfo or VkBufferView, as the type says. A binding with
+ * immutable samplers keeps them. */
+static void pvk_descriptor_write(char *dst, VkDescriptorType type, const void *info, bool immutable)
+{
+    switch (type) {
+    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: {
+        const VkDescriptorBufferInfo *bi = (const VkDescriptorBufferInfo *)info;
+        const struct pvk_buffer *buffer = (const struct pvk_buffer *)bi->buffer;
+        uint64_t d[2] = { 0, 0 }; /* address, size */
+        if (buffer) {
+            d[0] = buffer->gpu_address + bi->offset;
+            d[1] = bi->range == VK_WHOLE_SIZE ? buffer->size - bi->offset : bi->range;
+        }
+        memcpy(dst, d, 16);
+        break;
+    }
+    case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+    case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+    case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
+        const VkDescriptorImageInfo *ii = (const VkDescriptorImageInfo *)info;
+        const struct pvk_image_view *view = (const struct pvk_image_view *)ii->imageView;
+        pvk_MTLResourceID texture = pvk_texture_id(view ? view->mtl_texture : NULL);
+        memcpy(dst, &texture, 8);
+        if (type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && !immutable) {
+            pvk_MTLResourceID sampler = pvk_sampler_id(ii->sampler);
+            memcpy(dst + 8, &sampler, 8);
+        }
+        break;
+    }
+    case VK_DESCRIPTOR_TYPE_SAMPLER:
+        if (!immutable) {
+            pvk_MTLResourceID sampler = pvk_sampler_id(((const VkDescriptorImageInfo *)info)->sampler);
+            memcpy(dst, &sampler, 8);
+        }
+        break;
+    case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+    case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: {
+        const struct pvk_buffer_view *view = (const struct pvk_buffer_view *)*(const VkBufferView *)info;
+        pvk_MTLResourceID texture = pvk_texture_id(view ? view->mtl_texture : NULL);
+        memcpy(dst, &texture, 8);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+/* Writes `count` descriptors of `type` (inline uniform blocks: bytes) into
+ * a table of `layout`, from binding number `binding`, element `element` on,
+ * continuing into the next bindings. Descriptor k's info is at
+ * data + k * stride; an inline uniform block's bytes are at data. */
+static void pvk_table_write(char *table, const struct pvk_descriptor_set_layout *layout, uint32_t variable,
+                            uint32_t binding, uint32_t element, uint32_t count, VkDescriptorType type,
+                            const char *data, size_t stride)
+{
+    uint32_t i, k = 0, j;
+    for (i = pvk_layout_find(layout, binding); i < layout->binding_count && k < count; i++) {
+        const struct pvk_set_binding *b = &layout->bindings[i];
+        uint32_t have = pvk_binding_count(b, variable), n;
+        char *dst;
+        if (element >= have) { /* past this binding (or an empty one) */
+            element -= have;
+            continue;
+        }
+        n = have - element < count - k ? have - element : count - k;
+        dst = table + b->offset + (size_t)element * b->stride;
+        if (type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
+            memcpy(dst, data + k, n);
+        else
+            for (j = 0; j < n; j++)
+                pvk_descriptor_write(dst + (size_t)j * b->stride, type, data + (k + j) * stride, b->immutable != NULL);
+        k += n;
+        element = 0;
+    }
+}
+
+static void pvk_table_write_set(char *table, const struct pvk_descriptor_set_layout *layout, uint32_t variable,
+                                const VkWriteDescriptorSet *w)
+{
+    const char *data = (const char *)w->pImageInfo;
+    size_t stride = sizeof(VkDescriptorImageInfo);
+    const VkBaseInStructure *ext;
+
+    switch (w->descriptorType) {
+    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+        data = (const char *)w->pBufferInfo;
+        stride = sizeof(VkDescriptorBufferInfo);
+        break;
+    case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+    case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+        data = (const char *)w->pTexelBufferView;
+        stride = sizeof(VkBufferView);
+        break;
+    case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK:
+        data = NULL;
+        for (ext = w->pNext; ext; ext = ext->pNext)
+            if (ext->sType == VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_INLINE_UNIFORM_BLOCK)
+                data = (const char *)((const VkWriteDescriptorSetInlineUniformBlock *)ext)->pData;
+        break;
+    default:
+        break;
+    }
+    if (data)
+        pvk_table_write(table, layout, variable, w->dstBinding, w->dstArrayElement, w->descriptorCount,
+                        w->descriptorType, data, stride);
+}
+
+static void pvk_descriptor_copy(const VkCopyDescriptorSet *c)
+{
+    const struct pvk_descriptor_set *src = (const struct pvk_descriptor_set *)c->srcSet;
+    const struct pvk_descriptor_set *dst = (const struct pvk_descriptor_set *)c->dstSet;
+    const struct pvk_descriptor_set_layout *sl = src->layout, *dl = dst->layout;
+    uint32_t si = pvk_layout_find(sl, c->srcBinding), di = pvk_layout_find(dl, c->dstBinding);
+    uint32_t se = c->srcArrayElement, de = c->dstArrayElement, k = 0, j;
+
+    while (k < c->descriptorCount && si < sl->binding_count && di < dl->binding_count) {
+        const struct pvk_set_binding *sb = &sl->bindings[si], *db = &dl->bindings[di];
+        uint32_t shave = pvk_binding_count(sb, src->variable_count), dhave = pvk_binding_count(db, dst->variable_count);
+        uint32_t n = c->descriptorCount - k;
+        const char *from;
+        char *to;
+        if (se >= shave) {
+            se -= shave;
+            si++;
+            continue;
+        }
+        if (de >= dhave) {
+            de -= dhave;
+            di++;
+            continue;
+        }
+        if (n > shave - se)
+            n = shave - se;
+        if (n > dhave - de)
+            n = dhave - de;
+        from = src->contents + sb->offset + (size_t)se * sb->stride;
+        to = dst->contents + db->offset + (size_t)de * db->stride;
+        if (db->immutable) /* the destination keeps its samplers: copy the images only */
+            for (j = 0; db->type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && j < n; j++)
+                memmove(to + (size_t)j * db->stride, from + (size_t)j * sb->stride, 8);
+        else
+            memmove(to, from, (size_t)n * db->stride);
+        se += n;
+        de += n;
+        k += n;
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount,
+                                                  const VkWriteDescriptorSet *pDescriptorWrites,
+                                                  uint32_t descriptorCopyCount,
+                                                  const VkCopyDescriptorSet *pDescriptorCopies)
+{
+    uint32_t i;
+    (void)device;
+    for (i = 0; i < descriptorWriteCount; i++) {
+        const struct pvk_descriptor_set *set = (const struct pvk_descriptor_set *)pDescriptorWrites[i].dstSet;
+        pvk_table_write_set(set->contents, set->layout, set->variable_count, &pDescriptorWrites[i]);
+    }
+    for (i = 0; i < descriptorCopyCount; i++)
+        pvk_descriptor_copy(&pDescriptorCopies[i]);
+}
+
+/* ---- Update templates ---- */
+
+struct pvk_descriptor_update_template {
+    VkDescriptorUpdateTemplateType type;
+    VkPipelineBindPoint bind_point; /* push descriptor templates */
+    uint32_t entry_count;
+    VkDescriptorUpdateTemplateEntry entries[];
+};
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorUpdateTemplate(VkDevice device,
+                                                                const VkDescriptorUpdateTemplateCreateInfo *pCreateInfo,
+                                                                const VkAllocationCallbacks *pAllocator,
+                                                                VkDescriptorUpdateTemplate *pDescriptorUpdateTemplate)
+{
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
+    uint32_t n = pCreateInfo->descriptorUpdateEntryCount;
+    struct pvk_descriptor_update_template *t =
+        pvk_alloc(alloc, sizeof(*t) + sizeof(t->entries[0]) * n, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!t)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    t->type = pCreateInfo->templateType;
+    t->bind_point = pCreateInfo->pipelineBindPoint;
+    t->entry_count = n;
+    if (n)
+        memcpy(t->entries, pCreateInfo->pDescriptorUpdateEntries, sizeof(t->entries[0]) * n);
+    *pDescriptorUpdateTemplate = (VkDescriptorUpdateTemplate)t;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorUpdateTemplate(VkDevice device,
+                                                             VkDescriptorUpdateTemplate descriptorUpdateTemplate,
+                                                             const VkAllocationCallbacks *pAllocator)
+{
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), descriptorUpdateTemplate);
+}
+
+/* Applies a template's entries to a table. An inline uniform block entry's
+ * bytes are at its offset (its stride is unused). */
+static void pvk_table_write_template(char *table, const struct pvk_descriptor_set_layout *layout, uint32_t variable,
+                                     const struct pvk_descriptor_update_template *t, const void *data)
+{
+    uint32_t i;
+    for (i = 0; i < t->entry_count; i++) {
+        const VkDescriptorUpdateTemplateEntry *e = &t->entries[i];
+        pvk_table_write(table, layout, variable, e->dstBinding, e->dstArrayElement, e->descriptorCount,
+                        e->descriptorType, (const char *)data + e->offset, e->stride);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, VkDescriptorSet descriptorSet,
+                                                             VkDescriptorUpdateTemplate descriptorUpdateTemplate,
+                                                             const void *pData)
+{
+    const struct pvk_descriptor_set *set = (const struct pvk_descriptor_set *)descriptorSet;
+    (void)device;
+    pvk_table_write_template(set->contents, set->layout, set->variable_count,
+                             (const struct pvk_descriptor_update_template *)descriptorUpdateTemplate, pData);
+}
 
 /* ==========================================================================
  * 13. Shader translator (SPIR-V -> MSL)
@@ -40074,8 +40908,9 @@ static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const
 
 /* Pipelines (section 16) as the commands see them. */
 struct pvk_pipeline_layout {
-    uint32_t set_count;          /* descriptor sets will be tables at buffer indices 0.. */
+    uint32_t set_count;          /* descriptor sets: tables at buffer indices 0.. */
     uint32_t push_constant_size; /* end of the highest push-constant range */
+    struct pvk_descriptor_set_layout *sets[PVK_MAX_BOUND_SETS]; /* referenced; NULL: none */
 };
 
 struct pvk_pipeline {
@@ -40085,6 +40920,7 @@ struct pvk_pipeline {
     uint32_t push_size;            /* push-constant bytes to bind from offset 0 (0: none) */
     bool dispatch_base;            /* reads the base workgroup at dispatch_base_offset */
     uint32_t dispatch_base_offset; /* in the push-constant buffer */
+    uint32_t set_mask;             /* bit N: the shader reads descriptor set N */
 };
 
 /* The encoder tracks PVK_MAX_PUSH_CONSTANTS_SIZE (section 7) bytes of push
@@ -40112,6 +40948,18 @@ struct pvk_command_pool {
 
 enum pvk_command_buffer_state { PVK_CB_INITIAL, PVK_CB_RECORDING, PVK_CB_EXECUTABLE };
 
+/* Largest push descriptor set table: maxPushDescriptors descriptors of at
+ * most 16 bytes, padding included (section 12). */
+#define PVK_PUSH_SET_SIZE (PVK_MAX_PUSH_DESCRIPTORS * 16u)
+
+/* The push descriptor set of each bind point (0: graphics, 1: compute),
+ * as the pushes so far left it (see "Descriptor sets" below). */
+struct pvk_push_descriptors {
+    const struct pvk_descriptor_set_layout *layout[2]; /* NULL: undefined */
+    uint32_t set[2];
+    unsigned char table[2][PVK_PUSH_SET_SIZE];
+};
+
 struct pvk_command_buffer {
     struct pvk_command_pool *pool;
     struct pvk_command_buffer *prev, *next; /* pool->buffers */
@@ -40120,6 +40968,7 @@ struct pvk_command_buffer {
     VkCommandBufferUsageFlags usage;
     VkResult result; /* first recording error, returned by vkEndCommandBuffer */
     struct pvk_cmd_block *first, *last;
+    struct pvk_push_descriptors *push; /* made by the first push, kept across resets */
 };
 
 static const VkAllocationCallbacks *pvk_pool_alloc(const struct pvk_command_pool *pool)
@@ -40161,6 +41010,12 @@ static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release
     cb->first = cb->last = NULL;
     cb->state = PVK_CB_INITIAL;
     cb->result = VK_SUCCESS;
+    if (cb->push && release) {
+        pvk_free(pvk_pool_alloc(pool), cb->push);
+        cb->push = NULL;
+    } else if (cb->push) { /* a new recording starts with undefined push descriptors */
+        cb->push->layout[0] = cb->push->layout[1] = NULL;
+    }
 }
 
 static void pvk_command_pool_trim(struct pvk_command_pool *pool)
@@ -40177,6 +41032,7 @@ static void pvk_command_buffer_free(struct pvk_command_buffer *cb)
 {
     struct pvk_command_pool *pool = cb->pool;
     pvk_command_buffer_reset(cb, false);
+    pvk_free(pvk_pool_alloc(pool), cb->push);
     if (cb->prev)
         cb->prev->next = cb->next;
     else
@@ -40316,7 +41172,9 @@ enum pvk_cmd_op {
     PVK_CMD_PUSH_CONSTANTS,    /* struct pvk_cmd_push, then the data */
     PVK_CMD_DISPATCH,          /* struct pvk_cmd_dispatch */
     PVK_CMD_DISPATCH_INDIRECT, /* struct pvk_cmd_dispatch_indirect */
-    PVK_CMD_EXECUTE_COMMANDS   /* struct pvk_cmd_execute, then the command buffers */
+    PVK_CMD_EXECUTE_COMMANDS,  /* struct pvk_cmd_execute, then the command buffers */
+    PVK_CMD_BIND_SET,          /* struct pvk_cmd_bind_set, then its struct pvk_dynamic_offset list */
+    PVK_CMD_PUSH_SET           /* struct pvk_cmd_push_set, then the table */
 };
 
 struct pvk_cmd {
@@ -40375,6 +41233,34 @@ struct pvk_cmd_dispatch_indirect {
 struct pvk_cmd_execute {
     struct pvk_cmd hdr;
     uint32_t count;
+    uint32_t pad;
+};
+
+/* Bind points of a descriptor set packet: bit 0 graphics, bit 1 compute. */
+#define PVK_BIND_GRAPHICS 1u
+#define PVK_BIND_COMPUTE 2u
+
+struct pvk_cmd_bind_set {
+    struct pvk_cmd hdr;
+    uint32_t bind_points;
+    uint32_t index;            /* set number */
+    pvk_MTLGPUAddress address; /* of the table */
+    const char *contents;      /* the table, copied at submit when there are dynamic offsets */
+    uint64_t size;
+    uint32_t dynamic_count;    /* struct pvk_dynamic_offset entries after the packet */
+    uint32_t pad;
+};
+
+struct pvk_dynamic_offset {
+    uint32_t at;     /* table offset of a dynamic buffer descriptor (its address) */
+    uint32_t offset; /* to add to it */
+};
+
+struct pvk_cmd_push_set {
+    struct pvk_cmd hdr;
+    uint32_t bind_points;
+    uint32_t index; /* set number */
+    uint32_t size;  /* of the table that follows */
     uint32_t pad;
 };
 
@@ -40647,6 +41533,183 @@ VKAPI_ATTR void VKAPI_CALL vkCmdExecuteCommands(VkCommandBuffer commandBuffer, u
     memcpy(c + 1, pCommandBuffers, sizeof(VkCommandBuffer) * (size_t)commandBufferCount);
 }
 
+/* ---- Descriptor sets ----
+ *
+ * Binding a set records its table's address (section 12), and for each
+ * dynamic buffer descriptor its place in the table and its dynamic offset,
+ * taken in binding order, then array order. The table is read only when the
+ * GPU runs (or, with dynamic offsets, copied at submit), so updates after
+ * binding are seen.
+ *
+ * Push descriptors are written into the command buffer's table for the
+ * bind point, which starts over (zeroed, immutable samplers filled in) when
+ * a push names another layout or set number: the specification leaves the
+ * push descriptors undefined then, and when recording begins. Each push
+ * copies the whole table (at most PVK_PUSH_SET_SIZE bytes) into its packet,
+ * so earlier commands keep the descriptors they were recorded with. */
+
+static uint32_t pvk_bind_point_bits(VkPipelineBindPoint bind_point)
+{
+    return bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS ? PVK_BIND_GRAPHICS
+         : bind_point == VK_PIPELINE_BIND_POINT_COMPUTE  ? PVK_BIND_COMPUTE
+                                                         : 0;
+}
+
+/* The bind points the stages of the *2 commands name. */
+static uint32_t pvk_stage_bind_points(VkShaderStageFlags stages)
+{
+    VkShaderStageFlags graphics = VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
+    return ((stages & VK_SHADER_STAGE_COMPUTE_BIT) ? PVK_BIND_COMPUTE : 0) | ((stages & graphics) ? PVK_BIND_GRAPHICS : 0);
+}
+
+static void pvk_cmd_bind_sets(struct pvk_command_buffer *cb, uint32_t bind_points, uint32_t first, uint32_t count,
+                              const VkDescriptorSet *sets, uint32_t dynamic_count, const uint32_t *dynamic)
+{
+    uint32_t i, used = 0;
+    if (!bind_points)
+        return;
+    for (i = 0; i < count; i++) {
+        const struct pvk_descriptor_set *set = (const struct pvk_descriptor_set *)sets[i];
+        const struct pvk_descriptor_set_layout *layout;
+        struct pvk_dynamic_offset *d;
+        struct pvk_cmd_bind_set *c;
+        uint32_t b, e, k = 0;
+        if (!set) /* allowed with independent sets: leaves the binding alone */
+            continue;
+        layout = set->layout;
+        if (first + i >= PVK_MAX_BOUND_SETS)
+            break;
+        c = pvk_cmd_append(cb, PVK_CMD_BIND_SET, sizeof(*c) + sizeof(*d) * layout->dynamic_count);
+        if (!c)
+            return;
+        c->bind_points = bind_points;
+        c->index = first + i;
+        c->address = set->address;
+        c->contents = set->contents;
+        c->size = set->size;
+        c->dynamic_count = layout->dynamic_count;
+        d = (struct pvk_dynamic_offset *)(c + 1);
+        for (b = 0; b < layout->binding_count && k < layout->dynamic_count; b++) {
+            const struct pvk_set_binding *lb = &layout->bindings[b];
+            for (e = 0; pvk_descriptor_is_dynamic(lb->type) && e < lb->count; e++, k++) {
+                d[k].at = lb->offset + e * lb->stride;
+                d[k].offset = used + k < dynamic_count ? dynamic[used + k] : 0;
+            }
+        }
+        used += layout->dynamic_count;
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdBindDescriptorSets(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint,
+                                                   VkPipelineLayout layout, uint32_t firstSet,
+                                                   uint32_t descriptorSetCount, const VkDescriptorSet *pDescriptorSets,
+                                                   uint32_t dynamicOffsetCount, const uint32_t *pDynamicOffsets)
+{
+    (void)layout; /* the sets' own layouts are compatible with it */
+    pvk_cmd_bind_sets((struct pvk_command_buffer *)commandBuffer, pvk_bind_point_bits(pipelineBindPoint), firstSet,
+                      descriptorSetCount, pDescriptorSets, dynamicOffsetCount, pDynamicOffsets);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdBindDescriptorSets2(VkCommandBuffer commandBuffer,
+                                                    const VkBindDescriptorSetsInfo *pBindDescriptorSetsInfo)
+{
+    const VkBindDescriptorSetsInfo *info = pBindDescriptorSetsInfo;
+    pvk_cmd_bind_sets((struct pvk_command_buffer *)commandBuffer, pvk_stage_bind_points(info->stageFlags),
+                      info->firstSet, info->descriptorSetCount, info->pDescriptorSets, info->dynamicOffsetCount,
+                      info->pDynamicOffsets);
+}
+
+/* The push descriptor table of bind point bp (0, 1) for set `index` of
+ * `layout`, started over if the layout or set changed. NULL without one. */
+static char *pvk_push_table(struct pvk_command_buffer *cb, uint32_t bp, uint32_t index,
+                            const struct pvk_descriptor_set_layout *layout)
+{
+    struct pvk_push_descriptors *p = cb->push;
+    if (!layout || layout->size > PVK_PUSH_SET_SIZE || cb->result != VK_SUCCESS)
+        return NULL;
+    if (!p) {
+        p = pvk_alloc(pvk_pool_alloc(cb->pool), sizeof(*p), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+        if (!p) {
+            cb->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+            return NULL;
+        }
+        cb->push = p;
+    }
+    if (p->layout[bp] != layout || p->set[bp] != index) {
+        memset(p->table[bp], 0, (size_t)layout->size);
+        pvk_table_init_samplers(layout, (char *)p->table[bp], 0);
+        p->layout[bp] = layout;
+        p->set[bp] = index;
+    }
+    return (char *)p->table[bp];
+}
+
+/* Records the push table of bind point bp as it is now. */
+static void pvk_cmd_push_table(struct pvk_command_buffer *cb, uint32_t bp)
+{
+    uint32_t size = (uint32_t)cb->push->layout[bp]->size;
+    struct pvk_cmd_push_set *c = pvk_cmd_append(cb, PVK_CMD_PUSH_SET, sizeof(*c) + size);
+    if (!c)
+        return;
+    c->bind_points = 1u << bp;
+    c->index = cb->push->set[bp];
+    c->size = size;
+    memcpy(c + 1, cb->push->table[bp], size);
+}
+
+/* Pushes writes, or a template's update if t is set, for the bind points. */
+static void pvk_cmd_push(struct pvk_command_buffer *cb, uint32_t bind_points, const struct pvk_pipeline_layout *pl,
+                         uint32_t set, uint32_t count, const VkWriteDescriptorSet *writes,
+                         const struct pvk_descriptor_update_template *t, const void *data)
+{
+    const struct pvk_descriptor_set_layout *layout = pl && set < pl->set_count ? pl->sets[set] : NULL;
+    uint32_t bp, i;
+    for (bp = 0; bp < 2; bp++) {
+        char *table;
+        if (!(bind_points & (1u << bp)) || !(table = pvk_push_table(cb, bp, set, layout)))
+            continue;
+        if (t)
+            pvk_table_write_template(table, layout, 0, t, data);
+        for (i = 0; i < count; i++)
+            pvk_table_write_set(table, layout, 0, &writes[i]);
+        pvk_cmd_push_table(cb, bp);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdPushDescriptorSet(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint,
+                                                  VkPipelineLayout layout, uint32_t set, uint32_t descriptorWriteCount,
+                                                  const VkWriteDescriptorSet *pDescriptorWrites)
+{
+    pvk_cmd_push((struct pvk_command_buffer *)commandBuffer, pvk_bind_point_bits(pipelineBindPoint),
+                 (const struct pvk_pipeline_layout *)layout, set, descriptorWriteCount, pDescriptorWrites, NULL, NULL);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdPushDescriptorSet2(VkCommandBuffer commandBuffer,
+                                                   const VkPushDescriptorSetInfo *pPushDescriptorSetInfo)
+{
+    const VkPushDescriptorSetInfo *info = pPushDescriptorSetInfo;
+    pvk_cmd_push((struct pvk_command_buffer *)commandBuffer, pvk_stage_bind_points(info->stageFlags),
+                 (const struct pvk_pipeline_layout *)info->layout, info->set, info->descriptorWriteCount,
+                 info->pDescriptorWrites, NULL, NULL);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdPushDescriptorSetWithTemplate(VkCommandBuffer commandBuffer,
+                                                              VkDescriptorUpdateTemplate descriptorUpdateTemplate,
+                                                              VkPipelineLayout layout, uint32_t set, const void *pData)
+{
+    const struct pvk_descriptor_update_template *t = (const struct pvk_descriptor_update_template *)descriptorUpdateTemplate;
+    pvk_cmd_push((struct pvk_command_buffer *)commandBuffer, pvk_bind_point_bits(t->bind_point),
+                 (const struct pvk_pipeline_layout *)layout, set, 0, NULL, t, pData);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdPushDescriptorSetWithTemplate2(
+    VkCommandBuffer commandBuffer, const VkPushDescriptorSetWithTemplateInfo *pPushDescriptorSetWithTemplateInfo)
+{
+    const VkPushDescriptorSetWithTemplateInfo *info = pPushDescriptorSetWithTemplateInfo;
+    vkCmdPushDescriptorSetWithTemplate(commandBuffer, info->descriptorUpdateTemplate, info->layout, info->set,
+                                       info->pData);
+}
+
 /* ==========================================================================
  * 15. Queue submission and synchronization
  *
@@ -40706,6 +41769,7 @@ struct pvk_upload_chunk {
     id buffer;     /* MTLBuffer: shared, write-combined, untracked, resident */
     char *contents;
     pvk_MTLGPUAddress address;
+    size_t size;   /* PVK_UPLOAD_CHUNK_SIZE, or more for one large upload (freed when done) */
     size_t used;
     uint64_t serial; /* last submission that used it */
 };
@@ -40849,6 +41913,11 @@ static void pvk_queue_recycle(struct pvk_queue *queue)
     while (queue->retired && queue->retired->serial <= done) {
         struct pvk_upload_chunk *c = queue->retired;
         queue->retired = c->next;
+        if (c->size != PVK_UPLOAD_CHUNK_SIZE) { /* a large upload's own chunk */
+            c->next = NULL;
+            pvk_upload_chunks_free(queue->device, c);
+            continue;
+        }
         c->next = queue->free_chunks;
         queue->free_chunks = c;
     }
@@ -40913,10 +41982,48 @@ struct pvk_encoder {
     uint32_t push_bound; /* bytes bound at the push-constant index */
     /* push constants, then (dispatch base pipelines) the base workgroup */
     unsigned char push[PVK_MAX_PUSH_CONSTANTS_SIZE + 16];
+    /* Descriptor set tables per bind point (0: graphics, 1: compute), and
+     * those the argument table holds at indices 0.. (0: unknown). */
+    pvk_MTLGPUAddress sets[2][PVK_MAX_BOUND_SETS];
+    pvk_MTLGPUAddress sets_bound[PVK_MAX_BOUND_SETS];
 };
 
+/* A new upload chunk of `size` bytes, resident; NULL with e->result set. */
+static struct pvk_upload_chunk *pvk_upload_chunk_new(struct pvk_encoder *e, size_t size)
+{
+    struct pvk_device *device = e->device;
+    struct pvk_upload_chunk *c = pvk_alloc(pvk_device_alloc(device), sizeof(*c), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+    if (c)
+        c->buffer = pvk_MTLDevice_newBufferWithLength_options(
+            device->physical_device->mtl_device, size,
+            PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeWriteCombined |
+                PVK_MTLResourceHazardTrackingModeUntracked);
+    if (!c || !c->buffer) {
+        pvk_free(pvk_device_alloc(device), c);
+        e->result = c ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_ERROR_OUT_OF_HOST_MEMORY;
+        return NULL;
+    }
+    c->size = size;
+    c->contents = pvk_MTLBuffer_contents(c->buffer);
+    c->address = pvk_MTLBuffer_gpuAddress(c->buffer);
+    pvk_device_make_resident(device, c->buffer);
+    return c;
+}
+
+/* A chunk is reusable once its last user finished. */
+static void pvk_upload_retire(struct pvk_queue *queue, struct pvk_upload_chunk *c)
+{
+    c->next = NULL;
+    if (queue->retired_tail)
+        queue->retired_tail->next = c;
+    else
+        queue->retired = c;
+    queue->retired_tail = c;
+}
+
 /* Upload-ring memory for this submission: size bytes at an align-aligned
- * offset (align: a power of two), CPU pointer returned. */
+ * offset (align: a power of two, at most 16384), CPU pointer returned. More
+ * than a chunk (a large descriptor table) gets a chunk of its own. */
 static void *pvk_upload(struct pvk_encoder *e, size_t size, size_t align, id *buffer, VkDeviceSize *offset,
                         pvk_MTLGPUAddress *address)
 {
@@ -40925,39 +42032,28 @@ static void *pvk_upload(struct pvk_encoder *e, size_t size, size_t align, id *bu
     size_t at = c ? (c->used + align - 1) & ~(align - 1) : 0;
 
     if (size > PVK_UPLOAD_CHUNK_SIZE) {
-        e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
-        return NULL;
+        c = pvk_upload_chunk_new(e, (size + 16383) & ~(size_t)16383);
+        if (!c)
+            return NULL;
+        c->used = size;
+        c->serial = e->serial;
+        pvk_upload_retire(queue, c);
+        if (buffer)
+            *buffer = c->buffer;
+        if (offset)
+            *offset = 0;
+        *address = c->address;
+        return c->contents;
     }
     if (!c || at + size > PVK_UPLOAD_CHUNK_SIZE) {
-        if (c) { /* full: reusable once its last user finished */
-            c->next = NULL;
-            if (queue->retired_tail)
-                queue->retired_tail->next = c;
-            else
-                queue->retired = c;
-            queue->retired_tail = c;
-        }
+        if (c) /* full */
+            pvk_upload_retire(queue, c);
+        queue->upload = NULL;
         c = queue->free_chunks;
-        if (c) {
+        if (c)
             queue->free_chunks = c->next;
-        } else {
-            struct pvk_device *device = e->device;
-            c = pvk_alloc(pvk_device_alloc(device), sizeof(*c), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
-            if (c)
-                c->buffer = pvk_MTLDevice_newBufferWithLength_options(
-                    device->physical_device->mtl_device, PVK_UPLOAD_CHUNK_SIZE,
-                    PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeWriteCombined |
-                        PVK_MTLResourceHazardTrackingModeUntracked);
-            if (!c || !c->buffer) {
-                pvk_free(pvk_device_alloc(device), c);
-                queue->upload = NULL;
-                e->result = c ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_ERROR_OUT_OF_HOST_MEMORY;
-                return NULL;
-            }
-            c->contents = pvk_MTLBuffer_contents(c->buffer);
-            c->address = pvk_MTLBuffer_gpuAddress(c->buffer);
-            pvk_device_make_resident(device, c->buffer);
-        }
+        else if (!(c = pvk_upload_chunk_new(e, PVK_UPLOAD_CHUNK_SIZE)))
+            return NULL;
         c->next = NULL;
         c->used = 0;
         queue->upload = c;
@@ -41100,11 +42196,53 @@ static void pvk_encode_update(struct pvk_encoder *e, const struct pvk_cmd_update
         enc, buffer, offset, c->buffer, c->offset, c->size);
 }
 
-/* Pipeline and push constants for a dispatch with base workgroup `base`. */
+static void pvk_encoder_set_table(struct pvk_encoder *e, uint32_t bind_points, uint32_t index,
+                                  pvk_MTLGPUAddress address)
+{
+    uint32_t bp;
+    for (bp = 0; bp < 2; bp++)
+        if (bind_points & (1u << bp))
+            e->sets[bp][index] = address;
+}
+
+/* A bound set: its table, or with dynamic offsets a copy of it with the
+ * offsets added to the dynamic buffers' addresses (section 12). */
+static void pvk_encode_bind_set(struct pvk_encoder *e, const struct pvk_cmd_bind_set *c)
+{
+    const struct pvk_dynamic_offset *d = (const struct pvk_dynamic_offset *)(c + 1);
+    pvk_MTLGPUAddress address = c->address;
+    uint32_t i;
+    if (c->dynamic_count) {
+        char *copy = pvk_upload(e, (size_t)c->size, 16, NULL, NULL, &address);
+        if (!copy)
+            return;
+        memcpy(copy, c->contents, (size_t)c->size);
+        for (i = 0; i < c->dynamic_count; i++) {
+            uint64_t a;
+            memcpy(&a, c->contents + d[i].at, 8); /* the copy is write-combined: read the source */
+            a += d[i].offset;
+            memcpy(copy + d[i].at, &a, 8);
+        }
+    }
+    pvk_encoder_set_table(e, c->bind_points, c->index, address);
+}
+
+static void pvk_encode_push_set(struct pvk_encoder *e, const struct pvk_cmd_push_set *c)
+{
+    pvk_MTLGPUAddress address;
+    void *table = pvk_upload(e, c->size ? c->size : 16, 16, NULL, NULL, &address);
+    if (!table)
+        return;
+    memcpy(table, c + 1, c->size);
+    pvk_encoder_set_table(e, c->bind_points, c->index, address);
+}
+
+/* Pipeline, descriptor sets and push constants for a dispatch with base
+ * workgroup `base`. */
 static id pvk_encode_compute_state(struct pvk_encoder *e, const uint32_t base[3])
 {
     struct pvk_pipeline *p = e->pipeline;
-    uint32_t need;
+    uint32_t need, n;
     id enc;
 
     if (!p || !p->mtl_pipeline || !(enc = pvk_encoder_get(e)))
@@ -41112,6 +42250,12 @@ static id pvk_encode_compute_state(struct pvk_encoder *e, const uint32_t base[3]
     if (e->pipeline_dirty) {
         pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, p->mtl_pipeline);
         e->pipeline_dirty = false;
+    }
+    for (n = 0; n < PVK_MAX_BOUND_SETS; n++) {
+        if ((p->set_mask & (1u << n)) && e->sets_bound[n] != e->sets[1][n]) {
+            pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, e->sets[1][n], n);
+            e->sets_bound[n] = e->sets[1][n];
+        }
     }
     need = p->push_size;
     if (p->dispatch_base) {
@@ -41199,6 +42343,12 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
                 e->pipeline_dirty = true; /* the state after it is undefined */
                 break;
             }
+            case PVK_CMD_BIND_SET:
+                pvk_encode_bind_set(e, (const struct pvk_cmd_bind_set *)c);
+                break;
+            case PVK_CMD_PUSH_SET:
+                pvk_encode_push_set(e, (const struct pvk_cmd_push_set *)c);
+                break;
             }
         }
     }
@@ -41861,8 +43011,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkWaitSemaphores(VkDevice device, const VkSemapho
  * A compute pipeline is translated (section 13) and compiled when created:
  * MSL 3.2, MTLMathModeSafe, maxTotalThreadsPerThreadgroup = the workgroup
  * size (so the compiler fits it). Push constants are bound by GPU address at
- * the translator's push-constant index; descriptor sets will be tables
- * (section 11 format) at indices 0..N. The pipeline cache is not used yet.
+ * the translator's push-constant index; descriptor set N is a table
+ * (section 11 format) bound at index N, laid out as the pipeline layout's
+ * set layout N says (section 12). The pipeline cache is not used yet.
  * ========================================================================== */
 
 struct pvk_shader_module {
@@ -41962,8 +43113,9 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyShaderModule(VkDevice device, VkShaderModule
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), shaderModule);
 }
 
-/* Set layouts may be destroyed right after this call: when descriptor sets
- * land, what pipelines need of them gets copied here. */
+/* Set layouts may be destroyed right after this call: the pipeline layout
+ * keeps a reference to each (section 12), for pipelines (their bindings go
+ * to the translator) and push descriptors. */
 VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineLayout(VkDevice device, const VkPipelineLayoutCreateInfo *pCreateInfo,
                                                       const VkAllocationCallbacks *pAllocator,
                                                       VkPipelineLayout *pPipelineLayout)
@@ -41973,7 +43125,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineLayout(VkDevice device, const VkP
     uint32_t i;
     if (!layout)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
-    layout->set_count = pCreateInfo->setLayoutCount;
+    /* Valid usage: setLayoutCount <= maxBoundDescriptorSets. */
+    layout->set_count = pCreateInfo->setLayoutCount < PVK_MAX_BOUND_SETS ? pCreateInfo->setLayoutCount
+                                                                          : PVK_MAX_BOUND_SETS;
+    for (i = 0; i < layout->set_count; i++)
+        layout->sets[i] = pvk_set_layout_ref((struct pvk_descriptor_set_layout *)pCreateInfo->pSetLayouts[i]);
     for (i = 0; i < pCreateInfo->pushConstantRangeCount; i++) {
         const VkPushConstantRange *r = &pCreateInfo->pPushConstantRanges[i];
         if (r->offset + r->size > layout->push_constant_size)
@@ -41986,7 +43142,42 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineLayout(VkDevice device, const VkP
 VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineLayout(VkDevice device, VkPipelineLayout pipelineLayout,
                                                    const VkAllocationCallbacks *pAllocator)
 {
-    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), pipelineLayout);
+    struct pvk_pipeline_layout *layout = (struct pvk_pipeline_layout *)pipelineLayout;
+    uint32_t i;
+    if (!layout)
+        return;
+    for (i = 0; i < layout->set_count; i++)
+        pvk_set_layout_unref(layout->sets[i]);
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), layout);
+}
+
+/* The pipeline layout's set layouts as the translator takes them, in one
+ * allocation (*out, free with pvk_free); sets[] gets set_count entries. */
+static VkResult pvk_msl_set_layouts(const struct pvk_pipeline_layout *layout, const VkAllocationCallbacks *alloc,
+                                    struct pvk_msl_set_layout *sets, struct pvk_msl_binding **out)
+{
+    struct pvk_msl_binding *msl;
+    uint32_t i, j, n = 0;
+    for (i = 0; i < layout->set_count; i++)
+        n += layout->sets[i] ? layout->sets[i]->binding_count : 0;
+    *out = msl = pvk_alloc(alloc, sizeof(*msl) * (n ? n : 1), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+    if (!msl)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    for (i = 0; i < layout->set_count; i++) {
+        const struct pvk_descriptor_set_layout *sl = layout->sets[i];
+        sets[i].bindings = msl;
+        sets[i].binding_count = sl ? sl->binding_count : 0;
+        for (j = 0; j < sets[i].binding_count; j++, msl++) {
+            const struct pvk_set_binding *b = &sl->bindings[j];
+            msl->binding = b->binding;
+            msl->type = b->type;
+            msl->count = b->count;
+            msl->offset = b->offset;
+            msl->stride = b->stride;
+            msl->variable_count = (b->flags & VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT) != 0;
+        }
+    }
+    return VK_SUCCESS;
 }
 
 /* VkPipelineCreateFlags2CreateInfo replaces the flags when chained. */
@@ -42008,6 +43199,8 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, const VkC
     const struct pvk_shader_module *module = (const struct pvk_shader_module *)stage->module;
     const uint32_t *code = module ? module->code : NULL;
     size_t words = module ? module->word_count : 0;
+    struct pvk_msl_set_layout sets[PVK_MAX_BOUND_SETS];
+    struct pvk_msl_binding *bindings = NULL;
     struct pvk_msl_options options;
     struct pvk_msl_result res;
     struct pvk_pipeline *pipeline;
@@ -42032,16 +43225,18 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, const VkC
         options.dispatch_base = true;
         options.dispatch_base_offset = layout ? layout->push_constant_size : 0;
     }
+    if (layout) { /* the shader's sets must be the layout's */
+        if (pvk_msl_set_layouts(layout, alloc, sets, &bindings) != VK_SUCCESS)
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        options.set_layouts = sets;
+        options.set_layout_count = layout->set_count;
+    }
     result = pvk_spirv_to_msl(code, words, stage->pName, &options, &res);
+    pvk_free(alloc, bindings);
     if (result != VK_SUCCESS) {
         pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: cannot translate the shader: %s", res.error);
         pvk_msl_result_free(&res);
         return result == VK_ERROR_OUT_OF_HOST_MEMORY ? result : VK_ERROR_UNKNOWN;
-    }
-    if (res.set_mask) {
-        pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: descriptor sets are not implemented yet");
-        pvk_msl_result_free(&res);
-        return VK_ERROR_UNKNOWN;
     }
     if ((res.has_push_constants && res.push_constant_offset + res.push_constant_size > PVK_MAX_PUSH_CONSTANTS_SIZE) ||
         (res.dispatch_base && res.dispatch_base_offset > PVK_MAX_PUSH_CONSTANTS_SIZE)) {
@@ -42062,6 +43257,7 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, const VkC
         pipeline->push_size = (res.push_constant_offset + res.push_constant_size + 15) & ~15u;
     pipeline->dispatch_base = res.dispatch_base;
     pipeline->dispatch_base_offset = res.dispatch_base_offset;
+    pipeline->set_mask = res.set_mask;
     pipeline->mtl_pipeline = pvk_compile_compute(device, res.msl, res.entry_point,
                                                  (unsigned long)res.workgroup_size[0] * res.workgroup_size[1] *
                                                      res.workgroup_size[2],
@@ -42139,15 +43335,12 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
 
 VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImage2KHR(VkDevice device, const VkAcquireNextImageInfoKHR* pAcquireInfo, uint32_t* pImageIndex) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImageKHR(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t* pImageIndex) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkAllocateDescriptorSets(VkDevice device, const VkDescriptorSetAllocateInfo* pAllocateInfo, VkDescriptorSet* pDescriptorSets) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory(VkDevice device, VkImage image, VkDeviceMemory memory, VkDeviceSize memoryOffset) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory2(VkDevice device, uint32_t bindInfoCount, const VkBindImageMemoryInfo* pBindInfos) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t query, VkQueryControlFlags flags) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo* pRenderPassBegin, VkSubpassContents contents) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass2(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo* pRenderPassBegin, const VkSubpassBeginInfo* pSubpassBeginInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, const VkRenderingInfo* pRenderingInfo) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdBindDescriptorSets(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint, VkPipelineLayout layout, uint32_t firstSet, uint32_t descriptorSetCount, const VkDescriptorSet* pDescriptorSets, uint32_t dynamicOffsetCount, const uint32_t* pDynamicOffsets) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdBindDescriptorSets2(VkCommandBuffer commandBuffer, const VkBindDescriptorSetsInfo* pBindDescriptorSetsInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, VkIndexType indexType) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer2(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size, VkIndexType indexType) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers(VkCommandBuffer commandBuffer, uint32_t firstBinding, uint32_t bindingCount, const VkBuffer* pBuffers, const VkDeviceSize* pOffsets) { PVK_UNIMPLEMENTED(); }
@@ -42176,10 +43369,6 @@ VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass2(VkCommandBuffer commandBuffer, co
 VKAPI_ATTR void VKAPI_CALL vkCmdEndRendering(VkCommandBuffer commandBuffer) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass(VkCommandBuffer commandBuffer, VkSubpassContents contents) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass2(VkCommandBuffer commandBuffer, const VkSubpassBeginInfo* pSubpassBeginInfo, const VkSubpassEndInfo* pSubpassEndInfo) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdPushDescriptorSet(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint, VkPipelineLayout layout, uint32_t set, uint32_t descriptorWriteCount, const VkWriteDescriptorSet* pDescriptorWrites) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdPushDescriptorSet2(VkCommandBuffer commandBuffer, const VkPushDescriptorSetInfo* pPushDescriptorSetInfo) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdPushDescriptorSetWithTemplate(VkCommandBuffer commandBuffer, VkDescriptorUpdateTemplate descriptorUpdateTemplate, VkPipelineLayout layout, uint32_t set, const void* pData) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdPushDescriptorSetWithTemplate2(VkCommandBuffer commandBuffer, const VkPushDescriptorSetWithTemplateInfo* pPushDescriptorSetWithTemplateInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdResetEvent(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags stageMask) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdResetEvent2(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags2 stageMask) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdResetQueryPool(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount) { PVK_UNIMPLEMENTED(); }
@@ -42222,9 +43411,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToImage(VkDevice device, const VkCopyI
 VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToMemory(VkDevice device, const VkCopyImageToMemoryInfo* pCopyImageToMemoryInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCopyMemoryToImage(VkDevice device, const VkCopyMemoryToImageInfo* pCopyMemoryToImageInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateBufferView(VkDevice device, const VkBufferViewCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkBufferView* pView) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorPool(VkDevice device, const VkDescriptorPoolCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDescriptorPool* pDescriptorPool) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice device, const VkDescriptorSetLayoutCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDescriptorSetLayout* pSetLayout) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorUpdateTemplate(VkDevice device, const VkDescriptorUpdateTemplateCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDescriptorUpdateTemplate* pDescriptorUpdateTemplate) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateEvent(VkDevice device, const VkEventCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkEvent* pEvent) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateFramebuffer(VkDevice device, const VkFramebufferCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkFramebuffer* pFramebuffer) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateGraphicsPipelines(VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount, const VkGraphicsPipelineCreateInfo* pCreateInfos, const VkAllocationCallbacks* pAllocator, VkPipeline* pPipelines) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
@@ -42240,9 +43426,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSampler(VkDevice device, const VkSamplerC
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSamplerYcbcrConversion(VkDevice device, const VkSamplerYcbcrConversionCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSamplerYcbcrConversion* pYcbcrConversion) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSwapchainKHR* pSwapchain) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkDestroyBufferView(VkDevice device, VkBufferView bufferView, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorSetLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorUpdateTemplate(VkDevice device, VkDescriptorUpdateTemplate descriptorUpdateTemplate, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyEvent(VkDevice device, VkEvent event, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyFramebuffer(VkDevice device, VkFramebuffer framebuffer, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyImage(VkDevice device, VkImage image, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
@@ -42255,8 +43438,6 @@ VKAPI_ATTR void VKAPI_CALL vkDestroySampler(VkDevice device, VkSampler sampler, 
 VKAPI_ATTR void VKAPI_CALL vkDestroySamplerYcbcrConversion(VkDevice device, VkSamplerYcbcrConversion ycbcrConversion, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkFreeDescriptorSets(VkDevice device, VkDescriptorPool descriptorPool, uint32_t descriptorSetCount, const VkDescriptorSet* pDescriptorSets) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkGetDescriptorSetLayoutSupport(VkDevice device, const VkDescriptorSetLayoutCreateInfo* pCreateInfo, VkDescriptorSetLayoutSupport* pSupport) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, uint32_t heapIndex, uint32_t localDeviceIndex, uint32_t remoteDeviceIndex, VkPeerMemoryFeatureFlags* pPeerMemoryFeatures) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetDeviceGroupPresentCapabilitiesKHR(VkDevice device, VkDeviceGroupPresentCapabilitiesKHR* pDeviceGroupPresentCapabilities) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetDeviceGroupSurfacePresentModesKHR(VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR* pModes) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
@@ -42294,14 +43475,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesKHR(VkDevice device, VkSwapch
 VKAPI_ATTR VkResult VKAPI_CALL vkMergePipelineCaches(VkDevice device, VkPipelineCache dstCache, uint32_t srcCacheCount, const VkPipelineCache* pSrcCaches) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkQueueBindSparse(VkQueue queue, uint32_t bindInfoCount, const VkBindSparseInfo* pBindInfo, VkFence fence) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkResetDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool, VkDescriptorPoolResetFlags flags) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkResetEvent(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkResetQueryPool(VkDevice device, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkSetEvent(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkSetPrivateData(VkDevice device, VkObjectType objectType, uint64_t objectHandle, VkPrivateDataSlot privateDataSlot, uint64_t data) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t transitionCount, const VkHostImageLayoutTransitionInfo* pTransitions) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, VkDescriptorSet descriptorSet, VkDescriptorUpdateTemplate descriptorUpdateTemplate, const void* pData) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount, const VkWriteDescriptorSet* pDescriptorWrites, uint32_t descriptorCopyCount, const VkCopyDescriptorSet* pDescriptorCopies) { PVK_UNIMPLEMENTED(); }
 
 #if defined(__clang__)
 #pragma clang diagnostic pop

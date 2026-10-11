@@ -1,0 +1,1572 @@
+/* Descriptor sets (section 12): layouts, pools, sets, updates and update
+ * templates, and compute dispatches reading through them (sections 14-16):
+ * dynamic offsets, push descriptors, inline uniform blocks, update after
+ * bind, descriptor arrays indexed non-uniformly, runtime arrays and
+ * partially bound bindings.
+ *
+ * Shaders: GLSL in the comment above each array, compiled with
+ *   glslangValidator -V --target-env vulkan1.3 */
+#define PLASMAVK_IMPLEMENTATION
+#include "../../plasmavk.h"
+
+#include <string.h>
+
+#include "../pvk_test.h"
+
+/*
+ * #version 450
+ * layout(local_size_x = 64) in;
+ * layout(set = 0, binding = 0) uniform Params { uint count; uint mul; uint add; } params;
+ * layout(std430, set = 0, binding = 1) readonly buffer Src { uint v[]; } src;
+ * layout(std430, set = 0, binding = 2) buffer Dst { uint v[]; } dst;
+ * void main()
+ * {
+ *     uint i = gl_GlobalInvocationID.x;
+ *     if (i < params.count)
+ *         dst.v[i] = src.v[i] * params.mul + params.add;
+ * }
+ */
+static const uint32_t spv_ubo_ssbo[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000036, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0009000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000b, 0x00000013, 0x00000020,
+    0x00000025, 0x00060010, 0x00000004, 0x00000011, 0x00000040, 0x00000001, 0x00000001, 0x00030003,
+    0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000008,
+    0x00000069, 0x00080005, 0x0000000b, 0x475f6c67, 0x61626f6c, 0x766e496c, 0x7461636f, 0x496e6f69,
+    0x00000044, 0x00040005, 0x00000011, 0x61726150, 0x0000736d, 0x00050006, 0x00000011, 0x00000000,
+    0x6e756f63, 0x00000074, 0x00040006, 0x00000011, 0x00000001, 0x006c756d, 0x00040006, 0x00000011,
+    0x00000002, 0x00646461, 0x00040005, 0x00000013, 0x61726170, 0x0000736d, 0x00030005, 0x0000001e,
+    0x00747344, 0x00040006, 0x0000001e, 0x00000000, 0x00000076, 0x00030005, 0x00000020, 0x00747364,
+    0x00030005, 0x00000023, 0x00637253, 0x00040006, 0x00000023, 0x00000000, 0x00000076, 0x00030005,
+    0x00000025, 0x00637273, 0x00040047, 0x0000000b, 0x0000000b, 0x0000001c, 0x00030047, 0x00000011,
+    0x00000002, 0x00050048, 0x00000011, 0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x00000011,
+    0x00000001, 0x00000023, 0x00000004, 0x00050048, 0x00000011, 0x00000002, 0x00000023, 0x00000008,
+    0x00040047, 0x00000013, 0x00000021, 0x00000000, 0x00040047, 0x00000013, 0x00000022, 0x00000000,
+    0x00040047, 0x0000001d, 0x00000006, 0x00000004, 0x00030047, 0x0000001e, 0x00000002, 0x00050048,
+    0x0000001e, 0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x00000020, 0x00000021, 0x00000002,
+    0x00040047, 0x00000020, 0x00000022, 0x00000000, 0x00040047, 0x00000022, 0x00000006, 0x00000004,
+    0x00030047, 0x00000023, 0x00000002, 0x00040048, 0x00000023, 0x00000000, 0x00000018, 0x00050048,
+    0x00000023, 0x00000000, 0x00000023, 0x00000000, 0x00030047, 0x00000025, 0x00000018, 0x00040047,
+    0x00000025, 0x00000021, 0x00000001, 0x00040047, 0x00000025, 0x00000022, 0x00000000, 0x00020013,
+    0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000000,
+    0x00040020, 0x00000007, 0x00000007, 0x00000006, 0x00040017, 0x00000009, 0x00000006, 0x00000003,
+    0x00040020, 0x0000000a, 0x00000001, 0x00000009, 0x0004003b, 0x0000000a, 0x0000000b, 0x00000001,
+    0x0004002b, 0x00000006, 0x0000000c, 0x00000000, 0x00040020, 0x0000000d, 0x00000001, 0x00000006,
+    0x0005001e, 0x00000011, 0x00000006, 0x00000006, 0x00000006, 0x00040020, 0x00000012, 0x00000002,
+    0x00000011, 0x0004003b, 0x00000012, 0x00000013, 0x00000002, 0x00040015, 0x00000014, 0x00000020,
+    0x00000001, 0x0004002b, 0x00000014, 0x00000015, 0x00000000, 0x00040020, 0x00000016, 0x00000002,
+    0x00000006, 0x00020014, 0x00000019, 0x0003001d, 0x0000001d, 0x00000006, 0x0003001e, 0x0000001e,
+    0x0000001d, 0x00040020, 0x0000001f, 0x0000000c, 0x0000001e, 0x0004003b, 0x0000001f, 0x00000020,
+    0x0000000c, 0x0003001d, 0x00000022, 0x00000006, 0x0003001e, 0x00000023, 0x00000022, 0x00040020,
+    0x00000024, 0x0000000c, 0x00000023, 0x0004003b, 0x00000024, 0x00000025, 0x0000000c, 0x00040020,
+    0x00000027, 0x0000000c, 0x00000006, 0x0004002b, 0x00000014, 0x0000002a, 0x00000001, 0x0004002b,
+    0x00000014, 0x0000002e, 0x00000002, 0x0004002b, 0x00000006, 0x00000033, 0x00000040, 0x0004002b,
+    0x00000006, 0x00000034, 0x00000001, 0x0006002c, 0x00000009, 0x00000035, 0x00000033, 0x00000034,
+    0x00000034, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005,
+    0x0004003b, 0x00000007, 0x00000008, 0x00000007, 0x00050041, 0x0000000d, 0x0000000e, 0x0000000b,
+    0x0000000c, 0x0004003d, 0x00000006, 0x0000000f, 0x0000000e, 0x0003003e, 0x00000008, 0x0000000f,
+    0x0004003d, 0x00000006, 0x00000010, 0x00000008, 0x00050041, 0x00000016, 0x00000017, 0x00000013,
+    0x00000015, 0x0004003d, 0x00000006, 0x00000018, 0x00000017, 0x000500b0, 0x00000019, 0x0000001a,
+    0x00000010, 0x00000018, 0x000300f7, 0x0000001c, 0x00000000, 0x000400fa, 0x0000001a, 0x0000001b,
+    0x0000001c, 0x000200f8, 0x0000001b, 0x0004003d, 0x00000006, 0x00000021, 0x00000008, 0x0004003d,
+    0x00000006, 0x00000026, 0x00000008, 0x00060041, 0x00000027, 0x00000028, 0x00000025, 0x00000015,
+    0x00000026, 0x0004003d, 0x00000006, 0x00000029, 0x00000028, 0x00050041, 0x00000016, 0x0000002b,
+    0x00000013, 0x0000002a, 0x0004003d, 0x00000006, 0x0000002c, 0x0000002b, 0x00050084, 0x00000006,
+    0x0000002d, 0x00000029, 0x0000002c, 0x00050041, 0x00000016, 0x0000002f, 0x00000013, 0x0000002e,
+    0x0004003d, 0x00000006, 0x00000030, 0x0000002f, 0x00050080, 0x00000006, 0x00000031, 0x0000002d,
+    0x00000030, 0x00060041, 0x00000027, 0x00000032, 0x00000020, 0x00000015, 0x00000021, 0x0003003e,
+    0x00000032, 0x00000031, 0x000200f9, 0x0000001c, 0x000200f8, 0x0000001c, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 450
+ * layout(local_size_x = 64) in;
+ * layout(set = 0, binding = 0) uniform Params { uint count; uint add; } params;
+ * layout(std430, set = 0, binding = 1) buffer Dst { uint v[]; } dst[2];
+ * layout(std430, set = 1, binding = 0) readonly buffer Src { uint v[]; } src;
+ * void main()
+ * {
+ *     uint i = gl_GlobalInvocationID.x;
+ *     if (i < params.count) {
+ *         dst[0].v[i] = src.v[i] + params.add;
+ *         dst[1].v[i] = src.v[i] * 2u + params.add;
+ *     }
+ * }
+ */
+static const uint32_t spv_dynamic[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x0000003d, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0009000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000b, 0x00000013, 0x00000022,
+    0x00000027, 0x00060010, 0x00000004, 0x00000011, 0x00000040, 0x00000001, 0x00000001, 0x00030003,
+    0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000008,
+    0x00000069, 0x00080005, 0x0000000b, 0x475f6c67, 0x61626f6c, 0x766e496c, 0x7461636f, 0x496e6f69,
+    0x00000044, 0x00040005, 0x00000011, 0x61726150, 0x0000736d, 0x00050006, 0x00000011, 0x00000000,
+    0x6e756f63, 0x00000074, 0x00040006, 0x00000011, 0x00000001, 0x00646461, 0x00040005, 0x00000013,
+    0x61726170, 0x0000736d, 0x00030005, 0x0000001e, 0x00747344, 0x00040006, 0x0000001e, 0x00000000,
+    0x00000076, 0x00030005, 0x00000022, 0x00747364, 0x00030005, 0x00000025, 0x00637253, 0x00040006,
+    0x00000025, 0x00000000, 0x00000076, 0x00030005, 0x00000027, 0x00637273, 0x00040047, 0x0000000b,
+    0x0000000b, 0x0000001c, 0x00030047, 0x00000011, 0x00000002, 0x00050048, 0x00000011, 0x00000000,
+    0x00000023, 0x00000000, 0x00050048, 0x00000011, 0x00000001, 0x00000023, 0x00000004, 0x00040047,
+    0x00000013, 0x00000021, 0x00000000, 0x00040047, 0x00000013, 0x00000022, 0x00000000, 0x00040047,
+    0x0000001d, 0x00000006, 0x00000004, 0x00030047, 0x0000001e, 0x00000002, 0x00050048, 0x0000001e,
+    0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x00000022, 0x00000021, 0x00000001, 0x00040047,
+    0x00000022, 0x00000022, 0x00000000, 0x00040047, 0x00000024, 0x00000006, 0x00000004, 0x00030047,
+    0x00000025, 0x00000002, 0x00040048, 0x00000025, 0x00000000, 0x00000018, 0x00050048, 0x00000025,
+    0x00000000, 0x00000023, 0x00000000, 0x00030047, 0x00000027, 0x00000018, 0x00040047, 0x00000027,
+    0x00000021, 0x00000000, 0x00040047, 0x00000027, 0x00000022, 0x00000001, 0x00020013, 0x00000002,
+    0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000000, 0x00040020,
+    0x00000007, 0x00000007, 0x00000006, 0x00040017, 0x00000009, 0x00000006, 0x00000003, 0x00040020,
+    0x0000000a, 0x00000001, 0x00000009, 0x0004003b, 0x0000000a, 0x0000000b, 0x00000001, 0x0004002b,
+    0x00000006, 0x0000000c, 0x00000000, 0x00040020, 0x0000000d, 0x00000001, 0x00000006, 0x0004001e,
+    0x00000011, 0x00000006, 0x00000006, 0x00040020, 0x00000012, 0x00000002, 0x00000011, 0x0004003b,
+    0x00000012, 0x00000013, 0x00000002, 0x00040015, 0x00000014, 0x00000020, 0x00000001, 0x0004002b,
+    0x00000014, 0x00000015, 0x00000000, 0x00040020, 0x00000016, 0x00000002, 0x00000006, 0x00020014,
+    0x00000019, 0x0003001d, 0x0000001d, 0x00000006, 0x0003001e, 0x0000001e, 0x0000001d, 0x0004002b,
+    0x00000006, 0x0000001f, 0x00000002, 0x0004001c, 0x00000020, 0x0000001e, 0x0000001f, 0x00040020,
+    0x00000021, 0x0000000c, 0x00000020, 0x0004003b, 0x00000021, 0x00000022, 0x0000000c, 0x0003001d,
+    0x00000024, 0x00000006, 0x0003001e, 0x00000025, 0x00000024, 0x00040020, 0x00000026, 0x0000000c,
+    0x00000025, 0x0004003b, 0x00000026, 0x00000027, 0x0000000c, 0x00040020, 0x00000029, 0x0000000c,
+    0x00000006, 0x0004002b, 0x00000014, 0x0000002c, 0x00000001, 0x0004002b, 0x00000006, 0x0000003a,
+    0x00000040, 0x0004002b, 0x00000006, 0x0000003b, 0x00000001, 0x0006002c, 0x00000009, 0x0000003c,
+    0x0000003a, 0x0000003b, 0x0000003b, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
+    0x000200f8, 0x00000005, 0x0004003b, 0x00000007, 0x00000008, 0x00000007, 0x00050041, 0x0000000d,
+    0x0000000e, 0x0000000b, 0x0000000c, 0x0004003d, 0x00000006, 0x0000000f, 0x0000000e, 0x0003003e,
+    0x00000008, 0x0000000f, 0x0004003d, 0x00000006, 0x00000010, 0x00000008, 0x00050041, 0x00000016,
+    0x00000017, 0x00000013, 0x00000015, 0x0004003d, 0x00000006, 0x00000018, 0x00000017, 0x000500b0,
+    0x00000019, 0x0000001a, 0x00000010, 0x00000018, 0x000300f7, 0x0000001c, 0x00000000, 0x000400fa,
+    0x0000001a, 0x0000001b, 0x0000001c, 0x000200f8, 0x0000001b, 0x0004003d, 0x00000006, 0x00000023,
+    0x00000008, 0x0004003d, 0x00000006, 0x00000028, 0x00000008, 0x00060041, 0x00000029, 0x0000002a,
+    0x00000027, 0x00000015, 0x00000028, 0x0004003d, 0x00000006, 0x0000002b, 0x0000002a, 0x00050041,
+    0x00000016, 0x0000002d, 0x00000013, 0x0000002c, 0x0004003d, 0x00000006, 0x0000002e, 0x0000002d,
+    0x00050080, 0x00000006, 0x0000002f, 0x0000002b, 0x0000002e, 0x00070041, 0x00000029, 0x00000030,
+    0x00000022, 0x00000015, 0x00000015, 0x00000023, 0x0003003e, 0x00000030, 0x0000002f, 0x0004003d,
+    0x00000006, 0x00000031, 0x00000008, 0x0004003d, 0x00000006, 0x00000032, 0x00000008, 0x00060041,
+    0x00000029, 0x00000033, 0x00000027, 0x00000015, 0x00000032, 0x0004003d, 0x00000006, 0x00000034,
+    0x00000033, 0x00050084, 0x00000006, 0x00000035, 0x00000034, 0x0000001f, 0x00050041, 0x00000016,
+    0x00000036, 0x00000013, 0x0000002c, 0x0004003d, 0x00000006, 0x00000037, 0x00000036, 0x00050080,
+    0x00000006, 0x00000038, 0x00000035, 0x00000037, 0x00070041, 0x00000029, 0x00000039, 0x00000022,
+    0x0000002c, 0x00000015, 0x00000031, 0x0003003e, 0x00000039, 0x00000038, 0x000200f9, 0x0000001c,
+    0x000200f8, 0x0000001c, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 450
+ * layout(local_size_x = 1) in;
+ * layout(set = 0, binding = 0) uniform Inline { uvec4 a; uint b; } blk;
+ * layout(set = 0, binding = 1) uniform Small { uint x; } small[3];
+ * layout(std430, set = 0, binding = 2) buffer Out { uint v[]; } o;
+ * layout(push_constant) uniform Push { uint index; } pc;
+ * void main()
+ * {
+ *     o.v[0] = blk.a.x;
+ *     o.v[1] = blk.a.y;
+ *     o.v[2] = blk.a.z;
+ *     o.v[3] = blk.a.w;
+ *     o.v[4] = blk.b;
+ *     o.v[5] = small[pc.index].x;
+ * }
+ */
+static const uint32_t spv_inline[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x0000003a, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0009000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000a, 0x00000010, 0x0000002e,
+    0x00000031, 0x00060010, 0x00000004, 0x00000011, 0x00000001, 0x00000001, 0x00000001, 0x00030003,
+    0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000008,
+    0x0074754f, 0x00040006, 0x00000008, 0x00000000, 0x00000076, 0x00030005, 0x0000000a, 0x0000006f,
+    0x00040005, 0x0000000e, 0x696c6e49, 0x0000656e, 0x00040006, 0x0000000e, 0x00000000, 0x00000061,
+    0x00040006, 0x0000000e, 0x00000001, 0x00000062, 0x00030005, 0x00000010, 0x006b6c62, 0x00040005,
+    0x0000002b, 0x6c616d53, 0x0000006c, 0x00040006, 0x0000002b, 0x00000000, 0x00000078, 0x00040005,
+    0x0000002e, 0x6c616d73, 0x0000006c, 0x00040005, 0x0000002f, 0x68737550, 0x00000000, 0x00050006,
+    0x0000002f, 0x00000000, 0x65646e69, 0x00000078, 0x00030005, 0x00000031, 0x00006370, 0x00040047,
+    0x00000007, 0x00000006, 0x00000004, 0x00030047, 0x00000008, 0x00000002, 0x00050048, 0x00000008,
+    0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x0000000a, 0x00000021, 0x00000002, 0x00040047,
+    0x0000000a, 0x00000022, 0x00000000, 0x00030047, 0x0000000e, 0x00000002, 0x00050048, 0x0000000e,
+    0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x0000000e, 0x00000001, 0x00000023, 0x00000010,
+    0x00040047, 0x00000010, 0x00000021, 0x00000000, 0x00040047, 0x00000010, 0x00000022, 0x00000000,
+    0x00030047, 0x0000002b, 0x00000002, 0x00050048, 0x0000002b, 0x00000000, 0x00000023, 0x00000000,
+    0x00040047, 0x0000002e, 0x00000021, 0x00000001, 0x00040047, 0x0000002e, 0x00000022, 0x00000000,
+    0x00030047, 0x0000002f, 0x00000002, 0x00050048, 0x0000002f, 0x00000000, 0x00000023, 0x00000000,
+    0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020,
+    0x00000000, 0x0003001d, 0x00000007, 0x00000006, 0x0003001e, 0x00000008, 0x00000007, 0x00040020,
+    0x00000009, 0x0000000c, 0x00000008, 0x0004003b, 0x00000009, 0x0000000a, 0x0000000c, 0x00040015,
+    0x0000000b, 0x00000020, 0x00000001, 0x0004002b, 0x0000000b, 0x0000000c, 0x00000000, 0x00040017,
+    0x0000000d, 0x00000006, 0x00000004, 0x0004001e, 0x0000000e, 0x0000000d, 0x00000006, 0x00040020,
+    0x0000000f, 0x00000002, 0x0000000e, 0x0004003b, 0x0000000f, 0x00000010, 0x00000002, 0x0004002b,
+    0x00000006, 0x00000011, 0x00000000, 0x00040020, 0x00000012, 0x00000002, 0x00000006, 0x00040020,
+    0x00000015, 0x0000000c, 0x00000006, 0x0004002b, 0x0000000b, 0x00000017, 0x00000001, 0x0004002b,
+    0x00000006, 0x00000018, 0x00000001, 0x0004002b, 0x0000000b, 0x0000001c, 0x00000002, 0x0004002b,
+    0x00000006, 0x0000001d, 0x00000002, 0x0004002b, 0x0000000b, 0x00000021, 0x00000003, 0x0004002b,
+    0x00000006, 0x00000022, 0x00000003, 0x0004002b, 0x0000000b, 0x00000026, 0x00000004, 0x0004002b,
+    0x0000000b, 0x0000002a, 0x00000005, 0x0003001e, 0x0000002b, 0x00000006, 0x0004001c, 0x0000002c,
+    0x0000002b, 0x00000022, 0x00040020, 0x0000002d, 0x00000002, 0x0000002c, 0x0004003b, 0x0000002d,
+    0x0000002e, 0x00000002, 0x0003001e, 0x0000002f, 0x00000006, 0x00040020, 0x00000030, 0x00000009,
+    0x0000002f, 0x0004003b, 0x00000030, 0x00000031, 0x00000009, 0x00040020, 0x00000032, 0x00000009,
+    0x00000006, 0x00040017, 0x00000038, 0x00000006, 0x00000003, 0x0006002c, 0x00000038, 0x00000039,
+    0x00000018, 0x00000018, 0x00000018, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
+    0x000200f8, 0x00000005, 0x00060041, 0x00000012, 0x00000013, 0x00000010, 0x0000000c, 0x00000011,
+    0x0004003d, 0x00000006, 0x00000014, 0x00000013, 0x00060041, 0x00000015, 0x00000016, 0x0000000a,
+    0x0000000c, 0x0000000c, 0x0003003e, 0x00000016, 0x00000014, 0x00060041, 0x00000012, 0x00000019,
+    0x00000010, 0x0000000c, 0x00000018, 0x0004003d, 0x00000006, 0x0000001a, 0x00000019, 0x00060041,
+    0x00000015, 0x0000001b, 0x0000000a, 0x0000000c, 0x00000017, 0x0003003e, 0x0000001b, 0x0000001a,
+    0x00060041, 0x00000012, 0x0000001e, 0x00000010, 0x0000000c, 0x0000001d, 0x0004003d, 0x00000006,
+    0x0000001f, 0x0000001e, 0x00060041, 0x00000015, 0x00000020, 0x0000000a, 0x0000000c, 0x0000001c,
+    0x0003003e, 0x00000020, 0x0000001f, 0x00060041, 0x00000012, 0x00000023, 0x00000010, 0x0000000c,
+    0x00000022, 0x0004003d, 0x00000006, 0x00000024, 0x00000023, 0x00060041, 0x00000015, 0x00000025,
+    0x0000000a, 0x0000000c, 0x00000021, 0x0003003e, 0x00000025, 0x00000024, 0x00050041, 0x00000012,
+    0x00000027, 0x00000010, 0x00000017, 0x0004003d, 0x00000006, 0x00000028, 0x00000027, 0x00060041,
+    0x00000015, 0x00000029, 0x0000000a, 0x0000000c, 0x00000026, 0x0003003e, 0x00000029, 0x00000028,
+    0x00050041, 0x00000032, 0x00000033, 0x00000031, 0x0000000c, 0x0004003d, 0x00000006, 0x00000034,
+    0x00000033, 0x00060041, 0x00000012, 0x00000035, 0x0000002e, 0x00000034, 0x0000000c, 0x0004003d,
+    0x00000006, 0x00000036, 0x00000035, 0x00060041, 0x00000015, 0x00000037, 0x0000000a, 0x0000000c,
+    0x0000002a, 0x0003003e, 0x00000037, 0x00000036, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 450
+ * #extension GL_EXT_nonuniform_qualifier : require
+ * layout(local_size_x = 64) in;
+ * layout(std430, set = 0, binding = 0) buffer Out { uint v[]; } o;
+ * layout(std430, set = 0, binding = 1) readonly buffer In { uint v[]; } bufs[];
+ * layout(push_constant) uniform Push { uint count; uint arrays; } pc;
+ * void main()
+ * {
+ *     uint i = gl_GlobalInvocationID.x;
+ *     if (i < pc.count)
+ *         o.v[i] = bufs[nonuniformEXT(i % pc.arrays)].v[i / pc.arrays];
+ * }
+ */
+static const uint32_t spv_nonuniform[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000038, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x000014b5, 0x00020011, 0x000014b6, 0x00020011, 0x000014bc, 0x0006000b, 0x00000001, 0x4c534c47,
+    0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x0009000f, 0x00000005,
+    0x00000004, 0x6e69616d, 0x00000000, 0x0000000b, 0x00000013, 0x00000020, 0x00000026, 0x00060010,
+    0x00000004, 0x00000011, 0x00000040, 0x00000001, 0x00000001, 0x00030003, 0x00000002, 0x000001c2,
+    0x00080004, 0x455f4c47, 0x6e5f5458, 0x6e756e6f, 0x726f6669, 0x75715f6d, 0x66696c61, 0x00726569,
+    0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000008, 0x00000069, 0x00080005,
+    0x0000000b, 0x475f6c67, 0x61626f6c, 0x766e496c, 0x7461636f, 0x496e6f69, 0x00000044, 0x00040005,
+    0x00000011, 0x68737550, 0x00000000, 0x00050006, 0x00000011, 0x00000000, 0x6e756f63, 0x00000074,
+    0x00050006, 0x00000011, 0x00000001, 0x61727261, 0x00007379, 0x00030005, 0x00000013, 0x00006370,
+    0x00030005, 0x0000001e, 0x0074754f, 0x00040006, 0x0000001e, 0x00000000, 0x00000076, 0x00030005,
+    0x00000020, 0x0000006f, 0x00030005, 0x00000023, 0x00006e49, 0x00040006, 0x00000023, 0x00000000,
+    0x00000076, 0x00040005, 0x00000026, 0x73667562, 0x00000000, 0x00040047, 0x0000000b, 0x0000000b,
+    0x0000001c, 0x00030047, 0x00000011, 0x00000002, 0x00050048, 0x00000011, 0x00000000, 0x00000023,
+    0x00000000, 0x00050048, 0x00000011, 0x00000001, 0x00000023, 0x00000004, 0x00040047, 0x0000001d,
+    0x00000006, 0x00000004, 0x00030047, 0x0000001e, 0x00000002, 0x00050048, 0x0000001e, 0x00000000,
+    0x00000023, 0x00000000, 0x00040047, 0x00000020, 0x00000021, 0x00000000, 0x00040047, 0x00000020,
+    0x00000022, 0x00000000, 0x00040047, 0x00000022, 0x00000006, 0x00000004, 0x00030047, 0x00000023,
+    0x00000002, 0x00040048, 0x00000023, 0x00000000, 0x00000018, 0x00050048, 0x00000023, 0x00000000,
+    0x00000023, 0x00000000, 0x00030047, 0x00000026, 0x00000018, 0x00040047, 0x00000026, 0x00000021,
+    0x00000001, 0x00040047, 0x00000026, 0x00000022, 0x00000000, 0x00030047, 0x0000002c, 0x000014b4,
+    0x00030047, 0x00000032, 0x000014b4, 0x00030047, 0x00000033, 0x000014b4, 0x00020013, 0x00000002,
+    0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000000, 0x00040020,
+    0x00000007, 0x00000007, 0x00000006, 0x00040017, 0x00000009, 0x00000006, 0x00000003, 0x00040020,
+    0x0000000a, 0x00000001, 0x00000009, 0x0004003b, 0x0000000a, 0x0000000b, 0x00000001, 0x0004002b,
+    0x00000006, 0x0000000c, 0x00000000, 0x00040020, 0x0000000d, 0x00000001, 0x00000006, 0x0004001e,
+    0x00000011, 0x00000006, 0x00000006, 0x00040020, 0x00000012, 0x00000009, 0x00000011, 0x0004003b,
+    0x00000012, 0x00000013, 0x00000009, 0x00040015, 0x00000014, 0x00000020, 0x00000001, 0x0004002b,
+    0x00000014, 0x00000015, 0x00000000, 0x00040020, 0x00000016, 0x00000009, 0x00000006, 0x00020014,
+    0x00000019, 0x0003001d, 0x0000001d, 0x00000006, 0x0003001e, 0x0000001e, 0x0000001d, 0x00040020,
+    0x0000001f, 0x0000000c, 0x0000001e, 0x0004003b, 0x0000001f, 0x00000020, 0x0000000c, 0x0003001d,
+    0x00000022, 0x00000006, 0x0003001e, 0x00000023, 0x00000022, 0x0003001d, 0x00000024, 0x00000023,
+    0x00040020, 0x00000025, 0x0000000c, 0x00000024, 0x0004003b, 0x00000025, 0x00000026, 0x0000000c,
+    0x0004002b, 0x00000014, 0x00000028, 0x00000001, 0x00040020, 0x00000031, 0x0000000c, 0x00000006,
+    0x0004002b, 0x00000006, 0x00000035, 0x00000040, 0x0004002b, 0x00000006, 0x00000036, 0x00000001,
+    0x0006002c, 0x00000009, 0x00000037, 0x00000035, 0x00000036, 0x00000036, 0x00050036, 0x00000002,
+    0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003b, 0x00000007, 0x00000008,
+    0x00000007, 0x00050041, 0x0000000d, 0x0000000e, 0x0000000b, 0x0000000c, 0x0004003d, 0x00000006,
+    0x0000000f, 0x0000000e, 0x0003003e, 0x00000008, 0x0000000f, 0x0004003d, 0x00000006, 0x00000010,
+    0x00000008, 0x00050041, 0x00000016, 0x00000017, 0x00000013, 0x00000015, 0x0004003d, 0x00000006,
+    0x00000018, 0x00000017, 0x000500b0, 0x00000019, 0x0000001a, 0x00000010, 0x00000018, 0x000300f7,
+    0x0000001c, 0x00000000, 0x000400fa, 0x0000001a, 0x0000001b, 0x0000001c, 0x000200f8, 0x0000001b,
+    0x0004003d, 0x00000006, 0x00000021, 0x00000008, 0x0004003d, 0x00000006, 0x00000027, 0x00000008,
+    0x00050041, 0x00000016, 0x00000029, 0x00000013, 0x00000028, 0x0004003d, 0x00000006, 0x0000002a,
+    0x00000029, 0x00050089, 0x00000006, 0x0000002b, 0x00000027, 0x0000002a, 0x00040053, 0x00000006,
+    0x0000002c, 0x0000002b, 0x0004003d, 0x00000006, 0x0000002d, 0x00000008, 0x00050041, 0x00000016,
+    0x0000002e, 0x00000013, 0x00000028, 0x0004003d, 0x00000006, 0x0000002f, 0x0000002e, 0x00050086,
+    0x00000006, 0x00000030, 0x0000002d, 0x0000002f, 0x00070041, 0x00000031, 0x00000032, 0x00000026,
+    0x0000002c, 0x00000015, 0x00000030, 0x0004003d, 0x00000006, 0x00000033, 0x00000032, 0x00060041,
+    0x00000031, 0x00000034, 0x00000020, 0x00000015, 0x00000021, 0x0003003e, 0x00000034, 0x00000033,
+    0x000200f9, 0x0000001c, 0x000200f8, 0x0000001c, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 450
+ * layout(local_size_x = 1) in;
+ * layout(std430, set = 0, binding = 0) buffer A { uint v[]; } a;
+ * layout(std430, set = 0, binding = 1) buffer B { uint head; uint v[]; } b;
+ * void main()
+ * {
+ *     a.v[0] = uint(a.v.length());
+ *     a.v[1] = uint(b.v.length());
+ *     a.v[2] = b.head;
+ * }
+ */
+static const uint32_t spv_length[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000022, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0007000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000a, 0x00000016, 0x00060010,
+    0x00000004, 0x00000011, 0x00000001, 0x00000001, 0x00000001, 0x00030003, 0x00000002, 0x000001c2,
+    0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000008, 0x00000041, 0x00040006,
+    0x00000008, 0x00000000, 0x00000076, 0x00030005, 0x0000000a, 0x00000061, 0x00030005, 0x00000014,
+    0x00000042, 0x00050006, 0x00000014, 0x00000000, 0x64616568, 0x00000000, 0x00040006, 0x00000014,
+    0x00000001, 0x00000076, 0x00030005, 0x00000016, 0x00000062, 0x00040047, 0x00000007, 0x00000006,
+    0x00000004, 0x00030047, 0x00000008, 0x00000002, 0x00050048, 0x00000008, 0x00000000, 0x00000023,
+    0x00000000, 0x00040047, 0x0000000a, 0x00000021, 0x00000000, 0x00040047, 0x0000000a, 0x00000022,
+    0x00000000, 0x00040047, 0x00000013, 0x00000006, 0x00000004, 0x00030047, 0x00000014, 0x00000002,
+    0x00050048, 0x00000014, 0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x00000014, 0x00000001,
+    0x00000023, 0x00000004, 0x00040047, 0x00000016, 0x00000021, 0x00000001, 0x00040047, 0x00000016,
+    0x00000022, 0x00000000, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00040015,
+    0x00000006, 0x00000020, 0x00000000, 0x0003001d, 0x00000007, 0x00000006, 0x0003001e, 0x00000008,
+    0x00000007, 0x00040020, 0x00000009, 0x0000000c, 0x00000008, 0x0004003b, 0x00000009, 0x0000000a,
+    0x0000000c, 0x00040015, 0x0000000b, 0x00000020, 0x00000001, 0x0004002b, 0x0000000b, 0x0000000c,
+    0x00000000, 0x00040020, 0x00000010, 0x0000000c, 0x00000006, 0x0004002b, 0x0000000b, 0x00000012,
+    0x00000001, 0x0003001d, 0x00000013, 0x00000006, 0x0004001e, 0x00000014, 0x00000006, 0x00000013,
+    0x00040020, 0x00000015, 0x0000000c, 0x00000014, 0x0004003b, 0x00000015, 0x00000016, 0x0000000c,
+    0x0004002b, 0x0000000b, 0x0000001b, 0x00000002, 0x00040017, 0x0000001f, 0x00000006, 0x00000003,
+    0x0004002b, 0x00000006, 0x00000020, 0x00000001, 0x0006002c, 0x0000001f, 0x00000021, 0x00000020,
+    0x00000020, 0x00000020, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8,
+    0x00000005, 0x00050044, 0x00000006, 0x0000000d, 0x0000000a, 0x00000000, 0x0004007c, 0x0000000b,
+    0x0000000e, 0x0000000d, 0x0004007c, 0x00000006, 0x0000000f, 0x0000000e, 0x00060041, 0x00000010,
+    0x00000011, 0x0000000a, 0x0000000c, 0x0000000c, 0x0003003e, 0x00000011, 0x0000000f, 0x00050044,
+    0x00000006, 0x00000017, 0x00000016, 0x00000001, 0x0004007c, 0x0000000b, 0x00000018, 0x00000017,
+    0x0004007c, 0x00000006, 0x00000019, 0x00000018, 0x00060041, 0x00000010, 0x0000001a, 0x0000000a,
+    0x0000000c, 0x00000012, 0x0003003e, 0x0000001a, 0x00000019, 0x00050041, 0x00000010, 0x0000001c,
+    0x00000016, 0x0000000c, 0x0004003d, 0x00000006, 0x0000001d, 0x0000001c, 0x00060041, 0x00000010,
+    0x0000001e, 0x0000000a, 0x0000000c, 0x0000001b, 0x0003003e, 0x0000001e, 0x0000001d, 0x000100fd,
+    0x00010038,
+};
+
+static VkInstance instance;
+static VkPhysicalDevice pd;
+static VkDevice device;
+static VkQueue queue;
+static VkCommandPool cmd_pool;
+static VkFence fence;
+static uint32_t shared_type = UINT32_MAX;
+static VkPhysicalDeviceVulkan12Features v12;
+
+#define COMPUTE VK_SHADER_STAGE_COMPUTE_BIT
+#define UBO VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+#define SSBO VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+#define UBO_DYNAMIC VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+#define SSBO_DYNAMIC VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC
+#define INLINE VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK
+
+struct buf {
+    VkBuffer buffer;
+    VkDeviceMemory memory;
+    unsigned char *data;
+    VkDeviceSize size;
+};
+
+/* A device with every feature the physical device supports. */
+static void setup(void)
+{
+    VkApplicationInfo app;
+    VkInstanceCreateInfo instance_info;
+    VkPhysicalDeviceFeatures2 f2;
+    VkPhysicalDeviceVulkan11Features v11;
+    VkPhysicalDeviceVulkan13Features v13;
+    VkPhysicalDeviceVulkan14Features v14;
+    VkDeviceQueueCreateInfo queue_info;
+    VkDeviceCreateInfo device_info;
+    VkCommandPoolCreateInfo pool_info;
+    VkFenceCreateInfo fence_info;
+    VkPhysicalDeviceMemoryProperties mem;
+    float priority = 1.0f;
+    uint32_t count = 1, i;
+
+    memset(&app, 0, sizeof(app));
+    app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    app.apiVersion = VK_API_VERSION_1_4;
+    memset(&instance_info, 0, sizeof(instance_info));
+    instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    instance_info.pApplicationInfo = &app;
+    REQUIRE_VK(vkCreateInstance(&instance_info, NULL, &instance));
+    REQUIRE_VK(vkEnumeratePhysicalDevices(instance, &count, &pd));
+    memset(&f2, 0, sizeof(f2));
+    memset(&v11, 0, sizeof(v11));
+    memset(&v12, 0, sizeof(v12));
+    memset(&v13, 0, sizeof(v13));
+    memset(&v14, 0, sizeof(v14));
+    f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    f2.pNext = &v11;
+    v11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    v11.pNext = &v12;
+    v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    v12.pNext = &v13;
+    v13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    v13.pNext = &v14;
+    v14.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
+    vkGetPhysicalDeviceFeatures2(pd, &f2);
+    REQUIRE(v13.inlineUniformBlock && v14.pushDescriptor);
+    memset(&queue_info, 0, sizeof(queue_info));
+    queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queue_info.queueCount = 1;
+    queue_info.pQueuePriorities = &priority;
+    memset(&device_info, 0, sizeof(device_info));
+    device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    device_info.pNext = &f2;
+    device_info.queueCreateInfoCount = 1;
+    device_info.pQueueCreateInfos = &queue_info;
+    REQUIRE_VK(vkCreateDevice(pd, &device_info, NULL, &device));
+    v12.pNext = NULL;
+    vkGetDeviceQueue(device, 0, 0, &queue);
+    vkGetPhysicalDeviceMemoryProperties(pd, &mem);
+    for (i = 0; i < mem.memoryTypeCount && shared_type == UINT32_MAX; i++)
+        if (mem.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+            shared_type = i;
+    memset(&pool_info, 0, sizeof(pool_info));
+    pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    REQUIRE_VK(vkCreateCommandPool(device, &pool_info, NULL, &cmd_pool));
+    memset(&fence_info, 0, sizeof(fence_info));
+    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    REQUIRE_VK(vkCreateFence(device, &fence_info, NULL, &fence));
+}
+
+static void teardown(void)
+{
+    vkDestroyFence(device, fence, NULL);
+    vkDestroyCommandPool(device, cmd_pool, NULL);
+    vkDestroyDevice(device, NULL);
+    vkDestroyInstance(instance, NULL);
+}
+
+/* ---- Helpers ---- */
+
+/* A zeroed, mapped buffer usable as uniform and storage buffer. */
+static struct buf make_buf(VkDeviceSize size)
+{
+    VkBufferCreateInfo info;
+    VkMemoryAllocateInfo alloc;
+    VkMemoryRequirements req;
+    struct buf b;
+    void *p = NULL;
+
+    memset(&b, 0, sizeof(b));
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    info.size = size;
+    info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (vkCreateBuffer(device, &info, NULL, &b.buffer) != VK_SUCCESS)
+        return b;
+    vkGetBufferMemoryRequirements(device, b.buffer, &req);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = shared_type;
+    if (vkAllocateMemory(device, &alloc, NULL, &b.memory) != VK_SUCCESS)
+        return b;
+    vkBindBufferMemory(device, b.buffer, b.memory, 0);
+    if (vkMapMemory(device, b.memory, 0, VK_WHOLE_SIZE, 0, &p) == VK_SUCCESS) {
+        b.data = p;
+        memset(b.data, 0, (size_t)size);
+    }
+    b.size = size;
+    return b;
+}
+
+static void free_buf(struct buf *b)
+{
+    vkDestroyBuffer(device, b->buffer, NULL);
+    vkFreeMemory(device, b->memory, NULL);
+}
+
+static uint32_t word(const struct buf *b, size_t i)
+{
+    uint32_t w;
+    memcpy(&w, b->data + 4 * i, 4);
+    return w;
+}
+
+static void put(struct buf *b, size_t i, uint32_t w)
+{
+    memcpy(b->data + 4 * i, &w, 4);
+}
+
+static VkDescriptorSetLayoutBinding lb(uint32_t binding, VkDescriptorType type, uint32_t count)
+{
+    VkDescriptorSetLayoutBinding b;
+    memset(&b, 0, sizeof(b));
+    b.binding = binding;
+    b.descriptorType = type;
+    b.descriptorCount = count;
+    b.stageFlags = COMPUTE;
+    return b;
+}
+
+/* binding_flags: NULL, or one per binding. */
+static VkDescriptorSetLayout make_set_layout(const VkDescriptorSetLayoutBinding *bindings, uint32_t count,
+                                             VkDescriptorSetLayoutCreateFlags flags,
+                                             const VkDescriptorBindingFlags *binding_flags)
+{
+    VkDescriptorSetLayoutBindingFlagsCreateInfo flags_info;
+    VkDescriptorSetLayoutCreateInfo info;
+    VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+    memset(&flags_info, 0, sizeof(flags_info));
+    flags_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    flags_info.bindingCount = count;
+    flags_info.pBindingFlags = binding_flags;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    info.pNext = binding_flags ? &flags_info : NULL;
+    info.flags = flags;
+    info.bindingCount = count;
+    info.pBindings = bindings;
+    CHECK_VK(vkCreateDescriptorSetLayout(device, &info, NULL, &layout), VK_SUCCESS);
+    return layout;
+}
+
+static VkPipelineLayout make_pipeline_layout(const VkDescriptorSetLayout *sets, uint32_t count, uint32_t push_size)
+{
+    VkPushConstantRange range;
+    VkPipelineLayoutCreateInfo info;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    memset(&range, 0, sizeof(range));
+    range.stageFlags = COMPUTE;
+    range.size = push_size;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    info.setLayoutCount = count;
+    info.pSetLayouts = sets;
+    info.pushConstantRangeCount = push_size ? 1 : 0;
+    info.pPushConstantRanges = &range;
+    CHECK_VK(vkCreatePipelineLayout(device, &info, NULL, &layout), VK_SUCCESS);
+    return layout;
+}
+
+static VkPipeline make_pipeline(const uint32_t *code, size_t size, VkPipelineLayout layout)
+{
+    VkShaderModuleCreateInfo module_info;
+    VkComputePipelineCreateInfo info;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    memset(&module_info, 0, sizeof(module_info));
+    module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    module_info.codeSize = size;
+    module_info.pCode = code;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    info.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    info.stage.pNext = &module_info;
+    info.stage.stage = COMPUTE;
+    info.stage.pName = "main";
+    info.layout = layout;
+    CHECK_VK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &info, NULL, &pipeline), VK_SUCCESS);
+    return pipeline;
+}
+
+static VkDescriptorPool make_pool(uint32_t max_sets, const VkDescriptorPoolSize *sizes, uint32_t n,
+                                  VkDescriptorPoolCreateFlags flags, const void *pnext)
+{
+    VkDescriptorPoolCreateInfo info;
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    info.pNext = pnext;
+    info.flags = flags;
+    info.maxSets = max_sets;
+    info.poolSizeCount = n;
+    info.pPoolSizes = sizes;
+    CHECK_VK(vkCreateDescriptorPool(device, &info, NULL, &pool), VK_SUCCESS);
+    return pool;
+}
+
+static VkDescriptorPoolSize ps(VkDescriptorType type, uint32_t count)
+{
+    VkDescriptorPoolSize s;
+    s.type = type;
+    s.descriptorCount = count;
+    return s;
+}
+
+/* One set; variable: its variable descriptor count (UINT32_MAX: none given). */
+static VkResult alloc_sets(VkDescriptorPool pool, const VkDescriptorSetLayout *layouts, uint32_t n,
+                           const uint32_t *variable, VkDescriptorSet *sets)
+{
+    VkDescriptorSetVariableDescriptorCountAllocateInfo counts;
+    VkDescriptorSetAllocateInfo info;
+    memset(&counts, 0, sizeof(counts));
+    counts.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO;
+    counts.descriptorSetCount = n;
+    counts.pDescriptorCounts = variable;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    info.pNext = variable ? &counts : NULL;
+    info.descriptorPool = pool;
+    info.descriptorSetCount = n;
+    info.pSetLayouts = layouts;
+    return vkAllocateDescriptorSets(device, &info, sets);
+}
+
+static VkDescriptorSet alloc_set(VkDescriptorPool pool, VkDescriptorSetLayout layout)
+{
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    CHECK_VK(alloc_sets(pool, &layout, 1, NULL, &set), VK_SUCCESS);
+    return set;
+}
+
+static VkWriteDescriptorSet buffer_write(VkDescriptorSet set, uint32_t binding, uint32_t element,
+                                         VkDescriptorType type, const VkDescriptorBufferInfo *info, uint32_t count)
+{
+    VkWriteDescriptorSet w;
+    memset(&w, 0, sizeof(w));
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = set;
+    w.dstBinding = binding;
+    w.dstArrayElement = element;
+    w.descriptorCount = count;
+    w.descriptorType = type;
+    w.pBufferInfo = info;
+    return w;
+}
+
+static VkDescriptorBufferInfo bi(const struct buf *b, VkDeviceSize offset, VkDeviceSize range)
+{
+    VkDescriptorBufferInfo i;
+    i.buffer = b->buffer;
+    i.offset = offset;
+    i.range = range;
+    return i;
+}
+
+static void write_buffer(VkDescriptorSet set, uint32_t binding, uint32_t element, VkDescriptorType type,
+                         const struct buf *b, VkDeviceSize offset, VkDeviceSize range)
+{
+    VkDescriptorBufferInfo info = bi(b, offset, range);
+    VkWriteDescriptorSet w = buffer_write(set, binding, element, type, &info, 1);
+    vkUpdateDescriptorSets(device, 1, &w, 0, NULL);
+}
+
+static VkCommandBuffer begin(void)
+{
+    VkCommandBufferAllocateInfo alloc;
+    VkCommandBufferBeginInfo info;
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc.commandPool = cmd_pool;
+    alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc.commandBufferCount = 1;
+    vkAllocateCommandBuffers(device, &alloc, &cb);
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    vkBeginCommandBuffer(cb, &info);
+    return cb;
+}
+
+static VkResult submit_wait(VkCommandBuffer cb)
+{
+    VkSubmitInfo submit;
+    VkResult r;
+    memset(&submit, 0, sizeof(submit));
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cb;
+    vkResetFences(device, 1, &fence);
+    r = vkQueueSubmit(queue, 1, &submit, fence);
+    return r != VK_SUCCESS ? r : vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ull);
+}
+
+static void host_barrier(VkCommandBuffer cb)
+{
+    VkMemoryBarrier b;
+    memset(&b, 0, sizeof(b));
+    b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &b, 0, NULL, 0,
+                         NULL);
+}
+
+/* Ends, submits and waits for cb, then frees it. */
+static VkResult finish(VkCommandBuffer cb)
+{
+    VkResult r;
+    host_barrier(cb);
+    r = vkEndCommandBuffer(cb);
+    if (r == VK_SUCCESS)
+        r = submit_wait(cb);
+    vkFreeCommandBuffers(device, cmd_pool, 1, &cb);
+    return r;
+}
+
+/* The bindings of spv_ubo_ssbo: params, src, dst. */
+static void ubo_ssbo_bindings(VkDescriptorSetLayoutBinding b[3])
+{
+    b[0] = lb(0, UBO, 1);
+    b[1] = lb(1, SSBO, 1);
+    b[2] = lb(2, SSBO, 1);
+}
+
+/* spv_ubo_ssbo's uniform block */
+static void put_params(struct buf *b, size_t at, uint32_t count, uint32_t mul, uint32_t add)
+{
+    put(b, at / 4, count);
+    put(b, at / 4 + 1, mul);
+    put(b, at / 4 + 2, add);
+}
+
+/* dst words [first, first + n) are src[i] * mul + add, src[i] being i + base. */
+static int check_scaled(const struct buf *dst, size_t first, uint32_t n, uint32_t base, uint32_t mul, uint32_t add)
+{
+    uint32_t i;
+    for (i = 0; i < n; i++)
+        if (word(dst, first + i) != (i + base) * mul + add) {
+            fprintf(stderr, "  word %zu: %u, want %u\n", first + i, word(dst, first + i), (i + base) * mul + add);
+            return 0;
+        }
+    return 1;
+}
+
+/* ---- Layouts and pools ---- */
+
+/* Bindings go in binding order at 16-byte-aligned offsets with the section
+ * 11 strides; dynamic descriptors are numbered in binding order. */
+static void test_layout_offsets(void)
+{
+    static const struct {
+        uint32_t binding, offset, stride;
+    } want[5] = { { 0, 0, 16 }, { 2, 16, 16 }, { 3, 48, 1 }, { 5, 80, 8 }, { 7, 112, 8 } };
+    VkDescriptorBindingFlags flags[5] = { 0, 0, 0, 0,
+                                          VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
+                                              VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT };
+    VkDescriptorSetLayoutBinding b[5];
+    VkDescriptorSetLayout layout, dyn;
+    const struct pvk_descriptor_set_layout *l;
+    uint32_t i;
+
+    b[0] = lb(5, VK_DESCRIPTOR_TYPE_SAMPLER, 3);
+    b[1] = lb(0, UBO, 1);
+    b[2] = lb(3, INLINE, 20);
+    b[3] = lb(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2);
+    b[4] = lb(7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 100);
+    layout = make_set_layout(b, 5, 0, flags);
+    REQUIRE(layout);
+    l = (const struct pvk_descriptor_set_layout *)layout;
+    REQUIRE(l->binding_count == 5);
+    for (i = 0; i < 5; i++) {
+        CHECK(l->bindings[i].binding == want[i].binding);
+        CHECK(l->bindings[i].offset == want[i].offset);
+        CHECK(l->bindings[i].stride == want[i].stride);
+    }
+    CHECK(l->variable && l->size == 112 && l->dynamic_count == 0);
+
+    b[0] = lb(1, SSBO_DYNAMIC, 2);
+    b[1] = lb(0, UBO_DYNAMIC, 1);
+    b[2] = lb(4, SSBO, 1);
+    dyn = make_set_layout(b, 3, 0, NULL);
+    REQUIRE(dyn);
+    l = (const struct pvk_descriptor_set_layout *)dyn;
+    CHECK(l->dynamic_count == 3 && l->bindings[0].dynamic_index == 0 && l->bindings[1].dynamic_index == 1);
+    CHECK(l->size == 64 && !l->variable);
+    vkDestroyDescriptorSetLayout(device, layout, NULL);
+    vkDestroyDescriptorSetLayout(device, dyn, NULL);
+}
+
+static void test_layout_support(void)
+{
+    VkDescriptorBindingFlags flags[2] = { 0, VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT };
+    VkDescriptorSetLayoutBindingFlagsCreateInfo flags_info;
+    VkDescriptorSetVariableDescriptorCountLayoutSupport variable;
+    VkDescriptorSetLayoutBinding b[2];
+    VkDescriptorSetLayoutCreateInfo info;
+    VkDescriptorSetLayoutSupport support;
+
+    b[0] = lb(0, UBO, 4);
+    b[1] = lb(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000);
+    memset(&flags_info, 0, sizeof(flags_info));
+    flags_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    flags_info.bindingCount = 2;
+    flags_info.pBindingFlags = flags;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    info.pNext = &flags_info;
+    info.bindingCount = 2;
+    info.pBindings = b;
+    memset(&variable, 0, sizeof(variable));
+    variable.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_LAYOUT_SUPPORT;
+    memset(&support, 0, sizeof(support));
+    support.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_SUPPORT;
+    support.pNext = &variable;
+    vkGetDescriptorSetLayoutSupport(device, &info, &support);
+    CHECK(support.supported);
+    if (v12.descriptorBindingVariableDescriptorCount)
+        CHECK(variable.maxVariableDescriptorCount == ((1u << 30) - 64) / 8);
+    else
+        CHECK(variable.maxVariableDescriptorCount == 0);
+
+    /* 2^28 storage buffers: a 4 GB table */
+    info.pNext = NULL;
+    b[0] = lb(0, SSBO, 1u << 28);
+    info.bindingCount = 1;
+    variable.maxVariableDescriptorCount = 7;
+    vkGetDescriptorSetLayoutSupport(device, &info, &support);
+    CHECK(!support.supported && variable.maxVariableDescriptorCount == 0);
+}
+
+/* maxSets, failure leaving every handle VK_NULL_HANDLE, freeing, reset,
+ * fragmentation, and allocations of one size never failing within the
+ * pool sizes. */
+static void test_pools(void)
+{
+    VkDescriptorSetLayoutBinding b[2];
+    VkDescriptorPoolSize sizes[2];
+    VkDescriptorSetLayout one, two, layouts[4];
+    VkDescriptorSet sets[4];
+    VkDescriptorPool pool;
+    uint32_t i, round;
+
+    b[0] = lb(0, SSBO, 1);
+    b[1] = lb(1, SSBO, 1);
+    one = make_set_layout(b, 1, 0, NULL);
+    two = make_set_layout(b, 2, 0, NULL);
+    sizes[0] = ps(SSBO, 4);
+    pool = make_pool(3, sizes, 1, 0, NULL);
+    REQUIRE(one && two && pool);
+    for (i = 0; i < 4; i++)
+        layouts[i] = one;
+    for (i = 0; i < 4; i++)
+        sets[i] = (VkDescriptorSet)(uintptr_t)1;
+    CHECK_VK(alloc_sets(pool, layouts, 4, NULL, sets), VK_ERROR_OUT_OF_POOL_MEMORY); /* maxSets is 3 */
+    CHECK(!sets[0] && !sets[1] && !sets[2] && !sets[3]);
+    CHECK(((struct pvk_descriptor_pool *)pool)->set_count == 0);
+    CHECK_VK(alloc_sets(pool, layouts, 3, NULL, sets), VK_SUCCESS);
+    CHECK_VK(vkResetDescriptorPool(device, pool, 0), VK_SUCCESS);
+    CHECK_VK(alloc_sets(pool, layouts, 3, NULL, sets), VK_SUCCESS);
+    vkDestroyDescriptorPool(device, pool, NULL);
+
+    /* FREE_DESCRIPTOR_SET: one-size sets refill any holes */
+    sizes[0] = ps(SSBO, 4);
+    pool = make_pool(4, sizes, 1, VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT, NULL);
+    REQUIRE(pool);
+    CHECK_VK(alloc_sets(pool, layouts, 4, NULL, sets), VK_SUCCESS);
+    for (round = 0; round < 8; round++) {
+        uint32_t a = round % 4, c = (round * 3 + 1) % 4;
+        CHECK_VK(vkFreeDescriptorSets(device, pool, 1, &sets[a]), VK_SUCCESS);
+        if (c != a)
+            CHECK_VK(vkFreeDescriptorSets(device, pool, 1, &sets[c]), VK_SUCCESS);
+        CHECK_VK(alloc_sets(pool, layouts, 1, NULL, &sets[a]), VK_SUCCESS);
+        if (c != a)
+            CHECK_VK(alloc_sets(pool, layouts, 1, NULL, &sets[c]), VK_SUCCESS);
+    }
+    /* Two 16-byte holes do not hold a 32-byte set. */
+    CHECK_VK(vkFreeDescriptorSets(device, pool, 1, &sets[0]), VK_SUCCESS);
+    CHECK_VK(vkFreeDescriptorSets(device, pool, 1, &sets[2]), VK_SUCCESS);
+    CHECK_VK(alloc_sets(pool, &two, 1, NULL, &sets[0]), VK_ERROR_FRAGMENTED_POOL);
+    CHECK(!sets[0]);
+    CHECK_VK(vkFreeDescriptorSets(device, pool, 1, &sets[1]), VK_SUCCESS);
+    CHECK_VK(alloc_sets(pool, &two, 1, NULL, &sets[0]), VK_SUCCESS); /* holes 0..2 merged */
+    CHECK(((struct pvk_descriptor_set *)sets[0])->offset == 0);
+    vkDestroyDescriptorPool(device, pool, NULL);
+
+    /* The worst case of the pool sizes: 8-byte descriptors alone in their
+     * bindings, inline uniform blocks of 4 bytes. */
+    {
+        VkDescriptorPoolInlineUniformBlockCreateInfo inline_info;
+        VkDescriptorSetLayout samp, blk, list[8];
+        VkDescriptorSet s[8];
+        b[0] = lb(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1);
+        samp = make_set_layout(b, 1, 0, NULL);
+        b[0] = lb(0, INLINE, 4);
+        blk = make_set_layout(b, 1, 0, NULL);
+        memset(&inline_info, 0, sizeof(inline_info));
+        inline_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_INLINE_UNIFORM_BLOCK_CREATE_INFO;
+        inline_info.maxInlineUniformBlockBindings = 4;
+        sizes[0] = ps(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4);
+        sizes[1] = ps(INLINE, 16);
+        pool = make_pool(8, sizes, 2, 0, &inline_info);
+        for (i = 0; i < 8; i++)
+            list[i] = i < 4 ? samp : blk;
+        CHECK_VK(alloc_sets(pool, list, 8, NULL, s), VK_SUCCESS);
+        vkDestroyDescriptorPool(device, pool, NULL);
+        vkDestroyDescriptorSetLayout(device, samp, NULL);
+        vkDestroyDescriptorSetLayout(device, blk, NULL);
+    }
+    vkDestroyDescriptorSetLayout(device, one, NULL);
+    vkDestroyDescriptorSetLayout(device, two, NULL);
+}
+
+/* ---- Dispatches ---- */
+
+/* A uniform buffer at an offset, storage buffers with a range and with
+ * VK_WHOLE_SIZE from an offset. */
+static void test_buffers(void)
+{
+    enum { N = 1000 };
+    struct buf params = make_buf(256), src = make_buf(4 * N + 64), dst = make_buf(4 * N + 256);
+    VkDescriptorSetLayoutBinding b[3];
+    VkDescriptorPoolSize sizes[2];
+    VkDescriptorSetLayout sl;
+    VkPipelineLayout pl;
+    VkDescriptorPool pool;
+    VkDescriptorSet set;
+    VkPipeline p;
+    VkCommandBuffer cb;
+    uint32_t i;
+
+    ubo_ssbo_bindings(b);
+    sl = make_set_layout(b, 3, 0, NULL);
+    pl = make_pipeline_layout(&sl, 1, 0);
+    p = make_pipeline(spv_ubo_ssbo, sizeof(spv_ubo_ssbo), pl);
+    sizes[0] = ps(UBO, 1);
+    sizes[1] = ps(SSBO, 2);
+    pool = make_pool(1, sizes, 2, 0, NULL);
+    REQUIRE(sl && pl && p && pool && params.data && src.data && dst.data);
+    set = alloc_set(pool, sl);
+    REQUIRE(set);
+    put_params(&params, 16, N, 3, 7);
+    for (i = 0; i < N; i++)
+        put(&src, 16 + i, i + 5);
+    write_buffer(set, 0, 0, UBO, &params, 16, 12);
+    write_buffer(set, 1, 0, SSBO, &src, 64, 4 * N);
+    write_buffer(set, 2, 0, SSBO, &dst, 256, VK_WHOLE_SIZE);
+    cb = begin();
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
+    vkCmdDispatch(cb, (N + 63) / 64, 1, 1);
+    REQUIRE_VK(finish(cb));
+    CHECK(check_scaled(&dst, 64, N, 5, 3, 7));
+    CHECK(word(&dst, 63) == 0 && word(&dst, 64 + N) == 0);
+    vkDestroyPipeline(device, p, NULL);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyPipelineLayout(device, pl, NULL);
+    vkDestroyDescriptorSetLayout(device, sl, NULL);
+    free_buf(&params);
+    free_buf(&src);
+    free_buf(&dst);
+}
+
+/* The OpArrayLength of a storage buffer comes from the descriptor's range. */
+static void test_array_length(void)
+{
+    struct buf a = make_buf(64), b = make_buf(100);
+    VkDescriptorSetLayoutBinding bindings[2];
+    VkDescriptorPoolSize size = ps(SSBO, 2);
+    VkDescriptorSetLayout sl;
+    VkPipelineLayout pl;
+    VkDescriptorPool pool;
+    VkDescriptorSet set;
+    VkPipeline p;
+    VkCommandBuffer cb;
+
+    bindings[0] = lb(0, SSBO, 1);
+    bindings[1] = lb(1, SSBO, 1);
+    sl = make_set_layout(bindings, 2, 0, NULL);
+    pl = make_pipeline_layout(&sl, 1, 0);
+    p = make_pipeline(spv_length, sizeof(spv_length), pl);
+    pool = make_pool(1, &size, 1, 0, NULL);
+    REQUIRE(sl && pl && p && pool && a.data && b.data);
+    set = alloc_set(pool, sl);
+    REQUIRE(set);
+    put(&b, 4, 1234);
+    write_buffer(set, 0, 0, SSBO, &a, 0, 64);
+    write_buffer(set, 1, 0, SSBO, &b, 16, VK_WHOLE_SIZE); /* 84 bytes: head + 20 words */
+    cb = begin();
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
+    vkCmdDispatch(cb, 1, 1, 1);
+    REQUIRE_VK(finish(cb));
+    CHECK(word(&a, 0) == 16);
+    CHECK(word(&a, 1) == 20);
+    CHECK(word(&a, 2) == 1234);
+    vkDestroyPipeline(device, p, NULL);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyPipelineLayout(device, pl, NULL);
+    vkDestroyDescriptorSetLayout(device, sl, NULL);
+    free_buf(&a);
+    free_buf(&b);
+}
+
+/* Dynamic offsets: one set bound three times with different offsets in one
+ * command buffer (through vkCmdBindDescriptorSets2 too), each dispatch
+ * seeing its own; offsets count array elements in binding order. A second
+ * layout adds a binding of 20000 descriptors, so its table exceeds an
+ * upload chunk. */
+static void test_dynamic_offsets(void)
+{
+    enum { N = 100, REGION = 512 };
+    struct buf params = make_buf(1024), src = make_buf(4 * N), dst = make_buf(6 * REGION);
+    VkDescriptorSetLayoutBinding b[3];
+    VkDescriptorPoolSize sizes[3];
+    VkDescriptorSetLayout sl[2], big;
+    VkPipelineLayout pl;
+    VkDescriptorPool pool;
+    VkDescriptorSet sets[2];
+    VkPipeline p;
+    uint32_t i, k, round;
+
+    b[0] = lb(0, UBO_DYNAMIC, 1);
+    b[1] = lb(1, SSBO_DYNAMIC, 2);
+    b[2] = lb(2, SSBO, 20000);
+    sl[0] = make_set_layout(b, 2, 0, NULL);
+    big = make_set_layout(b, 3, 0, NULL);
+    b[0] = lb(0, SSBO, 1);
+    sl[1] = make_set_layout(b, 1, 0, NULL);
+    pl = make_pipeline_layout(sl, 2, 0);
+    p = make_pipeline(spv_dynamic, sizeof(spv_dynamic), pl);
+    sizes[0] = ps(UBO_DYNAMIC, 2);
+    sizes[1] = ps(SSBO_DYNAMIC, 4);
+    sizes[2] = ps(SSBO, 20001);
+    pool = make_pool(3, sizes, 3, 0, NULL);
+    REQUIRE(sl[0] && sl[1] && big && pl && p && pool && params.data && src.data && dst.data);
+    for (i = 0; i < N; i++)
+        put(&src, i, i);
+    for (k = 0; k < 3; k++) {
+        put(&params, k * 64, N);
+        put(&params, k * 64 + 1, 1000 * (k + 1));
+    }
+    for (round = 0; round < 2; round++) {
+        VkDescriptorSetLayout first = round ? big : sl[0];
+        VkCommandBuffer cb;
+        memset(dst.data, 0, 6 * REGION);
+        sets[0] = alloc_set(pool, first);
+        sets[1] = alloc_set(pool, sl[1]);
+        REQUIRE(sets[0] && sets[1]);
+        write_buffer(sets[0], 0, 0, UBO_DYNAMIC, &params, 0, 8);
+        write_buffer(sets[0], 1, 0, SSBO_DYNAMIC, &dst, 0, REGION);
+        write_buffer(sets[0], 1, 1, SSBO_DYNAMIC, &dst, REGION, REGION);
+        write_buffer(sets[1], 0, 0, SSBO, &src, 0, VK_WHOLE_SIZE);
+        cb = begin();
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 1, 1, &sets[1], 0, NULL);
+        for (k = 0; k < 3; k++) {
+            uint32_t offsets[3];
+            offsets[0] = k * 256;
+            offsets[1] = k * 2 * REGION;
+            offsets[2] = k * 2 * REGION;
+            if (k == 1) {
+                VkBindDescriptorSetsInfo info;
+                memset(&info, 0, sizeof(info));
+                info.sType = VK_STRUCTURE_TYPE_BIND_DESCRIPTOR_SETS_INFO;
+                info.stageFlags = COMPUTE;
+                info.layout = pl;
+                info.descriptorSetCount = 1;
+                info.pDescriptorSets = &sets[0];
+                info.dynamicOffsetCount = 3;
+                info.pDynamicOffsets = offsets;
+                vkCmdBindDescriptorSets2(cb, &info);
+            } else {
+                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &sets[0], 3, offsets);
+            }
+            vkCmdDispatch(cb, (N + 63) / 64, 1, 1);
+        }
+        REQUIRE_VK(finish(cb));
+        for (k = 0; k < 3; k++) {
+            CHECK(check_scaled(&dst, (2 * k * REGION) / 4, N, 0, 1, 1000 * (k + 1)));
+            CHECK(check_scaled(&dst, ((2 * k + 1) * REGION) / 4, N, 0, 2, 1000 * (k + 1)));
+        }
+        CHECK_VK(vkResetDescriptorPool(device, pool, 0), VK_SUCCESS);
+    }
+    vkDestroyPipeline(device, p, NULL);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyPipelineLayout(device, pl, NULL);
+    vkDestroyDescriptorSetLayout(device, sl[0], NULL);
+    vkDestroyDescriptorSetLayout(device, sl[1], NULL);
+    vkDestroyDescriptorSetLayout(device, big, NULL);
+    free_buf(&params);
+    free_buf(&src);
+    free_buf(&dst);
+}
+
+/* An inline uniform block written in two parts and copied between sets
+ * (byte offsets), next to a uniform buffer array indexed dynamically. */
+static void test_inline_uniform_block(void)
+{
+    static const uint32_t first[4] = { 11, 22, 33, 44 }, second = 55;
+    struct buf small = make_buf(1024), out = make_buf(64);
+    VkDescriptorPoolInlineUniformBlockCreateInfo inline_info;
+    VkWriteDescriptorSetInlineUniformBlock data;
+    VkDescriptorSetLayoutBinding b[3];
+    VkDescriptorPoolSize sizes[3];
+    VkDescriptorBufferInfo infos[3];
+    VkWriteDescriptorSet w[2];
+    VkCopyDescriptorSet copy;
+    VkDescriptorSetLayout sl;
+    VkPipelineLayout pl;
+    VkDescriptorPool pool;
+    VkDescriptorSet sets[2];
+    VkPipeline p;
+    uint32_t i, s;
+
+    b[0] = lb(0, INLINE, 32);
+    b[1] = lb(1, UBO, 3);
+    b[2] = lb(2, SSBO, 1);
+    sl = make_set_layout(b, 3, 0, NULL);
+    pl = make_pipeline_layout(&sl, 1, 4);
+    p = make_pipeline(spv_inline, sizeof(spv_inline), pl);
+    memset(&inline_info, 0, sizeof(inline_info));
+    inline_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_INLINE_UNIFORM_BLOCK_CREATE_INFO;
+    inline_info.maxInlineUniformBlockBindings = 2;
+    sizes[0] = ps(INLINE, 64);
+    sizes[1] = ps(UBO, 6);
+    sizes[2] = ps(SSBO, 2);
+    pool = make_pool(2, sizes, 3, 0, &inline_info);
+    REQUIRE(sl && pl && p && pool && small.data && out.data);
+    sets[0] = alloc_set(pool, sl);
+    sets[1] = alloc_set(pool, sl);
+    REQUIRE(sets[0] && sets[1]);
+    for (i = 0; i < 3; i++) {
+        put(&small, 64 * i, 1000 * (i + 1));
+        infos[i] = bi(&small, 256 * i, 4);
+    }
+    memset(&data, 0, sizeof(data));
+    data.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_INLINE_UNIFORM_BLOCK;
+    data.dataSize = sizeof(first);
+    data.pData = first;
+    memset(w, 0, sizeof(w));
+    w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[0].pNext = &data;
+    w[0].dstSet = sets[0];
+    w[0].dstBinding = 0;
+    w[0].dstArrayElement = 0;
+    w[0].descriptorCount = sizeof(first);
+    w[0].descriptorType = INLINE;
+    w[1] = buffer_write(sets[0], 1, 0, UBO, infos, 3);
+    vkUpdateDescriptorSets(device, 2, w, 0, NULL);
+    data.dataSize = 4;
+    data.pData = &second;
+    w[0].dstArrayElement = 16;
+    w[0].descriptorCount = 4;
+    vkUpdateDescriptorSets(device, 1, w, 0, NULL);
+    write_buffer(sets[0], 2, 0, SSBO, &out, 0, VK_WHOLE_SIZE);
+
+    /* set 1: the block's bytes 4..20 and the uniform buffers 1 and 2 */
+    w[1] = buffer_write(sets[1], 1, 0, UBO, infos, 1);
+    vkUpdateDescriptorSets(device, 1, &w[1], 0, NULL);
+    write_buffer(sets[1], 2, 0, SSBO, &out, 32, VK_WHOLE_SIZE);
+    memset(&copy, 0, sizeof(copy));
+    copy.sType = VK_STRUCTURE_TYPE_COPY_DESCRIPTOR_SET;
+    copy.srcSet = sets[0];
+    copy.srcBinding = 0;
+    copy.srcArrayElement = 4;
+    copy.dstSet = sets[1];
+    copy.dstBinding = 0;
+    copy.dstArrayElement = 4;
+    copy.descriptorCount = 16;
+    vkUpdateDescriptorSets(device, 0, NULL, 1, &copy);
+    copy.srcBinding = 1;
+    copy.srcArrayElement = 1;
+    copy.dstBinding = 1;
+    copy.dstArrayElement = 1;
+    copy.descriptorCount = 2;
+    vkUpdateDescriptorSets(device, 0, NULL, 1, &copy);
+
+    for (s = 0; s < 2; s++) {
+        VkCommandBuffer cb = begin();
+        uint32_t index = 2 - s;
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &sets[s], 0, NULL);
+        vkCmdPushConstants(cb, pl, COMPUTE, 0, 4, &index);
+        vkCmdDispatch(cb, 1, 1, 1);
+        REQUIRE_VK(finish(cb));
+    }
+    for (i = 0; i < 4; i++)
+        CHECK(word(&out, i) == first[i]);
+    CHECK(word(&out, 4) == second && word(&out, 5) == 3000);
+    CHECK(word(&out, 8) == 0); /* not copied */
+    for (i = 1; i < 4; i++)
+        CHECK(word(&out, 8 + i) == first[i]);
+    CHECK(word(&out, 12) == second && word(&out, 13) == 2000);
+    vkDestroyPipeline(device, p, NULL);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyPipelineLayout(device, pl, NULL);
+    vkDestroyDescriptorSetLayout(device, sl, NULL);
+    free_buf(&small);
+    free_buf(&out);
+}
+
+/* A runtime descriptor array: variable count 6, 5 descriptors written
+ * (partially bound), indexed non-uniformly. */
+static void test_runtime_array(void)
+{
+    enum { ARRAYS = 5, PER = 300, N = ARRAYS * PER };
+    VkDescriptorBindingFlags flags[2] = { 0, VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
+                                                 VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT };
+    struct buf in[ARRAYS], out = make_buf(4 * N);
+    VkDescriptorSetLayoutBinding b[2];
+    VkDescriptorPoolSize size = ps(SSBO, 9);
+    VkDescriptorSetLayout sl;
+    VkPipelineLayout pl;
+    VkDescriptorPool pool;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VkPipeline p;
+    VkCommandBuffer cb;
+    uint32_t i, j, variable = 6, push[2] = { N, ARRAYS };
+
+    b[0] = lb(0, SSBO, 1);
+    b[1] = lb(1, SSBO, 8);
+    sl = make_set_layout(b, 2, 0, flags);
+    pl = make_pipeline_layout(&sl, 1, 8);
+    p = make_pipeline(spv_nonuniform, sizeof(spv_nonuniform), pl);
+    pool = make_pool(1, &size, 1, 0, NULL);
+    REQUIRE(sl && pl && p && pool && out.data);
+    CHECK_VK(alloc_sets(pool, &sl, 1, &variable, &set), VK_SUCCESS);
+    REQUIRE(set);
+    CHECK(((struct pvk_descriptor_set *)set)->size == 16 + 6 * 16);
+    write_buffer(set, 0, 0, SSBO, &out, 0, VK_WHOLE_SIZE);
+    for (i = 0; i < ARRAYS; i++) {
+        in[i] = make_buf(4 * PER);
+        REQUIRE(in[i].data);
+        for (j = 0; j < PER; j++)
+            put(&in[i], j, i * 1000 + j);
+        write_buffer(set, 1, i, SSBO, &in[i], 0, VK_WHOLE_SIZE);
+    }
+    cb = begin();
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
+    vkCmdPushConstants(cb, pl, COMPUTE, 0, 8, push);
+    vkCmdDispatch(cb, (N + 63) / 64, 1, 1);
+    REQUIRE_VK(finish(cb));
+    for (i = 0; i < N; i++)
+        if (word(&out, i) != (i % ARRAYS) * 1000 + i / ARRAYS) {
+            fprintf(stderr, "  word %u: %u\n", i, word(&out, i));
+            CHECK(0);
+            break;
+        }
+    vkDestroyPipeline(device, p, NULL);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyPipelineLayout(device, pl, NULL);
+    vkDestroyDescriptorSetLayout(device, sl, NULL);
+    for (i = 0; i < ARRAYS; i++)
+        free_buf(&in[i]);
+    free_buf(&out);
+}
+
+/* Update after bind: descriptors written between recording and submitting
+ * (and between two submissions) are the ones used. */
+static void test_update_after_bind(void)
+{
+    enum { N = 256 };
+    VkDescriptorBindingFlags flags[3];
+    struct buf params = make_buf(256), src = make_buf(4 * N), dst1 = make_buf(4 * N), dst2 = make_buf(4 * N);
+    VkDescriptorSetLayoutBinding b[3];
+    VkDescriptorPoolSize sizes[2];
+    VkDescriptorSetLayout sl;
+    VkPipelineLayout pl;
+    VkDescriptorPool pool;
+    VkDescriptorSet set;
+    VkPipeline p;
+    VkCommandBuffer cb;
+    uint32_t i;
+
+    if (!v12.descriptorBindingStorageBufferUpdateAfterBind || !v12.descriptorBindingUniformBufferUpdateAfterBind) {
+        printf("SKIP update after bind of buffers is not supported\n");
+        return;
+    }
+    for (i = 0; i < 3; i++)
+        flags[i] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    ubo_ssbo_bindings(b);
+    sl = make_set_layout(b, 3, VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT, flags);
+    pl = make_pipeline_layout(&sl, 1, 0);
+    p = make_pipeline(spv_ubo_ssbo, sizeof(spv_ubo_ssbo), pl);
+    sizes[0] = ps(UBO, 1);
+    sizes[1] = ps(SSBO, 2);
+    pool = make_pool(1, sizes, 2, VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT, NULL);
+    REQUIRE(sl && pl && p && pool && params.data && src.data && dst1.data && dst2.data);
+    set = alloc_set(pool, sl);
+    REQUIRE(set);
+    for (i = 0; i < N; i++)
+        put(&src, i, i);
+    put_params(&params, 0, N, 2, 1);
+    write_buffer(set, 0, 0, UBO, &params, 0, 12);
+    write_buffer(set, 1, 0, SSBO, &src, 0, VK_WHOLE_SIZE);
+    write_buffer(set, 2, 0, SSBO, &dst1, 0, VK_WHOLE_SIZE);
+    cb = begin();
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
+    vkCmdDispatch(cb, N / 64, 1, 1);
+    host_barrier(cb);
+    REQUIRE_VK(vkEndCommandBuffer(cb));
+    write_buffer(set, 2, 0, SSBO, &dst2, 0, VK_WHOLE_SIZE);
+    REQUIRE_VK(submit_wait(cb));
+    CHECK(word(&dst1, 1) == 0);
+    CHECK(check_scaled(&dst2, 0, N, 0, 2, 1));
+    put_params(&params, 128, N, 5, 3);
+    write_buffer(set, 0, 0, UBO, &params, 128, 12);
+    REQUIRE_VK(submit_wait(cb));
+    CHECK(check_scaled(&dst2, 0, N, 0, 5, 3));
+    vkFreeCommandBuffers(device, cmd_pool, 1, &cb);
+    vkDestroyPipeline(device, p, NULL);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyPipelineLayout(device, pl, NULL);
+    vkDestroyDescriptorSetLayout(device, sl, NULL);
+    free_buf(&params);
+    free_buf(&src);
+    free_buf(&dst1);
+    free_buf(&dst2);
+}
+
+/* Copies and writes continue into the next bindings; a template reads
+ * descriptors from an application struct with its own strides. */
+static void test_copies_and_templates(void)
+{
+    enum { N = 128 };
+    struct app_data {
+        uint32_t junk;
+        VkDescriptorBufferInfo params;
+        VkDescriptorBufferInfo bufs[2];
+    } data;
+    struct buf params = make_buf(256), src = make_buf(4 * N), dst = make_buf(3 * 4 * N);
+    VkDescriptorUpdateTemplateEntry entries[2];
+    VkDescriptorUpdateTemplateCreateInfo tinfo;
+    VkDescriptorUpdateTemplate tmpl;
+    VkDescriptorSetLayoutBinding b[3];
+    VkDescriptorPoolSize sizes[2];
+    VkDescriptorBufferInfo infos[2];
+    VkWriteDescriptorSet w;
+    VkCopyDescriptorSet copy;
+    VkDescriptorSetLayout sl;
+    VkPipelineLayout pl;
+    VkDescriptorPool pool;
+    VkDescriptorSet sets[3];
+    VkPipeline p;
+    VkCommandBuffer cb;
+    uint32_t i;
+
+    ubo_ssbo_bindings(b);
+    sl = make_set_layout(b, 3, 0, NULL);
+    pl = make_pipeline_layout(&sl, 1, 0);
+    p = make_pipeline(spv_ubo_ssbo, sizeof(spv_ubo_ssbo), pl);
+    sizes[0] = ps(UBO, 3);
+    sizes[1] = ps(SSBO, 6);
+    pool = make_pool(3, sizes, 2, 0, NULL);
+    REQUIRE(sl && pl && p && pool && params.data && src.data && dst.data);
+    for (i = 0; i < 3; i++)
+        sets[i] = alloc_set(pool, sl);
+    REQUIRE(sets[0] && sets[1] && sets[2]);
+    for (i = 0; i < N; i++)
+        put(&src, i, i);
+    put_params(&params, 0, N, 3, 1);
+    put_params(&params, 64, N, 4, 2);
+
+    /* set 0: one write covering bindings 1 and 2 */
+    write_buffer(sets[0], 0, 0, UBO, &params, 0, 12);
+    infos[0] = bi(&src, 0, VK_WHOLE_SIZE);
+    infos[1] = bi(&dst, 0, 4 * N);
+    w = buffer_write(sets[0], 1, 0, SSBO, infos, 2);
+    vkUpdateDescriptorSets(device, 1, &w, 0, NULL);
+
+    /* set 1: copied from set 0 (binding 1 on, two descriptors), its own dst */
+    memset(&copy, 0, sizeof(copy));
+    copy.sType = VK_STRUCTURE_TYPE_COPY_DESCRIPTOR_SET;
+    copy.srcSet = sets[0];
+    copy.srcBinding = 0;
+    copy.dstSet = sets[1];
+    copy.dstBinding = 0;
+    copy.descriptorCount = 3;
+    vkUpdateDescriptorSets(device, 0, NULL, 1, &copy);
+    write_buffer(sets[1], 2, 0, SSBO, &dst, 4 * N, 4 * N);
+
+    /* set 2: a template */
+    memset(entries, 0, sizeof(entries));
+    entries[0].dstBinding = 0;
+    entries[0].descriptorCount = 1;
+    entries[0].descriptorType = UBO;
+    entries[0].offset = offsetof(struct app_data, params);
+    entries[1].dstBinding = 1;
+    entries[1].descriptorCount = 2;
+    entries[1].descriptorType = SSBO;
+    entries[1].offset = offsetof(struct app_data, bufs);
+    entries[1].stride = sizeof(VkDescriptorBufferInfo);
+    memset(&tinfo, 0, sizeof(tinfo));
+    tinfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO;
+    tinfo.descriptorUpdateEntryCount = 2;
+    tinfo.pDescriptorUpdateEntries = entries;
+    tinfo.templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET;
+    tinfo.descriptorSetLayout = sl;
+    REQUIRE_VK(vkCreateDescriptorUpdateTemplate(device, &tinfo, NULL, &tmpl));
+    memset(&data, 0, sizeof(data));
+    data.params = bi(&params, 64, 12);
+    data.bufs[0] = bi(&src, 0, VK_WHOLE_SIZE);
+    data.bufs[1] = bi(&dst, 8 * N, VK_WHOLE_SIZE);
+    vkUpdateDescriptorSetWithTemplate(device, sets[2], tmpl, &data);
+
+    cb = begin();
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+    for (i = 0; i < 3; i++) {
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &sets[i], 0, NULL);
+        vkCmdDispatch(cb, N / 64, 1, 1);
+    }
+    REQUIRE_VK(finish(cb));
+    CHECK(check_scaled(&dst, 0, N, 0, 3, 1));
+    CHECK(check_scaled(&dst, N, N, 0, 3, 1));
+    CHECK(check_scaled(&dst, 2 * N, N, 0, 4, 2));
+    vkDestroyDescriptorUpdateTemplate(device, tmpl, NULL);
+    vkDestroyPipeline(device, p, NULL);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyPipelineLayout(device, pl, NULL);
+    vkDestroyDescriptorSetLayout(device, sl, NULL);
+    free_buf(&params);
+    free_buf(&src);
+    free_buf(&dst);
+}
+
+/* Push descriptors: each dispatch sees the pushes before it; later pushes
+ * update the set incrementally (vkCmdPushDescriptorSet, ...2 and with a
+ * template). The set layout is destroyed right after the pipeline layout
+ * is made. */
+static void test_push_descriptors(void)
+{
+    enum { N = 128 };
+    struct buf params = make_buf(256), src = make_buf(4 * N), dst = make_buf(4 * 4 * N);
+    VkDescriptorUpdateTemplateEntry entry;
+    VkDescriptorUpdateTemplateCreateInfo tinfo;
+    VkDescriptorUpdateTemplate tmpl;
+    VkPushDescriptorSetWithTemplateInfo tpush;
+    VkPushDescriptorSetInfo push2;
+    VkDescriptorSetLayoutBinding b[3];
+    VkDescriptorBufferInfo infos[3], tdata;
+    VkWriteDescriptorSet w[2];
+    VkDescriptorSetLayout sl;
+    VkPipelineLayout pl;
+    VkPipeline p;
+    VkCommandBuffer cb;
+    uint32_t i;
+
+    ubo_ssbo_bindings(b);
+    sl = make_set_layout(b, 3, VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT, NULL);
+    pl = make_pipeline_layout(&sl, 1, 0);
+    memset(&entry, 0, sizeof(entry));
+    entry.dstBinding = 2;
+    entry.descriptorCount = 1;
+    entry.descriptorType = SSBO;
+    memset(&tinfo, 0, sizeof(tinfo));
+    tinfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO;
+    tinfo.descriptorUpdateEntryCount = 1;
+    tinfo.pDescriptorUpdateEntries = &entry;
+    tinfo.templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS;
+    tinfo.pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
+    tinfo.pipelineLayout = pl;
+    tinfo.set = 0;
+    REQUIRE_VK(vkCreateDescriptorUpdateTemplate(device, &tinfo, NULL, &tmpl));
+    vkDestroyDescriptorSetLayout(device, sl, NULL);
+    p = make_pipeline(spv_ubo_ssbo, sizeof(spv_ubo_ssbo), pl);
+    REQUIRE(pl && p && params.data && src.data && dst.data);
+    for (i = 0; i < N; i++)
+        put(&src, i, i);
+    put_params(&params, 0, N, 2, 1);
+    put_params(&params, 64, N, 3, 5);
+
+    cb = begin();
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+    infos[0] = bi(&params, 0, 12);
+    infos[1] = bi(&src, 0, VK_WHOLE_SIZE);
+    infos[2] = bi(&dst, 0, 4 * N);
+    w[0] = buffer_write(VK_NULL_HANDLE, 0, 0, UBO, &infos[0], 1);
+    w[1] = buffer_write(VK_NULL_HANDLE, 1, 0, SSBO, &infos[1], 2); /* bindings 1 and 2 */
+    vkCmdPushDescriptorSet(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 2, w);
+    vkCmdDispatch(cb, N / 64, 1, 1);
+    /* only dst and then params change */
+    infos[2] = bi(&dst, 4 * N, 4 * N);
+    w[0] = buffer_write(VK_NULL_HANDLE, 2, 0, SSBO, &infos[2], 1);
+    vkCmdPushDescriptorSet(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, w);
+    infos[0] = bi(&params, 64, 12);
+    w[0] = buffer_write(VK_NULL_HANDLE, 0, 0, UBO, &infos[0], 1);
+    memset(&push2, 0, sizeof(push2));
+    push2.sType = VK_STRUCTURE_TYPE_PUSH_DESCRIPTOR_SET_INFO;
+    push2.stageFlags = COMPUTE;
+    push2.layout = pl;
+    push2.set = 0;
+    push2.descriptorWriteCount = 1;
+    push2.pDescriptorWrites = w;
+    vkCmdPushDescriptorSet2(cb, &push2);
+    vkCmdDispatch(cb, N / 64, 1, 1);
+    /* templates */
+    tdata = bi(&dst, 8 * N, 4 * N);
+    vkCmdPushDescriptorSetWithTemplate(cb, tmpl, pl, 0, &tdata);
+    vkCmdDispatch(cb, N / 64, 1, 1);
+    tdata = bi(&dst, 12 * N, 4 * N);
+    memset(&tpush, 0, sizeof(tpush));
+    tpush.sType = VK_STRUCTURE_TYPE_PUSH_DESCRIPTOR_SET_WITH_TEMPLATE_INFO;
+    tpush.descriptorUpdateTemplate = tmpl;
+    tpush.layout = pl;
+    tpush.set = 0;
+    tpush.pData = &tdata;
+    vkCmdPushDescriptorSetWithTemplate2(cb, &tpush);
+    vkCmdDispatch(cb, N / 64, 1, 1);
+    REQUIRE_VK(finish(cb));
+    CHECK(check_scaled(&dst, 0, N, 0, 2, 1));
+    CHECK(check_scaled(&dst, N, N, 0, 3, 5));
+    CHECK(check_scaled(&dst, 2 * N, N, 0, 3, 5));
+    CHECK(check_scaled(&dst, 3 * N, N, 0, 3, 5));
+    vkDestroyDescriptorUpdateTemplate(device, tmpl, NULL);
+    vkDestroyPipeline(device, p, NULL);
+    vkDestroyPipelineLayout(device, pl, NULL);
+    free_buf(&params);
+    free_buf(&src);
+    free_buf(&dst);
+}
+
+/* Set layouts destroyed after their sets and pipeline layouts are made;
+ * a set allocated from one keeps working, also after the pipeline layout
+ * goes. */
+static void test_layout_lifetime(void)
+{
+    enum { N = 64 };
+    struct buf params = make_buf(256), src = make_buf(4 * N), dst = make_buf(4 * N);
+    VkDescriptorSetLayoutBinding b[3];
+    VkDescriptorPoolSize sizes[2];
+    VkDescriptorSetLayout sl;
+    VkPipelineLayout pl;
+    VkDescriptorPool pool;
+    VkDescriptorSet set;
+    VkPipeline p;
+    VkCommandBuffer cb;
+    uint32_t i;
+
+    ubo_ssbo_bindings(b);
+    sl = make_set_layout(b, 3, 0, NULL);
+    pl = make_pipeline_layout(&sl, 1, 0);
+    sizes[0] = ps(UBO, 1);
+    sizes[1] = ps(SSBO, 2);
+    pool = make_pool(1, sizes, 2, 0, NULL);
+    REQUIRE(sl && pl && pool && params.data && src.data && dst.data);
+    set = alloc_set(pool, sl);
+    vkDestroyDescriptorSetLayout(device, sl, NULL);
+    p = make_pipeline(spv_ubo_ssbo, sizeof(spv_ubo_ssbo), pl);
+    REQUIRE(set && p);
+    for (i = 0; i < N; i++)
+        put(&src, i, i);
+    put_params(&params, 0, N, 7, 0);
+    write_buffer(set, 0, 0, UBO, &params, 0, 12);
+    write_buffer(set, 1, 0, SSBO, &src, 0, VK_WHOLE_SIZE);
+    write_buffer(set, 2, 0, SSBO, &dst, 0, VK_WHOLE_SIZE);
+    cb = begin();
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
+    vkCmdDispatch(cb, 1, 1, 1);
+    host_barrier(cb);
+    REQUIRE_VK(vkEndCommandBuffer(cb));
+    vkDestroyPipelineLayout(device, pl, NULL);
+    REQUIRE_VK(submit_wait(cb));
+    vkFreeCommandBuffers(device, cmd_pool, 1, &cb);
+    CHECK(check_scaled(&dst, 0, N, 0, 7, 0));
+    vkDestroyPipeline(device, p, NULL);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    free_buf(&params);
+    free_buf(&src);
+    free_buf(&dst);
+}
+
+int main(void)
+{
+    setup();
+    if (pvk_test_failures)
+        return 1;
+    RUN(test_layout_offsets);
+    RUN(test_layout_support);
+    RUN(test_pools);
+    RUN(test_buffers);
+    RUN(test_array_length);
+    RUN(test_dynamic_offsets);
+    RUN(test_inline_uniform_block);
+    RUN(test_runtime_array);
+    RUN(test_update_after_bind);
+    RUN(test_copies_and_templates);
+    RUN(test_push_descriptors);
+    RUN(test_layout_lifetime);
+    teardown();
+    return TEST_RESULT();
+}
