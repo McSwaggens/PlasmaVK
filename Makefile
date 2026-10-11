@@ -60,20 +60,22 @@ check:
 	@$(IOS_CC) -std=c99 $(WARN) tests/compile/impl.c tests/compile/user.c -o $(BUILD)/check/ios
 	@$(MAKE) --no-print-directory test
 
+# Every benchmark runs even if an earlier one reports an error (wrong output);
+# the target fails at the end if any did. See bench/README.md.
 bench:
 	@mkdir -p $(BUILD)/bench
-	@set -e; for b in $(BENCHES); do \
-		$(CC) -std=c99 $(WARN) -O2 bench/$$b.c -o $(BUILD)/bench/$$b; \
-		./$(BUILD)/bench/$$b; \
-	done
+	@status=0; for b in $(BENCHES); do \
+		$(CC) -std=c99 $(WARN) -O2 bench/$$b.c -o $(BUILD)/bench/$$b || exit 1; \
+		./$(BUILD)/bench/$$b || status=1; \
+	done; exit $$status
 
 bench-mvk:
 	@mkdir -p $(BUILD)/bench-loader
-	@set -e; for b in $(BENCHES); do \
+	@status=0; for b in $(BENCHES); do \
 		$(CC) -std=c99 $(WARN) -O2 -DBENCH_USE_LOADER bench/$$b.c \
-			-L$(LOADER_LIB) -lvulkan -Wl,-rpath,$(LOADER_LIB) -o $(BUILD)/bench-loader/$$b; \
-		VK_DRIVER_FILES=$(MVK_ICD) BENCH_IMPL=moltenvk ./$(BUILD)/bench-loader/$$b; \
-	done
+			-L$(LOADER_LIB) -lvulkan -Wl,-rpath,$(LOADER_LIB) -o $(BUILD)/bench-loader/$$b || exit 1; \
+		VK_DRIVER_FILES=$(MVK_ICD) BENCH_IMPL=moltenvk ./$(BUILD)/bench-loader/$$b || status=1; \
+	done; exit $$status
 
 clean:
 	rm -rf $(BUILD)
