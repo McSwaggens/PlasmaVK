@@ -34852,6 +34852,10 @@ struct pvk_image_view {
     uint32_t base_level, levels, base_layer, layers;
     uint32_t depth_plane; /* 2D views of 3D images: first slice */
     bool resident; /* mtl_texture is in the device residency set */
+    /* Render pass attachments (sections 15-16): mtl_texture, or when that is
+     * swizzled (depth and stencil views always are), an unswizzled view of
+     * the same subresources: Metal renders to no swizzled view. */
+    id mtl_attachment;
 };
 
 struct pvk_buffer_view {
@@ -35433,6 +35437,26 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
         pvk_free(alloc, view);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
+    if (!image->memoryless && (image->mtl_usage & PVK_MTLTextureUsageRenderTarget) &&
+        (swizzle.red != PVK_MTLTextureSwizzleRed || swizzle.green != PVK_MTLTextureSwizzleGreen ||
+         swizzle.blue != PVK_MTLTextureSwizzleBlue || swizzle.alpha != PVK_MTLTextureSwizzleAlpha)) {
+        pvk_MTLTextureSwizzleChannels identity;
+        identity.red = PVK_MTLTextureSwizzleRed;
+        identity.green = PVK_MTLTextureSwizzleGreen;
+        identity.blue = PVK_MTLTextureSwizzleBlue;
+        identity.alpha = PVK_MTLTextureSwizzleAlpha;
+        pool = objc_autoreleasePoolPush();
+        view->mtl_attachment = pvk_MTLTexture_newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(
+            image->mtl_texture, format, type, levels, slices, identity);
+        objc_autoreleasePoolPop(pool);
+    } else {
+        view->mtl_attachment = pvk_retain(view->mtl_texture);
+    }
+    if (!view->mtl_attachment) {
+        pvk_release(view->mtl_texture);
+        pvk_free(alloc, view);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
     /* Descriptors name the view's texture by its resource ID. The heap
      * covers its memory, but Metal's shader validation also wants the view
      * object itself resident. Memoryless textures can't join a set. */
@@ -35452,6 +35476,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyImageView(VkDevice device, VkImageView image
     if (view->resident)
         pvk_device_evict((struct pvk_device *)device, view->mtl_texture);
     pvk_release(view->mtl_texture);
+    pvk_release(view->mtl_attachment);
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), view);
 }
 
@@ -47301,7 +47326,7 @@ static void pvk_pass_att_view(struct pvk_pass_attachment *pa, const struct pvk_i
 {
     if (!view)
         return;
-    pa->texture = view->mtl_texture;
+    pa->texture = view->mtl_attachment;
     pa->fmt = pvk_format(view->format);
     if (view->image->memoryless) {
         pa->level = view->base_level;
@@ -47317,7 +47342,7 @@ static void pvk_pass_att_resolve(struct pvk_pass_attachment *pa, const struct pv
 {
     if (!view || !pa->texture)
         return;
-    pa->resolve = view->mtl_texture;
+    pa->resolve = view->mtl_attachment;
     if (view->image->memoryless) {
         pa->resolve_level = view->base_level;
         pa->resolve_slice = view->base_layer;
