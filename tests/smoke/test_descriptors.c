@@ -1,5 +1,5 @@
 /* Descriptor sets (section 12): layouts, pools, sets, updates and update
- * templates, and compute dispatches reading through them (sections 14-16):
+ * templates, and compute dispatches reading through them (sections 15-17):
  * dynamic offsets, push descriptors, inline uniform blocks, update after
  * bind, descriptor arrays indexed non-uniformly, runtime arrays and
  * partially bound bindings.

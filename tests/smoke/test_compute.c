@@ -1,6 +1,6 @@
-/* Shader modules, pipeline layouts and compute pipelines (section 16), and
- * dispatches with push constants and buffer device addresses (sections 14
- * and 15).
+/* Shader modules, pipeline layouts and compute pipelines (section 17), and
+ * dispatches with push constants and buffer device addresses (sections 15
+ * and 16).
  *
  * Shaders: GLSL in the comment above each array, compiled with
  *   glslangValidator -V --target-env vulkan1.3 */

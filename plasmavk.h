@@ -39,11 +39,13 @@
  *   11. Images, views and samplers
  *   12. Descriptor sets
  *   13. Shader translator (SPIR-V -> MSL)
- *   14. Command buffers
- *   15. Queue submission and synchronization
- *   16. Pipelines
- *   17. Unimplemented commands
- *   18. Entry points
+ *   14. Queries
+ *   15. Command buffers
+ *   16. Queue submission and synchronization
+ *   17. Pipelines
+ *   18. Window system integration
+ *   19. Unimplemented commands
+ *   20. Entry points
  *   Licenses
  *
  * LICENSE
@@ -31408,7 +31410,7 @@ static inline void pvk_MTLComputePipelineDescriptor_setMaxTotalThreadsPerThreadg
 static inline unsigned long pvk_MTLComputePipelineState_maxTotalThreadsPerThreadgroup(id self) { PVK_SEL_CACHE("maxTotalThreadsPerThreadgroup"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
 static inline pvk_MTLResourceID pvk_MTLTexture_gpuResourceID(id self) { PVK_SEL_CACHE("gpuResourceID"); return PVK_MSG(pvk_MTLResourceID, (id, SEL))(self, pvk_sel_); }
 static inline pvk_MTLResourceID pvk_MTLSamplerState_gpuResourceID(id self) { PVK_SEL_CACHE("gpuResourceID"); return PVK_MSG(pvk_MTLResourceID, (id, SEL))(self, pvk_sel_); }
-/* Images, views and samplers (section 11) and image transfers (sections 14-15) */
+/* Images, views and samplers (section 11) and image transfers (sections 15-16) */
 static inline bool pvk_MTLDevice_supportsBCTextureCompression(id self) { PVK_SEL_CACHE("supportsBCTextureCompression"); return PVK_MSG(bool, (id, SEL))(self, pvk_sel_); }
 static inline bool pvk_MTLDevice_supports32BitFloatFiltering(id self) { PVK_SEL_CACHE("supports32BitFloatFiltering"); return PVK_MSG(bool, (id, SEL))(self, pvk_sel_); }
 static inline unsigned long pvk_MTLDevice_minimumLinearTextureAlignmentForPixelFormat(id self, pvk_MTLPixelFormat format) { PVK_SEL_CACHE("minimumLinearTextureAlignmentForPixelFormat:"); return PVK_MSG(unsigned long, (id, SEL, pvk_MTLPixelFormat))(self, pvk_sel_, format); }
@@ -31528,7 +31530,7 @@ static void pvk_log(enum pvk_log_level level, const char *fmt, ...)
     fputc('\n', stderr);
 }
 
-/* Body of every stub in section 17. */
+/* Body of every stub in section 19. */
 #ifdef PLASMAVK_ABORT_ON_UNIMPLEMENTED
 #define PVK_UNIMPLEMENTED() (pvk_log(PVK_LOG_ERROR, "%s is not implemented", __func__), abort())
 #else
@@ -31609,8 +31611,8 @@ static VkResult pvk_enumerate(const void *items, size_t item_size, uint32_t coun
 /* ==========================================================================
  * 6. Extensions
  *
- * Advertised extensions. Their commands get stubs in section 17 and entries
- * in section 18 until implemented.
+ * Advertised extensions. Their commands get stubs in section 19 and entries
+ * in section 20 until implemented.
  * ========================================================================== */
 
 enum pvk_instance_extension {
@@ -31649,7 +31651,7 @@ static const VkExtensionProperties pvk_device_extensions[] = {
  * Dependencies: a device extension whose instance extension dependency was
  * not enabled by vkCreateInstance is unsupported, so it is neither listed by
  * vkEnumerateDeviceExtensionProperties nor accepted by vkCreateDevice, and
- * its commands are not available (section 18). */
+ * its commands are not available (section 20). */
 static const int pvk_device_extension_needs[PVK_DEVICE_EXTENSION_COUNT] = {
     PVK_INSTANCE_EXT_KHR_surface, /* VK_KHR_swapchain */
     -1,                           /* VK_KHR_maintenance5 */
@@ -31715,7 +31717,7 @@ struct pvk_queue {
     uint32_t family_index;
     uint32_t index;
     VkDeviceQueueCreateFlags flags;
-    /* Submission (section 15). vkQueueSubmit is externally synchronized, so
+    /* Submission (section 16). vkQueueSubmit is externally synchronized, so
      * only it, vkQueueWaitIdle and vkDeviceWaitIdle touch these. */
     id timeline;          /* MTLSharedEvent: reaches N when submission N is done */
     uint64_t serial;      /* value of the last submission */
@@ -31725,7 +31727,7 @@ struct pvk_queue {
     struct pvk_upload_chunk *upload;               /* being filled */
     struct pvk_upload_chunk *retired, *retired_tail; /* full, in flight, oldest first */
     struct pvk_upload_chunk *free_chunks;
-    /* Batches whose semaphore waits the host resolves (section 15): the
+    /* Batches whose semaphore waits the host resolves (section 16): the
      * queue's thread commits them in order. */
     pthread_mutex_t lock;
     pthread_cond_t cond;
@@ -31733,7 +31735,7 @@ struct pvk_queue {
     pthread_t thread;
     struct pvk_deferred *deferred, *deferred_tail; /* to do; the head is in progress */
     struct pvk_deferred *done;                     /* done, freed by vkQueueSubmit */
-    /* Image transfers (section 15): */
+    /* Image transfers (section 16): */
     id render_table;   /* MTL4ArgumentTable of internal blit/resolve draws */
     bool ordered;      /* a barrier was recorded: each new encoder waits for earlier work */
 };
@@ -31748,11 +31750,11 @@ struct pvk_device {
     struct pvk_queue queues[PVK_MAX_QUEUES];
     id residency_set; /* MTLResidencySet attached to every queue (section 9) */
     pthread_mutex_t residency_lock;
-    /* GPU execution (sections 14-16) */
+    /* GPU execution (sections 15-17) */
     int lost;              /* a command buffer failed: VK_ERROR_DEVICE_LOST (atomic) */
     long feedback_pending; /* commit feedback handlers still to run (atomic) */
     id fill_pipeline;      /* internal kernel of vkCmdFillBuffer, made on first use */
-    /* Images (sections 11, 14 and 15) */
+    /* Images (sections 11, 15 and 16) */
     struct pvk_sampler_state *sampler_states; /* MTLSamplerStates shared by equal VkSamplers */
     id blit_library;                          /* internal blit/resolve shaders, made on first use */
     struct pvk_blit_pipeline *blit_pipelines; /* render pipelines made from it, by function and format */
@@ -32228,7 +32230,7 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
  * indexing (pvk_physical_device_init_descriptor_features).
  *
  * Most of these have no implementation yet (their commands are stubs in
- * section 17): reporting them follows from claiming 1.4, and each subsystem
+ * section 19): reporting them follows from claiming 1.4, and each subsystem
  * must honour them as it lands. */
 static void pvk_physical_device_init_features(struct pvk_features *f)
 {
@@ -32846,7 +32848,7 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceMemoryProperties2(VkPhysicalDevice
  * format" (Apple7 column, which every Metal 4 GPU has) and "Texture buffer
  * pixel formats". Format features are derived from these
  * (pvk_format_image_features, pvk_format_buffer_features); images, views,
- * buffer views and transfers (sections 11, 14, 15) use the same table.
+ * buffer views and transfers (sections 11, 15, 16) use the same table.
  *
  * Packed 16-bit formats Metal lacks but whose bits match a Metal format with
  * the components in another order (B4G4R4A4, B5G6R5, B5G5R5A1, A1B5G5R5 and
@@ -33163,7 +33165,7 @@ static VkFormatFeatureFlags2 pvk_format_image_features(const struct pvk_physical
              VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
     if (f->caps & PVK_FC_ATOMIC)
         r |= VK_FORMAT_FEATURE_2_STORAGE_IMAGE_ATOMIC_BIT;
-    /* Blits draw into the destination (section 15). */
+    /* Blits draw into the destination (section 16). */
     if (f->caps & PVK_FC_COLOR)
         r |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_2_BLIT_DST_BIT;
     if (f->caps & PVK_FC_BLEND)
@@ -34190,7 +34192,7 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  * 11. Images, views and samplers
  *
  * VkImage, VkImageView, VkBufferView, VkSampler and host image copy. Formats
- * are in section 7 (pvk_format), image transfer commands in sections 14-15.
+ * are in section 7 (pvk_format), image transfer commands in sections 15-16.
  *
  * IMAGES
  *   A VkImage keeps its creation parameters until memory is bound; then it
@@ -34220,11 +34222,11 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  *   Usage: shader read always; shader write for storage; atomics for storage
  *   images of atomic formats; render target for attachments and for transfer
  *   destinations Metal can render to, as clears, blits and resolves draw
- *   (section 15); pixel-format views for mutable formats whose views change
+ *   (section 16); pixel-format views for mutable formats whose views change
  *   more than sRGB-ness, and for depth/stencil formats (stencil views).
  *
  *   Image layouts have no Metal equivalent: transitions are barriers only
- *   (section 15), and vkTransitionImageLayout does nothing.
+ *   (section 16), and vkTransitionImageLayout does nothing.
  *
  * HOST IMAGE COPY
  *   Images with VK_IMAGE_USAGE_HOST_TRANSFER_BIT are shared-storage textures
@@ -34251,7 +34253,7 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  * (D, 0, 0, 1) instead of Metal's (D, D, D, 1); depth2d reads and compares
  * are unaffected.
  *
- * Descriptor memory format (sections 12, 13 and 16 rely on it): a descriptor
+ * Descriptor memory format (sections 12, 13 and 17 rely on it): a descriptor
  * set is a table in GPU memory, bound by address at argument-table buffer
  * index N for set N. Bindings are ordered by binding number, each binding's
  * offset is 16-byte aligned, and the elements of an array binding follow
@@ -35403,8 +35405,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  * 12. Descriptor sets
  *
  * Descriptor set layouts, pools, sets, updates and update templates. Binding
- * sets and push descriptors are recorded in section 14 and encoded in
- * section 15.
+ * sets and push descriptors are recorded in section 15 and encoded in
+ * section 16.
  *
  * A descriptor set is a table in the section 11 format: GPU memory that
  * shaders read through `constant pvk_setN&` (section 13), bound by address
@@ -35416,7 +35418,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  * LAYOUTS
  *   A layout orders its bindings by binding number and gives each a
  *   16-byte-aligned offset and its type's stride (pvk_descriptor_stride);
- *   section 16 hands exactly that to the translator (struct
+ *   section 17 hands exactly that to the translator (struct
  *   pvk_msl_binding). The variable-count binding is the last one, so a
  *   set's table is the layout's fixed size plus that binding's descriptors.
  *   Layouts are reference counted: each set and pipeline layout made with
@@ -35445,7 +35447,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  *   table is zeroed, then its immutable samplers are written. Writes and
  *   copies continue into consecutive bindings as the specification says.
  *
- * DYNAMIC OFFSETS AND PUSH DESCRIPTORS (sections 14, 15)
+ * DYNAMIC OFFSETS AND PUSH DESCRIPTORS (sections 15, 16)
  *   Binding a set records its table address, plus, for dynamic buffers,
  *   where their descriptors are and the offsets to add: at submit the table
  *   is copied to the upload ring, the offsets added to the copy's
@@ -36714,7 +36716,7 @@ static void pvk_msl_result_free(struct pvk_msl_result *result);
 
 /* A vertex and a fragment shader (fragment word count 0: none) translated
  * together, the fragment stage linked to the vertex stage's outputs.
- * (Unused until graphics pipelines land in section 16.) */
+ * (Unused until graphics pipelines land in section 17.) */
 static VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_t vs_word_count, const char *vs_entry,
                                           const struct pvk_msl_options *vs_options, const uint32_t *fs_words,
                                           size_t fs_word_count, const char *fs_entry,
@@ -44531,21 +44533,27 @@ static VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_t vs_wo
 }
 
 /* ==========================================================================
- * 14. Command buffers
+ * 14. Queries
+ *
+ * Query pools: timestamps, occlusion and the results commands.
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 15. Command buffers
  *
  * Command pools and command buffers: recording vkCmd* commands.
  *
  * Recording is deferred. Each vkCmd* appends a compact packet to the command
  * buffer's blocks (memory from its pool, through the pool's allocation
  * callbacks) and touches no Metal object; vkQueueSubmit replays the packets
- * into a fresh MTL4CommandBuffer (section 15). So a command buffer can be
+ * into a fresh MTL4CommandBuffer (section 16). So a command buffer can be
  * submitted any number of times, also simultaneously, and is free to reset
  * as soon as vkQueueSubmit returns. Buffers are resolved to their memory's
  * MTLBuffer and GPU address when recorded (Vulkan requires them bound by
  * then).
  * ========================================================================== */
 
-/* Pipelines (section 16) as the commands see them. */
+/* Pipelines (section 17) as the commands see them. */
 struct pvk_pipeline_layout {
     uint32_t set_count;          /* descriptor sets: tables at buffer indices 0.. */
     uint32_t push_constant_size; /* end of the highest push-constant range */
@@ -45357,14 +45365,14 @@ VKAPI_ATTR void VKAPI_CALL vkCmdPushDescriptorSetWithTemplate2(
 /* ---- Image transfer commands ----
  *
  * Images are resolved to their MTLTexture when recorded (Vulkan requires
- * them bound by then). Encoding is in section 15:
+ * them bound by then). Encoding is in section 16:
  *   buffer <-> image, image -> image   blit copies of the compute encoder
  *                                      (Metal copies between any formats
  *                                      of equal block size, compressed and
  *                                      uncompressed alike, checked on M4 Max);
  *   clears                             a render pass whose load action clears;
  *   blits, resolves                    a draw into the destination that reads
- *                                      the source (internal shaders, section 15).
+ *                                      the source (internal shaders, section 16).
  * Image layouts change nothing. */
 
 /* One region of a buffer <-> image copy. */
@@ -45408,7 +45416,7 @@ static void pvk_cmd_zero(void *packet, size_t size)
     memset((char *)packet + sizeof(struct pvk_cmd), 0, size - sizeof(struct pvk_cmd));
 }
 
-/* Internal fragment functions of blits and resolves (section 15). */
+/* Internal fragment functions of blits and resolves (section 16). */
 enum pvk_blit_function {
     PVK_BLIT_F_2D, PVK_BLIT_F_2DARRAY, PVK_BLIT_F_3D,    /* nearest, float */
     PVK_BLIT_U_2D, PVK_BLIT_U_2DARRAY, PVK_BLIT_U_3D,    /* nearest, uint */
@@ -45900,7 +45908,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
 }
 
 /* ==========================================================================
- * 15. Queue submission and synchronization
+ * 16. Queue submission and synchronization
  *
  * vkQueueSubmit, fences, semaphores and waiting for idle.
  *
@@ -46485,7 +46493,7 @@ static id pvk_encode_compute_state(struct pvk_encoder *e, const uint32_t base[3]
 
 /* ---- Image transfers ----
  *
- * The packets of section 14's image transfer commands. Copies are blits of
+ * The packets of section 15's image transfer commands. Copies are blits of
  * the compute encoder. Clears, blits and resolves draw, each in a render
  * encoder of its own between compute encoders (pvk_encoder_render): a clear
  * is a render pass whose load action clears (all layers of a level at once,
@@ -47722,7 +47730,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkWaitSemaphores(VkDevice device, const VkSemapho
 }
 
 /* ==========================================================================
- * 16. Pipelines
+ * 17. Pipelines
  *
  * Shader modules, pipeline layouts and pipelines.
  *
@@ -47780,7 +47788,7 @@ static id pvk_compile_compute(struct pvk_device *device, const char *msl, const 
     return pso;
 }
 
-/* vkCmdFillBuffer for patterns whose four bytes differ (section 15): one
+/* vkCmdFillBuffer for patterns whose four bytes differ (section 16): one
  * 32-bit word per thread, arguments at the push-constant index. */
 static const char pvk_fill_msl[] =
     "#include <metal_stdlib>\n"
@@ -48040,11 +48048,17 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
 }
 
 /* ==========================================================================
- * 17. Unimplemented commands
+ * 18. Window system integration
+ *
+ * VK_EXT_metal_surface surfaces (CAMetalLayer) and VK_KHR_swapchain.
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 19. Unimplemented commands
  *
  * Every other Vulkan 1.4 command, plus the commands of the extensions in
  * section 6. To implement one, delete its line here and write it in its
- * subsystem's section. Its entry in section 18 stays as is.
+ * subsystem's section. Its entry in section 20 stays as is.
  * ========================================================================== */
 
 #if defined(__clang__)
@@ -48164,7 +48178,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkSetPrivateData(VkDevice device, VkObjectType ob
 #endif
 
 /* ==========================================================================
- * 18. Entry points
+ * 20. Entry points
  *
  * Every command vkGetInstanceProcAddr / vkGetDeviceProcAddr can return,
  * with its scope, the core version that added it and the extension it

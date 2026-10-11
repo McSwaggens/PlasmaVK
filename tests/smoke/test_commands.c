@@ -1,5 +1,5 @@
 /* Command pools and buffers, transfer commands and pipeline barriers
- * (sections 14 and 15), checked against host-visible memory. */
+ * (sections 15 and 16), checked against host-visible memory. */
 #define PLASMAVK_IMPLEMENTATION
 #include "../../plasmavk.h"
 

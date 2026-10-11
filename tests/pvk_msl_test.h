@@ -65,7 +65,7 @@ static inline bool mt_translate(const uint32_t *words, size_t count, const struc
     return true;
 }
 
-/* Compiles the MSL as section 16 does (MSL 3.2, safe math) and builds a
+/* Compiles the MSL as section 17 does (MSL 3.2, safe math) and builds a
  * compute pipeline (retained), NULL on failure after printing the compiler
  * error and the numbered source. */
 static inline id mt_pipeline(const struct pvk_msl_result *res)

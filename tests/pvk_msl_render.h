@@ -8,7 +8,7 @@
 #ifndef PVK_MSL_RENDER_H
 #define PVK_MSL_RENDER_H
 
-/* Compiles MSL as section 16 does (MSL 3.2, safe math) and returns the named
+/* Compiles MSL as section 17 does (MSL 3.2, safe math) and returns the named
  * function (retained), NULL after printing the error and the source. */
 static inline id mr_function(const char *msl, const char *name)
 {
