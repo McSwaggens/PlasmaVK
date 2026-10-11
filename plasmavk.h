@@ -37312,10 +37312,17 @@ struct pvk_spv_ptr {
     const char *desc_suffix;
     const char *desc;        /* buffer descriptor of the block expr designates (OpArrayLength) */
     const char *decl;        /* descriptor variables: declaration of expr in each function */
+    /* Robust buffer access (ROBUSTNESS): rb is the buffer descriptor whose range
+     * bounds accesses through this pointer (robust: set it when a descriptor
+     * array is indexed); a vector component is not addressable, so its
+     * address is rb_vec's plus rb_comp elements. */
+    bool robust;
+    const char *rb, *rb_vec, *rb_comp;
     /* OpImageTexelPointer (storage Image): texture and coordinate arguments */
     const char *texel_image;
     const char *texel_args;
     uint32_t texel_type; /* image type */
+    const char *texel_ok; /* robust image access: the texel is in bounds */
     bool value; /* an input attachment variable: a value like an Input, not a descriptor */
 };
 
@@ -39594,6 +39601,8 @@ static const char *pvk_spv_zero(struct pvk_spv *ctx, uint32_t tid)
     struct pvk_spv_type *t = pvk_spv_type(ctx, tid);
     if (pvk_spv_is_scalar(t))
         return pvk_spv_literal(ctx, t, 0);
+    if (pvk_spv_is_psb(t) || (t->op == PVK_SPV_OpTypePointer && t->msl))
+        return pvk_spv_fmt(ctx, "(%s)nullptr", t->msl);
     if (t->op == PVK_SPV_OpTypeVector)
         return pvk_spv_fmt(ctx, "%s(%s)", t->msl, pvk_spv_literal(ctx, pvk_spv_type(ctx, t->elem), 0));
     return pvk_spv_fmt(ctx, "%s{}", t->msl);
@@ -40473,6 +40482,9 @@ static void pvk_spv_resource_view(struct pvk_spv *ctx, uint32_t var)
     bool is_array, buffer = pvk_spv_is_buffer_type(b->layout.type), cast;
 
     pvk_spv_desc_count(ctx, var, &is_array);
+    if (buffer && ctx->options) /* robust buffer access: bound by the descriptor's range */
+        p->robust = pvk_spv_is_storage_block(ctx, var) ? ctx->options->robust_storage_buffers
+                                                       : ctx->options->robust_uniform_buffers;
     if (buffer) {
         wrap = pvk_spv_buffer_desc_type(ctx, obj, pvk_spv_is_storage_block(ctx, var));
     } else if (b->layout.type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && kind == VK_DESCRIPTOR_TYPE_SAMPLER) {
@@ -40505,6 +40517,8 @@ static void pvk_spv_resource_view(struct pvk_spv *ctx, uint32_t var)
     if (buffer) {
         struct pvk_spv_type *bt = pvk_spv_buffer_block(ctx, var, &block);
         p->desc = member;
+        if (p->robust)
+            p->rb = member;
         p->decl = pvk_spv_fmt(ctx, "%s %s& %s = *%s.p;", pvk_spv_is_storage_block(ctx, var) ? "device" : "constant",
                               bt->msl, x->msl, member);
     } else {
@@ -40548,6 +40562,28 @@ static void pvk_spv_emit_sets(struct pvk_spv *ctx)
         }
         pvk_sb_append(ctx, &ctx->types, "};\n\n", 4);
     }
+}
+
+/* MSL helper functions (pvk_spv_helper_text), emitted when used. */
+enum {
+    PVK_SPV_H_SMOD = 1u << 0,
+    PVK_SPV_H_FMOD = 1u << 1,
+    PVK_SPV_H_SSIGN = 1u << 2,
+    PVK_SPV_H_FIND_LSB = 1u << 3,
+    PVK_SPV_H_FIND_UMSB = 1u << 4,
+    PVK_SPV_H_FIND_SMSB = 1u << 5,
+    PVK_SPV_H_INVERSE = 1u << 6,
+    PVK_SPV_H_REFRACT = 1u << 7,
+    PVK_SPV_H_SRGB = 1u << 8,
+    PVK_SPV_H_BALLOT = 1u << 9,
+    PVK_SPV_H_SG_SCAN = 1u << 10,
+    PVK_SPV_H_INB = 1u << 11
+};
+
+static const char *pvk_spv_helper(struct pvk_spv *ctx, uint32_t bit, const char *name)
+{
+    ctx->helper_mask |= bit;
+    return name;
 }
 
 /* ---- Values, pointers, copies ---- */
@@ -40757,6 +40793,8 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
         p->desc_index = NULL;
         if (p->desc_buffer) {
             p->desc = pvk_spv_fmt(ctx, "%s[%s]%s", p->expr, idx, p->desc_suffix);
+            if (p->robust)
+                p->rb = p->desc;
             p->expr = pvk_spv_fmt(ctx, "(*%s.p)", p->desc);
         } else {
             p->expr = pvk_spv_fmt(ctx, "%s[%s]%s", p->expr, idx, p->desc_suffix);
@@ -40795,6 +40833,10 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
         p->node = NULL;
         return;
     case PVK_SPV_OpTypeVector:
+        if (p->rb) { /* a component: not addressable (ROBUSTNESS) */
+            p->rb_vec = p->rm_col ? pvk_spv_fmt(ctx, "%s[%s]%s", p->expr, idx, p->node->padded ? ".v" : "") : p->expr;
+            p->rb_comp = p->rm_col ? p->rm_col : cidx >= 0 ? pvk_spv_fmt(ctx, "%u", (uint32_t)cidx) : idx;
+        }
         if (p->rm_col) {
             p->expr = pvk_spv_fmt(ctx, "%s[%s]%s[%s]", p->expr, idx, p->node->padded ? ".v" : "", p->rm_col);
             p->rm_col = NULL;
@@ -40811,10 +40853,28 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
     }
 }
 
-/* Value of what p points at, as result rid. */
+/* With robust buffer access, the check that pointer p's access lies in its
+ * descriptor's range (ROBUSTNESS); NULL when unchecked. A column of a
+ * row-major matrix is checked as the whole matrix. */
+static const char *pvk_spv_bounds(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
+{
+    uint32_t size;
+    if (!p->rb)
+        return NULL;
+    pvk_spv_helper(ctx, PVK_SPV_H_INB, "pvk_inb");
+    if (p->rb_vec) {
+        size = pvk_spv_type(ctx, p->type)->size;
+        return pvk_spv_fmt(ctx, "pvk_inb(%s, reinterpret_cast<ulong>(&%s) + ulong(%s) * %uul, %uul)", p->rb, p->rb_vec,
+                           p->rb_comp, size, size);
+    }
+    return pvk_spv_fmt(ctx, "pvk_inb(%s, reinterpret_cast<ulong>(&%s), sizeof(%s))", p->rb, p->expr, p->expr);
+}
+
+/* Value of what p points at, as result rid (zero outside a robust buffer). */
 static void pvk_spv_load(struct pvk_spv *ctx, uint32_t rid, const struct pvk_spv_ptr *p)
 {
     struct pvk_spv_id *x = pvk_spv_get(ctx, rid);
+    const char *ok = pvk_spv_bounds(ctx, p), *name;
     if (x->type != p->type)
         pvk_spv_fail(ctx, "load of %u: type mismatch", rid);
     if (p->desc_array)
@@ -40827,12 +40887,43 @@ static void pvk_spv_load(struct pvk_spv *ctx, uint32_t rid, const struct pvk_spv
         uint32_t r;
         for (r = 0; r < t->count; r++)
             e = pvk_spv_fmt(ctx, "%s%s%s[%u]%s[%s]", e, r ? ", " : "", p->expr, r, p->node->padded ? ".v" : "", p->rm_col);
-        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s)", e));
+        e = pvk_spv_fmt(ctx, "%s)", e);
+        pvk_spv_set(ctx, rid, ok ? pvk_spv_fmt(ctx, "%s ? %s : %s", ok, e, pvk_spv_zero(ctx, p->type)) : e);
     } else if (p->node) {
-        pvk_spv_copy(ctx, pvk_spv_result(ctx, rid), NULL, p->type, p->expr, p->node, p->type, 0);
+        name = pvk_spv_result(ctx, rid);
+        if (ok) {
+            pvk_spv_line(ctx, "if (!%s)", ok);
+            pvk_spv_line(ctx, "    %s = %s;", name, pvk_spv_zero(ctx, p->type));
+            pvk_spv_line(ctx, "else");
+            pvk_spv_line(ctx, "{");
+            ctx->indent++;
+        }
+        pvk_spv_copy(ctx, name, NULL, p->type, p->expr, p->node, p->type, 0);
+        if (ok) {
+            ctx->indent--;
+            pvk_spv_line(ctx, "}");
+        }
     } else {
-        pvk_spv_set(ctx, rid, p->expr);
+        pvk_spv_set(ctx, rid, ok ? pvk_spv_fmt(ctx, "%s ? %s : %s", ok, p->expr, pvk_spv_zero(ctx, p->type)) : p->expr);
     }
+}
+
+/* Opens `if (ok) {` around a robust access (ok NULL: nothing). */
+static void pvk_spv_if_open(struct pvk_spv *ctx, const char *ok)
+{
+    if (!ok)
+        return;
+    pvk_spv_line(ctx, "if (%s)", ok);
+    pvk_spv_line(ctx, "{");
+    ctx->indent++;
+}
+
+static void pvk_spv_if_close(struct pvk_spv *ctx, const char *ok)
+{
+    if (!ok)
+        return;
+    ctx->indent--;
+    pvk_spv_line(ctx, "}");
 }
 
 static bool pvk_spv_writable(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
@@ -40850,24 +40941,26 @@ static bool pvk_spv_writable(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
     }
 }
 
+/* *p = val (discarded outside a robust buffer). */
 static void pvk_spv_store(struct pvk_spv *ctx, const struct pvk_spv_ptr *p, const char *val, uint32_t vtype)
 {
+    const char *ok = pvk_spv_bounds(ctx, p);
     if (!pvk_spv_writable(ctx, p))
         pvk_spv_fail(ctx, "store to read-only memory");
     if (p->desc_array)
         pvk_spv_fail(ctx, "cannot store a whole descriptor array");
+    if (vtype != p->type)
+        pvk_spv_fail(ctx, "store: type mismatch");
+    pvk_spv_if_open(ctx, ok);
     if (p->rm_col) {
         struct pvk_spv_type *t = pvk_spv_type(ctx, p->type);
         uint32_t r;
-        if (vtype != p->type)
-            pvk_spv_fail(ctx, "store: type mismatch");
         for (r = 0; r < t->count; r++)
             pvk_spv_line(ctx, "%s[%u]%s[%s] = %s[%u];", p->expr, r, p->node->padded ? ".v" : "", p->rm_col, val, r);
-        return;
+    } else {
+        pvk_spv_copy(ctx, p->expr, p->node, p->type, val, NULL, vtype, 0);
     }
-    if (vtype != p->type)
-        pvk_spv_fail(ctx, "store: type mismatch");
-    pvk_spv_copy(ctx, p->expr, p->node, p->type, val, NULL, vtype, 0);
+    pvk_spv_if_close(ctx, ok);
 }
 
 /* ---- Instructions ---- */
@@ -40906,20 +40999,6 @@ static const char *pvk_spv_shift_amount(struct pvk_spv *ctx, uint32_t base_type_
         return pvk_spv_val(ctx, v);
     return pvk_spv_fmt(ctx, "%s(%s)", want, pvk_spv_val(ctx, v));
 }
-
-enum {
-    PVK_SPV_H_SMOD = 1u << 0,
-    PVK_SPV_H_FMOD = 1u << 1,
-    PVK_SPV_H_SSIGN = 1u << 2,
-    PVK_SPV_H_FIND_LSB = 1u << 3,
-    PVK_SPV_H_FIND_UMSB = 1u << 4,
-    PVK_SPV_H_FIND_SMSB = 1u << 5,
-    PVK_SPV_H_INVERSE = 1u << 6,
-    PVK_SPV_H_REFRACT = 1u << 7,
-    PVK_SPV_H_SRGB = 1u << 8,
-    PVK_SPV_H_BALLOT = 1u << 9,
-    PVK_SPV_H_SG_SCAN = 1u << 10
-};
 
 static const char *const pvk_spv_helper_text[] = {
     "template <typename T>\ninline T pvk_smod(T a, T b)\n{\n    T r = a % b;\n"
@@ -40994,13 +41073,11 @@ static const char *const pvk_spv_helper_text[] = {
     "            acc = O()(acc, v);\n"
     "    }\n"
     "    return acc;\n}\n\n",
+    "/* Robust buffer access: [addr, addr + n) lies in descriptor d's range. */\n"
+    "template <typename D, typename A>\ninline bool pvk_inb(D d, A addr, ulong n)\n{\n"
+    "    ulong o = ulong(addr) - reinterpret_cast<ulong>(d.p);\n"
+    "    return o < d.size && n <= d.size - o;\n}\n\n",
 };
-
-static const char *pvk_spv_helper(struct pvk_spv *ctx, uint32_t bit, const char *name)
-{
-    ctx->helper_mask |= bit;
-    return name;
-}
 
 static void pvk_spv_glsl(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
@@ -41220,26 +41297,72 @@ static uint32_t pvk_spv_const_u32(struct pvk_spv *ctx, uint32_t cid)
     return (uint32_t)pvk_spv_const_uint(ctx, cid);
 }
 
+/* ---- Memory model ----
+ *
+ * Metal's atomics are relaxed and MSL 3.2's fences are seq_cst (the only
+ * other order it has), so SPIR-V's memory semantics become fences: a
+ * release (Release, AcquireRelease, SequentiallyConsistent, MakeAvailable)
+ * is atomic_thread_fence before the operation, an acquire (Acquire, ...,
+ * MakeVisible) one after it, over the storage classes the semantics name
+ * (the atomic's own when it names none), at the memory scope's
+ * thread_scope (Device and QueueFamily: thread_scope_device). Device-scope
+ * coherence of buffer memory itself: COHERENCE in pvk_spv_coherence. */
+
+#define PVK_SPV_SEM_RELEASE \
+    (PVK_SPV_SemanticsRelease | PVK_SPV_SemanticsAcquireRelease | PVK_SPV_SemanticsSequentiallyConsistent | \
+     PVK_SPV_SemanticsMakeAvailable)
+#define PVK_SPV_SEM_ACQUIRE \
+    (PVK_SPV_SemanticsAcquire | PVK_SPV_SemanticsAcquireRelease | PVK_SPV_SemanticsSequentiallyConsistent | \
+     PVK_SPV_SemanticsMakeVisible)
+
+static const char *pvk_spv_thread_scope(uint32_t scope)
+{
+    return scope == PVK_SPV_ScopeWorkgroup ? "thread_scope_threadgroup"
+           : scope == PVK_SPV_ScopeSubgroup ? "thread_scope_simdgroup"
+                                            : "thread_scope_device";
+}
+
+/* The fence of a release (want PVK_SPV_SEM_RELEASE) or acquire for memory
+ * scope `scope` and semantics `sem`; own: the storage of the atomic it
+ * orders (NULL: none). Emitted when the semantics ask for it. */
+static void pvk_spv_fence(struct pvk_spv *ctx, uint32_t scope, uint32_t sem, uint32_t want, const char *own)
+{
+    const char *flags = pvk_spv_mem_flags(ctx, sem);
+    if (!(sem & want) || scope == PVK_SPV_ScopeInvocation)
+        return;
+    if (!flags)
+        flags = own;
+    if (flags)
+        pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, pvk_spv_thread_scope(scope));
+}
+
 static void pvk_spv_barrier(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     if (in->op == PVK_SPV_OpControlBarrier) {
         uint32_t exec = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 1));
-        const char *flags = pvk_spv_mem_flags(ctx, pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 3)));
-        pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2));
+        uint32_t scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2));
+        uint32_t sem = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 3));
+        const char *flags = pvk_spv_mem_flags(ctx, sem);
+        /* Metal's barriers order memory for the threadgroup (SIMD-group); a
+         * wider memory scope adds device-scope fences around them. */
+        uint32_t dev = sem & (PVK_SPV_SemanticsUniformMemory | PVK_SPV_SemanticsCrossWorkgroupMemory |
+                              PVK_SPV_SemanticsImageMemory);
+        bool wide = dev && (scope == PVK_SPV_ScopeDevice || scope == PVK_SPV_ScopeQueueFamily);
+        if (wide)
+            pvk_spv_fence(ctx, scope, dev | PVK_SPV_SemanticsRelease, PVK_SPV_SEM_RELEASE, NULL);
         if (exec == PVK_SPV_ScopeWorkgroup)
             pvk_spv_line(ctx, "threadgroup_barrier(%s);", flags ? flags : "mem_flags::mem_none");
         else if (exec == PVK_SPV_ScopeSubgroup)
             pvk_spv_line(ctx, "simdgroup_barrier(%s);", flags ? flags : "mem_flags::mem_none");
         else
             pvk_spv_fail(ctx, "OpControlBarrier with execution scope %u is not supported", exec);
+        if (wide)
+            pvk_spv_fence(ctx, scope, dev | PVK_SPV_SemanticsAcquire, PVK_SPV_SEM_ACQUIRE, NULL);
     } else {
         uint32_t scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 1));
         const char *flags = pvk_spv_mem_flags(ctx, pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2)));
-        const char *ts = scope == PVK_SPV_ScopeWorkgroup ? "thread_scope_threadgroup"
-                         : scope == PVK_SPV_ScopeSubgroup ? "thread_scope_simdgroup"
-                                                          : "thread_scope_device";
         if (flags && scope != PVK_SPV_ScopeInvocation)
-            pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, ts);
+            pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, pvk_spv_thread_scope(scope));
     }
 }
 
@@ -41252,6 +41375,8 @@ static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn 
     struct pvk_spv_type *t = pvk_spv_type(ctx, p->type), *it = pvk_spv_type(ctx, p->texel_type);
     struct pvk_spv_type *st = pvk_spv_type(ctx, it->elem);
     const char *img = p->texel_image, *args = p->texel_args, *t4, *e = NULL, *v = NULL, *what = NULL;
+    const char *ok = p->texel_ok, *own = "mem_flags::mem_texture";
+    uint32_t scope, sem;
 
     if (t->op == PVK_SPV_OpTypeFloat)
         pvk_spv_fail(ctx, "float image atomics are not supported (Metal texture atomics are integer)");
@@ -41263,7 +41388,10 @@ static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn 
         pvk_spv_fail(ctx, "atomics on cube images are not supported");
     if (!store && pvk_spv_get(ctx, rid)->type != p->type)
         pvk_spv_fail(ctx, "atomic result type differs from the pointee type");
-    pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 2 : 4)); /* scope */
+    scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 2 : 4));
+    sem = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 3 : 5));
+    if (in->op == PVK_SPV_OpAtomicCompareExchange || in->op == PVK_SPV_OpAtomicCompareExchangeWeak)
+        sem |= pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 6)) & PVK_SPV_SEM_ACQUIRE;
     tsg = sg = st->is_signed;
     if (in->op == PVK_SPV_OpAtomicSMin || in->op == PVK_SPV_OpAtomicSMax)
         sg = true;
@@ -41282,13 +41410,19 @@ static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn 
     case PVK_SPV_OpAtomicStore:
         if (!v)
             pvk_spv_fail(ctx, "OpAtomicStore without a value");
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_RELEASE, own);
+        pvk_spv_if_open(ctx, ok);
         pvk_spv_line(ctx, "%s.atomic_store(%s(%s), %s);", img, t4, v, args);
+        pvk_spv_if_close(ctx, ok);
         return;
     case PVK_SPV_OpAtomicCompareExchange:
     case PVK_SPV_OpAtomicCompareExchangeWeak: {
         const char *val = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 7), tsg);
         const char *cmp = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 8), tsg);
         const char *name = pvk_spv_result(ctx, rid);
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_RELEASE, own);
+        if (ok)
+            pvk_spv_line(ctx, "if (%s)", ok);
         pvk_spv_line(ctx, "{");
         ctx->indent++;
         pvk_spv_line(ctx, "%s pvk_expected = %s(%s);", t4, t4, cmp);
@@ -41302,6 +41436,9 @@ static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn 
             pvk_spv_line(ctx, "%s = pvk_expected.x;", name);
         ctx->indent--;
         pvk_spv_line(ctx, "}");
+        if (ok)
+            pvk_spv_line(ctx, "else\n%*s    %s = 0;", (int)ctx->indent * 4, "", name);
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_ACQUIRE, own);
         return;
     }
     case PVK_SPV_OpAtomicIIncrement:
@@ -41326,17 +41463,23 @@ static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn 
         pvk_spv_fail(ctx, "image atomic min/max with the other signedness than the image is not supported");
     if (what)
         e = pvk_spv_fmt(ctx, "%s.atomic_%s(%s, %s(%s)).x", img, what, args, t4, v);
+    if (in->op != PVK_SPV_OpAtomicLoad)
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_RELEASE, own);
+    if (ok) /* robust image access: no effect outside the image */
+        e = pvk_spv_fmt(ctx, "(%s ? %s : 0)", ok, e);
     pvk_spv_set_int(ctx, rid, e, tsg);
+    pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_ACQUIRE, own);
 }
 
 static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     bool store = in->op == PVK_SPV_OpAtomicStore, sg;
     uint32_t ptr = pvk_spv_arg(ctx, in, store ? 1 : 3), rid = store ? 0 : in->w[2];
+    uint32_t scope, sem;
     uint32_t first = store ? 4 : 6; /* first value operand */
     const struct pvk_spv_ptr *p = pvk_spv_ptr_of(ctx, ptr);
     struct pvk_spv_type *t = pvk_spv_type(ctx, p->type);
-    const char *space, *atype, *obj, *e = NULL, *v = NULL;
+    const char *space, *atype, *obj, *e = NULL, *v = NULL, *own, *ok = pvk_spv_bounds(ctx, p);
     const char *ord = "memory_order_relaxed";
 
     if (p->storage == PVK_SPV_StorageImage) {
@@ -41373,7 +41516,11 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
             pvk_spv_fail(ctx, "OpAtomicFAddEXT on an integer");
         atype = sg ? "atomic_int" : "atomic_uint";
     }
-    pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 2 : 4)); /* scope */
+    scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 2 : 4));
+    sem = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 3 : 5));
+    if (in->op == PVK_SPV_OpAtomicCompareExchange || in->op == PVK_SPV_OpAtomicCompareExchangeWeak)
+        sem |= pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 6)) & PVK_SPV_SEM_ACQUIRE; /* Unequal */
+    own = p->storage == PVK_SPV_StorageWorkgroup ? "mem_flags::mem_threadgroup" : "mem_flags::mem_device";
     obj = pvk_spv_fmt(ctx, "(%s %s*)&%s", space, atype, p->expr);
     if (in->wc > first && in->op != PVK_SPV_OpAtomicIIncrement && in->op != PVK_SPV_OpAtomicIDecrement &&
         in->op != PVK_SPV_OpAtomicLoad && in->op != PVK_SPV_OpAtomicCompareExchange &&
@@ -41387,13 +41534,19 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     case PVK_SPV_OpAtomicStore:
         if (!v)
             pvk_spv_fail(ctx, "OpAtomicStore without a value");
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_RELEASE, own);
+        pvk_spv_if_open(ctx, ok);
         pvk_spv_line(ctx, "atomic_store_explicit(%s, %s, %s);", obj, v, ord);
+        pvk_spv_if_close(ctx, ok);
         return;
     case PVK_SPV_OpAtomicCompareExchange:
     case PVK_SPV_OpAtomicCompareExchangeWeak: {
         const char *val = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 7), sg);
         const char *cmp = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 8), sg);
         const char *name = pvk_spv_result(ctx, rid);
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_RELEASE, own);
+        if (ok)
+            pvk_spv_line(ctx, "if (%s)", ok);
         pvk_spv_line(ctx, "{");
         ctx->indent++;
         pvk_spv_line(ctx, "%s pvk_expected = %s;", sg ? "int" : "uint", cmp);
@@ -41407,6 +41560,9 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
             pvk_spv_line(ctx, "%s = pvk_expected;", name);
         ctx->indent--;
         pvk_spv_line(ctx, "}");
+        if (ok)
+            pvk_spv_line(ctx, "else\n%*s    %s = 0;", (int)ctx->indent * 4, "", name);
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_ACQUIRE, own);
         return;
     }
     case PVK_SPV_OpAtomicIIncrement:
@@ -41433,10 +41589,15 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         break;
     }
     }
+    if (in->op != PVK_SPV_OpAtomicLoad)
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_RELEASE, own);
+    if (ok) /* robust buffer access: no effect outside the range, the result is 0 */
+        e = pvk_spv_fmt(ctx, "(%s ? %s : 0)", ok, e);
     if (t->op == PVK_SPV_OpTypeFloat)
         pvk_spv_set(ctx, rid, e);
     else
         pvk_spv_set_int(ctx, rid, e, sg);
+    pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_ACQUIRE, own);
 }
 
 static const char *pvk_spv_join_vals(struct pvk_spv *ctx, const uint32_t *ids, uint32_t n)
@@ -41803,13 +41964,15 @@ static const char *pvk_spv_sample_coord(struct pvk_spv *ctx, const struct pvk_sp
     return c;
 }
 
-/* An integer texel coordinate as Metal's arguments: "uint2(x, y)[, face][, layer]".
+/* The spatial part of an integer texel coordinate, as uint/uint2/uint3
+ * (negative values wrap to large ones); *n receives the component count.
  * off: an offset operand added first (0: none). */
-static const char *pvk_spv_texel_args(struct pvk_spv *ctx, const struct pvk_spv_type *it, uint32_t coord, uint32_t off)
+static const char *pvk_spv_texel_coord(struct pvk_spv *ctx, const struct pvk_spv_type *it, uint32_t coord, uint32_t off,
+                                       uint32_t *pn)
 {
     struct pvk_spv_type *cs = pvk_spv_scalar_of(ctx, pvk_spv_vtype(ctx, coord));
     uint32_t n = it->img.dim == PVK_SPV_Dim3D ? 3 : it->img.dim == PVK_SPV_Dim2D || it->img.dim == PVK_SPV_DimCube ? 2 : 1;
-    const char *c = pvk_spv_comps(ctx, coord, 0, n), *e;
+    const char *c = pvk_spv_comps(ctx, coord, 0, n);
     if (!cs || cs->op != PVK_SPV_OpTypeInt)
         pvk_spv_fail(ctx, "texel coordinates must be integers");
     if (off) {
@@ -41820,7 +41983,63 @@ static const char *pvk_spv_texel_args(struct pvk_spv *ctx, const struct pvk_spv_
             pvk_spv_fail(ctx, "image offset %u has the wrong number of components", off);
         c = pvk_spv_fmt(ctx, "%s(%s) + %s(%s)", iv, c, iv, pvk_spv_val(ctx, off));
     }
-    e = n == 1 ? pvk_spv_fmt(ctx, "uint(%s)", c) : pvk_spv_fmt(ctx, "uint%u(%s)", n, c);
+    *pn = n;
+    return n == 1 ? pvk_spv_fmt(ctx, "uint(%s)", c) : pvk_spv_fmt(ctx, "uint%u(%s)", n, c);
+}
+
+/* Whether accesses of image type it are bounds-checked (ROBUSTNESS): texel
+ * buffers by robust buffer access, other images by robust image access. */
+static bool pvk_spv_image_robust(struct pvk_spv *ctx, const struct pvk_spv_type *it)
+{
+    const struct pvk_msl_options *o = ctx->options;
+    if (!o)
+        return false;
+    if (it->img.dim == PVK_SPV_DimBuffer)
+        return it->img.sampled == 1 ? o->robust_uniform_buffers : o->robust_storage_buffers;
+    return o->robust_images;
+}
+
+/* Robust image access: whether texel coordinate `coord` (+ off), level
+ * `lod` and sample `sample` (MSL expressions, NULL: none) are inside image
+ * tex of type it; NULL when the image is not checked. */
+static const char *pvk_spv_texel_bounds(struct pvk_spv *ctx, const struct pvk_spv_type *it, const char *tex,
+                                        uint32_t coord, uint32_t off, const char *lod, const char *sample)
+{
+    uint32_t n;
+    const char *c, *l = "", *e = "", *z;
+    bool native_1d = it->img.dim == PVK_SPV_Dim1D && !pvk_spv_image_as_2d(ctx, it);
+    if (!pvk_spv_image_robust(ctx, it))
+        return NULL;
+    c = pvk_spv_texel_coord(ctx, it, coord, off, &n);
+    if (lod && !native_1d && it->img.dim != PVK_SPV_DimBuffer && !it->img.ms) {
+        l = lod;
+        e = pvk_spv_fmt(ctx, "%s < %s.get_num_mip_levels() && ", lod, tex); /* (first: get_width needs a level) */
+    }
+    if (n == 1)
+        e = pvk_spv_fmt(ctx, "%s%s < %s.get_width(%s)", e, c, tex, l);
+    else if (n == 2)
+        e = pvk_spv_fmt(ctx, "%sall(%s < uint2(%s.get_width(%s), %s.get_height(%s)))", e, c, tex, l, tex, l);
+    else
+        e = pvk_spv_fmt(ctx, "%sall(%s < uint3(%s.get_width(%s), %s.get_height(%s), %s.get_depth(%s)))", e, c, tex, l, tex,
+                        l, tex, l);
+    if (it->img.dim == PVK_SPV_DimCube) { /* face, or face + 6 * cube */
+        z = pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_comps(ctx, coord, 2, 1));
+        e = it->img.arrayed ? pvk_spv_fmt(ctx, "%s && %s / 6u < %s.get_array_size()", e, z, tex)
+                            : pvk_spv_fmt(ctx, "%s && %s < 6u", e, z);
+    } else if (it->img.arrayed) {
+        e = pvk_spv_fmt(ctx, "%s && uint(%s) < %s.get_array_size()", e, pvk_spv_comps(ctx, coord, n, 1), tex);
+    }
+    if (sample)
+        e = pvk_spv_fmt(ctx, "%s && %s < %s.get_num_samples()", e, sample, tex);
+    return pvk_spv_fmt(ctx, "(%s)", e);
+}
+
+/* An integer texel coordinate as Metal's arguments: "uint2(x, y)[, face][, layer]".
+ * off: an offset operand added first (0: none). */
+static const char *pvk_spv_texel_args(struct pvk_spv *ctx, const struct pvk_spv_type *it, uint32_t coord, uint32_t off)
+{
+    uint32_t n;
+    const char *e = pvk_spv_texel_coord(ctx, it, coord, off, &n);
     if (pvk_spv_image_as_2d(ctx, it))
         e = pvk_spv_fmt(ctx, "uint2(%s, 0u)", e);
     if (it->img.dim == PVK_SPV_DimCube) {
@@ -42042,7 +42261,7 @@ static void pvk_spv_image_read(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     bool fetch = in->op == PVK_SPV_OpImageFetch;
     struct pvk_spv_type *it = pvk_spv_image_type(ctx, img, false);
     struct pvk_spv_imgops o;
-    const char *tex = pvk_spv_val(ctx, img), *args, *e;
+    const char *tex = pvk_spv_val(ctx, img), *args, *e, *ok;
 
     pvk_spv_image_operands(ctx, in, 5, &o);
     if (o.mask & (PVK_SPV_ImgBias | PVK_SPV_ImgGrad | PVK_SPV_ImgConstOffsets | PVK_SPV_ImgMinLod))
@@ -42073,6 +42292,13 @@ static void pvk_spv_image_read(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         e = pvk_spv_fmt(ctx, "%s.read(%s, %s)", tex, args, o.lod ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.lod)) : "0u");
     else
         e = pvk_spv_fmt(ctx, "%s.read(%s)", tex, args);
+    ok = pvk_spv_texel_bounds(ctx, it, tex, coord, o.const_offset ? o.const_offset : o.offset,
+                              fetch ? (o.lod ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.lod)) : "0u") : NULL,
+                              o.sample ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.sample)) : NULL);
+    if (ok) /* robust access: zero outside the image */
+        e = pvk_spv_fmt(ctx, "(%s ? %s : %s)", ok, e,
+                        strncmp(it->msl, "depth", 5) == 0 ? "0.0f"
+                                                          : pvk_spv_fmt(ctx, "%s4(0)", pvk_spv_type(ctx, it->elem)->msl));
     pvk_spv_texel_result(ctx, rid, e, strncmp(it->msl, "depth", 5) == 0 ? 1 : 4, it);
 }
 
@@ -42082,7 +42308,7 @@ static void pvk_spv_image_write(struct pvk_spv *ctx, const struct pvk_spv_insn *
     struct pvk_spv_type *it = pvk_spv_image_type(ctx, img, false), *s = pvk_spv_type(ctx, it->elem);
     struct pvk_spv_type *tt = pvk_spv_vtype(ctx, texel), *ts = pvk_spv_scalar_of(ctx, tt);
     struct pvk_spv_imgops o;
-    const char *tex = pvk_spv_val(ctx, img), *v = pvk_spv_val(ctx, texel);
+    const char *tex = pvk_spv_val(ctx, img), *v = pvk_spv_val(ctx, texel), *ok;
 
     pvk_spv_image_operands(ctx, in, 4, &o);
     if (o.mask & (PVK_SPV_ImgBias | PVK_SPV_ImgLod | PVK_SPV_ImgGrad | PVK_SPV_ImgConstOffset | PVK_SPV_ImgOffset |
@@ -42100,7 +42326,10 @@ static void pvk_spv_image_write(struct pvk_spv *ctx, const struct pvk_spv_insn *
                                   : pvk_spv_fmt(ctx, "%s(%s)", pvk_spv_vec_msl(ctx, s, n, s->is_signed), v);
     if (n < 4) /* components past the format's are ignored */
         v = pvk_spv_fmt(ctx, "%s4(%s%s)", s->msl, v, n == 1 ? ", 0, 0, 0" : n == 2 ? ", 0, 0" : ", 0");
+    ok = pvk_spv_texel_bounds(ctx, it, tex, coord, 0, NULL, NULL);
+    pvk_spv_if_open(ctx, ok); /* robust access: discarded outside the image */
     pvk_spv_line(ctx, "%s.write(%s, %s);", tex, v, pvk_spv_texel_args(ctx, it, coord, 0));
+    pvk_spv_if_close(ctx, ok);
     if (it->img.access == (PVK_SPV_ACCESS_READ | PVK_SPV_ACCESS_WRITE))
         pvk_spv_line(ctx, "%s.fence();", tex); /* this invocation's later reads see the write */
 }
@@ -42213,6 +42442,7 @@ static void pvk_spv_image_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         p->var = ip->var;
         p->expr = p->texel_image = ip->expr;
         p->texel_args = pvk_spv_texel_args(ctx, it, pvk_spv_arg(ctx, in, 4), 0);
+        p->texel_ok = pvk_spv_texel_bounds(ctx, it, ip->expr, in->w[4], 0, NULL, NULL);
         p->texel_type = ip->type;
         pvk_spv_get(ctx, rid)->p = p;
         return;
@@ -42639,7 +42869,22 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
             pvk_spv_fail(ctx, "unsupported OpCopyMemory");
         if (!pvk_spv_writable(ctx, d))
             pvk_spv_fail(ctx, "store to read-only memory");
+        a = pvk_spv_bounds(ctx, d);
+        b = pvk_spv_bounds(ctx, sp);
+        pvk_spv_if_open(ctx, a); /* robust buffer access: no write outside the range */
+        pvk_spv_if_open(ctx, b);
         pvk_spv_copy(ctx, d->expr, d->node, d->type, sp->expr, sp->node, sp->type, 0);
+        pvk_spv_if_close(ctx, b);
+        if (b) { /* a source outside the range reads zero */
+            pvk_spv_line(ctx, "else");
+            pvk_spv_line(ctx, "{");
+            ctx->indent++;
+            pvk_spv_line(ctx, "%s pvk_zero = {};", pvk_spv_type(ctx, d->type)->msl);
+            pvk_spv_copy(ctx, d->expr, d->node, d->type, "pvk_zero", NULL, d->type, 0);
+            ctx->indent--;
+            pvk_spv_line(ctx, "}");
+        }
+        pvk_spv_if_close(ctx, a);
         return;
     }
     case PVK_SPV_OpAccessChain:
