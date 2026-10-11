@@ -31946,6 +31946,9 @@ struct pvk_device {
     struct pvk_fan_buffer *fan_buffers;       /* triangle fan index patterns, newest first */
     id draw_indices;                          /* MTLBuffer of uints 0, 1, 2, ...: DrawIndex values */
     pvk_MTLGPUAddress draw_indices_address;
+    struct pvk_hidden_texture *hidden_textures; /* memoryless depth/stencil copies, by format and size */
+    id ds_copy_library;                       /* internal shaders of the depth/stencil copies */
+    struct pvk_ds_copy_pipeline *ds_copy_pipelines;
     /* Queries (sections 14-16) */
     id query_copy_pipeline; /* internal kernel of vkCmdCopyQueryPoolResults, made on first use */
     /* Private data (section 9): slots reserved by VkDevicePrivateDataCreateInfo */
@@ -37436,8 +37439,10 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   Buffer indices: set N at N, the vertex buffer table at 29
  *   (PVK_MSL_VERTEX_TABLE_BUFFER, options->vertex_table_buffer), push
  *   constants at 30, the draw index at 28 (PVK_MSL_DRAW_INDEX_BUFFER: a
- *   uint, vertex shaders reading DrawIndex). Graphics stages bind theirs
- *   separately (Metal has per-stage tables), with the same indices.
+ *   uint, vertex shaders reading DrawIndex), the depth bounds at 27
+ *   (PVK_MSL_DEPTH_BOUNDS_BUFFER, options->depth_bounds). Graphics stages
+ *   bind theirs separately (Metal has per-stage tables), with the same
+ *   indices.
  *
  * STAGE INTERFACE (vertex and fragment shaders; pvk_spv_emit_stage)
  *   The SPIR-V entry point becomes an ordinary helper function, and the
@@ -37517,6 +37522,23 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   pass must keep that image bound as color attachment c. subpassInputMS
  *   reads the current sample (the shader should run per sample).
  *   result->input_attachments / color_fetches.
+ *   DEPTH/STENCIL INPUT ATTACHMENTS: Metal fetches color attachments only,
+ *   so the render pass keeps copies of the depth (R32Float) and stencil
+ *   (R8Uint) in color attachments (section 16), which input attachments
+ *   mapped to PVK_MSL_IA_DEPTH / _STENCIL fetch: (D, 0, 0, 1) and
+ *   (S, 0, 0, 1), converted to the variable's type
+ *   (result->depth_stencil_fetches). The draws that write depth keep the
+ *   depth copy up to date: options->hidden_depth_output adds an output of
+ *   the depth the attachment stores, FragDepth or FragCoord.z (depth bias
+ *   and the viewport included: on M4 Max bit for bit what Depth32Float
+ *   stores), rounded as Metal rounds to D16_UNORM (to nearest, ties up,
+ *   from the exact product). With several samples the function runs per
+ *   sample (the inputs keep their interpolation) and extrapolates
+ *   FragCoord.z to the sample from its derivatives: Metal interpolates
+ *   [[position]] at the pixel center, so the copy can be a few ULP off the
+ *   stored depth there. options->depth_bounds emulates the depth bounds
+ *   test with that copy (the stored depth), discarding the fragment after
+ *   the entry point ran (the test follows fragment shading).
  *
  * VERTEX INPUT (pvk_spv_vertex_fetch)
  *   Attributes are pulled by the vertex function, not fetched by a Metal
@@ -37642,9 +37664,8 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   and on float or 64-bit images, image atomic min/max of the other
  *   signedness than the image, writes to multisampled images; tessellation,
  *   geometry and mesh shaders, transform feedback; CullDistance (Metal has
- *   none), 64-bit and 8-bit stage inputs and outputs, input attachments that
- *   are not color attachments (depth/stencil: Metal has no depth fetch). A
- *   texture1d has one mip level (image_1d_as_2d for mipmapped 1D images).
+ *   none), 64-bit and 8-bit stage inputs and outputs. A texture1d has one
+ *   mip level (image_1d_as_2d for mipmapped 1D images).
  *   Not yet: 64-bit atomics (shaderBufferInt64Atomics is not reported),
  *   bounds checks through variable pointers (ROBUSTNESS), structs and
  *   matrices through physical pointers aligned below their MSL alignment.
@@ -37747,6 +37768,49 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
 #define PVK_MSL_PUSH_CONSTANT_BUFFER 30u
 #define PVK_MSL_VERTEX_TABLE_BUFFER 29u
 #define PVK_MSL_DRAW_INDEX_BUFFER 28u
+#define PVK_MSL_DEPTH_BOUNDS_BUFFER 27u
+
+/* pvk_msl_options.input_attachment_colors entries beyond color attachments,
+ * and input_attachment_undecorated bits (DEPTH/STENCIL INPUT ATTACHMENTS). */
+#define PVK_MSL_IA_DEPTH 0x100u
+#define PVK_MSL_IA_STENCIL 0x101u
+#define PVK_MSL_IA_DEPTH_STENCIL 0x102u
+#define PVK_MSL_IA_UNDECORATED_DEPTH 0x1u
+#define PVK_MSL_IA_UNDECORATED_STENCIL 0x2u
+
+/* The depth bounds at buffer index 27 (options->depth_bounds), 16 bytes. */
+struct pvk_msl_depth_bounds {
+    float min, max; /* a fragment whose stored depth lies outside is discarded */
+    uint32_t write; /* nonzero: the fragment writes its depth to the copy */
+    uint32_t pad;
+};
+
+/* MSL of the depth copy (DEPTH/STENCIL INPUT ATTACHMENTS): struct
+ * pvk_msl_depth_bounds, and a depth as D16_UNORM stores it. Metal rounds
+ * z * 65535 to nearest with ties up, z * 65535 taken exactly (checked on M4
+ * Max): the product's rounding error decides near a tie. */
+static const char pvk_msl_depth_bounds_text[] = "struct pvk_depth_bounds { float min, max; uint write, pad; };\n\n";
+static const char pvk_msl_d16_text[] =
+    "static float pvk_d16(float z)\n"
+    "{\n"
+    "    z = saturate(z);\n"
+    "    float p = z * 65535.0f, e = fma(z, 65535.0f, -p), f = floor(p), r = p - f;\n"
+    "    return (f + (r > 0.5f || (r == 0.5f && e >= 0.0f) ? 1.0f : 0.0f)) / 65535.0f;\n"
+    "}\n\n";
+
+/* The depth a fragment stores: FragCoord.z (float4 pvk_frag_coord
+ * [[position]]), with several samples extrapolated to the sample (uint
+ * pvk_sample_id [[sample_id]]: Metal gives the center's z), rounded as the
+ * format (bits 16: D16_UNORM, 32: D32_SFLOAT). */
+static const char *pvk_msl_depth_expr(uint32_t bits, uint32_t samples)
+{
+    if (samples > 1)
+        return bits == 16 ? "pvk_d16(pvk_frag_coord.z + dfdx(pvk_frag_coord.z) * (get_sample_position(pvk_sample_id).x - "
+                            "0.5f) + dfdy(pvk_frag_coord.z) * (get_sample_position(pvk_sample_id).y - 0.5f))"
+                          : "(pvk_frag_coord.z + dfdx(pvk_frag_coord.z) * (get_sample_position(pvk_sample_id).x - 0.5f) "
+                            "+ dfdy(pvk_frag_coord.z) * (get_sample_position(pvk_sample_id).y - 0.5f))";
+    return bits == 16 ? "pvk_d16(pvk_frag_coord.z)" : "pvk_frag_coord.z";
+}
 #define PVK_MSL_MAX_SETS 30u
 #define PVK_MSL_MAX_LOCATIONS 32u /* stage input/output locations */
 
@@ -37853,9 +37917,17 @@ struct pvk_msl_options {
     uint32_t vertex_output_count;
     /* Input attachment index i reads color attachment
      * input_attachment_colors[i] by framebuffer fetch; NULL: color
-     * attachment i. */
+     * attachment i. PVK_MSL_IA_DEPTH, PVK_MSL_IA_STENCIL: the copy of the
+     * depth (color attachment input_attachment_depth - 1, R32Float) or of
+     * the stencil (input_attachment_stencil - 1, R8Uint); 0: there is none;
+     * PVK_MSL_IA_DEPTH_STENCIL: either, by the variable's type (float:
+     * depth). Variables without InputAttachmentIndex (dynamic rendering
+     * local read) read the copies the input_attachment_undecorated bits
+     * PVK_MSL_IA_UNDECORATED_* allow, by type. */
     const uint32_t *input_attachment_colors;
     uint32_t input_attachment_color_count;
+    uint32_t input_attachment_depth, input_attachment_stencil;
+    uint32_t input_attachment_undecorated;
     /* The color attachments (bit n: location n) and their numeric types
      * (FLOAT for float, unorm and snorm formats): outputs without an
      * attachment of their type are dropped, as Metal rejects them. Ignored
@@ -37864,6 +37936,16 @@ struct pvk_msl_options {
     uint32_t color_attachments;
     enum pvk_msl_scalar_type color_attachment_types[8];
     bool sample_shading; /* sampleShadingEnable: run once per sample */
+    /* The depth copy (DEPTH/STENCIL INPUT ATTACHMENTS): the function also
+     * writes its fragment's depth, as the depth attachment stores it, to
+     * color attachment hidden_depth_output - 1 (0: none). hidden_depth_bits:
+     * the attachment's format, 16 (D16_UNORM) or 32 (D32_SFLOAT);
+     * hidden_depth_samples > 1: once per sample, at the sample.
+     * depth_bounds: the function also reads that copy, the stored depth,
+     * discards the fragment outside struct pvk_msl_depth_bounds's range
+     * (buffer index 27), and writes its depth only if that says so. */
+    uint32_t hidden_depth_output, hidden_depth_bits, hidden_depth_samples;
+    bool depth_bounds;
 
     /* Combined image sampler bindings of set_layouts with Y'CbCr
      * conversions; the others have none. */
@@ -37952,6 +38034,7 @@ struct pvk_msl_result {
     bool discards;                   /* may kill or demote */
     uint32_t input_attachments;      /* bit i: input attachment index i is read */
     uint32_t color_fetches;          /* bit n: color attachment n is read by framebuffer fetch */
+    uint32_t depth_stencil_fetches;  /* bit 0: the depth copy is read, bit 1: the stencil copy */
     char error[256];
 };
 
@@ -46738,7 +46821,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     struct pvk_msl_result *res = ctx->result;
     const struct pvk_msl_options *o = ctx->options;
     struct pvk_spv_func *entry = ctx->funcs[pvk_spv_get(ctx, ctx->entry_fid)->func - 1];
-    bool vertex = ctx->model == PVK_SPV_ExecutionModelVertex, per_sample = false, early = false;
+    bool vertex = ctx->model == PVK_SPV_ExecutionModelVertex, per_sample = false, early = false, depth_copy = false;
     struct pvk_spv_iface in, out;
     struct pvk_sb outs, ins;
     const char **params = NULL, **args = NULL, *depth_mode = "any";
@@ -46837,6 +46920,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
         uint32_t tid = x->p->type, n = 1, k;
         struct pvk_spv_type *t;
+        bool undecorated;
         if (!pvk_spv_stage_global(ctx, entry, g) || !x->p->value)
             continue;
         t = pvk_spv_type(ctx, tid);
@@ -46847,26 +46931,49 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
             if (pvk_spv_type(ctx, t->elem)->op != PVK_SPV_OpTypeImage)
                 pvk_spv_fail(ctx, "arrays of arrays of input attachments are not supported");
         }
-        if (!(x->flags & PVK_SPV_F_IA_INDEX) || x->ia_index + n > 32 || n > 32)
+        undecorated = !(x->flags & PVK_SPV_F_IA_INDEX);
+        if (undecorated ? n > 1 || !o || !o->input_attachment_undecorated : x->ia_index + n > 32 || n > 32)
             pvk_spv_fail(ctx, "input attachment %u needs an InputAttachmentIndex below 32", ctx->globals[g]);
         for (k = 0; k < n; k++) {
+            struct pvk_spv_type *it = pvk_spv_type(ctx, t->op == PVK_SPV_OpTypeArray ? t->elem : tid);
             uint32_t ia = x->ia_index + k, c = ia;
-            if (o && o->input_attachment_colors) {
+            const char *lv = t->op == PVK_SPV_OpTypeArray ? pvk_spv_fmt(ctx, "%s[%u]%s", x->msl, k, t->slot_padded ? ".v" : "")
+                                                          : x->msl;
+            if (undecorated) {
+                c = PVK_MSL_IA_DEPTH_STENCIL;
+            } else if (o && o->input_attachment_colors) {
                 if (ia >= o->input_attachment_color_count)
                     pvk_spv_fail(ctx, "input attachment index %u has no color attachment", ia);
                 c = o->input_attachment_colors[ia];
             }
+            if (c == PVK_MSL_IA_DEPTH_STENCIL) /* the aspect the variable's type reads */
+                c = pvk_spv_type(ctx, it->elem)->op == PVK_SPV_OpTypeFloat ? PVK_MSL_IA_DEPTH : PVK_MSL_IA_STENCIL;
+            if (undecorated && !(o->input_attachment_undecorated &
+                                 (c == PVK_MSL_IA_DEPTH ? PVK_MSL_IA_UNDECORATED_DEPTH : PVK_MSL_IA_UNDECORATED_STENCIL)))
+                pvk_spv_fail(ctx, "input attachment %u has no InputAttachmentIndex", ctx->globals[g]);
+            if (c == PVK_MSL_IA_DEPTH || c == PVK_MSL_IA_STENCIL) { /* the depth or stencil copy */
+                bool depth = c == PVK_MSL_IA_DEPTH;
+                uint32_t copy = !o ? 0 : depth ? o->input_attachment_depth : o->input_attachment_stencil;
+                if (!copy || copy > 8)
+                    pvk_spv_fail(ctx, "input attachment %u reads a %s attachment the pass does not have", ctx->globals[g],
+                                 depth ? "depth" : "stencil");
+                c = copy - 1;
+                res->depth_stencil_fetches |= depth ? 1u : 2u;
+                if (!undecorated)
+                    res->input_attachments |= 1u << ia;
+                pvk_spv_line(ctx, "%s = %s(pvk_color%u);", lv, it->msl, c);
+                if (!(fetch_colors & (1u << c)))
+                    PVK_SPV_PUSH(ctx, params, nparams, cap,
+                                 pvk_spv_fmt(ctx, "%s pvk_color%u [[color(%u)]]", depth ? "float4" : "uint4", c, c));
+                fetch_colors |= 1u << c;
+                continue;
+            }
             if (c >= 8)
                 pvk_spv_fail(ctx, "input attachment index %u maps to color attachment %u (0-7)", ia, c);
             res->input_attachments |= 1u << ia;
-            if (t->op == PVK_SPV_OpTypeArray)
-                pvk_spv_line(ctx, "%s[%u]%s = pvk_color%u;", x->msl, k, t->slot_padded ? ".v" : "", c);
-            else
-                pvk_spv_line(ctx, "%s = pvk_color%u;", x->msl, c);
+            pvk_spv_line(ctx, "%s = pvk_color%u;", lv, c);
             if (!(fetch_colors & (1u << c)))
-                PVK_SPV_PUSH(ctx, params, nparams, cap,
-                             pvk_spv_fmt(ctx, "%s pvk_color%u [[color(%u)]]",
-                                         pvk_spv_type(ctx, t->op == PVK_SPV_OpTypeArray ? t->elem : tid)->msl, c, c));
+                PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_fmt(ctx, "%s pvk_color%u [[color(%u)]]", it->msl, c, c));
             fetch_colors |= 1u << c;
         }
     }
@@ -47042,6 +47149,36 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
             nout++;
         }
     }
+    if (!vertex && o && (o->hidden_depth_output || o->depth_bounds)) { /* the depth copy (DEPTH/STENCIL INPUT ATTACHMENTS) */
+        uint32_t h = o->hidden_depth_output - 1;
+        const char *z;
+        if (!o->hidden_depth_output || h >= 8)
+            pvk_spv_fail(ctx, "the depth copy's color attachment %u is out of range (0-7)", h);
+        need |= PVK_SPV_NEED_POSITION;
+        if (res->builtins & PVK_MSL_BUILTIN_FRAG_DEPTH) { /* every sample's depth */
+            z = o->hidden_depth_bits == 16 ? "pvk_d16(pvk_out.pvk_frag_depth)" : "pvk_out.pvk_frag_depth";
+        } else {
+            z = pvk_msl_depth_expr(o->hidden_depth_bits, o->hidden_depth_samples);
+            if (o->hidden_depth_samples > 1) /* runs per sample (the inputs keep their interpolation) */
+                need |= PVK_SPV_NEED_SAMPLE_ID;
+        }
+        pvk_sb_printf(ctx, &outs, "    float pvk_hidden_depth [[color(%u)]];\n", h);
+        if (o->depth_bounds) { /* the stored depth: the copy, fetched */
+            if (!(fetch_colors & (1u << h)))
+                PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_fmt(ctx, "float4 pvk_color%u [[color(%u)]]", h, h));
+            fetch_colors |= 1u << h;
+            res->color_fetches = fetch_colors;
+            PVK_SPV_PUSH(ctx, params, nparams, cap,
+                         pvk_spv_fmt(ctx, "constant pvk_depth_bounds& pvk_bounds [[buffer(%u)]]", PVK_MSL_DEPTH_BOUNDS_BUFFER));
+            pvk_spv_line(ctx, "if (pvk_color%u.x < pvk_bounds.min || pvk_color%u.x > pvk_bounds.max)", h, h);
+            pvk_spv_line(ctx, "    discard_fragment();");
+            pvk_spv_line(ctx, "pvk_out.pvk_hidden_depth = pvk_bounds.write != 0u ? %s : pvk_color%u.x;", z, h);
+            res->discards = true;
+        } else {
+            pvk_spv_line(ctx, "pvk_out.pvk_hidden_depth = %s;", z);
+        }
+        depth_copy = true;
+    }
     if (outs.len)
         pvk_spv_line(ctx, "return pvk_out;");
 
@@ -47090,6 +47227,8 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         PVK_SPV_PUSH(ctx, params, nparams, cap,
                      pvk_spv_fmt(ctx, "constant uint& pvk_draw_index [[buffer(%u)]]", PVK_MSL_DRAW_INDEX_BUFFER));
     }
+    if (depth_copy && o->depth_bounds && ((res->set_mask >> PVK_MSL_DEPTH_BOUNDS_BUFFER) & 1u))
+        pvk_spv_fail(ctx, "the depth bounds' buffer index %u is taken", PVK_MSL_DEPTH_BOUNDS_BUFFER);
     for (set = 0; set < PVK_MSL_MAX_SETS; set++)
         if (res->set_mask & (1u << set))
             PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_fmt(ctx, "constant pvk_set%u& set%u [[buffer(%u)]]", set, set, set));
@@ -47122,6 +47261,10 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         pvk_sb_printf(ctx, text, "/* A vertex buffer table entry (struct pvk_msl_vertex_buffer). */\n"
                                  "struct pvk_vertex_buffer\n{\n    device const uchar* p;\n    ulong size;\n"
                                  "    uint stride;\n    uint reserved;\n};\n\n");
+    if (depth_copy && o->hidden_depth_bits == 16)
+        pvk_sb_append(ctx, text, pvk_msl_d16_text, sizeof(pvk_msl_d16_text) - 1);
+    if (depth_copy && o->depth_bounds)
+        pvk_sb_append(ctx, text, pvk_msl_depth_bounds_text, sizeof(pvk_msl_depth_bounds_text) - 1);
     if (ins.len) {
         pvk_sb_printf(ctx, text, "struct %s_in\n{\n", name);
         pvk_sb_append(ctx, text, ins.data, ins.len);
@@ -49213,6 +49356,26 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
  *   except that a stored depth/stencil attachment is resolved by an
  *   internal pass after it (pvk_render_resolve_ds, section 16).
  *
+ * DEPTH/STENCIL INPUT ATTACHMENTS
+ *   Metal fetches color attachments only, so a Metal pass whose subpasses
+ *   read its depth/stencil attachment as an input attachment (also one a
+ *   subpass only reads: it becomes the pass's depth/stencil attachment), or
+ *   whose draws test depth bounds, keeps copies of the depth (R32Float) and
+ *   of the stencil (R8Uint) in memoryless color attachments after its color
+ *   slots (section 16). Pipelines see them at the lowest logical indices
+ *   their subpass leaves free (pvk_hidden_logical), where the input
+ *   attachments of the depth/stencil attachment fetch them (section 13):
+ *   by render pass input attachment references, or by the dynamic rendering
+ *   local read depth and stencil input attachment indices. The depth copy
+ *   is written by each draw that writes depth, through a variant of its
+ *   pipeline whose fragment function also outputs its depth (made for
+ *   pipelines without a fragment shader too), is cleared with the
+ *   attachment, and is loaded from it by a copy draw when the pass loads
+ *   it. The stencil copy is rebuilt from the attachment by Metal's stencil
+ *   test, one bit per draw, before a draw that reads it when the stencil
+ *   may have changed (stencil ops also act on fragments that fail a test,
+ *   which write no color).
+ *
  * STATE
  *   All graphics state Vulkan can make dynamic is one struct
  *   pvk_dynamic_state that the encoder keeps: binding a pipeline copies its
@@ -49238,6 +49401,10 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
 /* Input attachments are color attachments read by framebuffer fetch, so a
  * subpass reads at most 8; indices beyond 7 are ignored. */
 #define PVK_MAX_INPUT_ATTACHMENTS 8u
+/* Copies of the depth and the stencil a Metal pass keeps in color
+ * attachments for input attachments (DEPTH/STENCIL INPUT ATTACHMENTS). */
+#define PVK_HIDDEN_DEPTH 1u
+#define PVK_HIDDEN_STENCIL 2u
 #define PVK_MAX_VIEWPORTS 16u /* FST: 16 viewports and scissor rectangles */
 #define PVK_NO_SLOT 0xffu     /* in color attachment maps */
 #define PVK_NO_ID 0xffffffffu /* = VK_ATTACHMENT_UNUSED */
@@ -49259,11 +49426,15 @@ struct pvk_subpass {
     uint32_t resolves[PVK_MAX_COLOR_ATTACHMENTS]; /* its resolve attachment */
     uint32_t input_count;
     uint32_t inputs[PVK_MAX_INPUT_ATTACHMENTS];   /* attachment at each input attachment index */
+    uint32_t input_aspects[PVK_MAX_INPUT_ATTACHMENTS]; /* VkImageAspectFlags read (0: the format's) */
     uint32_t depth, depth_resolve;                /* depth/stencil attachment and its resolve */
     VkResolveModeFlagBits depth_resolve_mode, stencil_resolve_mode;
     uint32_t view_mask;
     uint32_t pass;                                /* index of its struct pvk_rp_pass */
+    uint32_t ds_input;                            /* depth/stencil attachment read as input attachment */
+    uint32_t hidden;                              /* PVK_HIDDEN_* copies of it the subpass reads */
     uint8_t map[PVK_MAX_COLOR_ATTACHMENTS];       /* logical color index -> slot of its pass */
+    uint8_t hidden_logical[2];                    /* logical indices of the copies (pvk_hidden_logical) */
 };
 
 /* Subpasses sharing one Metal render pass. */
@@ -49275,6 +49446,7 @@ struct pvk_rp_pass {
     uint32_t depth, depth_resolve;
     VkResolveModeFlagBits depth_resolve_mode, stencil_resolve_mode;
     uint32_t view_mask, samples;
+    uint32_t hidden; /* PVK_HIDDEN_* copies its subpasses read */
 };
 
 struct pvk_render_pass {
@@ -49319,6 +49491,18 @@ static void pvk_color_logical(const uint32_t *loc_ids, const uint32_t *input_ids
             input_logical[i] = (uint8_t)l;
         }
     }
+}
+
+/* The logical indices of the depth and stencil copies (DEPTH/STENCIL INPUT
+ * ATTACHMENTS) in a subpass whose logical indices are ids[]: the lowest two
+ * it leaves free (PVK_NO_SLOT: none left). */
+static void pvk_hidden_logical(const uint32_t ids[PVK_MAX_COLOR_ATTACHMENTS], uint8_t out[2])
+{
+    uint32_t l, n = 0;
+    out[0] = out[1] = PVK_NO_SLOT;
+    for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS && n < 2; l++)
+        if (ids[l] == PVK_NO_ID)
+            out[n++] = (uint8_t)l;
 }
 
 /* Dynamic rendering: locations[i] and input_indices[i] of color attachment
@@ -49460,6 +49644,11 @@ static void pvk_dynamic_copy(struct pvk_dynamic_state *d, const struct pvk_dynam
         memcpy(d->line_stipple, s->line_stipple, sizeof(d->line_stipple));
 }
 
+/* Variants of a pipeline in a pass with a depth copy (DEPTH/STENCIL INPUT
+ * ATTACHMENTS, section 17): writing the copy, testing depth bounds. */
+enum { PVK_VARIANT_DEPTH, PVK_VARIANT_BOUNDS, PVK_VARIANT_COUNT };
+struct pvk_gfx_variants;
+
 /* A graphics pipeline as the commands see it (made in section 17). */
 struct pvk_gfx_pipeline {
     uint32_t dynamic;               /* PVK_DYN_BIT()s the pipeline leaves dynamic */
@@ -49472,6 +49661,10 @@ struct pvk_gfx_pipeline {
     bool lines;                     /* polygon mode LINE */
     bool has_fragment;
     bool draw_index;                /* the vertex shader reads DrawIndex (buffer index 28) */
+    bool bounds;                    /* may test depth bounds (with the depth copy) */
+    uint32_t reads;                 /* PVK_HIDDEN_* copies its input attachments read */
+    struct pvk_gfx_variants *variants; /* pipelines that write depth or test depth bounds in a pass
+                                        * with a depth copy (section 17); NULL: none */
 };
 
 /* ---- Packets ---- */
@@ -49488,6 +49681,7 @@ struct pvk_pass_attachment {
     uint32_t clear_in_area;       /* LOAD_OP_CLEAR by drawing in the render area */
     uint32_t width, height;       /* of the attachment */
     uint32_t samples;
+    uint32_t array;               /* texture is an array texture (depth copies read it so) */
     VkClearValue clear;
 };
 
@@ -49499,6 +49693,8 @@ struct pvk_cmd_begin_pass {
     VkRect2D area;
     uint32_t layers;      /* renderTargetArrayLength; 0: one layer */
     uint32_t flags;       /* VkRenderingFlags of vkCmdBeginRendering */
+    uint32_t hidden;      /* render passes: PVK_HIDDEN_* copies the subpasses read */
+    uint32_t pad;
 };
 
 /* The subpass, or local-read mapping, of the draws that follow. */
@@ -49508,7 +49704,8 @@ struct pvk_cmd_subpass {
     uint32_t view_mask;
     uint32_t depth, stencil; /* the subpass has them (else their tests are off) */
     uint32_t dynamic;        /* vkCmdClearAttachments names color slots (dynamic rendering) */
-    uint32_t pad;
+    uint8_t hidden_logical[2]; /* logical indices of the depth and stencil copies */
+    uint8_t pad[2];
 };
 
 struct pvk_cmd_end_pass {
@@ -49708,6 +49905,8 @@ static void pvk_pass_att_view(struct pvk_pass_attachment *pa, const struct pvk_i
     pa->width = pvk_view_width(view);
     pa->height = pvk_view_height(view);
     pa->samples = view->image->samples;
+    pa->array = view->view_type == VK_IMAGE_VIEW_TYPE_1D_ARRAY || view->view_type == VK_IMAGE_VIEW_TYPE_2D_ARRAY ||
+                view->view_type == VK_IMAGE_VIEW_TYPE_CUBE || view->view_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
 }
 
 static void pvk_pass_att_resolve(struct pvk_pass_attachment *pa, const struct pvk_image_view *view)
@@ -49795,6 +49994,7 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
     c->height = r->height;
     c->layers = pvk_pass_layers(mp->view_mask, r->layers);
     c->color_count = mp->color_count;
+    c->hidden = mp->hidden;
     for (s = 0; s < mp->color_count; s++) {
         uint32_t a = mp->colors[s];
         const struct pvk_rp_attachment *att = &pass->attachments[a];
@@ -49839,6 +50039,7 @@ static void pvk_cmd_subpass_rp(struct pvk_command_buffer *cb, const struct pvk_c
         return;
     pvk_cmd_zero(c, sizeof(*c));
     memcpy(c->map, sp->map, sizeof(c->map));
+    memcpy(c->hidden_logical, sp->hidden_logical, sizeof(c->hidden_logical));
     c->view_mask = sp->view_mask;
     if (sp->depth != VK_ATTACHMENT_UNUSED) {
         c->depth = pvk_format_has_depth(r->pass->attachments[sp->depth].fmt);
@@ -49859,6 +50060,7 @@ static void pvk_cmd_subpass_dynamic(struct pvk_command_buffer *cb, const struct 
     pvk_color_logical(loc_ids, input_ids, ids, input_logical);
     for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS; l++)
         c->map[l] = ids[l] == PVK_NO_ID ? PVK_NO_SLOT : (uint8_t)ids[l];
+    pvk_hidden_logical(ids, c->hidden_logical);
     c->view_mask = r->view_mask;
     c->depth = r->depth;
     c->stencil = r->stencil;
@@ -50063,8 +50265,10 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetRenderingAttachmentLocations(VkCommandBuffer 
     pvk_cmd_subpass_dynamic(cb, r);
 }
 
-/* Depth and stencil input attachments are not supported (section 13: no
- * depth framebuffer fetch), so only the color attachments' indices count. */
+/* The depth and stencil input attachment indices only matter to pipelines:
+ * the copies they read sit at logical indices the color attachments' leave
+ * free (DEPTH/STENCIL INPUT ATTACHMENTS), and a pipeline's indices must
+ * match these. */
 VKAPI_ATTR void VKAPI_CALL vkCmdSetRenderingInputAttachmentIndices(
     VkCommandBuffer commandBuffer, const VkRenderingInputAttachmentIndexInfo *pInputAttachmentIndexInfo)
 {
@@ -50953,6 +51157,7 @@ struct pvk_draw_track {
     uint32_t index_type; /* VkIndexType */
     uint32_t samples;    /* the first graphics pipeline's (passes without attachments) */
     struct pvk_query_pool *vis_pool; /* the first occlusion query's pool */
+    uint32_t hidden;     /* PVK_HIDDEN_* copies the pipelines bound read (or depth bounds need) */
 };
 
 /* Queries a render encoder makes available once it ends. */
@@ -50999,6 +51204,16 @@ struct pvk_render {
     /* Stored depth/stencil attachments to resolve when the pass ends
      * (texture NULL: none); see pvk_render_resolve_ds */
     struct pvk_pass_attachment resolve_depth, resolve_stencil;
+    /* Depth/stencil copies (section 15, DEPTH/STENCIL INPUT ATTACHMENTS) */
+    uint32_t hidden;            /* PVK_HIDDEN_* copies the Metal pass keeps */
+    uint8_t hidden_slot[2];     /* their color slots */
+    uint8_t hidden_logical[2];  /* the subpass's logical indices for them */
+    uint32_t depth_bits;        /* the depth attachment's format: 16 (D16_UNORM) or 32 */
+    bool stencil_dirty;         /* the stencil copy may be out of date */
+    VkRect2D area;              /* the render area */
+    id pso_set;                 /* the MTLRenderPipelineState set (NULL: unknown) */
+    struct pvk_msl_depth_bounds bounds_set; /* bound at buffer index 27 */
+    bool bounds_valid;
 };
 
 /* Position in a batch's primary command buffers. */
@@ -52424,6 +52639,7 @@ static void pvk_track_pipeline(struct pvk_draw_track *t, const struct pvk_pipeli
         t->restart = p->gfx->state.primitive_restart;
     if (!t->samples)
         t->samples = p->gfx->samples;
+    t->hidden |= p->gfx->reads | (p->gfx->bounds ? PVK_HIDDEN_DEPTH : 0); /* the copies the pass needs */
 }
 
 static bool pvk_scan_cb(struct pvk_encoder *e, struct pvk_draw_track *t, const struct pvk_command_buffer *cb, uint32_t depth);
@@ -52687,6 +52903,18 @@ static void pvk_clear_value_bits(const struct pvk_format *f, const VkClearColorV
 static void pvk_render_set_map(struct pvk_encoder *e, const uint8_t *map);
 static void pvk_render_counting(struct pvk_encoder *e, bool on);
 
+/* The depth an attachment of format f stores for a value (D16_UNORM: to
+ * 16 bits, rounded to nearest), as its copy holds it (section 15,
+ * DEPTH/STENCIL INPUT ATTACHMENTS). */
+static double pvk_stored_depth(const struct pvk_format *f, double depth)
+{
+    if (f && f->mtl == PVK_MTLPixelFormatDepth16Unorm) {
+        double d = depth < 0.0 ? 0.0 : depth > 1.0 ? 1.0 : depth;
+        return (double)(float)((double)(uint32_t)(d * 65535.0 + 0.5) / 65535.0);
+    }
+    return (double)(float)depth;
+}
+
 /* Clears color slots `colors` (values[slot]), depth and/or stencil in the
  * rectangles by drawing; restores what it changes on the next draw. */
 static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint32_t (*values)[4], bool depth,
@@ -52698,7 +52926,7 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
     struct pvk_ds_key dk;
     uint8_t map[PVK_MAX_COLOR_ATTACHMENTS];
     id pso, ds, enc = r->enc;
-    uint32_t s, i, views = 0, view_layers[32];
+    uint32_t s, i, views = 0, view_layers[32], copy = PVK_NO_SLOT, copy_bits = 0;
 
     if (!enc)
         return;
@@ -52711,6 +52939,16 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
         key.kinds[s] = r->kinds[s];
         map[s] = (uint8_t)s;
     }
+    if (depth && r->depth_fmt && (r->hidden & PVK_HIDDEN_DEPTH)) { /* the depth copy too */
+        float v = (float)pvk_stored_depth(r->depth_fmt, depth_value);
+        copy = r->hidden_slot[0];
+        key.formats[copy] = PVK_MTLPixelFormatR32Float;
+        key.kinds[copy] = PVK_FK_FLOAT;
+        map[copy] = (uint8_t)copy;
+        memcpy(&copy_bits, &v, 4);
+    }
+    if (stencil && r->stencil_fmt)
+        r->stencil_dirty = true;
     key.samples = r->samples_pass;
     key.layered = r->layers > 0;
     memset(&dk, 0, sizeof(dk));
@@ -52743,8 +52981,6 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
     pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(enc, 0.0f, 0.0f, 0.0f);
     pvk_MTL4RenderCommandEncoder_setDepthClipMode(enc, PVK_MTLDepthClipModeClip);
     pvk_MTL4RenderCommandEncoder_setTriangleFillMode(enc, PVK_MTLTriangleFillModeFill);
-    if (e->device->features.core.depthBounds)
-        pvk_MTL4RenderCommandEncoder_setDepthTestMinBound_maxBound(enc, 0.0f, 1.0f);
     if (r->amplification > 1) {
         pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, 1, NULL);
         r->amplification = 1;
@@ -52780,7 +53016,9 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
         args->multiview = views != 0;
         memcpy(args->layers, view_layers, sizeof(uint32_t) * views);
         for (s = 0; s < PVK_MAX_COLOR_ATTACHMENTS; s++)
-            if (key.formats[s])
+            if (s == copy)
+                args->colors[s][0] = copy_bits;
+            else if (key.formats[s])
                 memcpy(args->colors[s], values[s], sizeof(args->colors[s]));
         vp.originX = (double)x0;
         vp.originY = (double)y0;
@@ -52801,8 +53039,371 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
     pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->argument_table,
                                                            PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
     r->ds_state = NULL;
+    r->pso_set = NULL;
     r->dirty = PVK_RD_ALL;
     pvk_render_counting(e, true);
+}
+
+/* ---- Depth/stencil copies ----
+ *
+ * Section 15's DEPTH/STENCIL INPUT ATTACHMENTS. The copies are memoryless
+ * color attachments: one texture per format, size, sample count and layer
+ * count, kept by the device (memoryless textures take no memory). Internal
+ * draws cover the render area in every layer, like clears: one loads the
+ * depth copy from the depth attachment's texture (read in the pass that
+ * loads it, whose memory keeps what was loaded until the pass stores it),
+ * nine rebuild the stencil copy: cleared, then one bit per draw, set where
+ * the stencil test (EQUAL, compare mask the bit) passes. */
+
+struct pvk_hidden_texture {
+    struct pvk_hidden_texture *next;
+    pvk_MTLPixelFormat format;
+    uint32_t width, height, samples, layers;
+    id texture;
+};
+
+/* A memoryless render target (not retained: the device keeps it); NULL
+ * when Metal cannot make it. layers: renderTargetArrayLength (0: 2D). */
+static id pvk_hidden_texture(struct pvk_device *device, pvk_MTLPixelFormat format, uint32_t width, uint32_t height,
+                             uint32_t samples, uint32_t layers)
+{
+    struct pvk_hidden_texture *t;
+    id texture;
+    pthread_mutex_lock(&pvk_graphics_lock);
+    for (t = device->hidden_textures; t; t = t->next)
+        if (t->format == format && t->width == width && t->height == height && t->samples == samples &&
+            t->layers == layers)
+            break;
+    if (!t && (t = pvk_alloc(pvk_device_alloc(device), sizeof(*t), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE))) {
+        void *pool = objc_autoreleasePoolPush();
+        id desc = pvk_MTLTextureDescriptor_new();
+        if (desc) {
+            pvk_MTLTextureDescriptor_setTextureType(desc, samples > 1 ? (layers ? PVK_MTLTextureType2DMultisampleArray
+                                                                                : PVK_MTLTextureType2DMultisample)
+                                                                      : (layers ? PVK_MTLTextureType2DArray
+                                                                                : PVK_MTLTextureType2D));
+            pvk_MTLTextureDescriptor_setPixelFormat(desc, format);
+            pvk_MTLTextureDescriptor_setWidth(desc, width);
+            pvk_MTLTextureDescriptor_setHeight(desc, height);
+            pvk_MTLTextureDescriptor_setSampleCount(desc, samples);
+            pvk_MTLTextureDescriptor_setArrayLength(desc, layers ? layers : 1);
+            pvk_MTLTextureDescriptor_setResourceOptions(desc, PVK_MTLResourceStorageModeMemoryless |
+                                                                  PVK_MTLResourceHazardTrackingModeUntracked);
+            pvk_MTLTextureDescriptor_setUsage(desc, PVK_MTLTextureUsageRenderTarget);
+            t->texture = pvk_MTLDevice_newTextureWithDescriptor(device->physical_device->mtl_device, desc);
+            pvk_release(desc);
+        }
+        objc_autoreleasePoolPop(pool);
+        if (t->texture) {
+            t->format = format;
+            t->width = width;
+            t->height = height;
+            t->samples = samples;
+            t->layers = layers;
+            t->next = device->hidden_textures;
+            device->hidden_textures = t;
+        } else {
+            pvk_free(pvk_device_alloc(device), t);
+            t = NULL;
+        }
+    }
+    texture = t ? t->texture : NULL;
+    pthread_mutex_unlock(&pvk_graphics_lock);
+    return texture;
+}
+
+static const char pvk_ds_copy_msl[] =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct pvk_dsc_args { uint base_layer, multiview, bit, pad; uint layers[32]; };\n"
+    "struct pvk_dsc_v { float4 pos [[position]]; };\n"
+    "struct pvk_dsc_vl { float4 pos [[position]]; uint layer [[render_target_array_index]]; };\n"
+    "vertex pvk_dsc_v pvk_dsc_vs(uint vid [[vertex_id]])\n"
+    "{\n"
+    "    pvk_dsc_v o;\n"
+    "    o.pos = float4(float2((vid << 1) & 2, vid & 2) * 2.0 - 1.0, 0.0, 1.0);\n"
+    "    return o;\n"
+    "}\n"
+    "vertex pvk_dsc_vl pvk_dsc_vs_layered(uint vid [[vertex_id]], uint iid [[instance_id]],\n"
+    "                                    constant pvk_dsc_args &a [[buffer(0)]])\n"
+    "{\n"
+    "    pvk_dsc_vl o;\n"
+    "    o.pos = float4(float2((vid << 1) & 2, vid & 2) * 2.0 - 1.0, 0.0, 1.0);\n"
+    "    o.layer = a.multiview != 0u ? a.layers[iid] : a.base_layer + iid;\n"
+    "    return o;\n"
+    "}\n"
+    "struct pvk_dsc_d { float d [[color(0)]]; };\n"
+    "struct pvk_dsc_s { uint s [[color(0)]]; };\n"
+    "fragment pvk_dsc_d pvk_dsc_depth(float4 pos [[position]], depth2d<float> t [[texture(0)]])\n"
+    "{\n"
+    "    pvk_dsc_d o;\n"
+    "    o.d = t.read(uint2(pos.xy));\n"
+    "    return o;\n"
+    "}\n"
+    "fragment pvk_dsc_d pvk_dsc_depth_array(float4 pos [[position]], uint layer [[render_target_array_index]],\n"
+    "                                      depth2d_array<float> t [[texture(0)]])\n"
+    "{\n"
+    "    pvk_dsc_d o;\n"
+    "    o.d = t.read(uint2(pos.xy), layer);\n"
+    "    return o;\n"
+    "}\n"
+    "fragment pvk_dsc_d pvk_dsc_depth_ms(float4 pos [[position]], uint s [[sample_id]], depth2d_ms<float> t [[texture(0)]])\n"
+    "{\n"
+    "    pvk_dsc_d o;\n"
+    "    o.d = t.read(uint2(pos.xy), s);\n"
+    "    return o;\n"
+    "}\n"
+    "fragment pvk_dsc_d pvk_dsc_depth_ms_array(float4 pos [[position]], uint s [[sample_id]],\n"
+    "                                         uint layer [[render_target_array_index]],\n"
+    "                                         depth2d_ms_array<float> t [[texture(0)]])\n"
+    "{\n"
+    "    pvk_dsc_d o;\n"
+    "    o.d = t.read(uint2(pos.xy), layer, s);\n"
+    "    return o;\n"
+    "}\n"
+    "fragment pvk_dsc_s pvk_dsc_stencil(uint prev [[color(0)]], constant pvk_dsc_args &a [[buffer(0)]])\n"
+    "{\n"
+    "    pvk_dsc_s o;\n"
+    "    o.s = a.bit < 8u ? prev | (1u << a.bit) : 0u;\n"
+    "    return o;\n"
+    "}\n"
+    "fragment pvk_dsc_s pvk_dsc_stencil_ms(uint prev [[color(0)]], uint s [[sample_id]],\n"
+    "                                     constant pvk_dsc_args &a [[buffer(0)]])\n"
+    "{\n"
+    "    pvk_dsc_s o;\n"
+    "    o.s = a.bit < 8u ? prev | (1u << a.bit) : 0u;\n"
+    "    return o;\n"
+    "}\n";
+
+/* Arguments of the internal draws at buffer index 0 (pvk_dsc_args). */
+struct pvk_dsc_args {
+    uint32_t base_layer, multiview, bit, pad;
+    uint32_t layers[32];
+};
+
+enum { PVK_DSC_DEPTH, PVK_DSC_DEPTH_ARRAY, PVK_DSC_DEPTH_MS, PVK_DSC_DEPTH_MS_ARRAY, PVK_DSC_STENCIL, PVK_DSC_STENCIL_MS };
+
+struct pvk_ds_copy_pipeline {
+    struct pvk_ds_copy_pipeline *next;
+    uint32_t kind, samples, layered;
+    id pso;
+};
+
+/* The pipeline of internal draws of a kind (made on first use; NULL on
+ * failure): a layered one writes each instance's layer. */
+static id pvk_ds_copy_pipeline(struct pvk_device *device, uint32_t kind, uint32_t samples, bool layered)
+{
+    static const char *const functions[] = { "pvk_dsc_depth",    "pvk_dsc_depth_array", "pvk_dsc_depth_ms",
+                                             "pvk_dsc_depth_ms_array", "pvk_dsc_stencil", "pvk_dsc_stencil_ms" };
+    struct pvk_ds_copy_pipeline *c;
+    id pso = NULL, library;
+    char error[256];
+    void *pool;
+
+    pthread_mutex_lock(&pvk_graphics_lock);
+    for (c = device->ds_copy_pipelines; c; c = c->next)
+        if (c->kind == kind && c->samples == samples && c->layered == (uint32_t)layered)
+            break;
+    pso = c ? c->pso : NULL;
+    library = device->ds_copy_library;
+    pthread_mutex_unlock(&pvk_graphics_lock);
+    if (c)
+        return pso;
+    pool = objc_autoreleasePoolPush();
+    error[0] = 0;
+    if (!library) { /* (the compiler takes pvk_graphics_lock: made outside it) */
+        library = pvk_msl_library(device, pvk_ds_copy_msl, false, error, sizeof(error));
+        pthread_mutex_lock(&pvk_graphics_lock);
+        if (device->ds_copy_library) {
+            pvk_release(library);
+            library = device->ds_copy_library;
+        } else {
+            device->ds_copy_library = library;
+        }
+        pthread_mutex_unlock(&pvk_graphics_lock);
+    }
+    if (library) {
+        id desc = pvk_MTL4RenderPipelineDescriptor_new();
+        id vs = pvk_function_descriptor(library, layered ? "pvk_dsc_vs_layered" : "pvk_dsc_vs");
+        id fs = pvk_function_descriptor(library, functions[kind]);
+        id att = pvk_MTL4RenderPipelineColorAttachmentDescriptorArray_objectAtIndexedSubscript(
+            pvk_MTL4RenderPipelineDescriptor_colorAttachments(desc), 0);
+        pvk_MTL4RenderPipelineColorAttachmentDescriptor_setPixelFormat(
+            att, kind >= PVK_DSC_STENCIL ? PVK_MTLPixelFormatR8Uint : PVK_MTLPixelFormatR32Float);
+        pvk_MTL4RenderPipelineDescriptor_setVertexFunctionDescriptor(desc, vs);
+        pvk_MTL4RenderPipelineDescriptor_setFragmentFunctionDescriptor(desc, fs);
+        pvk_MTL4RenderPipelineDescriptor_setRasterSampleCount(desc, samples);
+        if (layered)
+            pvk_MTL4RenderPipelineDescriptor_setInputPrimitiveTopology(desc, PVK_MTLPrimitiveTopologyClassTriangle);
+        pvk_MTL4RenderPipelineDescriptor_setColorAttachmentMappingState(
+            desc, PVK_MTL4LogicalToPhysicalColorAttachmentMappingStateInherited);
+        pso = pvk_render_pipeline_compile(device, desc, error, sizeof(error));
+        pvk_release(fs);
+        pvk_release(vs);
+        pvk_release(desc);
+    }
+    objc_autoreleasePoolPop(pool);
+    if (!pso) {
+        pvk_log(PVK_LOG_ERROR, "internal depth/stencil copy pipeline: %s", error);
+        return NULL;
+    }
+    pthread_mutex_lock(&pvk_graphics_lock);
+    for (c = device->ds_copy_pipelines; c; c = c->next) /* made meanwhile by another queue */
+        if (c->kind == kind && c->samples == samples && c->layered == (uint32_t)layered)
+            break;
+    if (c) {
+        pvk_release(pso);
+        pso = c->pso;
+    } else if ((c = pvk_alloc(pvk_device_alloc(device), sizeof(*c), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE))) {
+        c->kind = kind;
+        c->samples = samples;
+        c->layered = layered;
+        c->pso = pso;
+        c->next = device->ds_copy_pipelines;
+        device->ds_copy_pipelines = c;
+    } else {
+        pvk_release(pso);
+        pso = NULL;
+    }
+    pthread_mutex_unlock(&pvk_graphics_lock);
+    return pso;
+}
+
+/* Internal draws into color slot `slot` (their logical color 0) over the
+ * render area, reading `texture` (texture index 0 of the queue's render
+ * table; NULL: none); pvk_render_internal_end restores the state. */
+static void pvk_render_internal_begin(struct pvk_encoder *e, id pso, uint32_t slot, id texture)
+{
+    struct pvk_render *r = &e->render;
+    id enc = r->enc;
+    uint8_t map[PVK_MAX_COLOR_ATTACHMENTS];
+    int64_t x0 = r->area.offset.x, y0 = r->area.offset.y;
+    int64_t x1 = x0 + r->area.extent.width, y1 = y0 + r->area.extent.height;
+    pvk_MTLViewport vp;
+    pvk_MTLScissorRect sc;
+
+    memset(map, PVK_NO_SLOT, sizeof(map));
+    map[0] = (uint8_t)slot;
+    x0 = x0 < 0 ? 0 : x0;
+    y0 = y0 < 0 ? 0 : y0;
+    x1 = x1 > r->width ? r->width : x1;
+    y1 = y1 > r->height ? r->height : y1;
+    if (x1 <= x0 || y1 <= y0) /* (nothing to cover: one pixel all the same) */
+        x1 = x0 + 1, y1 = y0 + 1;
+    pvk_render_counting(e, false); /* not counted by occlusion queries */
+    pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
+    pvk_render_set_map(e, map);
+    pvk_MTL4RenderCommandEncoder_setCullMode(enc, PVK_MTLCullModeNone);
+    pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(enc, 0.0f, 0.0f, 0.0f);
+    pvk_MTL4RenderCommandEncoder_setDepthClipMode(enc, PVK_MTLDepthClipModeClip);
+    pvk_MTL4RenderCommandEncoder_setTriangleFillMode(enc, PVK_MTLTriangleFillModeFill);
+    if (r->amplification > 1) {
+        pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, 1, NULL);
+        r->amplification = 1;
+    }
+    vp.originX = (double)x0;
+    vp.originY = (double)y0;
+    vp.width = (double)(x1 - x0);
+    vp.height = (double)(y1 - y0);
+    vp.znear = 0.0;
+    vp.zfar = 1.0;
+    sc.x = (unsigned long)x0;
+    sc.y = (unsigned long)y0;
+    sc.width = (unsigned long)(x1 - x0);
+    sc.height = (unsigned long)(y1 - y0);
+    pvk_MTL4RenderCommandEncoder_setViewports_count(enc, &vp, 1);
+    pvk_MTL4RenderCommandEncoder_setScissorRects_count(enc, &sc, 1);
+    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->render_table,
+                                                           PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
+    if (texture)
+        pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->render_table, pvk_MTLTexture_gpuResourceID(texture), 0);
+}
+
+/* One internal draw: a triangle covering the viewport in each layer of a
+ * layered pass, with depth/stencil state ds, stencil reference ref and
+ * pvk_dsc_args.bit. */
+static void pvk_render_internal_draw(struct pvk_encoder *e, id ds, uint32_t ref, uint32_t bit, bool layered)
+{
+    struct pvk_render *r = &e->render;
+    struct pvk_dsc_args *args;
+    pvk_MTLGPUAddress address;
+    if (!(args = pvk_upload(e, sizeof(*args), 16, NULL, NULL, &address)))
+        return;
+    memset(args, 0, sizeof(*args));
+    args->bit = bit;
+    pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->render_table, address, 0);
+    pvk_MTL4RenderCommandEncoder_setDepthStencilState(r->enc, ds);
+    pvk_MTL4RenderCommandEncoder_setStencilFrontReferenceValue_backReferenceValue(r->enc, ref, ref);
+    pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
+        r->enc, PVK_MTLPrimitiveTypeTriangle, 0, 3, layered && r->layers ? r->layers : 1, 0);
+}
+
+static void pvk_render_internal_end(struct pvk_encoder *e)
+{
+    struct pvk_render *r = &e->render;
+    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(r->enc, e->queue->argument_table,
+                                                           PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
+    r->ds_state = NULL;
+    r->pso_set = NULL;
+    r->dirty = PVK_RD_ALL;
+    pvk_render_counting(e, true);
+}
+
+/* Loads the depth copy from the depth attachment's texture (LOAD_OP_LOAD). */
+static void pvk_render_copy_depth(struct pvk_encoder *e, const struct pvk_pass_attachment *pa)
+{
+    struct pvk_render *r = &e->render;
+    bool ms = r->samples_pass > 1, layered = pa->array || r->layers;
+    uint32_t kind = ms ? (pa->array ? PVK_DSC_DEPTH_MS_ARRAY : PVK_DSC_DEPTH_MS)
+                       : (pa->array ? PVK_DSC_DEPTH_ARRAY : PVK_DSC_DEPTH);
+    id pso = pvk_ds_copy_pipeline(e->device, kind, r->samples_pass, layered), ds;
+    struct pvk_ds_key dk;
+    memset(&dk, 0, sizeof(dk));
+    dk.depth_compare = PVK_MTLCompareFunctionAlways;
+    ds = pvk_ds_state(e->device, &dk);
+    if (!pso || !ds) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return;
+    }
+    pvk_render_internal_begin(e, pso, r->hidden_slot[0], pa->texture);
+    pvk_render_internal_draw(e, ds, 0, 0, layered);
+    pvk_render_internal_end(e);
+}
+
+/* Rebuilds the stencil copy from the stencil attachment, bit by bit. */
+static void pvk_render_rebuild_stencil(struct pvk_encoder *e)
+{
+    struct pvk_render *r = &e->render;
+    bool layered = r->layers != 0;
+    id pso = pvk_ds_copy_pipeline(e->device, r->samples_pass > 1 ? PVK_DSC_STENCIL_MS : PVK_DSC_STENCIL, r->samples_pass,
+                                  layered);
+    id ds[9];
+    uint32_t b, f;
+    for (b = 0; b < 9; b++) {
+        struct pvk_ds_key dk;
+        memset(&dk, 0, sizeof(dk)); /* stencil ops KEEP */
+        dk.depth_compare = PVK_MTLCompareFunctionAlways;
+        if (b < 8) { /* passes where stencil bit b is set */
+            dk.stencil = 1;
+            for (f = 0; f < 2; f++) {
+                dk.face[f][0] = PVK_MTLCompareFunctionEqual;
+                dk.face[f][4] = 1u << b;
+            }
+        }
+        ds[b] = pvk_ds_state(e->device, &dk);
+        if (!ds[b])
+            pso = NULL;
+    }
+    r->stencil_dirty = false;
+    if (!pso) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return;
+    }
+    pvk_render_internal_begin(e, pso, r->hidden_slot[1], NULL);
+    pvk_render_internal_draw(e, ds[8], 0, 8, layered); /* bit 8: cleared */
+    for (b = 0; b < 8; b++)
+        pvk_render_internal_draw(e, ds[b], 1u << b, b, layered);
+    pvk_render_internal_end(e);
 }
 
 /* ---- Render passes ---- */
@@ -52982,8 +53583,9 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     struct pvk_render *r = &e->render;
     struct pvk_draw_track track;
     struct pvk_pass_attachment depth = c->depth, stencil = c->stencil, resolve_depth, resolve_stencil;
-    uint32_t s, clears = 0, values[PVK_MAX_COLOR_ATTACHMENTS][4];
+    uint32_t s, clears = 0, values[PVK_MAX_COLOR_ATTACHMENTS][4], hidden, k;
     uint32_t width = UINT32_MAX, height = UINT32_MAX, samples = 0;
+    uint8_t hidden_slot[2] = { PVK_NO_SLOT, PVK_NO_SLOT };
     id pass, enc;
     void *pool;
 
@@ -52995,7 +53597,11 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     if (e->result != VK_SUCCESS)
         return;
     track = pvk_render_track(r);
-    track.samples = r->pipeline && r->pipeline->gfx ? r->pipeline->gfx->samples : 0;
+    track.samples = 0;
+    track.hidden = 0;
+    pvk_track_pipeline(&track, r->pipeline); /* a pipeline bound before the pass */
+    track.topology = r->dyn.topology;
+    track.restart = r->dyn.primitive_restart;
     pvk_prepass_scan(e, &track);
     pvk_encoder_end(e);
     if (e->result != VK_SUCCESS)
@@ -53072,6 +53678,41 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
         pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(pass, height);
         pvk_MTL4RenderPassDescriptor_setDefaultRasterSampleCount(pass, samples);
     }
+    /* Copies of the depth and stencil in memoryless color slots after the
+     * colors (section 15, DEPTH/STENCIL INPUT ATTACHMENTS) */
+    hidden = (c->hidden | track.hidden) &
+             ((c->depth.texture ? PVK_HIDDEN_DEPTH : 0u) | (c->stencil.texture ? PVK_HIDDEN_STENCIL : 0u));
+    for (k = 0, s = c->color_count; k < 2; k++) {
+        id tex, att;
+        if (!(hidden & (1u << k)))
+            continue;
+        tex = s < PVK_MAX_COLOR_ATTACHMENTS ? pvk_hidden_texture(e->device, k ? PVK_MTLPixelFormatR8Uint
+                                                                              : PVK_MTLPixelFormatR32Float,
+                                                                 width, height, samples, c->layers)
+                                            : NULL;
+        if (!tex) {
+            static int warned;
+            if (!warned++)
+                pvk_log(PVK_LOG_WARN, "a render pass with 8 color attachments cannot keep a copy of its depth or "
+                                      "stencil: depth/stencil input attachments and depth bounds read nothing there");
+            hidden &= ~(1u << k);
+            continue;
+        }
+        att = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
+            pvk_MTL4RenderPassDescriptor_colorAttachments(pass), s);
+        pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, tex);
+        pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, !k && c->depth.load == PVK_MTLLoadActionClear
+                                                                     ? PVK_MTLLoadActionClear
+                                                                     : PVK_MTLLoadActionDontCare);
+        pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionDontCare);
+        if (!k) {
+            pvk_MTLClearColor cc;
+            cc.red = pvk_stored_depth(c->depth.fmt, c->depth.clear.depthStencil.depth);
+            cc.green = cc.blue = cc.alpha = 0.0;
+            pvk_MTLRenderPassColorAttachmentDescriptor_setClearColor(att, cc);
+        }
+        hidden_slot[k] = (uint8_t)s++;
+    }
     pvk_MTL4RenderPassDescriptor_setSupportColorAttachmentMapping(pass, true);
     /* autoreleased: kept until pvk_render_end */
     enc = pvk_retain(pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass));
@@ -53108,6 +53749,14 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     r->draw_index = UINT32_MAX;
     r->counting = false;
     r->pending_count = 0;
+    r->hidden = hidden;
+    memcpy(r->hidden_slot, hidden_slot, sizeof(r->hidden_slot));
+    memset(r->hidden_logical, PVK_NO_SLOT, sizeof(r->hidden_logical));
+    r->depth_bits = c->depth.texture && c->depth.fmt->mtl == PVK_MTLPixelFormatDepth16Unorm ? 16 : 32;
+    r->stencil_dirty = true; /* rebuilt before a draw reads it */
+    r->area = c->area;
+    r->pso_set = NULL;
+    r->bounds_valid = false;
     e->push_bound = 0; /* the render stages have not seen the push constants */
     memset(e->sets_bound, 0, sizeof(e->sets_bound));
     if (clears || (c->depth.clear_in_area || c->stencil.clear_in_area)) {
@@ -53119,6 +53768,8 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
                          c->depth.clear.depthStencil.depth, c->stencil.clear_in_area != 0,
                          c->stencil.clear.depthStencil.stencil, &rect, 1);
     }
+    if ((hidden & PVK_HIDDEN_DEPTH) && c->depth.load == PVK_MTLLoadActionLoad && !c->depth.clear_in_area)
+        pvk_render_copy_depth(e, &c->depth); /* the loaded depth into its copy */
     pvk_render_counting(e, true); /* a query active since before the pass */
 }
 
@@ -53130,6 +53781,7 @@ static void pvk_encode_subpass(struct pvk_encoder *e, const struct pvk_cmd_subpa
     r->depth = c->depth && r->depth_fmt;
     r->stencil = c->stencil && r->stencil_fmt;
     r->dynamic = c->dynamic != 0;
+    memcpy(r->hidden_logical, c->hidden_logical, sizeof(r->hidden_logical));
     r->dirty |= PVK_RD_MAP | PVK_RD_DS | PVK_RD_DEPTH_BOUNDS | PVK_RD_AMPLIFICATION;
 }
 
@@ -53329,6 +53981,8 @@ static float pvk_clamp01(float x)
     return x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x;
 }
 
+static id pvk_gfx_variant(struct pvk_device *device, struct pvk_pipeline *p, unsigned kind);
+
 /* Applies what the next draw needs; false when it cannot draw. */
 static bool pvk_render_flush(struct pvk_encoder *e)
 {
@@ -53336,16 +53990,71 @@ static bool pvk_render_flush(struct pvk_encoder *e)
     struct pvk_dynamic_state *d = &r->dyn;
     struct pvk_pipeline *p = r->pipeline;
     const struct pvk_gfx_pipeline *g;
-    uint32_t dirty = r->dirty, i, n, need;
-    id enc = r->enc;
+    uint32_t dirty, i, n, need;
+    int variant = -1;
+    id enc = r->enc, pso;
 
     if (!enc || !p || !p->gfx || !p->mtl_pipeline || e->result != VK_SUCCESS)
         return false;
     g = p->gfx;
+    if ((g->reads & r->hidden & PVK_HIDDEN_STENCIL) && r->stencil_dirty) /* (internal draws: before the state) */
+        pvk_render_rebuild_stencil(e);
+    dirty = r->dirty;
+    /* The pipeline, or with a depth copy the variant that writes it or
+     * tests depth bounds (section 15, DEPTH/STENCIL INPUT ATTACHMENTS) */
+    pso = p->mtl_pipeline;
+    if ((r->hidden & PVK_HIDDEN_DEPTH) && r->depth) {
+        if (d->depth_bounds_test && g->bounds)
+            variant = PVK_VARIANT_BOUNDS;
+        else if (d->depth_test && d->depth_write)
+            variant = PVK_VARIANT_DEPTH;
+        if (variant >= 0 && !(pso = pvk_gfx_variant(e->device, p, (unsigned)variant))) {
+            static int warned;
+            if (!warned++)
+                pvk_log(PVK_LOG_WARN, "a pipeline has no depth copy variant: depth input attachments and depth "
+                                      "bounds of its pass miss its depth writes");
+            pso = p->mtl_pipeline;
+            variant = -1;
+        }
+    }
     if (dirty & PVK_RD_PIPELINE)
-        pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, p->mtl_pipeline);
-    if (dirty & PVK_RD_MAP)
+        r->pso_set = NULL;
+    if (pso != r->pso_set) {
+        pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
+        r->pso_set = pso;
+    }
+    if (r->hidden) { /* the copies the variant uses, mapped */
+        uint8_t map[PVK_MAX_COLOR_ATTACHMENTS];
+        memcpy(map, r->map, sizeof(map));
+        if ((r->hidden & PVK_HIDDEN_DEPTH) && (variant >= 0 || (g->reads & PVK_HIDDEN_DEPTH)) &&
+            r->hidden_logical[0] != PVK_NO_SLOT)
+            map[r->hidden_logical[0]] = r->hidden_slot[0];
+        if ((r->hidden & g->reads & PVK_HIDDEN_STENCIL) && r->hidden_logical[1] != PVK_NO_SLOT)
+            map[r->hidden_logical[1]] = r->hidden_slot[1];
+        pvk_render_set_map(e, map);
+    } else if (dirty & PVK_RD_MAP) {
         pvk_render_set_map(e, r->map);
+    }
+    if (variant == PVK_VARIANT_BOUNDS) { /* struct pvk_msl_depth_bounds at buffer index 27 */
+        struct pvk_msl_depth_bounds b;
+        b.min = pvk_clamp01(d->depth_bounds[0]);
+        b.max = pvk_clamp01(d->depth_bounds[1]);
+        b.write = d->depth_test && d->depth_write;
+        b.pad = 0;
+        if (!r->bounds_valid || memcmp(&b, &r->bounds_set, sizeof(b)) != 0) {
+            pvk_MTLGPUAddress address;
+            void *data = pvk_upload(e, sizeof(b), 16, NULL, NULL, &address);
+            if (!data)
+                return false;
+            memcpy(data, &b, sizeof(b));
+            pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_DEPTH_BOUNDS_BUFFER);
+            r->bounds_set = b;
+            r->bounds_valid = true;
+        }
+    }
+    if ((r->hidden & PVK_HIDDEN_STENCIL) && r->stencil && d->stencil_test &&
+        ((d->stencil[0].write_mask | d->stencil[1].write_mask) & 0xffu))
+        r->stencil_dirty = true; /* this draw may change the stencil */
     if (dirty & PVK_RD_AMPLIFICATION) {
         pvk_MTLVertexAmplificationViewMapping views[32];
         n = 0;
@@ -53410,19 +54119,11 @@ static bool pvk_render_flush(struct pvk_encoder *e)
     if (dirty & PVK_RD_BLEND)
         pvk_MTL4RenderCommandEncoder_setBlendColorRed_green_blue_alpha(enc, d->blend_constants[0], d->blend_constants[1],
                                                                        d->blend_constants[2], d->blend_constants[3]);
-    if ((dirty & PVK_RD_DEPTH_BOUNDS) && e->device->features.core.depthBounds) {
-        float lo = 0.0f, hi = 1.0f;
-        r->skip_bounds = false;
-        if (d->depth_bounds_test && r->depth) {
-            lo = pvk_clamp01(d->depth_bounds[0]);
-            hi = pvk_clamp01(d->depth_bounds[1]);
-            if (lo > hi) { /* nothing passes */
-                r->skip_bounds = true;
-                hi = lo;
-            }
-        }
-        pvk_MTL4RenderCommandEncoder_setDepthTestMinBound_maxBound(enc, lo, hi);
-    }
+    /* Depth bounds: the variant above (Metal 4's setDepthTestMinBound:maxBound:
+     * traps on Apple9, macOS 27.2); empty bounds pass nothing */
+    if (dirty & PVK_RD_DEPTH_BOUNDS)
+        r->skip_bounds = d->depth_bounds_test && r->depth && g->bounds &&
+                         pvk_clamp01(d->depth_bounds[0]) > pvk_clamp01(d->depth_bounds[1]);
     if (dirty & PVK_RD_DS) {
         struct pvk_ds_key k;
         id ds;
@@ -53679,6 +54380,20 @@ static void pvk_device_finish_graphics(struct pvk_device *device)
         pvk_release(device->draw_indices);
         device->draw_indices = NULL;
     }
+    while (device->hidden_textures) {
+        struct pvk_hidden_texture *t = device->hidden_textures;
+        device->hidden_textures = t->next;
+        pvk_release(t->texture);
+        pvk_free(alloc, t);
+    }
+    while (device->ds_copy_pipelines) {
+        struct pvk_ds_copy_pipeline *c = device->ds_copy_pipelines;
+        device->ds_copy_pipelines = c->next;
+        pvk_release(c->pso);
+        pvk_free(alloc, c);
+    }
+    pvk_release(device->ds_copy_library);
+    device->ds_copy_library = NULL;
     for (i = 0; i < PVK_ARRAY_SIZE(device->prepass_pipelines); i++) {
         pvk_release(device->prepass_pipelines[i]);
         device->prepass_pipelines[i] = NULL;
@@ -55336,7 +56051,9 @@ struct pvk_cache_info {
      * PVK_GFX_* flags */
 };
 
-#define PVK_GFX_DRAW_INDEX 0x1u /* the vertex shader reads DrawIndex */
+#define PVK_GFX_DRAW_INDEX 0x1u    /* the vertex shader reads DrawIndex */
+#define PVK_GFX_READS_DEPTH 0x2u   /* the fragment shader reads the depth copy */
+#define PVK_GFX_READS_STENCIL 0x4u /* ... the stencil copy */
 
 struct pvk_cache_entry {
     struct pvk_cache_entry *next;
@@ -55828,6 +56545,40 @@ static bool pvk_rp_color(const struct pvk_render_pass *rp, uint32_t a)
     return a < rp->attachment_count && rp->attachments[a].fmt && pvk_format_is_color(rp->attachments[a].fmt);
 }
 
+/* The depth/stencil attachment a subpass reads as an input attachment and
+ * the copies of it that takes (section 15, DEPTH/STENCIL INPUT
+ * ATTACHMENTS): its own depth/stencil attachment, or one it only reads.
+ * Aspects: the reference's, else every aspect of the format (a shader
+ * reads depth through a float input attachment, stencil through an integer
+ * one). */
+static void pvk_subpass_ds_input(const struct pvk_render_pass *rp, struct pvk_subpass *sp)
+{
+    uint32_t j;
+    sp->ds_input = VK_ATTACHMENT_UNUSED;
+    sp->hidden = 0;
+    for (j = 0; j < sp->input_count; j++) {
+        uint32_t a = sp->inputs[j], aspects = sp->input_aspects[j];
+        const struct pvk_format *f = a < rp->attachment_count ? rp->attachments[a].fmt : NULL;
+        if (!f || pvk_format_is_color(f))
+            continue;
+        if ((sp->depth != VK_ATTACHMENT_UNUSED && a != sp->depth) ||
+            (sp->ds_input != VK_ATTACHMENT_UNUSED && a != sp->ds_input)) {
+            static int warned;
+            if (!warned++)
+                pvk_log(PVK_LOG_WARN, "vkCreateRenderPass: a subpass reads a depth/stencil attachment other than its "
+                                      "own as an input attachment, which is not supported (it reads its own)");
+            continue;
+        }
+        sp->ds_input = a;
+        if (!aspects)
+            aspects = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+        if ((aspects & VK_IMAGE_ASPECT_DEPTH_BIT) && pvk_format_has_depth(f))
+            sp->hidden |= PVK_HIDDEN_DEPTH;
+        if ((aspects & VK_IMAGE_ASPECT_STENCIL_BIT) && pvk_format_has_stencil(f))
+            sp->hidden |= PVK_HIDDEN_STENCIL;
+    }
+}
+
 /* The slot of attachment a in a Metal pass, or color_count if absent. */
 static uint32_t pvk_rp_slot(const struct pvk_rp_pass *mp, uint32_t a)
 {
@@ -55856,15 +56607,16 @@ static bool pvk_rp_can_merge(const struct pvk_render_pass *rp, const struct pvk_
                                   VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
                                   VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
     uint32_t slots = mp->color_count, i, s;
+    uint32_t ds = sp->depth != VK_ATTACHMENT_UNUSED ? sp->depth : sp->ds_input; /* the pass's depth/stencil */
 
     if (sp->view_mask != mp->view_mask)
         return false;
-    if (sp->depth != VK_ATTACHMENT_UNUSED && mp->depth != VK_ATTACHMENT_UNUSED && sp->depth != mp->depth)
+    if (ds != VK_ATTACHMENT_UNUSED && mp->depth != VK_ATTACHMENT_UNUSED && ds != mp->depth)
         return false;
     if (pvk_rp_resolves_into(mp, sp->depth) || pvk_rp_resolves_into(mp, sp->depth_resolve) ||
         (sp->depth != VK_ATTACHMENT_UNUSED && mp->depth_resolve != VK_ATTACHMENT_UNUSED))
         return false;
-    if (sp->depth != VK_ATTACHMENT_UNUSED && mp->samples && rp->attachments[sp->depth].samples != mp->samples)
+    if (ds != VK_ATTACHMENT_UNUSED && mp->samples && rp->attachments[ds].samples != mp->samples)
         return false;
     for (i = 0; i < sp->color_count; i++) {
         uint32_t a = sp->colors[i];
@@ -55898,8 +56650,8 @@ static bool pvk_rp_can_merge(const struct pvk_render_pass *rp, const struct pvk_
             }
         }
     }
-    if (slots > PVK_MAX_COLOR_ATTACHMENTS)
-        return false;
+    if (slots + (uint32_t)__builtin_popcount(mp->hidden | sp->hidden) > PVK_MAX_COLOR_ATTACHMENTS)
+        return false; /* (the depth and stencil copies take color slots too) */
     for (i = 0; i < info->dependencyCount; i++) {
         const VkSubpassDependency2 *d = &info->pDependencies[i];
         const VkBaseInStructure *ext;
@@ -55946,7 +56698,11 @@ static void pvk_rp_pass_add(const struct pvk_render_pass *rp, struct pvk_rp_pass
     if (sp->depth != VK_ATTACHMENT_UNUSED) {
         mp->depth = sp->depth;
         mp->samples = rp->attachments[sp->depth].samples;
+    } else if (sp->ds_input != VK_ATTACHMENT_UNUSED) { /* only read: still the pass's (copies come from it) */
+        mp->depth = sp->ds_input;
+        mp->samples = rp->attachments[sp->ds_input].samples;
     }
+    mp->hidden |= sp->hidden;
     if (sp->depth_resolve != VK_ATTACHMENT_UNUSED) {
         mp->depth_resolve = sp->depth_resolve;
         mp->depth_resolve_mode = sp->depth_resolve_mode;
@@ -56014,10 +56770,12 @@ static VkResult pvk_render_pass_create(struct pvk_device *device, const VkRender
                                                                               : PVK_MAX_INPUT_ATTACHMENTS;
         for (j = 0; j < PVK_MAX_INPUT_ATTACHMENTS; j++) {
             sp->inputs[j] = j < sp->input_count ? d->pInputAttachments[j].attachment : VK_ATTACHMENT_UNUSED;
+            sp->input_aspects[j] = j < sp->input_count ? d->pInputAttachments[j].aspectMask : 0;
             pvk_rp_use(rp, sp->inputs[j], i);
         }
         sp->depth = d->pDepthStencilAttachment ? d->pDepthStencilAttachment->attachment : VK_ATTACHMENT_UNUSED;
         pvk_rp_use(rp, sp->depth, i);
+        pvk_subpass_ds_input(rp, sp);
         sp->depth_resolve = VK_ATTACHMENT_UNUSED;
         for (ext = d->pNext; ext; ext = ext->pNext) {
             if (ext->sType == VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE) {
@@ -56056,6 +56814,7 @@ static VkResult pvk_render_pass_create(struct pvk_device *device, const VkRender
             uint32_t s = ids[j] == PVK_NO_ID ? mp->color_count : pvk_rp_slot(mp, ids[j]);
             sp->map[j] = s < mp->color_count ? (uint8_t)s : PVK_NO_SLOT;
         }
+        pvk_hidden_logical(ids, sp->hidden_logical);
     }
     *pRenderPass = (VkRenderPass)rp;
     return VK_SUCCESS;
@@ -56083,6 +56842,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRende
 {
     const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
     const VkRenderPassMultiviewCreateInfo *mv = NULL;
+    const VkRenderPassInputAttachmentAspectCreateInfo *ia_aspects = NULL;
     const VkBaseInStructure *ext;
     VkRenderPassCreateInfo2 info;
     VkAttachmentDescription2 *atts;
@@ -56093,9 +56853,12 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRende
     uint32_t i, j;
     VkResult result;
 
-    for (ext = pCreateInfo->pNext; ext; ext = ext->pNext)
+    for (ext = pCreateInfo->pNext; ext; ext = ext->pNext) {
         if (ext->sType == VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO)
             mv = (const VkRenderPassMultiviewCreateInfo *)ext;
+        else if (ext->sType == VK_STRUCTURE_TYPE_RENDER_PASS_INPUT_ATTACHMENT_ASPECT_CREATE_INFO)
+            ia_aspects = (const VkRenderPassInputAttachmentAspectCreateInfo *)ext;
+    }
     for (i = 0; i < pCreateInfo->subpassCount; i++) {
         const VkSubpassDescription *s = &pCreateInfo->pSubpasses[i];
         nrefs += s->inputAttachmentCount + s->colorAttachmentCount * (s->pResolveAttachments ? 2u : 1u) +
@@ -56149,6 +56912,12 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRende
         }
         d->preserveAttachmentCount = s->preserveAttachmentCount;
         d->pPreserveAttachments = s->pPreserveAttachments;
+    }
+    for (i = 0; ia_aspects && i < ia_aspects->aspectReferenceCount; i++) { /* the aspects input attachments read */
+        const VkInputAttachmentAspectReference *a = &ia_aspects->pAspectReferences[i];
+        if (a->subpass < pCreateInfo->subpassCount && a->inputAttachmentIndex < subs[a->subpass].inputAttachmentCount)
+            ((VkAttachmentReference2 *)subs[a->subpass].pInputAttachments)[a->inputAttachmentIndex].aspectMask =
+                a->aspectMask;
     }
     for (i = 0; i < pCreateInfo->dependencyCount; i++) {
         const VkSubpassDependency *s = &pCreateInfo->pDependencies[i];
@@ -56240,6 +57009,7 @@ struct pvk_gfx_desc {
     uint32_t outputs;                                 /* fragment output locations with an attachment */
     uint32_t output_types[PVK_MAX_COLOR_ATTACHMENTS]; /* enum pvk_msl_scalar_type */
     uint32_t sample_shading, view_mask, point_size, dynamic_strides, robust, has_fragment;
+    uint32_t ds_inputs[3]; /* depth/stencil input attachments: options input_attachment_depth, _stencil, _undecorated */
 };
 
 static pvk_MTLBlendFactor pvk_blend_factor(VkBlendFactor f)
@@ -56418,6 +57188,109 @@ static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *
     return pso;
 }
 
+/* ---- Depth copy variants ----
+ *
+ * In a Metal pass with a depth copy (section 15, DEPTH/STENCIL INPUT
+ * ATTACHMENTS) a draw that writes depth uses a variant of its pipeline
+ * whose fragment function also writes its depth to the copy, and a draw
+ * that tests depth bounds one that compares the copy with the bounds
+ * (section 13's hidden_depth_output, depth_bounds). Pipelines without a
+ * fragment shader get a fragment function that does only that. A variant
+ * is translated with the pipeline and compiled with it when it will be
+ * needed (the pipeline's subpass reads the depth, or its depth bounds test
+ * is static), else on first use: when the device enabled
+ * dynamicRenderingLocalRead or depthBounds, a pass's need of a copy is
+ * only known when it is encoded. */
+
+struct pvk_gfx_variants {
+    pthread_mutex_t lock;
+    struct pvk_gfx_desc desc; /* the pipeline's, with the copy's color attachment */
+    bool layered, invariant;
+    char *vs_msl, *fs_msl[PVK_VARIANT_COUNT]; /* fs_msl NULL: not needed */
+    char vs_entry[64], fs_entry[PVK_VARIANT_COUNT][64];
+    id pso[PVK_VARIANT_COUNT];
+    bool failed[PVK_VARIANT_COUNT];
+};
+
+/* The fragment function of a variant of a pipeline without a fragment
+ * shader (pvk_alloc'd; NULL when out of memory): it writes the depth to
+ * color attachment h, or with bounds tests them first. */
+static char *pvk_hidden_fragment_msl(const VkAllocationCallbacks *alloc, uint32_t h, uint32_t bits, uint32_t samples,
+                                     bool bounds)
+{
+    const char *z = pvk_msl_depth_expr(bits, samples);
+    size_t size = 2048;
+    char *msl = pvk_alloc(alloc, size, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT), stored[128];
+    if (!msl)
+        return NULL;
+    snprintf(stored, sizeof(stored), ", float4 pvk_stored [[color(%u)]], constant pvk_depth_bounds& pvk_bounds [[buffer(%u)]]",
+             h, PVK_MSL_DEPTH_BOUNDS_BUFFER);
+    snprintf(msl, size,
+             "#include <metal_stdlib>\nusing namespace metal;\n%s%s"
+             "struct pvk_depth_out { float d [[color(%u)]]; };\n"
+             "fragment pvk_depth_out pvk_depth_fs(float4 pvk_frag_coord [[position]]%s%s)\n"
+             "{\n"
+             "    pvk_depth_out o;\n"
+             "%s"
+             "    o.d = %s%s%s;\n"
+             "    return o;\n"
+             "}\n",
+             bits == 16 ? pvk_msl_d16_text : "", bounds ? pvk_msl_depth_bounds_text : "", h,
+             samples > 1 ? ", uint pvk_sample_id [[sample_id]]" : "", bounds ? stored : "",
+             bounds ? "    if (pvk_stored.x < pvk_bounds.min || pvk_stored.x > pvk_bounds.max)\n"
+                      "        discard_fragment();\n"
+                    : "",
+             bounds ? "pvk_bounds.write != 0u ? " : "", z, bounds ? " : pvk_stored.x" : "");
+    return msl;
+}
+
+static void pvk_gfx_variants_free(const VkAllocationCallbacks *alloc, struct pvk_gfx_variants *v)
+{
+    unsigned k;
+    if (!v)
+        return;
+    for (k = 0; k < PVK_VARIANT_COUNT; k++) {
+        pvk_release(v->pso[k]);
+        pvk_free(alloc, v->fs_msl[k]);
+    }
+    pvk_free(alloc, v->vs_msl);
+    pthread_mutex_destroy(&v->lock);
+    pvk_free(alloc, v);
+}
+
+static char *pvk_strdup_alloc(const VkAllocationCallbacks *alloc, const char *s)
+{
+    size_t n = strlen(s) + 1;
+    char *d = pvk_alloc(alloc, n, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (d)
+        memcpy(d, s, n);
+    return d;
+}
+
+/* Variant `kind` of a pipeline (not retained), compiled on first use; NULL
+ * when the pipeline has none or Metal could not make it. */
+static id pvk_gfx_variant(struct pvk_device *device, struct pvk_pipeline *p, unsigned kind)
+{
+    struct pvk_gfx_variants *v = p->gfx ? p->gfx->variants : NULL;
+    id pso;
+    if (!v || !v->fs_msl[kind])
+        return NULL;
+    pthread_mutex_lock(&v->lock);
+    if (!v->pso[kind] && !v->failed[kind]) {
+        char error[256];
+        v->pso[kind] = pvk_gfx_compile(device, &v->desc, v->vs_msl, v->vs_entry, v->fs_msl[kind], v->fs_entry[kind],
+                                       v->layered, v->invariant, error, sizeof(error));
+        if (!v->pso[kind]) {
+            v->failed[kind] = true;
+            pvk_log(PVK_LOG_ERROR, "a graphics pipeline's depth copy variant: %s", error);
+            pvk_log(PVK_LOG_DEBUG, "fragment MSL:\n%s", v->fs_msl[kind]);
+        }
+    }
+    pso = v->pso[kind];
+    pthread_mutex_unlock(&v->lock);
+    return pso;
+}
+
 static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct pvk_pipeline_cache *cache,
                                              const VkGraphicsPipelineCreateInfo *info, const VkAllocationCallbacks *alloc,
                                              VkPipeline *pPipeline)
@@ -56446,16 +57319,20 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     struct pvk_msl_options vo, fo;
     struct pvk_msl_result vres, fres;
     struct pvk_gfx_pipeline gfx;
-    struct pvk_gfx_desc d;
+    struct pvk_gfx_desc d, dc;
     struct pvk_cache_info ci;
     struct pvk_pipeline *pipeline;
     struct pvk_key key;
     const uint32_t *vs_code = NULL, *fs_code = NULL;
     size_t vs_words = 0, fs_words = 0;
     char error[256], entry[2][64], *msl[2] = { NULL, NULL };
+    char *variant_msl[PVK_VARIANT_COUNT] = { NULL, NULL }, variant_entry[PVK_VARIANT_COUNT][64];
     const char *sources[2], *names[2];
     const VkBaseInStructure *ext;
-    uint32_t i, view_mask = 0, dynamic = 0, color_count = 0;
+    const struct pvk_format *depth_fmt = NULL, *stencil_fmt = NULL;
+    uint32_t i, view_mask = 0, dynamic = 0, color_count = 0, readable = 0, reads, want = 0, eager = 0, k;
+    uint32_t fo_undecorated = 0;
+    uint8_t hidden_logical[2];
     bool discard, layered = false;
     id pso = NULL;
     int hit;
@@ -56602,7 +57479,57 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         }
     }
     for (i = 0; i < PVK_MAX_INPUT_ATTACHMENTS; i++)
-        d.input_colors[i] = input_colors[i] = input_logical[i];
+        input_colors[i] = input_logical[i];
+    /* Depth/stencil input attachments read the pass's copies of them, at
+     * logical indices the colors leave free (section 15) */
+    pvk_hidden_logical(ids, hidden_logical);
+    if (rp) {
+        const struct pvk_subpass *sp = &rp->subpasses[info->subpass];
+        uint32_t a = sp->depth != VK_ATTACHMENT_UNUSED ? sp->depth : rp->passes[sp->pass].depth;
+        if (sp->depth != VK_ATTACHMENT_UNUSED && pvk_format_has_depth(rp->attachments[sp->depth].fmt))
+            depth_fmt = rp->attachments[sp->depth].fmt;
+        if (a != VK_ATTACHMENT_UNUSED && (rp->passes[sp->pass].hidden & PVK_HIDDEN_DEPTH))
+            eager = 1u << PVK_VARIANT_DEPTH; /* the pass keeps a depth copy: draws writing depth need the variant */
+        readable = sp->hidden;
+        for (i = 0; i < sp->input_count; i++) {
+            uint32_t aspects = sp->input_aspects[i] ? sp->input_aspects[i]
+                                                    : VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            bool dep = (aspects & VK_IMAGE_ASPECT_DEPTH_BIT) && (readable & PVK_HIDDEN_DEPTH);
+            bool sten = (aspects & VK_IMAGE_ASPECT_STENCIL_BIT) && (readable & PVK_HIDDEN_STENCIL);
+            if (sp->inputs[i] == VK_ATTACHMENT_UNUSED || sp->inputs[i] != sp->ds_input || (!dep && !sten))
+                continue;
+            input_colors[i] = dep && sten ? PVK_MSL_IA_DEPTH_STENCIL : dep ? PVK_MSL_IA_DEPTH : PVK_MSL_IA_STENCIL;
+        }
+    } else if (rendering) { /* local read: pDepth/StencilInputAttachmentIndex, NULL: undecorated */
+        const uint32_t *di = input_indices ? input_indices->pDepthInputAttachmentIndex : NULL;
+        const uint32_t *si = input_indices ? input_indices->pStencilInputAttachmentIndex : NULL;
+        const struct pvk_format *df = pvk_format(rendering->depthAttachmentFormat);
+        stencil_fmt = pvk_format(rendering->stencilAttachmentFormat);
+        if (df && pvk_format_has_depth(df)) {
+            depth_fmt = df;
+            readable |= PVK_HIDDEN_DEPTH;
+            if (!di)
+                fo_undecorated |= PVK_MSL_IA_UNDECORATED_DEPTH;
+            else if (*di < PVK_MAX_INPUT_ATTACHMENTS)
+                input_colors[*di] = PVK_MSL_IA_DEPTH;
+        }
+        if (stencil_fmt && pvk_format_has_stencil(stencil_fmt)) {
+            readable |= PVK_HIDDEN_STENCIL;
+            if (!si)
+                fo_undecorated |= PVK_MSL_IA_UNDECORATED_STENCIL;
+            else if (*si < PVK_MAX_INPUT_ATTACHMENTS)
+                input_colors[*si] = input_colors[*si] == PVK_MSL_IA_DEPTH ? PVK_MSL_IA_DEPTH_STENCIL : PVK_MSL_IA_STENCIL;
+        }
+    }
+    if (hidden_logical[0] == PVK_NO_SLOT)
+        readable &= ~PVK_HIDDEN_DEPTH;
+    if (hidden_logical[1] == PVK_NO_SLOT)
+        readable &= ~PVK_HIDDEN_STENCIL;
+    d.ds_inputs[0] = (readable & PVK_HIDDEN_DEPTH) ? hidden_logical[0] + 1u : 0;
+    d.ds_inputs[1] = (readable & PVK_HIDDEN_STENCIL) ? hidden_logical[1] + 1u : 0;
+    d.ds_inputs[2] = fo_undecorated;
+    for (i = 0; i < PVK_MAX_INPUT_ATTACHMENTS; i++)
+        d.input_colors[i] = input_colors[i];
     d.samples = ms && ms->rasterizationSamples ? (uint32_t)ms->rasterizationSamples : 1;
     if (ms && !discard) {
         d.alpha_to_coverage = ms->alphaToCoverageEnable != VK_FALSE;
@@ -56670,6 +57597,9 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         fo.specialization = fs->pSpecializationInfo;
     fo.input_attachment_colors = input_colors;
     fo.input_attachment_color_count = PVK_MAX_INPUT_ATTACHMENTS;
+    fo.input_attachment_depth = d.ds_inputs[0];
+    fo.input_attachment_stencil = d.ds_inputs[1];
+    fo.input_attachment_undecorated = d.ds_inputs[2];
     fo.color_attachments_valid = true;
     fo.color_attachments = d.outputs;
     for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
@@ -56735,6 +57665,49 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         ci.dispatch_base = vres.layered; /* graphics: the vertex shader writes Layer or ViewportIndex */
         ci.dispatch_base_offset = vres.invariant; /* graphics: Position is invariant */
         ci.workgroup[0] = (vres.builtins & PVK_MSL_BUILTIN_DRAW_INDEX) ? PVK_GFX_DRAW_INDEX : 0;
+        ci.workgroup[0] |= (fres.depth_stencil_fetches & 1u) ? PVK_GFX_READS_DEPTH : 0;
+        ci.workgroup[0] |= (fres.depth_stencil_fetches & 2u) ? PVK_GFX_READS_STENCIL : 0;
+    }
+    /* Depth copy variants (above): their fragment functions, translated
+     * while the options are alive */
+    if (depth_fmt && !discard && hidden_logical[0] != PVK_NO_SLOT) {
+        bool test = (dynamic & PVK_DYN_BIT(DEPTH_TEST_ENABLE)) || gfx.state.depth_test;
+        bool write = (dynamic & PVK_DYN_BIT(DEPTH_WRITE_ENABLE)) || gfx.state.depth_write;
+        bool bounds = (dynamic & PVK_DYN_BIT(DEPTH_BOUNDS_TEST_ENABLE)) || gfx.state.depth_bounds_test;
+        if (test && write && (eager || device->features.v14.dynamicRenderingLocalRead || device->features.core.depthBounds))
+            want |= 1u << PVK_VARIANT_DEPTH;
+        if (bounds && device->features.core.depthBounds) {
+            want |= 1u << PVK_VARIANT_BOUNDS;
+            if (!(dynamic & PVK_DYN_BIT(DEPTH_BOUNDS_TEST_ENABLE)))
+                eager |= 1u << PVK_VARIANT_BOUNDS; /* every draw tests depth bounds */
+        }
+    }
+    eager &= want;
+    for (k = 0; k < PVK_VARIANT_COUNT; k++) {
+        struct pvk_msl_options fv = fo;
+        struct pvk_msl_result vv, fvr;
+        uint32_t bits = depth_fmt && depth_fmt->mtl == PVK_MTLPixelFormatDepth16Unorm ? 16 : 32;
+        if (!(want & (1u << k)))
+            continue;
+        if (!fs) {
+            variant_msl[k] = pvk_hidden_fragment_msl(alloc, hidden_logical[0], bits, d.samples, k == PVK_VARIANT_BOUNDS);
+            snprintf(variant_entry[k], sizeof(variant_entry[k]), "pvk_depth_fs");
+            continue;
+        }
+        fv.hidden_depth_output = hidden_logical[0] + 1u;
+        fv.hidden_depth_bits = bits;
+        fv.hidden_depth_samples = d.samples;
+        fv.depth_bounds = k == PVK_VARIANT_BOUNDS;
+        if (pvk_spirv_to_msl_graphics(vs_code, vs_words, vs->pName, &vo, fs_code, fs_words, fs->pName, &fv, &vv, &fvr) ==
+            VK_SUCCESS) {
+            variant_msl[k] = pvk_strdup_alloc(alloc, fvr.msl);
+            snprintf(variant_entry[k], sizeof(variant_entry[k]), "%s", fvr.entry_point);
+        } else {
+            pvk_log(PVK_LOG_ERROR, "vkCreateGraphicsPipelines: cannot translate a depth copy variant: %s",
+                    vv.error[0] ? vv.error : fvr.error);
+        }
+        pvk_msl_result_free(&vv);
+        pvk_msl_result_free(&fvr);
     }
     pvk_free(alloc, bindings);
     pvk_free(alloc, ycbcr);
@@ -56743,8 +57716,20 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     names[0] = hit ? entry[0] : vres.entry_point;
     names[1] = hit ? entry[1] : fres.entry_point;
     layered = ci.dispatch_base != 0;
+    /* The copies the fragment shader reads are color attachments it does not write */
+    reads = ((ci.workgroup[0] & PVK_GFX_READS_DEPTH) ? PVK_HIDDEN_DEPTH : 0) |
+            ((ci.workgroup[0] & PVK_GFX_READS_STENCIL) ? PVK_HIDDEN_STENCIL : 0);
+    dc = d;
+    if (reads & PVK_HIDDEN_DEPTH) {
+        dc.formats[hidden_logical[0]] = PVK_MTLPixelFormatR32Float;
+        dc.write_masks[hidden_logical[0]] = PVK_MTLColorWriteMaskNone;
+    }
+    if (reads & PVK_HIDDEN_STENCIL) {
+        dc.formats[hidden_logical[1]] = PVK_MTLPixelFormatR8Uint;
+        dc.write_masks[hidden_logical[1]] = PVK_MTLColorWriteMaskNone;
+    }
     if (!pso)
-        pso = pvk_gfx_compile(device, &d, sources[0], names[0], sources[1], names[1], layered,
+        pso = pvk_gfx_compile(device, &dc, sources[0], names[0], sources[1], names[1], layered,
                               ci.dispatch_base_offset != 0, error, sizeof(error));
     if (!pso) {
         pvk_log(PVK_LOG_ERROR, "vkCreateGraphicsPipelines: %s", error);
@@ -56755,9 +57740,44 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         pvk_free(alloc, msl[1]);
         pvk_msl_result_free(&vres);
         pvk_msl_result_free(&fres);
+        for (k = 0; k < PVK_VARIANT_COUNT; k++)
+            pvk_free(alloc, variant_msl[k]);
         return VK_ERROR_UNKNOWN;
     }
     pvk_cache_insert(cache, &key, &ci, names[0], names[1], sources[0], sources[1], pso);
+    if (variant_msl[PVK_VARIANT_DEPTH] || variant_msl[PVK_VARIANT_BOUNDS]) {
+        struct pvk_gfx_variants *v = pvk_alloc(alloc, sizeof(*v), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+        if (v) {
+            memset(v, 0, sizeof(*v));
+            v->desc = dc;
+            v->desc.formats[hidden_logical[0]] = PVK_MTLPixelFormatR32Float;
+            v->desc.write_masks[hidden_logical[0]] = PVK_MTLColorWriteMaskRed;
+            v->desc.blend[hidden_logical[0]][0] = 0;
+            v->desc.has_fragment = 1;
+            v->layered = layered;
+            v->invariant = ci.dispatch_base_offset != 0;
+            snprintf(v->vs_entry, sizeof(v->vs_entry), "%s", names[0]);
+            for (k = 0; k < PVK_VARIANT_COUNT; k++) {
+                v->fs_msl[k] = variant_msl[k];
+                memcpy(v->fs_entry[k], variant_entry[k], sizeof(v->fs_entry[k]));
+                variant_msl[k] = NULL;
+            }
+            if (!(v->vs_msl = pvk_strdup_alloc(alloc, sources[0])) || pthread_mutex_init(&v->lock, NULL) != 0) {
+                for (k = 0; k < PVK_VARIANT_COUNT; k++)
+                    pvk_free(alloc, v->fs_msl[k]);
+                pvk_free(alloc, v->vs_msl);
+                pvk_free(alloc, v);
+                v = NULL;
+            }
+        }
+        gfx.variants = v;
+        if (!v) {
+            pvk_log(PVK_LOG_ERROR, "vkCreateGraphicsPipelines: out of memory for the depth copy variants");
+            eager = 0;
+        }
+    }
+    for (k = 0; k < PVK_VARIANT_COUNT; k++)
+        pvk_free(alloc, variant_msl[k]);
     pvk_free(alloc, msl[0]);
     pvk_free(alloc, msl[1]);
     pvk_msl_result_free(&vres);
@@ -56766,6 +57786,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     pipeline = pvk_alloc(alloc, sizeof(*pipeline) + sizeof(gfx), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (!pipeline) {
         pvk_release(pso);
+        pvk_gfx_variants_free(alloc, gfx.variants);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
     pipeline->bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -56775,7 +57796,12 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     pipeline->gfx = (struct pvk_gfx_pipeline *)(pipeline + 1);
     gfx.vertex_bindings = ci.vertex_bindings;
     gfx.draw_index = (ci.workgroup[0] & PVK_GFX_DRAW_INDEX) != 0;
+    gfx.reads = reads;
+    gfx.bounds = gfx.variants && gfx.variants->fs_msl[PVK_VARIANT_BOUNDS];
     *pipeline->gfx = gfx;
+    for (k = 0; k < PVK_VARIANT_COUNT; k++) /* variants that will be needed: now */
+        if (eager & (1u << k))
+            pvk_gfx_variant(device, pipeline, k);
     pvk_creation_feedback(info->pNext, start, hit != 0);
     *pPipeline = (VkPipeline)pipeline;
     return VK_SUCCESS;
@@ -56810,10 +57836,13 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
                                              const VkAllocationCallbacks *pAllocator)
 {
     struct pvk_pipeline *pipeline = (struct pvk_pipeline *)_pipeline;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
     if (!pipeline)
         return;
     pvk_release(pipeline->mtl_pipeline);
-    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), pipeline);
+    if (pipeline->gfx)
+        pvk_gfx_variants_free(alloc, pipeline->gfx->variants);
+    pvk_free(alloc, pipeline);
 }
 
 /* ==========================================================================

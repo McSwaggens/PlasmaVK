@@ -703,6 +703,289 @@ static const uint32_t spv_ycbcr_fs[] = {
     0x000100fd, 0x00010038,
 };
 
+/*
+ * #version 450
+ * layout(location = 0) in vec3 pos;
+ * void main()
+ * {
+ *     gl_Position = vec4(pos, 1.0);
+ * }
+ */
+static const uint32_t spv_pos3_vs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x0000001b, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0007000f, 0x00000000, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000d, 0x00000012, 0x00030003,
+    0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00060005, 0x0000000b,
+    0x505f6c67, 0x65567265, 0x78657472, 0x00000000, 0x00060006, 0x0000000b, 0x00000000, 0x505f6c67,
+    0x7469736f, 0x006e6f69, 0x00070006, 0x0000000b, 0x00000001, 0x505f6c67, 0x746e696f, 0x657a6953,
+    0x00000000, 0x00070006, 0x0000000b, 0x00000002, 0x435f6c67, 0x4470696c, 0x61747369, 0x0065636e,
+    0x00070006, 0x0000000b, 0x00000003, 0x435f6c67, 0x446c6c75, 0x61747369, 0x0065636e, 0x00030005,
+    0x0000000d, 0x00000000, 0x00030005, 0x00000012, 0x00736f70, 0x00030047, 0x0000000b, 0x00000002,
+    0x00050048, 0x0000000b, 0x00000000, 0x0000000b, 0x00000000, 0x00050048, 0x0000000b, 0x00000001,
+    0x0000000b, 0x00000001, 0x00050048, 0x0000000b, 0x00000002, 0x0000000b, 0x00000003, 0x00050048,
+    0x0000000b, 0x00000003, 0x0000000b, 0x00000004, 0x00040047, 0x00000012, 0x0000001e, 0x00000000,
+    0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020,
+    0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040015, 0x00000008, 0x00000020, 0x00000000,
+    0x0004002b, 0x00000008, 0x00000009, 0x00000001, 0x0004001c, 0x0000000a, 0x00000006, 0x00000009,
+    0x0006001e, 0x0000000b, 0x00000007, 0x00000006, 0x0000000a, 0x0000000a, 0x00040020, 0x0000000c,
+    0x00000003, 0x0000000b, 0x0004003b, 0x0000000c, 0x0000000d, 0x00000003, 0x00040015, 0x0000000e,
+    0x00000020, 0x00000001, 0x0004002b, 0x0000000e, 0x0000000f, 0x00000000, 0x00040017, 0x00000010,
+    0x00000006, 0x00000003, 0x00040020, 0x00000011, 0x00000001, 0x00000010, 0x0004003b, 0x00000011,
+    0x00000012, 0x00000001, 0x0004002b, 0x00000006, 0x00000014, 0x3f800000, 0x00040020, 0x00000019,
+    0x00000003, 0x00000007, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8,
+    0x00000005, 0x0004003d, 0x00000010, 0x00000013, 0x00000012, 0x00050051, 0x00000006, 0x00000015,
+    0x00000013, 0x00000000, 0x00050051, 0x00000006, 0x00000016, 0x00000013, 0x00000001, 0x00050051,
+    0x00000006, 0x00000017, 0x00000013, 0x00000002, 0x00070050, 0x00000007, 0x00000018, 0x00000015,
+    0x00000016, 0x00000017, 0x00000014, 0x00050041, 0x00000019, 0x0000001a, 0x0000000d, 0x0000000f,
+    0x0003003e, 0x0000001a, 0x00000018, 0x000100fd, 0x00010038,
+};
+/*
+ * #version 450
+ * layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInput u_depth;
+ * layout(input_attachment_index = 1, set = 0, binding = 1) uniform usubpassInput u_stencil;
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = vec4(subpassLoad(u_depth).r, float(subpassLoad(u_stencil).r), 0.0, 1.0);
+ * }
+ */
+static const uint32_t spv_ds_read_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000021, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000028, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
+    0x00000000, 0x00000001, 0x0008000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009,
+    0x0000000c, 0x00000018, 0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2,
+    0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c,
+    0x00040005, 0x0000000c, 0x65645f75, 0x00687470, 0x00050005, 0x00000018, 0x74735f75, 0x69636e65,
+    0x0000006c, 0x00040047, 0x00000009, 0x0000001e, 0x00000000, 0x00040047, 0x0000000c, 0x00000021,
+    0x00000000, 0x00040047, 0x0000000c, 0x00000022, 0x00000000, 0x00040047, 0x0000000c, 0x0000002b,
+    0x00000000, 0x00040047, 0x00000018, 0x00000021, 0x00000001, 0x00040047, 0x00000018, 0x00000022,
+    0x00000000, 0x00040047, 0x00000018, 0x0000002b, 0x00000001, 0x00020013, 0x00000002, 0x00030021,
+    0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006,
+    0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008, 0x00000009,
+    0x00000003, 0x00090019, 0x0000000a, 0x00000006, 0x00000006, 0x00000000, 0x00000000, 0x00000000,
+    0x00000002, 0x00000000, 0x00040020, 0x0000000b, 0x00000000, 0x0000000a, 0x0004003b, 0x0000000b,
+    0x0000000c, 0x00000000, 0x00040015, 0x0000000e, 0x00000020, 0x00000001, 0x0004002b, 0x0000000e,
+    0x0000000f, 0x00000000, 0x00040017, 0x00000010, 0x0000000e, 0x00000002, 0x0005002c, 0x00000010,
+    0x00000011, 0x0000000f, 0x0000000f, 0x00040015, 0x00000013, 0x00000020, 0x00000000, 0x0004002b,
+    0x00000013, 0x00000014, 0x00000000, 0x00090019, 0x00000016, 0x00000013, 0x00000006, 0x00000000,
+    0x00000000, 0x00000000, 0x00000002, 0x00000000, 0x00040020, 0x00000017, 0x00000000, 0x00000016,
+    0x0004003b, 0x00000017, 0x00000018, 0x00000000, 0x00040017, 0x0000001a, 0x00000013, 0x00000004,
+    0x0004002b, 0x00000006, 0x0000001e, 0x00000000, 0x0004002b, 0x00000006, 0x0000001f, 0x3f800000,
+    0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003d,
+    0x0000000a, 0x0000000d, 0x0000000c, 0x00050062, 0x00000007, 0x00000012, 0x0000000d, 0x00000011,
+    0x00050051, 0x00000006, 0x00000015, 0x00000012, 0x00000000, 0x0004003d, 0x00000016, 0x00000019,
+    0x00000018, 0x00060062, 0x0000001a, 0x0000001b, 0x00000019, 0x00000011, 0x00002000, 0x00050051,
+    0x00000013, 0x0000001c, 0x0000001b, 0x00000000, 0x00040070, 0x00000006, 0x0000001d, 0x0000001c,
+    0x00070050, 0x00000007, 0x00000020, 0x00000015, 0x0000001d, 0x0000001e, 0x0000001f, 0x0003003e,
+    0x00000009, 0x00000020, 0x000100fd, 0x00010038,
+};
+/*
+ * #version 450
+ * layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInputMS u_depth;
+ * layout(input_attachment_index = 1, set = 0, binding = 1) uniform usubpassInputMS u_stencil;
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = vec4(subpassLoad(u_depth, gl_SampleID).r, float(subpassLoad(u_stencil, gl_SampleID).r), 0.0, 1.0);
+ * }
+ */
+static const uint32_t spv_ds_read_ms_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000025, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000023, 0x00020011, 0x00000028, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e,
+    0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x0009000f, 0x00000004, 0x00000004, 0x6e69616d,
+    0x00000000, 0x00000009, 0x0000000c, 0x00000010, 0x0000001b, 0x00030010, 0x00000004, 0x00000007,
+    0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00040005,
+    0x00000009, 0x6f635f6f, 0x00726f6c, 0x00040005, 0x0000000c, 0x65645f75, 0x00687470, 0x00050005,
+    0x00000010, 0x535f6c67, 0x6c706d61, 0x00444965, 0x00050005, 0x0000001b, 0x74735f75, 0x69636e65,
+    0x0000006c, 0x00040047, 0x00000009, 0x0000001e, 0x00000000, 0x00040047, 0x0000000c, 0x00000021,
+    0x00000000, 0x00040047, 0x0000000c, 0x00000022, 0x00000000, 0x00040047, 0x0000000c, 0x0000002b,
+    0x00000000, 0x00040047, 0x00000010, 0x0000000b, 0x00000012, 0x00030047, 0x00000010, 0x0000000e,
+    0x00040047, 0x0000001b, 0x00000021, 0x00000001, 0x00040047, 0x0000001b, 0x00000022, 0x00000000,
+    0x00040047, 0x0000001b, 0x0000002b, 0x00000001, 0x00020013, 0x00000002, 0x00030021, 0x00000003,
+    0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000004,
+    0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008, 0x00000009, 0x00000003,
+    0x00090019, 0x0000000a, 0x00000006, 0x00000006, 0x00000000, 0x00000000, 0x00000001, 0x00000002,
+    0x00000000, 0x00040020, 0x0000000b, 0x00000000, 0x0000000a, 0x0004003b, 0x0000000b, 0x0000000c,
+    0x00000000, 0x00040015, 0x0000000e, 0x00000020, 0x00000001, 0x00040020, 0x0000000f, 0x00000001,
+    0x0000000e, 0x0004003b, 0x0000000f, 0x00000010, 0x00000001, 0x0004002b, 0x0000000e, 0x00000012,
+    0x00000000, 0x00040017, 0x00000013, 0x0000000e, 0x00000002, 0x0005002c, 0x00000013, 0x00000014,
+    0x00000012, 0x00000012, 0x00040015, 0x00000016, 0x00000020, 0x00000000, 0x0004002b, 0x00000016,
+    0x00000017, 0x00000000, 0x00090019, 0x00000019, 0x00000016, 0x00000006, 0x00000000, 0x00000000,
+    0x00000001, 0x00000002, 0x00000000, 0x00040020, 0x0000001a, 0x00000000, 0x00000019, 0x0004003b,
+    0x0000001a, 0x0000001b, 0x00000000, 0x00040017, 0x0000001e, 0x00000016, 0x00000004, 0x0004002b,
+    0x00000006, 0x00000022, 0x00000000, 0x0004002b, 0x00000006, 0x00000023, 0x3f800000, 0x00050036,
+    0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003d, 0x0000000a,
+    0x0000000d, 0x0000000c, 0x0004003d, 0x0000000e, 0x00000011, 0x00000010, 0x00070062, 0x00000007,
+    0x00000015, 0x0000000d, 0x00000014, 0x00000040, 0x00000011, 0x00050051, 0x00000006, 0x00000018,
+    0x00000015, 0x00000000, 0x0004003d, 0x00000019, 0x0000001c, 0x0000001b, 0x0004003d, 0x0000000e,
+    0x0000001d, 0x00000010, 0x00070062, 0x0000001e, 0x0000001f, 0x0000001c, 0x00000014, 0x00002040,
+    0x0000001d, 0x00050051, 0x00000016, 0x00000020, 0x0000001f, 0x00000000, 0x00040070, 0x00000006,
+    0x00000021, 0x00000020, 0x00070050, 0x00000007, 0x00000024, 0x00000018, 0x00000021, 0x00000022,
+    0x00000023, 0x0003003e, 0x00000009, 0x00000024, 0x000100fd, 0x00010038,
+};
+/*
+ * #version 450
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     if (gl_FragCoord.x < 4.0)
+ *         discard;
+ *     o_color = vec4(1.0);
+ * }
+ */
+static const uint32_t spv_discard_left_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000019, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0007000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x00000016, 0x00030010,
+    0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d,
+    0x00000000, 0x00060005, 0x00000009, 0x465f6c67, 0x43676172, 0x64726f6f, 0x00000000, 0x00040005,
+    0x00000016, 0x6f635f6f, 0x00726f6c, 0x00040047, 0x00000009, 0x0000000b, 0x0000000f, 0x00040047,
+    0x00000016, 0x0000001e, 0x00000000, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002,
+    0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040020,
+    0x00000008, 0x00000001, 0x00000007, 0x0004003b, 0x00000008, 0x00000009, 0x00000001, 0x00040015,
+    0x0000000a, 0x00000020, 0x00000000, 0x0004002b, 0x0000000a, 0x0000000b, 0x00000000, 0x00040020,
+    0x0000000c, 0x00000001, 0x00000006, 0x0004002b, 0x00000006, 0x0000000f, 0x40800000, 0x00020014,
+    0x00000010, 0x00040020, 0x00000015, 0x00000003, 0x00000007, 0x0004003b, 0x00000015, 0x00000016,
+    0x00000003, 0x0004002b, 0x00000006, 0x00000017, 0x3f800000, 0x0007002c, 0x00000007, 0x00000018,
+    0x00000017, 0x00000017, 0x00000017, 0x00000017, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200f8, 0x00000005, 0x00050041, 0x0000000c, 0x0000000d, 0x00000009, 0x0000000b,
+    0x0004003d, 0x00000006, 0x0000000e, 0x0000000d, 0x000500b8, 0x00000010, 0x00000011, 0x0000000e,
+    0x0000000f, 0x000300f7, 0x00000013, 0x00000000, 0x000400fa, 0x00000011, 0x00000012, 0x00000013,
+    0x000200f8, 0x00000012, 0x00011140, 0x000200f8, 0x00000013, 0x0003003e, 0x00000016, 0x00000018,
+    0x000100fd, 0x00010038,
+};
+/*
+ * #version 450
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     gl_FragDepth = gl_FragCoord.y / 32.0;
+ *     o_color = vec4(1.0);
+ * }
+ */
+static const uint32_t spv_frag_depth_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000017, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0008000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000008, 0x0000000b, 0x00000014,
+    0x00030010, 0x00000004, 0x00000007, 0x00030010, 0x00000004, 0x0000000c, 0x00030003, 0x00000002,
+    0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00060005, 0x00000008, 0x465f6c67,
+    0x44676172, 0x68747065, 0x00000000, 0x00060005, 0x0000000b, 0x465f6c67, 0x43676172, 0x64726f6f,
+    0x00000000, 0x00040005, 0x00000014, 0x6f635f6f, 0x00726f6c, 0x00040047, 0x00000008, 0x0000000b,
+    0x00000016, 0x00040047, 0x0000000b, 0x0000000b, 0x0000000f, 0x00040047, 0x00000014, 0x0000001e,
+    0x00000000, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006,
+    0x00000020, 0x00040020, 0x00000007, 0x00000003, 0x00000006, 0x0004003b, 0x00000007, 0x00000008,
+    0x00000003, 0x00040017, 0x00000009, 0x00000006, 0x00000004, 0x00040020, 0x0000000a, 0x00000001,
+    0x00000009, 0x0004003b, 0x0000000a, 0x0000000b, 0x00000001, 0x00040015, 0x0000000c, 0x00000020,
+    0x00000000, 0x0004002b, 0x0000000c, 0x0000000d, 0x00000001, 0x00040020, 0x0000000e, 0x00000001,
+    0x00000006, 0x0004002b, 0x00000006, 0x00000011, 0x42000000, 0x00040020, 0x00000013, 0x00000003,
+    0x00000009, 0x0004003b, 0x00000013, 0x00000014, 0x00000003, 0x0004002b, 0x00000006, 0x00000015,
+    0x3f800000, 0x0007002c, 0x00000009, 0x00000016, 0x00000015, 0x00000015, 0x00000015, 0x00000015,
+    0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x00050041,
+    0x0000000e, 0x0000000f, 0x0000000b, 0x0000000d, 0x0004003d, 0x00000006, 0x00000010, 0x0000000f,
+    0x00050088, 0x00000006, 0x00000012, 0x00000010, 0x00000011, 0x0003003e, 0x00000008, 0x00000012,
+    0x0003003e, 0x00000014, 0x00000016, 0x000100fd, 0x00010038,
+};
+/*
+ * #version 450
+ * layout(set = 0, binding = 0) uniform sampler2DMS u_color;
+ * layout(set = 0, binding = 1) uniform sampler2DMS u_depth;
+ * layout(set = 0, binding = 2) uniform usampler2DMS u_stencil;
+ * layout(push_constant) uniform P { int sample_index; } pc;
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     ivec2 p = ivec2(gl_FragCoord.xy);
+ *     vec4 c = texelFetch(u_color, p, pc.sample_index);
+ *     o_color = vec4(c.r, c.g, texelFetch(u_depth, p, pc.sample_index).r, float(texelFetch(u_stencil, p, pc.sample_index).r));
+ * }
+ */
+static const uint32_t spv_ms_fetch_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000043, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x000b000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000d, 0x00000017, 0x0000001c,
+    0x00000024, 0x0000002d, 0x00000038, 0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002,
+    0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000009, 0x00000070,
+    0x00060005, 0x0000000d, 0x465f6c67, 0x43676172, 0x64726f6f, 0x00000000, 0x00030005, 0x00000013,
+    0x00000063, 0x00040005, 0x00000017, 0x6f635f75, 0x00726f6c, 0x00030005, 0x0000001a, 0x00000050,
+    0x00070006, 0x0000001a, 0x00000000, 0x706d6173, 0x695f656c, 0x7865646e, 0x00000000, 0x00030005,
+    0x0000001c, 0x00006370, 0x00040005, 0x00000024, 0x6f635f6f, 0x00726f6c, 0x00040005, 0x0000002d,
+    0x65645f75, 0x00687470, 0x00050005, 0x00000038, 0x74735f75, 0x69636e65, 0x0000006c, 0x00040047,
+    0x0000000d, 0x0000000b, 0x0000000f, 0x00040047, 0x00000017, 0x00000021, 0x00000000, 0x00040047,
+    0x00000017, 0x00000022, 0x00000000, 0x00030047, 0x0000001a, 0x00000002, 0x00050048, 0x0000001a,
+    0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x00000024, 0x0000001e, 0x00000000, 0x00040047,
+    0x0000002d, 0x00000021, 0x00000001, 0x00040047, 0x0000002d, 0x00000022, 0x00000000, 0x00040047,
+    0x00000038, 0x00000021, 0x00000002, 0x00040047, 0x00000038, 0x00000022, 0x00000000, 0x00020013,
+    0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000001,
+    0x00040017, 0x00000007, 0x00000006, 0x00000002, 0x00040020, 0x00000008, 0x00000007, 0x00000007,
+    0x00030016, 0x0000000a, 0x00000020, 0x00040017, 0x0000000b, 0x0000000a, 0x00000004, 0x00040020,
+    0x0000000c, 0x00000001, 0x0000000b, 0x0004003b, 0x0000000c, 0x0000000d, 0x00000001, 0x00040017,
+    0x0000000e, 0x0000000a, 0x00000002, 0x00040020, 0x00000012, 0x00000007, 0x0000000b, 0x00090019,
+    0x00000014, 0x0000000a, 0x00000001, 0x00000000, 0x00000000, 0x00000001, 0x00000001, 0x00000000,
+    0x0003001b, 0x00000015, 0x00000014, 0x00040020, 0x00000016, 0x00000000, 0x00000015, 0x0004003b,
+    0x00000016, 0x00000017, 0x00000000, 0x0003001e, 0x0000001a, 0x00000006, 0x00040020, 0x0000001b,
+    0x00000009, 0x0000001a, 0x0004003b, 0x0000001b, 0x0000001c, 0x00000009, 0x0004002b, 0x00000006,
+    0x0000001d, 0x00000000, 0x00040020, 0x0000001e, 0x00000009, 0x00000006, 0x00040020, 0x00000023,
+    0x00000003, 0x0000000b, 0x0004003b, 0x00000023, 0x00000024, 0x00000003, 0x00040015, 0x00000025,
+    0x00000020, 0x00000000, 0x0004002b, 0x00000025, 0x00000026, 0x00000000, 0x00040020, 0x00000027,
+    0x00000007, 0x0000000a, 0x0004002b, 0x00000025, 0x0000002a, 0x00000001, 0x0004003b, 0x00000016,
+    0x0000002d, 0x00000000, 0x00090019, 0x00000035, 0x00000025, 0x00000001, 0x00000000, 0x00000000,
+    0x00000001, 0x00000001, 0x00000000, 0x0003001b, 0x00000036, 0x00000035, 0x00040020, 0x00000037,
+    0x00000000, 0x00000036, 0x0004003b, 0x00000037, 0x00000038, 0x00000000, 0x00040017, 0x0000003e,
+    0x00000025, 0x00000004, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8,
+    0x00000005, 0x0004003b, 0x00000008, 0x00000009, 0x00000007, 0x0004003b, 0x00000012, 0x00000013,
+    0x00000007, 0x0004003d, 0x0000000b, 0x0000000f, 0x0000000d, 0x0007004f, 0x0000000e, 0x00000010,
+    0x0000000f, 0x0000000f, 0x00000000, 0x00000001, 0x0004006e, 0x00000007, 0x00000011, 0x00000010,
+    0x0003003e, 0x00000009, 0x00000011, 0x0004003d, 0x00000015, 0x00000018, 0x00000017, 0x0004003d,
+    0x00000007, 0x00000019, 0x00000009, 0x00050041, 0x0000001e, 0x0000001f, 0x0000001c, 0x0000001d,
+    0x0004003d, 0x00000006, 0x00000020, 0x0000001f, 0x00040064, 0x00000014, 0x00000021, 0x00000018,
+    0x0007005f, 0x0000000b, 0x00000022, 0x00000021, 0x00000019, 0x00000040, 0x00000020, 0x0003003e,
+    0x00000013, 0x00000022, 0x00050041, 0x00000027, 0x00000028, 0x00000013, 0x00000026, 0x0004003d,
+    0x0000000a, 0x00000029, 0x00000028, 0x00050041, 0x00000027, 0x0000002b, 0x00000013, 0x0000002a,
+    0x0004003d, 0x0000000a, 0x0000002c, 0x0000002b, 0x0004003d, 0x00000015, 0x0000002e, 0x0000002d,
+    0x0004003d, 0x00000007, 0x0000002f, 0x00000009, 0x00050041, 0x0000001e, 0x00000030, 0x0000001c,
+    0x0000001d, 0x0004003d, 0x00000006, 0x00000031, 0x00000030, 0x00040064, 0x00000014, 0x00000032,
+    0x0000002e, 0x0007005f, 0x0000000b, 0x00000033, 0x00000032, 0x0000002f, 0x00000040, 0x00000031,
+    0x00050051, 0x0000000a, 0x00000034, 0x00000033, 0x00000000, 0x0004003d, 0x00000036, 0x00000039,
+    0x00000038, 0x0004003d, 0x00000007, 0x0000003a, 0x00000009, 0x00050041, 0x0000001e, 0x0000003b,
+    0x0000001c, 0x0000001d, 0x0004003d, 0x00000006, 0x0000003c, 0x0000003b, 0x00040064, 0x00000035,
+    0x0000003d, 0x00000039, 0x0007005f, 0x0000003e, 0x0000003f, 0x0000003d, 0x0000003a, 0x00002040,
+    0x0000003c, 0x00050051, 0x00000025, 0x00000040, 0x0000003f, 0x00000000, 0x00040070, 0x0000000a,
+    0x00000041, 0x00000040, 0x00070050, 0x0000000b, 0x00000042, 0x00000029, 0x0000002c, 0x00000034,
+    0x00000041, 0x0003003e, 0x00000024, 0x00000042, 0x000100fd, 0x00010038,
+};
+/*
+ * #version 450
+ * layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInput u_depth;
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = vec4(subpassLoad(u_depth).r, 0.0, 0.0, 1.0);
+ * }
+ */
+static const uint32_t spv_depth_read_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000019, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000028, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
+    0x00000000, 0x00000001, 0x0007000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009,
+    0x0000000c, 0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c, 0x00040005,
+    0x0000000c, 0x65645f75, 0x00687470, 0x00040047, 0x00000009, 0x0000001e, 0x00000000, 0x00040047,
+    0x0000000c, 0x00000021, 0x00000000, 0x00040047, 0x0000000c, 0x00000022, 0x00000000, 0x00040047,
+    0x0000000c, 0x0000002b, 0x00000000, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002,
+    0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040020,
+    0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008, 0x00000009, 0x00000003, 0x00090019,
+    0x0000000a, 0x00000006, 0x00000006, 0x00000000, 0x00000000, 0x00000000, 0x00000002, 0x00000000,
+    0x00040020, 0x0000000b, 0x00000000, 0x0000000a, 0x0004003b, 0x0000000b, 0x0000000c, 0x00000000,
+    0x00040015, 0x0000000e, 0x00000020, 0x00000001, 0x0004002b, 0x0000000e, 0x0000000f, 0x00000000,
+    0x00040017, 0x00000010, 0x0000000e, 0x00000002, 0x0005002c, 0x00000010, 0x00000011, 0x0000000f,
+    0x0000000f, 0x00040015, 0x00000013, 0x00000020, 0x00000000, 0x0004002b, 0x00000013, 0x00000014,
+    0x00000000, 0x0004002b, 0x00000006, 0x00000016, 0x00000000, 0x0004002b, 0x00000006, 0x00000017,
+    0x3f800000, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005,
+    0x0004003d, 0x0000000a, 0x0000000d, 0x0000000c, 0x00050062, 0x00000007, 0x00000012, 0x0000000d,
+    0x00000011, 0x00050051, 0x00000006, 0x00000015, 0x00000012, 0x00000000, 0x00070050, 0x00000007,
+    0x00000018, 0x00000015, 0x00000016, 0x00000016, 0x00000017, 0x0003003e, 0x00000009, 0x00000018,
+    0x000100fd, 0x00010038,
+};
+
 /* ==========================================================================
  * Harness
  * ========================================================================== */
@@ -2967,6 +3250,290 @@ static void test_local_read(void)
     }
 }
 
+/* ---- Depth/stencil input attachments ----
+ *
+ * A scene writes depth and stencil (a depth-only pipeline, a sloped
+ * triangle whose fragments partly fail the depth test (stencil INVERT) or
+ * are discarded, gl_FragDepth); then a full-screen draw reads them as input
+ * attachments into an RGBA32F image: (depth, stencil, 0, 1). That must be
+ * what the attachments store, read back after the pass: bit for bit with
+ * one sample; per sample with four (a few ULP for depth: the copy
+ * extrapolates the fragment's depth to the sample). */
+
+/* pos3 triangle lists: a full-screen quad at depth 0.5 (vertices 0-5), a
+ * sloped triangle (6-8), the right quarter (9-14). */
+static const float ds_scene_verts[] = {
+    -1.0f, -1.0f, 0.5f,  1.0f,  -1.0f, 0.5f,  -1.0f, 1.0f,  0.5f, 1.0f, -1.0f, 0.5f, 1.0f, 1.0f, 0.5f,
+    -1.0f, 1.0f,  0.5f,  -1.0f, -1.0f, 0.1f,  1.0f,  -1.0f, 0.35f, -1.0f, 1.0f, 0.9f, 0.5f, -1.0f, 0.5f,
+    1.0f,  -1.0f, 0.5f,  0.5f,  1.0f,  0.5f,  1.0f,  -1.0f, 0.5f, 1.0f,  1.0f, 0.5f, 0.5f, 1.0f,  0.5f,
+};
+
+struct ds_setup {
+    VkDescriptorSetLayout set_layout; /* input attachments 0 (depth) and 1 (stencil) */
+    VkPipelineLayout layout;
+    VkDescriptorPool pool;
+    VkDescriptorSet set;
+    VkImageView views[2];             /* depth and stencil aspects */
+    struct buf vb;
+    VkPipelineVertexInputStateCreateInfo vi;
+    VkVertexInputBindingDescription binding;
+    VkVertexInputAttributeDescription attr;
+};
+
+static VkImageView aspect_view(const struct img *m, VkImageAspectFlags aspect)
+{
+    VkImageViewCreateInfo info;
+    VkImageView v = VK_NULL_HANDLE;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    info.image = m->image;
+    info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    info.format = m->format;
+    info.subresourceRange.aspectMask = aspect;
+    info.subresourceRange.levelCount = 1;
+    info.subresourceRange.layerCount = 1;
+    vkCreateImageView(device, &info, NULL, &v);
+    return v;
+}
+
+static void ds_setup_init(struct ds_setup *s, const struct img *ds)
+{
+    VkDescriptorSetLayoutBinding b[2];
+    VkDescriptorSetLayoutCreateInfo sli;
+    VkPipelineLayoutCreateInfo pli;
+    VkDescriptorPoolSize size = { VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 2 };
+    VkDescriptorPoolCreateInfo pi;
+    VkDescriptorSetAllocateInfo ai;
+    VkDescriptorImageInfo ii[2];
+    VkWriteDescriptorSet w;
+    uint32_t i, n = 0;
+
+    memset(s, 0, sizeof(*s));
+    memset(b, 0, sizeof(b));
+    for (i = 0; i < 2; i++) {
+        b[i].binding = i;
+        b[i].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+        b[i].descriptorCount = 1;
+        b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    memset(&sli, 0, sizeof(sli));
+    sli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    sli.bindingCount = 2;
+    sli.pBindings = b;
+    vkCreateDescriptorSetLayout(device, &sli, NULL, &s->set_layout);
+    memset(&pli, 0, sizeof(pli));
+    pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pli.setLayoutCount = 1;
+    pli.pSetLayouts = &s->set_layout;
+    vkCreatePipelineLayout(device, &pli, NULL, &s->layout);
+    memset(&pi, 0, sizeof(pi));
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes = &size;
+    vkCreateDescriptorPool(device, &pi, NULL, &s->pool);
+    memset(&ai, 0, sizeof(ai));
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = s->pool;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &s->set_layout;
+    vkAllocateDescriptorSets(device, &ai, &s->set);
+    memset(ii, 0, sizeof(ii));
+    if (ds->aspects & VK_IMAGE_ASPECT_DEPTH_BIT)
+        s->views[n++] = aspect_view(ds, VK_IMAGE_ASPECT_DEPTH_BIT);
+    if (ds->aspects & VK_IMAGE_ASPECT_STENCIL_BIT)
+        s->views[n++] = aspect_view(ds, VK_IMAGE_ASPECT_STENCIL_BIT);
+    for (i = 0; i < n; i++) {
+        ii[i].imageView = s->views[i];
+        ii[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    memset(&w, 0, sizeof(w));
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = s->set;
+    w.descriptorCount = n;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    w.pImageInfo = ii;
+    vkUpdateDescriptorSets(device, 1, &w, 0, NULL);
+    s->vb = make_buf(sizeof(ds_scene_verts));
+    memcpy(s->vb.data, ds_scene_verts, sizeof(ds_scene_verts));
+    s->binding.stride = 12;
+    s->attr.format = VK_FORMAT_R32G32B32_SFLOAT;
+    memset(&s->vi, 0, sizeof(s->vi));
+    s->vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    s->vi.vertexBindingDescriptionCount = 1;
+    s->vi.pVertexBindingDescriptions = &s->binding;
+    s->vi.vertexAttributeDescriptionCount = 1;
+    s->vi.pVertexAttributeDescriptions = &s->attr;
+}
+
+static void ds_setup_fini(struct ds_setup *s)
+{
+    vkDestroyImageView(device, s->views[0], NULL);
+    vkDestroyImageView(device, s->views[1], NULL);
+    vkDestroyDescriptorPool(device, s->pool, NULL);
+    vkDestroyPipelineLayout(device, s->layout, NULL);
+    vkDestroyDescriptorSetLayout(device, s->set_layout, NULL);
+    free_buf(&s->vb);
+}
+
+/* The scene's pipelines: [0] depth only (ALWAYS, stencil REPLACE 3), [1] the
+ * sloped triangle (LESS, discards the left 4 columns, stencil INCR / INVERT
+ * on depth fail), [2] gl_FragDepth (y / 32) in the right quarter. The pipe
+ * comes with the attachments (formats or render pass) set. */
+static void ds_scene_pipelines(struct ds_setup *s, const struct pipe *base, bool stencil, VkPipeline out[3])
+{
+    struct pipe p;
+    uint32_t k;
+    for (k = 0; k < 3; k++) {
+        static const uint32_t *const fs[3] = { NULL, spv_discard_left_fs, spv_frag_depth_fs };
+        static const size_t fs_size[3] = { 0, sizeof(spv_discard_left_fs), sizeof(spv_frag_depth_fs) };
+        p = *base;
+        p.vs = spv_pos3_vs;
+        p.vs_size = sizeof(spv_pos3_vs);
+        p.fs = fs[k];
+        p.fs_size = fs_size[k];
+        p.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        p.vertex = &s->vi;
+        p.has_ds = true;
+        memset(&p.ds, 0, sizeof(p.ds));
+        p.ds.depthTestEnable = p.ds.depthWriteEnable = VK_TRUE;
+        p.ds.depthCompareOp = k == 1 ? VK_COMPARE_OP_LESS : VK_COMPARE_OP_ALWAYS;
+        p.ds.stencilTestEnable = stencil && k < 2;
+        p.ds.front.compareOp = VK_COMPARE_OP_ALWAYS;
+        p.ds.front.passOp = k ? VK_STENCIL_OP_INCREMENT_AND_CLAMP : VK_STENCIL_OP_REPLACE;
+        p.ds.front.depthFailOp = VK_STENCIL_OP_INVERT;
+        p.ds.front.failOp = VK_STENCIL_OP_KEEP;
+        p.ds.front.compareMask = p.ds.front.writeMask = 0xff;
+        p.ds.front.reference = 3;
+        p.ds.back = p.ds.front;
+        out[k] = make_pipe(&p);
+    }
+}
+
+static void ds_scene_draw(VkCommandBuffer cb, const struct ds_setup *s, const VkPipeline pipes[3])
+{
+    static const uint32_t first[3] = { 0, 6, 9 }, count[3] = { 6, 3, 6 };
+    VkDeviceSize zero = 0;
+    uint32_t k;
+    vkCmdBindVertexBuffers(cb, 0, 1, &s->vb.buffer, &zero);
+    for (k = 0; k < 3; k++) {
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[k]);
+        vkCmdDraw(cb, count[k], 1, first[k], 0);
+    }
+}
+
+/* Compares (depth, stencil) read through input attachments (RGBA32F
+ * texels of `got`) with the attachments' (depth: D32 floats or D16
+ * units, stencil bytes); tol: depth tolerance. Returns the mismatches. */
+static int ds_compare(const float *got, const void *depth, VkFormat format, const uint8_t *stencil, float tol,
+                      const char *what)
+{
+    uint32_t i;
+    int bad = 0;
+    for (i = 0; i < W * H; i++) {
+        float d = format == VK_FORMAT_D16_UNORM ? (float)((const uint16_t *)depth)[i] / 65535.0f
+                                                : ((const float *)depth)[i];
+        float diff = got[4 * i] - d;
+        bool ok = tol ? diff <= tol && diff >= -tol : got[4 * i] == d;
+        if (stencil && got[4 * i + 1] != (float)stencil[i])
+            ok = false;
+        if (!ok) {
+            if (bad < 4)
+                fprintf(stderr, "%s: pixel (%u, %u) read (%.9g, %g), stored (%.9g, %u)\n", what, i % W, i / W, got[4 * i],
+                        got[4 * i + 1], d, stencil ? stencil[i] : 0);
+            bad++;
+        }
+    }
+    return bad;
+}
+
+/* Dynamic rendering local read of depth (and stencil): depth and stencil
+ * input attachment indices 0 and 1 (VkRenderingInputAttachmentIndexInfo,
+ * vkCmdSetRenderingInputAttachmentIndices). */
+static void ds_local_read_case(VkFormat format)
+{
+    static const uint32_t color_inputs[1] = { VK_ATTACHMENT_UNUSED };
+    static const uint32_t depth_index = 0, stencil_index = 1;
+    struct img out = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img ds = make_img(format, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf got = make_buf(W * H * 16), depth = make_buf(W * H * 4), stencil = make_buf(W * H);
+    bool has_stencil = (ds.aspects & VK_IMAGE_ASPECT_STENCIL_BIT) != 0;
+    VkRenderingInputAttachmentIndexInfo idx;
+    VkMemoryBarrier2 mb;
+    VkDependencyInfo dep;
+    struct ds_setup s;
+    struct pipe p;
+    VkPipeline scene[3], reader;
+    VkCommandBuffer cb;
+    static const float zero[4] = { 0, 0, 0, 0 };
+
+    ds_setup_init(&s, &ds);
+    memset(&idx, 0, sizeof(idx));
+    idx.sType = VK_STRUCTURE_TYPE_RENDERING_INPUT_ATTACHMENT_INDEX_INFO;
+    idx.colorAttachmentCount = 1;
+    idx.pColorAttachmentInputIndices = color_inputs;
+    idx.pDepthInputAttachmentIndex = &depth_index;
+    idx.pStencilInputAttachmentIndex = has_stencil ? &stencil_index : NULL;
+    pipe_init(&p, spv_pos3_vs, sizeof(spv_pos3_vs), NULL, 0);
+    p.color_formats[0] = VK_FORMAT_R32G32B32A32_SFLOAT;
+    p.depth_format = format;
+    p.stencil_format = has_stencil ? format : VK_FORMAT_UNDEFINED;
+    ds_scene_pipelines(&s, &p, has_stencil, scene);
+    p.fs = has_stencil ? spv_ds_read_fs : spv_depth_read_fs;
+    p.fs_size = has_stencil ? sizeof(spv_ds_read_fs) : sizeof(spv_depth_read_fs);
+    p.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    p.vertex = &s.vi;
+    p.layout = s.layout;
+    p.next = &idx;
+    reader = make_pipe(&p);
+    REQUIRE(scene[0] && scene[1] && scene[2] && reader);
+    memset(&mb, 0, sizeof(mb));
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
+    memset(&dep, 0, sizeof(dep));
+    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers = &mb;
+    cb = begin_cmd();
+    begin_rendering(cb, &out, 1, zero, &ds);
+    ds_scene_draw(cb, &s, scene);
+    vkCmdPipelineBarrier2(cb, &dep);
+    vkCmdSetRenderingInputAttachmentIndices(cb, &idx);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, reader);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s.layout, 0, 1, &s.set, 0, NULL);
+    vkCmdDraw(cb, 6, 1, 0, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &out, 0, VK_IMAGE_ASPECT_COLOR_BIT, &got);
+    download(cb, &ds, 0, VK_IMAGE_ASPECT_DEPTH_BIT, &depth);
+    if (has_stencil)
+        download(cb, &ds, 0, VK_IMAGE_ASPECT_STENCIL_BIT, &stencil);
+    submit(cb);
+    CHECK(ds_compare((const float *)got.data, depth.data, format, has_stencil ? stencil.data : NULL, 0.0f,
+                     format == VK_FORMAT_D16_UNORM ? "local read of D16" : "local read of D32S8") == 0);
+    vkDestroyPipeline(device, reader, NULL);
+    vkDestroyPipeline(device, scene[0], NULL);
+    vkDestroyPipeline(device, scene[1], NULL);
+    vkDestroyPipeline(device, scene[2], NULL);
+    ds_setup_fini(&s);
+    free_buf(&got);
+    free_buf(&depth);
+    free_buf(&stencil);
+    free_img(&out);
+    free_img(&ds);
+}
+
+static void test_ds_local_read(void)
+{
+    (void)spv_ds_read_ms_fs; /* TODO(wip) */
+    (void)spv_ms_fetch_fs;
+    ds_local_read_case(VK_FORMAT_D32_SFLOAT_S8_UINT);
+    ds_local_read_case(VK_FORMAT_D16_UNORM);
+}
+
 static uint32_t expect_msaa(uint32_t x, uint32_t y)
 {
     if (y < H / 2)
@@ -3821,6 +4388,7 @@ int main(void)
     RUN(test_clear_attachments);
     RUN(test_subpasses);
     RUN(test_local_read);
+    RUN(test_ds_local_read);
     RUN(test_msaa);
     RUN(test_suspend_secondary);
     RUN(test_imageless_noattachment);
