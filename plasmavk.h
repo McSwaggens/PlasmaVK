@@ -42911,6 +42911,74 @@ static void pvk_spv_subgroup(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     pvk_spv_set(ctx, rid, pvk_spv_sg_apply(ctx, r, v, e));
 }
 
+/* ---- Integer dot products ----
+ *
+ * OpSDot, OpUDot, OpSUDot and their AccSat forms, on integer vectors or on
+ * 32-bit integers holding four 8-bit lanes (PackedVectorFormat4x8Bit).
+ * MSL has no such instruction (integerDotProduct*Accelerated stay
+ * VK_FALSE): each lane is sign- or zero-extended to 64 bits, the products
+ * and their sum are computed in ulong (the low bits of the exact result),
+ * and the result keeps its low bits, or for AccSat the exact dot plus the
+ * accumulator clamped to the result type's range. */
+static void pvk_spv_dot(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    uint32_t op = in->op, rid = in->w[2], a = pvk_spv_arg(ctx, in, 3), b = pvk_spv_arg(ctx, in, 4), n, i, w;
+    bool acc = op >= PVK_SPV_OpSDotAccSat, packed = in->wc > (acc ? 6u : 5u);
+    uint32_t base = acc ? op - 3 : op;
+    bool s1 = base != PVK_SPV_OpUDot, s2 = base == PVK_SPV_OpSDot, rs;
+    struct pvk_spv_type *r = pvk_spv_vtype(ctx, rid), *ta = pvk_spv_vtype(ctx, a), *tb = pvk_spv_vtype(ctx, b);
+    const char *va, *vb, *d = "0ul", *e;
+
+    if (r->op != PVK_SPV_OpTypeInt || !pvk_spv_scalar_of(ctx, ta) || pvk_spv_scalar_of(ctx, ta)->op != PVK_SPV_OpTypeInt ||
+        !pvk_spv_scalar_of(ctx, tb) || pvk_spv_scalar_of(ctx, tb)->op != PVK_SPV_OpTypeInt || ta->op != tb->op ||
+        pvk_spv_components(ta) != pvk_spv_components(tb))
+        pvk_spv_fail(ctx, "malformed integer dot product");
+    rs = r->is_signed;
+    w = r->width;
+    if (packed) {
+        if (in->w[in->wc - 1] != 0 || ta->op != PVK_SPV_OpTypeInt || ta->width != 32 || tb->width != 32)
+            pvk_spv_fail(ctx, "unsupported packed dot product format");
+        n = 4;
+        va = pvk_spv_fmt(ctx, "as_type<%s>(%s)", s1 ? "char4" : "uchar4", pvk_spv_val(ctx, a));
+        vb = pvk_spv_fmt(ctx, "as_type<%s>(%s)", s2 ? "char4" : "uchar4", pvk_spv_val(ctx, b));
+    } else {
+        if (ta->op != PVK_SPV_OpTypeVector)
+            pvk_spv_fail(ctx, "integer dot products take vectors (or packed 32-bit integers)");
+        n = ta->count;
+        va = pvk_spv_ival(ctx, a, s1);
+        vb = pvk_spv_ival(ctx, b, s2);
+    }
+    for (i = 0; i < n; i++) /* (signed lanes go through long: sign extension) */
+        d = pvk_spv_fmt(ctx, "%s%sulong(%s%s.%c%s) * ulong(%s%s.%c%s)", i ? d : "", i ? " + " : "", s1 ? "long(" : "", va,
+                        "xyzw"[i], s1 ? ")" : "", s2 ? "long(" : "", vb, "xyzw"[i], s2 ? ")" : "");
+    d = pvk_spv_fmt(ctx, "(%s)", d);
+    if (!acc) { /* the low w bits */
+        pvk_spv_set_int(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", pvk_spv_scalar_msl(PVK_SPV_OpTypeInt, w, false), d), false);
+        return;
+    }
+    {
+        const char *c = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 5), rs), *sd = pvk_spv_fmt(ctx, "as_type<long>(%s)", d);
+        bool sdot = s1 || s2;
+        if (pvk_spv_get(ctx, in->w[5])->type != in->w[1])
+            pvk_spv_fail(ctx, "the dot product accumulator must have the result type");
+        if (w < 64 && rs)
+            e = pvk_spv_fmt(ctx, "clamp(%s + long(%s), %lldl, %lldl)", sdot ? sd : pvk_spv_fmt(ctx, "long(%s)", d), c,
+                            -(long long)(1ull << (w - 1)), (long long)((1ull << (w - 1)) - 1));
+        else if (w < 64 && sdot)
+            e = pvk_spv_fmt(ctx, "clamp(%s + long(%s), 0l, %lldl)", sd, c, (long long)pvk_spv_mask(w));
+        else if (w < 64)
+            e = pvk_spv_fmt(ctx, "min(%s + ulong(%s), %lluul)", d, c, (unsigned long long)pvk_spv_mask(w));
+        else if (rs)
+            e = pvk_spv_fmt(ctx, "addsat(%s, %s)", sdot ? sd : pvk_spv_fmt(ctx, "long(%s)", d), c);
+        else if (sdot) /* a signed dot added to an unsigned accumulator, saturated to [0, 2^64) */
+            e = pvk_spv_fmt(ctx, "(%s < 0l ? (%s > ulong(-%s) ? %s - ulong(-%s) : 0ul) : addsat(%s, %s))", sd, c, sd, c, sd,
+                            c, d);
+        else
+            e = pvk_spv_fmt(ctx, "addsat(%s, %s)", d, c);
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", r->msl, e));
+    }
+}
+
 static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     uint32_t op = in->op, rid = 0, rtype = 0;
@@ -43280,6 +43348,10 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
     }
     case PVK_SPV_OpGroupNonUniformRotateKHR:
         pvk_spv_subgroup(ctx, in);
+        return;
+    case PVK_SPV_OpSDot: case PVK_SPV_OpUDot: case PVK_SPV_OpSUDot: case PVK_SPV_OpSDotAccSat: case PVK_SPV_OpUDotAccSat:
+    case PVK_SPV_OpSUDotAccSat:
+        pvk_spv_dot(ctx, in);
         return;
     case PVK_SPV_OpExpectKHR: /* a hint: the value */
         if (pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 3))->type != rtype || pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 4))->type != rtype)
@@ -48837,7 +48909,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkWaitSemaphores(VkDevice device, const VkSemapho
  * size (so the compiler fits it). Push constants are bound by GPU address at
  * the translator's push-constant index; descriptor set N is a table
  * (section 11 format) bound at index N, laid out as the pipeline layout's
- * set layout N says (section 12). The pipeline cache is not used yet.
+ * set layout N says (section 12). The shader checks bounds as the device's
+ * robustness features and VkPipelineRobustnessCreateInfo ask
+ * (pvk_pipeline_robustness). The pipeline cache is not used yet.
  * ========================================================================== */
 
 struct pvk_shader_module {
@@ -49004,6 +49078,48 @@ static VkResult pvk_msl_set_layouts(const struct pvk_pipeline_layout *layout, co
     return VK_SUCCESS;
 }
 
+/* The bounds checks a pipeline stage's shader makes (section 13,
+ * ROBUSTNESS): the device's robustBufferAccess (storage, uniform and texel
+ * buffers, vertex input) and robustImageAccess, unless
+ * VkPipelineRobustnessCreateInfo in the pipeline's pNext, then in the
+ * stage's, says otherwise. Every behavior other than DISABLED gets the
+ * checks (they meet ROBUST_*_ACCESS_2's rules as well). */
+static void pvk_pipeline_robustness(const struct pvk_device *device, const void *pipeline_next, const void *stage_next,
+                                    struct pvk_msl_options *options)
+{
+    VkPipelineRobustnessBufferBehavior storage = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT;
+    VkPipelineRobustnessBufferBehavior uniform = storage, vertex = storage;
+    VkPipelineRobustnessImageBehavior images = VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DEVICE_DEFAULT;
+    const void *chains[2];
+    const VkBaseInStructure *ext;
+    bool rba = device->features.core.robustBufferAccess, ria = device->features.v13.robustImageAccess;
+    unsigned i;
+
+    chains[0] = pipeline_next;
+    chains[1] = stage_next; /* the stage's overrides the pipeline's */
+    for (i = 0; i < 2; i++) {
+        for (ext = chains[i]; ext; ext = ext->pNext) {
+            const VkPipelineRobustnessCreateInfo *r = (const VkPipelineRobustnessCreateInfo *)ext;
+            if (ext->sType != VK_STRUCTURE_TYPE_PIPELINE_ROBUSTNESS_CREATE_INFO)
+                continue;
+            if (r->storageBuffers != VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT)
+                storage = r->storageBuffers;
+            if (r->uniformBuffers != VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT)
+                uniform = r->uniformBuffers;
+            if (r->vertexInputs != VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT)
+                vertex = r->vertexInputs;
+            if (r->images != VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DEVICE_DEFAULT)
+                images = r->images;
+        }
+    }
+#define PVK_ROBUST(b, def, off) ((b) == 0 ? (def) : (b) != (off))
+    options->robust_storage_buffers = PVK_ROBUST(storage, rba, VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED);
+    options->robust_uniform_buffers = PVK_ROBUST(uniform, rba, VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED);
+    options->robust_vertex_input = PVK_ROBUST(vertex, rba, VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED);
+    options->robust_images = PVK_ROBUST(images, ria, VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DISABLED);
+#undef PVK_ROBUST
+}
+
 /* VkPipelineCreateFlags2CreateInfo replaces the flags when chained. */
 static VkPipelineCreateFlags2 pvk_pipeline_flags(VkPipelineCreateFlags flags, const void *pNext)
 {
@@ -49046,6 +49162,7 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, const VkC
     memset(&options, 0, sizeof(options));
     options.specialization = stage->pSpecializationInfo;
     options.image_1d_as_2d = true; /* 1D image views are 2D textures of height 1 (section 11) */
+    pvk_pipeline_robustness(device, info->pNext, stage->pNext, &options);
     if (flags & VK_PIPELINE_CREATE_2_DISPATCH_BASE_BIT) {
         options.dispatch_base = true;
         options.dispatch_base_offset = layout ? layout->push_constant_size : 0;
