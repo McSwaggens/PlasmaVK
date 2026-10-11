@@ -34152,8 +34152,10 @@ static uint32_t pvk_mip_levels(uint32_t w, uint32_t h, uint32_t d)
  *     aliased virtual addresses (MTL4VisibilityOptionResourceAlias) fix both,
  *     so on devices with sparseBinding every barrier does (struct
  *     pvk_device's visibility, sections 15 and 16). Then unbound regions
- *     read 0 and drop writes at every memory dependency:
- *     residencyNonResidentStrict.
+ *     read 0 and drop writes at every memory dependency, but not within an
+ *     invocation: there a write to an unbound page reads back (the CTS's
+ *     buffer.ssbo.read_write), so residencyNonResidentStrict is not
+ *     reported.
  *   - Lossless compression (allowGPUOptimizedContents) keeps state outside
  *     the heap: a tile rendered through one texture read zeros through
  *     another mapping it. Sparse textures are made without it; then a heap
@@ -34334,7 +34336,7 @@ static void pvk_sparse_standard_shapes(const struct pvk_physical_device *pd, con
  * each residencyStandard*BlockShape where every format's blocks of that kind
  * are the standard shapes (checked per format here: on M4 Max single-sample
  * 2D, not 2 samples nor 3D), residencyAlignedMipSize and
- * residencyNonResidentStrict (measured, above). sparseAddressSpaceSize:
+ * not residencyNonResidentStrict (measured, above). sparseAddressSpaceSize:
  * placement sparse buffers of maxBufferLength each, about 2 TB of them, fit
  * on M4 Max (macOS 27.2); half of it is reported. Before macOS/iOS 26.4
  * (no supportsPlacementSparse) none of the sparse features is reported. */
@@ -34371,7 +34373,7 @@ static void pvk_physical_device_init_sparse(struct pvk_physical_device *pd)
     sp->residencyStandard2DMultisampleBlockShape = std2dms;
     sp->residencyStandard3DBlockShape = std3d;
     sp->residencyAlignedMipSize = VK_TRUE;
-    sp->residencyNonResidentStrict = VK_TRUE;
+    sp->residencyNonResidentStrict = VK_FALSE;
 }
 
 /* Image creation flags PlasmaVK supports (sparse ones with the sparse

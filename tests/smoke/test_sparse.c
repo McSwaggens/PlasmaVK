@@ -998,11 +998,12 @@ static void test_sparse_properties(void)
     vkGetPhysicalDeviceProperties(pd, &props);
     CHECK(props.limits.sparseAddressSpaceSize >= (1ull << 31));
     /* Measured (section 7): Metal's 64 KB tiles are the standard 2D shapes,
-     * not the 3D and 2-sample ones; ALIGNED_MIP_SIZE; zeros when unbound. */
+     * not the 3D and 2-sample ones; ALIGNED_MIP_SIZE; not strict (an
+     * invocation reads back its own writes to unbound pages). */
     CHECK(sparse_props.residencyStandard2DBlockShape);
     CHECK(!sparse_props.residencyStandard2DMultisampleBlockShape);
     CHECK(!sparse_props.residencyStandard3DBlockShape);
-    CHECK(sparse_props.residencyAlignedMipSize && sparse_props.residencyNonResidentStrict);
+    CHECK(sparse_props.residencyAlignedMipSize && !sparse_props.residencyNonResidentStrict);
     vkGetPhysicalDeviceQueueFamilyProperties(pd, &count, families);
     for (i = 0; i < count; i++)
         if (families[i].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT)
