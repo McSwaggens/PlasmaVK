@@ -29765,6 +29765,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetMemoryMetalHandlePropertiesEXT(
  * application needs no -framework flags. Unused ones are dropped by ld. */
 __asm__(".linker_option \"-framework\", \"Metal\"\n"
         ".linker_option \"-framework\", \"QuartzCore\"\n"
+        ".linker_option \"-framework\", \"CoreGraphics\"\n"
         ".linker_option \"-framework\", \"Foundation\"\n"
         ".linker_option \"-lobjc\"\n");
 
@@ -31284,6 +31285,28 @@ typedef struct pvk__MTLAxisAlignedBoundingBox {
 } pvk__MTLAxisAlignedBoundingBox;
 PVK_ASSERT_SIZE(pvk__MTLAxisAlignedBoundingBox, 24);
 
+/* CoreGraphics and CoreFoundation types of QuartzCore's CAMetalLayer.h
+ * (section 18). CGFloat is double: 64-bit only. Opaque CF types are
+ * pointers to structs of our own (the ABI is the pointer's). */
+typedef double pvk_CGFloat;
+typedef struct pvk_CGPoint {
+    pvk_CGFloat x;
+    pvk_CGFloat y;
+} pvk_CGPoint;
+PVK_ASSERT_SIZE(pvk_CGPoint, 16);
+typedef struct pvk_CGSize {
+    pvk_CGFloat width;
+    pvk_CGFloat height;
+} pvk_CGSize;
+PVK_ASSERT_SIZE(pvk_CGSize, 16);
+typedef struct pvk_CGRect {
+    pvk_CGPoint origin;
+    pvk_CGSize size;
+} pvk_CGRect;
+PVK_ASSERT_SIZE(pvk_CGRect, 32);
+typedef const struct pvk___CFString *pvk_CFStringRef;
+typedef struct pvk_CGColorSpace *pvk_CGColorSpaceRef;
+
 /* ---- Functions and data ---- */
 
 extern id pvk_MTLCreateSystemDefaultDevice(void) __asm__("_MTLCreateSystemDefaultDevice");
@@ -31333,6 +31356,19 @@ extern id const pvk_MTLDynamicLibraryDomain __asm__("_MTLDynamicLibraryDomain");
 extern id const pvk_MTLLogStateErrorDomain __asm__("_MTLLogStateErrorDomain");
 extern id const pvk_MTLBinaryArchiveDomain __asm__("_MTLBinaryArchiveDomain");
 extern id const pvk_MTLIOErrorDomain __asm__("_MTLIOErrorDomain");
+extern pvk_CGColorSpaceRef pvk_CGColorSpaceCreateWithName(pvk_CFStringRef name) __asm__("_CGColorSpaceCreateWithName");
+extern void pvk_CGColorSpaceRelease(pvk_CGColorSpaceRef space) __asm__("_CGColorSpaceRelease");
+extern const pvk_CFStringRef pvk_kCGColorSpaceSRGB __asm__("_kCGColorSpaceSRGB");
+extern const pvk_CFStringRef pvk_kCGColorSpaceDisplayP3 __asm__("_kCGColorSpaceDisplayP3");
+extern const pvk_CFStringRef pvk_kCGColorSpaceDCIP3 __asm__("_kCGColorSpaceDCIP3");
+extern const pvk_CFStringRef pvk_kCGColorSpaceITUR_709 __asm__("_kCGColorSpaceITUR_709");
+extern const pvk_CFStringRef pvk_kCGColorSpaceAdobeRGB1998 __asm__("_kCGColorSpaceAdobeRGB1998");
+extern const pvk_CFStringRef pvk_kCGColorSpaceExtendedSRGB __asm__("_kCGColorSpaceExtendedSRGB");
+extern const pvk_CFStringRef pvk_kCGColorSpaceExtendedLinearSRGB __asm__("_kCGColorSpaceExtendedLinearSRGB");
+extern const pvk_CFStringRef pvk_kCGColorSpaceExtendedLinearDisplayP3 __asm__("_kCGColorSpaceExtendedLinearDisplayP3");
+extern const pvk_CFStringRef pvk_kCGColorSpaceExtendedLinearITUR_2020 __asm__("_kCGColorSpaceExtendedLinearITUR_2020");
+extern const pvk_CFStringRef pvk_kCGColorSpaceITUR_2100_PQ __asm__("_kCGColorSpaceITUR_2100_PQ");
+extern const pvk_CFStringRef pvk_kCGColorSpaceITUR_2100_HLG __asm__("_kCGColorSpaceITUR_2100_HLG");
 
 /* ---- Messages ---- */
 
@@ -31556,6 +31592,35 @@ static inline void pvk_MTLStencilDescriptor_setDepthFailureOperation(id self, pv
 static inline void pvk_MTLStencilDescriptor_setDepthStencilPassOperation(id self, pvk_MTLStencilOperation depthStencilPassOperation) { PVK_SEL_CACHE("setDepthStencilPassOperation:"); PVK_MSG(void, (id, SEL, pvk_MTLStencilOperation))(self, pvk_sel_, depthStencilPassOperation); }
 static inline void pvk_MTLStencilDescriptor_setReadMask(id self, uint32_t readMask) { PVK_SEL_CACHE("setReadMask:"); PVK_MSG(void, (id, SEL, uint32_t))(self, pvk_sel_, readMask); }
 static inline void pvk_MTLStencilDescriptor_setWriteMask(id self, uint32_t writeMask) { PVK_SEL_CACHE("setWriteMask:"); PVK_MSG(void, (id, SEL, uint32_t))(self, pvk_sel_, writeMask); }
+static inline bool pvk_NSObject_respondsToSelector(id self, SEL aSelector) { PVK_SEL_CACHE("respondsToSelector:"); return PVK_MSG(bool, (id, SEL, SEL))(self, pvk_sel_, aSelector); }
+static inline pvk_CGRect pvk_CALayer_bounds(id self) { PVK_SEL_CACHE("bounds"); return PVK_MSG(pvk_CGRect, (id, SEL))(self, pvk_sel_); }
+static inline pvk_CGFloat pvk_CALayer_contentsScale(id self) { PVK_SEL_CACHE("contentsScale"); return PVK_MSG(pvk_CGFloat, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_CALayer_setOpaque(id self, bool opaque) { PVK_SEL_CACHE("setOpaque:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, opaque); }
+static inline id pvk_CAMetalLayer_device(id self) { PVK_SEL_CACHE("device"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_CAMetalLayer_setDevice(id self, id device) { PVK_SEL_CACHE("setDevice:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, device); }
+static inline pvk_MTLPixelFormat pvk_CAMetalLayer_pixelFormat(id self) { PVK_SEL_CACHE("pixelFormat"); return PVK_MSG(pvk_MTLPixelFormat, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_CAMetalLayer_setPixelFormat(id self, pvk_MTLPixelFormat pixelFormat) { PVK_SEL_CACHE("setPixelFormat:"); PVK_MSG(void, (id, SEL, pvk_MTLPixelFormat))(self, pvk_sel_, pixelFormat); }
+static inline void pvk_CAMetalLayer_setFramebufferOnly(id self, bool framebufferOnly) { PVK_SEL_CACHE("setFramebufferOnly:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, framebufferOnly); }
+static inline pvk_CGSize pvk_CAMetalLayer_drawableSize(id self) { PVK_SEL_CACHE("drawableSize"); return PVK_MSG(pvk_CGSize, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_CAMetalLayer_setDrawableSize(id self, pvk_CGSize drawableSize) { PVK_SEL_CACHE("setDrawableSize:"); PVK_MSG(void, (id, SEL, pvk_CGSize))(self, pvk_sel_, drawableSize); }
+static inline id pvk_CAMetalLayer_nextDrawable(id self) { PVK_SEL_CACHE("nextDrawable"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_CAMetalLayer_setMaximumDrawableCount(id self, unsigned long maximumDrawableCount) { PVK_SEL_CACHE("setMaximumDrawableCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, maximumDrawableCount); }
+static inline void pvk_CAMetalLayer_setColorspace(id self, pvk_CGColorSpaceRef colorspace) { PVK_SEL_CACHE("setColorspace:"); PVK_MSG(void, (id, SEL, pvk_CGColorSpaceRef))(self, pvk_sel_, colorspace); }
+static inline void pvk_CAMetalLayer_setWantsExtendedDynamicRangeContent(id self, bool wantsExtendedDynamicRangeContent) { PVK_SEL_CACHE("setWantsExtendedDynamicRangeContent:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, wantsExtendedDynamicRangeContent); }
+static inline void pvk_CAMetalLayer_setDisplaySyncEnabled(id self, bool displaySyncEnabled) { PVK_SEL_CACHE("setDisplaySyncEnabled:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, displaySyncEnabled); }
+static inline id pvk_CAMetalLayer_residencySet(id self) { PVK_SEL_CACHE("residencySet"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_CAMetalDrawable_texture(id self) { PVK_SEL_CACHE("texture"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTLDrawable_present(id self) { PVK_SEL_CACHE("present"); PVK_MSG(void, (id, SEL))(self, pvk_sel_); }
+static inline unsigned long pvk_MTLTexture_width(id self) { PVK_SEL_CACHE("width"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
+static inline unsigned long pvk_MTLTexture_height(id self) { PVK_SEL_CACHE("height"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTL4CommandQueue_signalDrawable(id self, id drawable) { PVK_SEL_CACHE("signalDrawable:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, drawable); }
+static inline void pvk_MTL4CommandQueue_waitForDrawable(id self, id drawable) { PVK_SEL_CACHE("waitForDrawable:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, drawable); }
+static inline void pvk_MTL4CommandBuffer_useResidencySet(id self, id residencySet) { PVK_SEL_CACHE("useResidencySet:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, residencySet); }
+static inline id pvk_MTLSharedEventListener_sharedListener(void) { PVK_CLASS_CACHE("MTLSharedEventListener"); PVK_SEL_CACHE("sharedListener"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTLSharedEvent_notifyListener_atValue_block(id self, id listener, uint64_t value, pvk_MTLSharedEventNotificationBlock block) { PVK_SEL_CACHE("notifyListener:atValue:block:"); PVK_MSG(void, (id, SEL, id, uint64_t, pvk_MTLSharedEventNotificationBlock))(self, pvk_sel_, listener, value, block); }
+static inline void pvk_CATransaction_begin(void) { PVK_CLASS_CACHE("CATransaction"); PVK_SEL_CACHE("begin"); PVK_MSG(void, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_CATransaction_commit(void) { PVK_CLASS_CACHE("CATransaction"); PVK_SEL_CACHE("commit"); PVK_MSG(void, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_CATransaction_setDisableActions(bool flag) { PVK_CLASS_CACHE("CATransaction"); PVK_SEL_CACHE("setDisableActions:"); PVK_MSG(void, (id, SEL, bool))((id)pvk_cls_, pvk_sel_, flag); }
 
 /* ==========================================================================
  * 5. Internals
@@ -31693,6 +31758,8 @@ enum pvk_instance_extension {
     PVK_INSTANCE_EXT_KHR_surface,
     PVK_INSTANCE_EXT_EXT_metal_surface,
     PVK_INSTANCE_EXT_KHR_portability_enumeration, /* accepted so MoltenVK-era apps keep working */
+    /* No commands: the surface color spaces CAMetalLayer can show (section 18). */
+    PVK_INSTANCE_EXT_EXT_swapchain_colorspace,
     PVK_INSTANCE_EXTENSION_COUNT
 };
 
@@ -31700,6 +31767,7 @@ static const VkExtensionProperties pvk_instance_extensions[] = {
     { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_SURFACE_SPEC_VERSION },
     { VK_EXT_METAL_SURFACE_EXTENSION_NAME, VK_EXT_METAL_SURFACE_SPEC_VERSION },
     { VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME, VK_KHR_PORTABILITY_ENUMERATION_SPEC_VERSION },
+    { VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME, VK_EXT_SWAPCHAIN_COLOR_SPACE_SPEC_VERSION },
 };
 
 enum pvk_device_extension {
@@ -34743,6 +34811,9 @@ static VkResult pvk_image_bind(struct pvk_device *device, struct pvk_image *imag
     return VK_SUCCESS;
 }
 
+/* Section 18: the memory of a swapchain's image (bound at offset 0). */
+static struct pvk_device_memory *pvk_swapchain_image_memory(VkSwapchainKHR swapchain, uint32_t index);
+
 VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory2(VkDevice device, uint32_t bindInfoCount,
                                                   const VkBindImageMemoryInfo *pBindInfos)
 {
@@ -34750,9 +34821,19 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory2(VkDevice device, uint32_t bind
     uint32_t i;
     for (i = 0; i < bindInfoCount; i++) {
         const VkBindImageMemoryInfo *info = &pBindInfos[i];
+        struct pvk_device_memory *memory = (struct pvk_device_memory *)info->memory;
+        VkDeviceSize offset = info->memoryOffset;
         const VkBaseInStructure *ext;
-        VkResult r = pvk_image_bind((struct pvk_device *)device, (struct pvk_image *)info->image,
-                                    (struct pvk_device_memory *)info->memory, info->memoryOffset);
+        VkResult r;
+        for (ext = info->pNext; ext; ext = ext->pNext) {
+            if (ext->sType == VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_SWAPCHAIN_INFO_KHR) {
+                /* VK_KHR_swapchain with Vulkan 1.1: alias a swapchain image */
+                const VkBindImageMemorySwapchainInfoKHR *s = (const VkBindImageMemorySwapchainInfoKHR *)ext;
+                memory = pvk_swapchain_image_memory(s->swapchain, s->imageIndex);
+                offset = 0;
+            }
+        }
+        r = pvk_image_bind((struct pvk_device *)device, (struct pvk_image *)info->image, memory, offset);
         for (ext = info->pNext; ext; ext = ext->pNext)
             if (ext->sType == VK_STRUCTURE_TYPE_BIND_MEMORY_STATUS)
                 *((const VkBindMemoryStatus *)ext)->pResult = r;
@@ -47407,6 +47488,7 @@ struct pvk_deferred_batch {
     id cb;            /* NULL: no command buffers */
     uint32_t first;   /* in ops: nwaits waits, then nsignals signals */
     uint32_t nwaits, nsignals;
+    id drawable;      /* presentation (section 18): cb copies into it, then it is presented; owned */
 };
 
 struct pvk_deferred {
@@ -47450,8 +47532,11 @@ static VkResult pvk_queue_init(struct pvk_queue *queue)
 static void pvk_deferred_free(struct pvk_device *device, struct pvk_deferred *d)
 {
     struct pvk_deferred *next;
+    uint32_t b;
     for (; d; d = next) {
         next = d->next;
+        for (b = 0; b < d->nbatches; b++) /* presentations dropped when the device went away */
+            pvk_release(d->batches[b].drawable);
         pvk_free(pvk_device_alloc(device), d);
     }
 }
@@ -50311,6 +50396,9 @@ static void pvk_queue_commit(struct pvk_queue *queue, id cb)
     pvk_release(options);
 }
 
+/* "Presentation" below: commits a present's copy and presents the drawable. */
+static void pvk_present_commit(struct pvk_queue *queue, id cb, id drawable);
+
 /* ---- Semaphore waits ----
  *
  * A queue's -waitForEvent:value: gives up silently after about 4 s (M4 Max,
@@ -50380,7 +50468,7 @@ static void *pvk_queue_thread(void *arg)
         d = queue->deferred; /* stays at the head until done: vkQueueSubmit commits nothing meanwhile */
         pthread_mutex_unlock(&queue->lock);
         for (b = 0; b < d->nbatches && !stop; b++) {
-            const struct pvk_deferred_batch *db = &d->batches[b];
+            struct pvk_deferred_batch *db = &d->batches[b];
             void *pool = objc_autoreleasePoolPush();
             for (k = 0; k < db->nwaits && !stop; k++) {
                 const struct pvk_event_value *w = &d->ops[db->first + k];
@@ -50388,8 +50476,13 @@ static void *pvk_queue_thread(void *arg)
                     stop = __atomic_load_n(&queue->stop, __ATOMIC_ACQUIRE);
             }
             if (!stop) {
-                if (db->cb)
+                if (db->drawable) {
+                    pvk_present_commit(queue, db->cb, db->drawable);
+                    pvk_release(db->drawable);
+                    db->drawable = NULL;
+                } else if (db->cb) {
                     pvk_queue_commit(queue, db->cb);
+                }
                 for (k = 0; k < db->nsignals; k++) {
                     const struct pvk_event_value *s = &d->ops[db->first + db->nwaits + k];
                     pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, s->event, s->value);
@@ -50640,6 +50733,128 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue _queue, uint32_t submitCoun
     result = pvk_queue_submit(queue, submitCount, submits, fence);
     pvk_free(alloc, submits);
     return result;
+}
+
+/* ---- Presentation ----
+ *
+ * The queue operation of vkQueuePresentKHR (section 18 gets the drawables
+ * and encodes the copies): wait for the present's semaphores, then per
+ * swapchain commit the command buffer that copies its image into a
+ * CAMetalDrawable between -waitForDrawable: and -signalDrawable:, and
+ * -present the drawable. Like a submission it takes the queue's next serial;
+ * the timeline reaches it when the copies are done, which is when the images
+ * are the application's again (section 18). The waits are resolved as a
+ * submission's: at once when their values are reached and the queue has no
+ * backlog, otherwise by the queue's thread, in order with the submissions. */
+
+struct pvk_present_batch {
+    struct pvk_submission *s; /* the copy; NULL: nothing to present to that swapchain */
+    id drawable;              /* retained; NULL when s is */
+};
+
+static void pvk_present_commit(struct pvk_queue *queue, id cb, id drawable)
+{
+    pvk_MTL4CommandQueue_waitForDrawable(queue->mtl_queue, drawable);
+    pvk_queue_commit(queue, cb);
+    pvk_MTL4CommandQueue_signalDrawable(queue->mtl_queue, drawable);
+    pvk_MTLDrawable_present(drawable);
+}
+
+/* Takes over the batches' submissions and drawables, also on failure.
+ * *serial: the value of the queue's timeline that follows the copies. */
+static VkResult pvk_queue_present(struct pvk_queue *queue, uint32_t nwaits, const VkSemaphore *waits,
+                                  struct pvk_present_batch *batches, uint32_t count, uint64_t *serial)
+{
+    struct pvk_device *device = queue->device;
+    struct pvk_deferred *done, *d = NULL;
+    VkResult result = VK_SUCCESS;
+    bool backlog, ready = true;
+    uint32_t i;
+
+    pthread_mutex_lock(&queue->lock);
+    done = queue->done;
+    queue->done = NULL;
+    backlog = queue->deferred != NULL; /* then the present waits behind it */
+    pthread_mutex_unlock(&queue->lock);
+    pvk_deferred_free(device, done);
+    *serial = queue->serial + 1;
+    /* Binary semaphores: a wait is for the signals submitted so far. */
+    for (i = 0; i < nwaits && ready; i++) {
+        const struct pvk_semaphore *sem = (const struct pvk_semaphore *)waits[i];
+        ready = pvk_MTLSharedEvent_signaledValue(sem->event) >= sem->value;
+    }
+    if (pvk_device_lost(device))
+        result = VK_ERROR_DEVICE_LOST;
+    if (result == VK_SUCCESS && (backlog || !ready)) {
+        d = pvk_alloc(pvk_device_alloc(device),
+                      sizeof(*d) + sizeof(*d->batches) * count + sizeof(*d->ops) * nwaits,
+                      VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+        if (!d)
+            result = VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    if (d) {
+        d->timeline = *serial;
+        d->nbatches = count;
+        d->batches = (struct pvk_deferred_batch *)(d + 1);
+        d->ops = (struct pvk_event_value *)(d->batches + count);
+        for (i = 0; i < nwaits; i++) {
+            d->ops[i].event = ((const struct pvk_semaphore *)waits[i])->event;
+            d->ops[i].value = ((const struct pvk_semaphore *)waits[i])->value;
+        }
+        d->batches[0].nwaits = nwaits; /* the first batch waits, the others follow it */
+        for (i = 0; i < count; i++)
+            d->batches[i].cb = batches[i].s ? batches[i].s->cb : NULL;
+        if (!queue->thread_running) {
+            if (pthread_create(&queue->thread, NULL, pvk_queue_thread, queue) == 0)
+                queue->thread_running = true;
+            else
+                result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
+    }
+    if (result != VK_SUCCESS) {
+        pvk_free(pvk_device_alloc(device), d);
+        for (i = 0; i < count; i++) {
+            pvk_release(batches[i].drawable);
+            if (batches[i].s)
+                pvk_queue_put_submissions(queue, batches[i].s);
+        }
+        return result;
+    }
+
+    if (d) {
+        for (i = 0; i < count; i++)
+            d->batches[i].drawable = batches[i].drawable;
+        pthread_mutex_lock(&queue->lock);
+        if (queue->deferred_tail)
+            queue->deferred_tail->next = d;
+        else
+            queue->deferred = d;
+        queue->deferred_tail = d;
+        pthread_cond_broadcast(&queue->cond);
+        pthread_mutex_unlock(&queue->lock);
+    } else {
+        for (i = 0; i < count; i++) {
+            if (batches[i].drawable) {
+                pvk_present_commit(queue, batches[i].s->cb, batches[i].drawable);
+                pvk_release(batches[i].drawable);
+            }
+        }
+        pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, queue->timeline, *serial);
+    }
+    queue->serial = *serial;
+    for (i = 0; i < count; i++) {
+        struct pvk_submission *s = batches[i].s;
+        if (!s)
+            continue;
+        s->serial = *serial;
+        s->next = NULL;
+        if (queue->pending_tail)
+            queue->pending_tail->next = s;
+        else
+            queue->pending = s;
+        queue->pending_tail = s;
+    }
+    return VK_SUCCESS;
 }
 
 /* ---- Waiting ---- */
@@ -52644,7 +52859,776 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
  * 18. Window system integration
  *
  * VK_EXT_metal_surface surfaces (CAMetalLayer) and VK_KHR_swapchain.
+ *
+ * SURFACES
+ *   A VkSurfaceKHR is its CAMetalLayer, retained. The surface's size is the
+ *   layer's bounds times its contentsScale (as GLFW and SDL size the layers of
+ *   their views); a layer without area (never laid out, e.g. not in a window)
+ *   has the special currentExtent 0xFFFFFFFF: the swapchain's extent decides,
+ *   since it becomes the layer's drawableSize. Any extent up to
+ *   maxImageDimension2D can be presented, the layer scales drawables to its
+ *   bounds. Formats: those CAMetalLayer takes that Vulkan has (BGRA8 UNORM
+ *   and SRGB, RGBA16F, RGB10A2, BGR10A2) in sRGB, and with
+ *   VK_EXT_swapchain_colorspace enabled the color spaces CoreGraphics names
+ *   (the layer's colorspace; wantsExtendedDynamicRangeContent for extended
+ *   and HDR ones). Present modes: FIFO, and IMMEDIATE where the layer has
+ *   displaySyncEnabled (macOS). MAILBOX is not offered: Core Animation shows
+ *   every drawable presented, it cannot replace a queued one. Every queue
+ *   family can present.
+ *
+ * SWAPCHAIN IMAGES
+ *   Ordinary VkImages, each bound to a VkDeviceMemory of its own, made with
+ *   the swapchain. vkQueuePresentKHR copies the image into a CAMetalDrawable
+ *   and presents the drawable. The alternative, images that are the
+ *   drawables' textures, would change a VkImage's MTLTexture at every
+ *   acquire, while views, descriptors and attachments made from it keep the
+ *   old texture (or its resource ID), and the drawable pool is the layer's to
+ *   resize. With a copy the handles and textures never change, images have
+ *   every usage their format has (section 7), and acquiring needs no
+ *   drawable. The costs: a copy per present, and drawables that are not
+ *   framebufferOnly (the copy writes them). The swapchain configures the
+ *   layer: device, pixelFormat, drawableSize (the image extent),
+ *   maximumDrawableCount (the image count, 2 or 3: Core Animation's range),
+ *   framebufferOnly NO, colorspace and EDR, displaySyncEnabled, and opaque
+ *   for compositeAlpha OPAQUE / PRE_MULTIPLIED (INHERIT leaves it alone).
+ *
+ * ACQUIRE AND PRESENT
+ *   vkQueuePresentKHR gets a drawable with -nextDrawable on the calling
+ *   thread (it blocks while all of the layer's drawables are queued for
+ *   display: the FIFO throttle), encodes the copy, and section 16 commits it
+ *   once the wait semaphores are signalled and presents the drawable. The
+ *   image goes back to the presentation engine, released when the queue's
+ *   timeline reaches the present's serial (the copy is done).
+ *   vkAcquireNextImageKHR never waits for the GPU: it returns an image the
+ *   application does not hold, released ones first, then the one presented
+ *   longest ago. The fence becomes (timeline, serial) as after a submission;
+ *   the binary semaphore is signalled at once when the image is released,
+ *   otherwise by a block of MTLSharedEventListener's shared listener when the
+ *   timeline gets there. Nothing can be returned only while the application
+ *   holds every image: VK_NOT_READY with timeout 0, otherwise VK_TIMEOUT when
+ *   it expires (no present can come meanwhile: the swapchain is externally
+ *   synchronized).
+ *
+ * OUT OF DATE
+ *   VK_ERROR_OUT_OF_DATE_KHR when the layer no longer makes drawables for the
+ *   swapchain's images: someone else changed its drawableSize (views that
+ *   size drawables themselves, as MTKView and SDL's do) or pixelFormat (a
+ *   newer swapchain). VK_SUBOPTIMAL_KHR when only the layer's size (bounds
+ *   times contentsScale) differs from the swapchain's extent: presents still
+ *   work, scaled. Both from acquires and presents; a present that is out of
+ *   date shows nothing but still waits for its semaphores, then releases the
+ *   image. A retired swapchain presents what the application acquired from it
+ *   while the layer still fits it.
  * ========================================================================== */
+
+struct pvk_surface {
+    id layer; /* CAMetalLayer, retained */
+};
+
+#define PVK_SWAPCHAIN_MIN_IMAGES 2
+#define PVK_SWAPCHAIN_MAX_IMAGES 3 /* CAMetalLayer's maximumDrawableCount range */
+
+/* Every usage section 7 has for some surface format. */
+#define PVK_SWAPCHAIN_USAGE                                                                              \
+    (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |      \
+     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)
+
+struct pvk_swapchain_image {
+    VkImage image;
+    VkDeviceMemory memory;
+    bool acquired;          /* by the application */
+    id release_event;       /* a queue's timeline: presented, released once it reaches release_value; NULL: free */
+    uint64_t release_value;
+    uint64_t presented;     /* sequence number of its last present (0: never presented) */
+};
+
+struct pvk_swapchain {
+    struct pvk_device *device;
+    id layer;                   /* CAMetalLayer, retained */
+    struct pvk_swapchain *next; /* in pvk_swapchains while not retired */
+    bool retired;
+    VkExtent2D extent;
+    pvk_MTLPixelFormat mtl_format;
+    uint64_t presents;
+    uint32_t image_count;
+    struct pvk_swapchain_image images[PVK_SWAPCHAIN_MAX_IMAGES];
+};
+
+/* Swapchains that are not retired, of all devices: the layers (native
+ * windows) associated with a swapchain. */
+static pthread_mutex_t pvk_swapchain_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct pvk_swapchain *pvk_swapchains;
+
+/* ---- Surfaces ---- */
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateMetalSurfaceEXT(VkInstance instance, const VkMetalSurfaceCreateInfoEXT *pCreateInfo,
+                                                       const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface)
+{
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_instance_alloc((struct pvk_instance *)instance);
+    struct pvk_surface *surface = pvk_alloc(alloc, sizeof(*surface), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!surface)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    surface->layer = pvk_retain((id)(uintptr_t)pCreateInfo->pLayer);
+    *pSurface = (VkSurfaceKHR)surface;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroySurfaceKHR(VkInstance instance, VkSurfaceKHR _surface,
+                                               const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_surface *surface = (struct pvk_surface *)_surface;
+    if (!surface)
+        return;
+    pvk_release(surface->layer);
+    pvk_free(pAllocator ? pAllocator : pvk_instance_alloc((struct pvk_instance *)instance), surface);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice physicalDevice,
+                                                                    uint32_t queueFamilyIndex, VkSurfaceKHR surface,
+                                                                    VkBool32 *pSupported)
+{
+    (void)physicalDevice;
+    (void)surface;
+    *pSupported = queueFamilyIndex < PVK_QUEUE_FAMILY_COUNT ? VK_TRUE : VK_FALSE;
+    return VK_SUCCESS;
+}
+
+/* The layer's size in pixels, at most max; false when it has no area. */
+static bool pvk_layer_extent(id layer, uint32_t max, VkExtent2D *extent)
+{
+    pvk_CGRect bounds = pvk_CALayer_bounds(layer);
+    pvk_CGFloat scale = pvk_CALayer_contentsScale(layer);
+    pvk_CGFloat w = bounds.size.width * scale + 0.5, h = bounds.size.height * scale + 0.5;
+    if (!(w >= 1.0 && h >= 1.0)) /* NaN included */
+        return false;
+    extent->width = w < (pvk_CGFloat)max ? (uint32_t)w : max;
+    extent->height = h < (pvk_CGFloat)max ? (uint32_t)h : max;
+    return true;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceCapabilitiesKHR(VkPhysicalDevice physicalDevice,
+                                                                         VkSurfaceKHR _surface,
+                                                                         VkSurfaceCapabilitiesKHR *pSurfaceCapabilities)
+{
+    const struct pvk_physical_device *pd = (const struct pvk_physical_device *)physicalDevice;
+    const struct pvk_surface *surface = (const struct pvk_surface *)_surface;
+    VkSurfaceCapabilitiesKHR *caps = pSurfaceCapabilities;
+    uint32_t max = pd->properties.limits.maxImageDimension2D;
+    void *pool = objc_autoreleasePoolPush();
+
+    memset(caps, 0, sizeof(*caps));
+    caps->minImageCount = PVK_SWAPCHAIN_MIN_IMAGES;
+    caps->maxImageCount = PVK_SWAPCHAIN_MAX_IMAGES;
+    if (!pvk_layer_extent(surface->layer, max, &caps->currentExtent))
+        caps->currentExtent.width = caps->currentExtent.height = 0xFFFFFFFFu;
+    caps->minImageExtent.width = caps->minImageExtent.height = 1;
+    caps->maxImageExtent.width = caps->maxImageExtent.height = max;
+    caps->maxImageArrayLayers = 1;
+    caps->supportedTransforms = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    caps->currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    caps->supportedCompositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR | VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR |
+                                    VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+    caps->supportedUsageFlags = PVK_SWAPCHAIN_USAGE;
+    objc_autoreleasePoolPop(pool);
+    return VK_SUCCESS;
+}
+
+/* The first PVK_SURFACE_FORMATS_SRGB entries are VK_KHR_surface's; the
+ * rest need VK_EXT_swapchain_colorspace. Each UNORM/SRGB pair of sRGB comes
+ * whole (vkGetPhysicalDeviceSurfaceFormatsKHR). Nonlinear color spaces with
+ * another transfer function than sRGB's are offered with UNORM formats only,
+ * linear ones and extended sRGB with RGBA16F, HDR10 with 10 and 16 bits. */
+#define PVK_SURFACE_FORMATS_SRGB 5
+static const VkSurfaceFormatKHR pvk_surface_formats[] = {
+    { VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR },
+    { VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR },
+    { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR },
+    { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR },
+    { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR },
+    { VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT },
+    { VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT },
+    { VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_DCI_P3_NONLINEAR_EXT },
+    { VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_BT709_NONLINEAR_EXT },
+    { VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_ADOBERGB_NONLINEAR_EXT },
+    { VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_PASS_THROUGH_EXT },
+    { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT },
+    { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_NONLINEAR_EXT },
+    { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT },
+    { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_DISPLAY_P3_LINEAR_EXT },
+    { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_BT2020_LINEAR_EXT },
+    { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_HDR10_ST2084_EXT },
+    { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_HDR10_HLG_EXT },
+    { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_PASS_THROUGH_EXT },
+    { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT },
+    { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_BT709_NONLINEAR_EXT },
+    { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT },
+    { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_HLG_EXT },
+    { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_PASS_THROUGH_EXT },
+    { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT },
+    { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_BT709_NONLINEAR_EXT },
+    { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT },
+    { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_HLG_EXT },
+    { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_PASS_THROUGH_EXT },
+};
+
+/* The layer's colorspace for each color space (NULL name: none, no color
+ * matching) and whether it needs extended dynamic range. */
+static const struct {
+    VkColorSpaceKHR space;
+    const pvk_CFStringRef *name;
+    bool edr;
+} pvk_color_spaces[] = {
+    { VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, &pvk_kCGColorSpaceSRGB, false },
+    { VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT, &pvk_kCGColorSpaceDisplayP3, false },
+    { VK_COLOR_SPACE_DCI_P3_NONLINEAR_EXT, &pvk_kCGColorSpaceDCIP3, false },
+    { VK_COLOR_SPACE_BT709_NONLINEAR_EXT, &pvk_kCGColorSpaceITUR_709, false },
+    { VK_COLOR_SPACE_ADOBERGB_NONLINEAR_EXT, &pvk_kCGColorSpaceAdobeRGB1998, false },
+    { VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT, &pvk_kCGColorSpaceExtendedLinearSRGB, true },
+    { VK_COLOR_SPACE_EXTENDED_SRGB_NONLINEAR_EXT, &pvk_kCGColorSpaceExtendedSRGB, true },
+    { VK_COLOR_SPACE_DISPLAY_P3_LINEAR_EXT, &pvk_kCGColorSpaceExtendedLinearDisplayP3, true },
+    { VK_COLOR_SPACE_BT2020_LINEAR_EXT, &pvk_kCGColorSpaceExtendedLinearITUR_2020, true },
+    { VK_COLOR_SPACE_HDR10_ST2084_EXT, &pvk_kCGColorSpaceITUR_2100_PQ, true },
+    { VK_COLOR_SPACE_HDR10_HLG_EXT, &pvk_kCGColorSpaceITUR_2100_HLG, true },
+    { VK_COLOR_SPACE_PASS_THROUGH_EXT, NULL, false },
+};
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice physicalDevice,
+                                                                    VkSurfaceKHR surface, uint32_t *pSurfaceFormatCount,
+                                                                    VkSurfaceFormatKHR *pSurfaceFormats)
+{
+    const struct pvk_physical_device *pd = (const struct pvk_physical_device *)physicalDevice;
+    uint32_t count = pd->instance->extensions[PVK_INSTANCE_EXT_EXT_swapchain_colorspace]
+                         ? (uint32_t)PVK_ARRAY_SIZE(pvk_surface_formats)
+                         : PVK_SURFACE_FORMATS_SRGB;
+    (void)surface;
+    return pvk_enumerate(pvk_surface_formats, sizeof(pvk_surface_formats[0]), count, pSurfaceFormatCount,
+                         pSurfaceFormats);
+}
+
+static bool pvk_layer_has_display_sync(id layer)
+{
+    PVK_SEL_CACHE("setDisplaySyncEnabled:");
+    return pvk_NSObject_respondsToSelector(layer, pvk_sel_);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfacePresentModesKHR(VkPhysicalDevice physicalDevice,
+                                                                         VkSurfaceKHR _surface,
+                                                                         uint32_t *pPresentModeCount,
+                                                                         VkPresentModeKHR *pPresentModes)
+{
+    const struct pvk_surface *surface = (const struct pvk_surface *)_surface;
+    VkPresentModeKHR modes[2];
+    uint32_t count = 0;
+    (void)physicalDevice;
+    modes[count++] = VK_PRESENT_MODE_FIFO_KHR;
+    if (pvk_layer_has_display_sync(surface->layer))
+        modes[count++] = VK_PRESENT_MODE_IMMEDIATE_KHR;
+    return pvk_enumerate(modes, sizeof(modes[0]), count, pPresentModeCount, pPresentModes);
+}
+
+/* One rectangle, the surface; of unknown size when its extent is. */
+VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDevicePresentRectanglesKHR(VkPhysicalDevice physicalDevice,
+                                                                       VkSurfaceKHR _surface, uint32_t *pRectCount,
+                                                                       VkRect2D *pRects)
+{
+    const struct pvk_physical_device *pd = (const struct pvk_physical_device *)physicalDevice;
+    const struct pvk_surface *surface = (const struct pvk_surface *)_surface;
+    void *pool = objc_autoreleasePoolPush();
+    VkRect2D rect;
+
+    memset(&rect, 0, sizeof(rect));
+    if (!pvk_layer_extent(surface->layer, pd->properties.limits.maxImageDimension2D, &rect.extent))
+        rect.extent.width = rect.extent.height = 0xFFFFFFFFu;
+    objc_autoreleasePoolPop(pool);
+    return pvk_enumerate(&rect, sizeof(rect), 1, pRectCount, pRects);
+}
+
+/* A device group of one device: it presents its own images. */
+VKAPI_ATTR VkResult VKAPI_CALL vkGetDeviceGroupPresentCapabilitiesKHR(VkDevice device,
+                                                                      VkDeviceGroupPresentCapabilitiesKHR *pCapabilities)
+{
+    (void)device;
+    memset(pCapabilities->presentMask, 0, sizeof(pCapabilities->presentMask));
+    pCapabilities->presentMask[0] = 1;
+    pCapabilities->modes = VK_DEVICE_GROUP_PRESENT_MODE_LOCAL_BIT_KHR;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetDeviceGroupSurfacePresentModesKHR(VkDevice device, VkSurfaceKHR surface,
+                                                                      VkDeviceGroupPresentModeFlagsKHR *pModes)
+{
+    (void)device;
+    (void)surface;
+    *pModes = VK_DEVICE_GROUP_PRESENT_MODE_LOCAL_BIT_KHR;
+    return VK_SUCCESS;
+}
+
+/* ---- Swapchains ---- */
+
+/* An image and its memory (device-local, private), as the application
+ * would make them. */
+static VkResult pvk_swapchain_image_init(struct pvk_device *device, const VkSwapchainCreateInfoKHR *info,
+                                         const VkAllocationCallbacks *alloc, struct pvk_swapchain_image *img)
+{
+    const VkPhysicalDeviceMemoryProperties *types = &device->physical_device->memory_properties;
+    VkImageCreateInfo ci;
+    VkMemoryRequirements req;
+    VkMemoryAllocateInfo ai;
+    VkResult r;
+    uint32_t t;
+
+    memset(&ci, 0, sizeof(ci));
+    ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ci.imageType = VK_IMAGE_TYPE_2D;
+    ci.format = info->imageFormat;
+    ci.extent.width = info->imageExtent.width;
+    ci.extent.height = info->imageExtent.height;
+    ci.extent.depth = 1;
+    ci.mipLevels = 1;
+    ci.arrayLayers = info->imageArrayLayers;
+    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ci.usage = info->imageUsage;
+    ci.sharingMode = info->imageSharingMode;
+    ci.queueFamilyIndexCount = info->imageSharingMode == VK_SHARING_MODE_CONCURRENT ? info->queueFamilyIndexCount : 0;
+    ci.pQueueFamilyIndices = ci.queueFamilyIndexCount ? info->pQueueFamilyIndices : NULL;
+    ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    r = vkCreateImage((VkDevice)device, &ci, alloc, &img->image);
+    if (r != VK_SUCCESS)
+        return r;
+    vkGetImageMemoryRequirements((VkDevice)device, img->image, &req);
+    for (t = 0; t < types->memoryTypeCount; t++)
+        if ((req.memoryTypeBits & (1u << t)) && (types->memoryTypes[t].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
+            !(types->memoryTypes[t].propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT))
+            break;
+    if (t == types->memoryTypeCount)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    memset(&ai, 0, sizeof(ai));
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = t;
+    r = vkAllocateMemory((VkDevice)device, &ai, alloc, &img->memory);
+    if (r != VK_SUCCESS)
+        return r;
+    return vkBindImageMemory((VkDevice)device, img->image, img->memory, 0);
+}
+
+/* Waits (up to 5 s: a present may wait for a semaphore that is never
+ * signalled) until the presentation engine is done with the images, then
+ * frees the swapchain. */
+static void pvk_swapchain_free(struct pvk_swapchain *sc, const VkAllocationCallbacks *alloc)
+{
+    struct pvk_device *device = sc->device;
+    struct pvk_swapchain **p;
+    uint64_t start = pvk_now_ns();
+    uint32_t i;
+
+    pthread_mutex_lock(&pvk_swapchain_lock);
+    for (p = &pvk_swapchains; *p; p = &(*p)->next) {
+        if (*p == sc) {
+            *p = sc->next;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&pvk_swapchain_lock);
+    for (i = 0; i < sc->image_count; i++) {
+        struct pvk_swapchain_image *img = &sc->images[i];
+        while (img->release_event &&
+               !pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(img->release_event, img->release_value, 100)) {
+            if (pvk_device_lost(device) || pvk_now_ns() - start > 5000000000ull) {
+                pvk_log(PVK_LOG_ERROR, "vkDestroySwapchainKHR: a present of image %u is not done", i);
+                break;
+            }
+        }
+        if (img->image)
+            vkDestroyImage((VkDevice)device, img->image, alloc);
+        if (img->memory)
+            vkFreeMemory((VkDevice)device, img->memory, alloc);
+    }
+    pvk_release(sc->layer);
+    pvk_free(alloc, sc);
+}
+
+static void pvk_swapchain_configure(struct pvk_swapchain *sc, const VkSwapchainCreateInfoKHR *info)
+{
+    id layer = sc->layer, mtl = sc->device->physical_device->mtl_device;
+    pvk_CGSize size;
+    size_t i;
+
+    if (pvk_CAMetalLayer_device(layer) != mtl) /* a new device invalidates the layer's residency set */
+        pvk_CAMetalLayer_setDevice(layer, mtl);
+    pvk_CAMetalLayer_setPixelFormat(layer, sc->mtl_format);
+    pvk_CAMetalLayer_setFramebufferOnly(layer, false);
+    size.width = info->imageExtent.width;
+    size.height = info->imageExtent.height;
+    pvk_CAMetalLayer_setDrawableSize(layer, size);
+    pvk_CAMetalLayer_setMaximumDrawableCount(layer, sc->image_count);
+    if (pvk_layer_has_display_sync(layer))
+        pvk_CAMetalLayer_setDisplaySyncEnabled(layer, info->presentMode != VK_PRESENT_MODE_IMMEDIATE_KHR);
+    for (i = 0; i < PVK_ARRAY_SIZE(pvk_color_spaces); i++) {
+        if (pvk_color_spaces[i].space == info->imageColorSpace) {
+            pvk_CGColorSpaceRef cs = pvk_color_spaces[i].name ? pvk_CGColorSpaceCreateWithName(*pvk_color_spaces[i].name) : NULL;
+            pvk_CAMetalLayer_setColorspace(layer, cs);
+            if (cs)
+                pvk_CGColorSpaceRelease(cs);
+            pvk_CAMetalLayer_setWantsExtendedDynamicRangeContent(layer, pvk_color_spaces[i].edr);
+            break;
+        }
+    }
+    if (info->compositeAlpha == VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
+        pvk_CALayer_setOpaque(layer, true);
+    else if (info->compositeAlpha == VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR)
+        pvk_CALayer_setOpaque(layer, false);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice _device, const VkSwapchainCreateInfoKHR *pCreateInfo,
+                                                    const VkAllocationCallbacks *pAllocator, VkSwapchainKHR *pSwapchain)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    const struct pvk_surface *surface = (const struct pvk_surface *)pCreateInfo->surface;
+    struct pvk_swapchain *old = (struct pvk_swapchain *)pCreateInfo->oldSwapchain, *sc, **p;
+    const struct pvk_format *f = pvk_format(pCreateInfo->imageFormat);
+    VkResult result = VK_SUCCESS;
+    uint32_t i;
+    void *pool;
+
+    if (pvk_device_lost(device))
+        return VK_ERROR_DEVICE_LOST;
+    sc = pvk_alloc(alloc, sizeof(*sc), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    /* Swapchain creation: oldSwapchain is retired, even if this fails; with
+     * no oldSwapchain, a layer that has a swapchain gives
+     * VK_ERROR_NATIVE_WINDOW_IN_USE_KHR. */
+    pthread_mutex_lock(&pvk_swapchain_lock);
+    for (p = &pvk_swapchains; *p; p = &(*p)->next) {
+        if (*p == old) {
+            *p = old->next;
+            old->retired = true;
+            break;
+        }
+    }
+    for (p = &pvk_swapchains; *p; p = &(*p)->next)
+        if ((*p)->layer == surface->layer)
+            result = VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
+    if (result == VK_SUCCESS && sc) {
+        sc->next = pvk_swapchains;
+        pvk_swapchains = sc;
+    }
+    pthread_mutex_unlock(&pvk_swapchain_lock);
+    if (result != VK_SUCCESS || !sc) {
+        pvk_free(alloc, sc);
+        return sc ? result : VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+
+    sc->device = device;
+    sc->layer = pvk_retain(surface->layer);
+    sc->extent = pCreateInfo->imageExtent;
+    sc->mtl_format = f ? f->mtl : PVK_MTLPixelFormatInvalid;
+    sc->image_count = pCreateInfo->minImageCount < PVK_SWAPCHAIN_MIN_IMAGES ? PVK_SWAPCHAIN_MIN_IMAGES
+                      : pCreateInfo->minImageCount > PVK_SWAPCHAIN_MAX_IMAGES ? PVK_SWAPCHAIN_MAX_IMAGES
+                                                                              : pCreateInfo->minImageCount;
+    for (i = 0; i < sc->image_count && result == VK_SUCCESS; i++)
+        result = pvk_swapchain_image_init(device, pCreateInfo, alloc, &sc->images[i]);
+    if (result != VK_SUCCESS) {
+        pvk_swapchain_free(sc, alloc);
+        return result == VK_ERROR_OUT_OF_HOST_MEMORY ? result : VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    /* An explicit transaction: the layer's new properties reach the display
+     * even from a thread without a run loop (implicit transactions need one). */
+    pool = objc_autoreleasePoolPush();
+    pvk_CATransaction_begin();
+    pvk_CATransaction_setDisableActions(true);
+    pvk_swapchain_configure(sc, pCreateInfo);
+    pvk_CATransaction_commit();
+    objc_autoreleasePoolPop(pool);
+    *pSwapchain = (VkSwapchainKHR)sc;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain,
+                                                 const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_swapchain *sc = (struct pvk_swapchain *)swapchain;
+    void *pool;
+    if (!sc)
+        return;
+    pool = objc_autoreleasePoolPush();
+    pvk_swapchain_free(sc, pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device));
+    objc_autoreleasePoolPop(pool);
+}
+
+/* VkBindImageMemorySwapchainInfoKHR (section 11): an image made with
+ * VkImageSwapchainCreateInfoKHR, which needs nothing else, aliases the
+ * swapchain image's memory. */
+static struct pvk_device_memory *pvk_swapchain_image_memory(VkSwapchainKHR swapchain, uint32_t index)
+{
+    return (struct pvk_device_memory *)((struct pvk_swapchain *)swapchain)->images[index].memory;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesKHR(VkDevice device, VkSwapchainKHR swapchain,
+                                                       uint32_t *pSwapchainImageCount, VkImage *pSwapchainImages)
+{
+    const struct pvk_swapchain *sc = (const struct pvk_swapchain *)swapchain;
+    VkImage images[PVK_SWAPCHAIN_MAX_IMAGES];
+    uint32_t i;
+    (void)device;
+    for (i = 0; i < sc->image_count; i++)
+        images[i] = sc->images[i].image;
+    return pvk_enumerate(images, sizeof(images[0]), sc->image_count, pSwapchainImageCount, pSwapchainImages);
+}
+
+/* Whether the layer still takes the swapchain's images (see OUT OF DATE). */
+static VkResult pvk_swapchain_status(const struct pvk_swapchain *sc)
+{
+    pvk_CGSize size = pvk_CAMetalLayer_drawableSize(sc->layer);
+    VkExtent2D extent;
+    if (pvk_CAMetalLayer_pixelFormat(sc->layer) != sc->mtl_format || size.width != (pvk_CGFloat)sc->extent.width ||
+        size.height != (pvk_CGFloat)sc->extent.height)
+        return VK_ERROR_OUT_OF_DATE_KHR;
+    if (pvk_layer_extent(sc->layer, sc->device->physical_device->properties.limits.maxImageDimension2D, &extent) &&
+        (extent.width != sc->extent.width || extent.height != sc->extent.height))
+        return VK_SUBOPTIMAL_KHR;
+    return VK_SUCCESS;
+}
+
+/* ---- Acquire ---- */
+
+/* A block (section 3's Block ABI) for -notifyListener:atValue:block:,
+ * whose blocks take (id<MTLSharedEvent>, uint64_t): it signals a binary
+ * semaphore's event. */
+struct pvk_signal_block {
+    void *isa;
+    int flags;
+    int reserved;
+    void (*invoke)(struct pvk_signal_block *self, id event, uint64_t value);
+    const struct pvk_block_descriptor *descriptor;
+    /* captures */
+    id semaphore;   /* MTLSharedEvent, retained until invoked */
+    uint64_t value; /* to signal */
+};
+
+static void pvk_signal_block_invoke(struct pvk_signal_block *self, id event, uint64_t value)
+{
+    (void)event;
+    (void)value;
+    pvk_MTLSharedEvent_setSignaledValue(self->semaphore, self->value);
+    pvk_release(self->semaphore);
+}
+
+static const struct pvk_block_descriptor pvk_signal_block_descriptor = { 0, sizeof(struct pvk_signal_block) };
+
+static void pvk_sleep_ns(uint64_t ns)
+{
+    struct timespec ts;
+    ts.tv_sec = (time_t)(ns / 1000000000u);
+    ts.tv_nsec = (long)(ns % 1000000000u);
+    while (nanosleep(&ts, &ts) != 0)
+        ;
+}
+
+static VkResult pvk_acquire(struct pvk_device *device, struct pvk_swapchain *sc, uint64_t timeout,
+                            VkSemaphore semaphore, VkFence _fence, uint32_t *pImageIndex)
+{
+    struct pvk_semaphore *sem = (struct pvk_semaphore *)semaphore;
+    struct pvk_fence *fence = (struct pvk_fence *)_fence;
+    struct pvk_swapchain_image *img;
+    uint32_t i, best = UINT32_MAX;
+    bool best_released = false;
+    VkResult status;
+    void *pool;
+
+    if (pvk_device_lost(device))
+        return VK_ERROR_DEVICE_LOST;
+    if (sc->retired) /* invalid usage */
+        return VK_ERROR_OUT_OF_DATE_KHR;
+    pool = objc_autoreleasePoolPush();
+    status = pvk_swapchain_status(sc);
+    for (i = 0; i < sc->image_count && status != VK_ERROR_OUT_OF_DATE_KHR; i++) {
+        bool released;
+        img = &sc->images[i];
+        if (img->acquired)
+            continue;
+        released = !img->release_event || pvk_MTLSharedEvent_signaledValue(img->release_event) >= img->release_value;
+        if (best == UINT32_MAX || (released && !best_released) ||
+            (released == best_released && img->presented < sc->images[best].presented)) {
+            best = i;
+            best_released = released;
+        }
+    }
+    if (status == VK_ERROR_OUT_OF_DATE_KHR || best == UINT32_MAX) {
+        objc_autoreleasePoolPop(pool);
+        if (status == VK_ERROR_OUT_OF_DATE_KHR)
+            return status;
+        if (timeout == 0)
+            return VK_NOT_READY;
+        if (timeout != UINT64_MAX) /* else invalid usage: no forward progress */
+            pvk_sleep_ns(timeout);
+        return VK_TIMEOUT;
+    }
+
+    img = &sc->images[best];
+    img->acquired = true;
+    if (sem) {
+        sem->value++; /* a signal operation: section 16's binary semaphores */
+        if (best_released) {
+            pvk_MTLSharedEvent_setSignaledValue(sem->event, sem->value);
+        } else {
+            struct pvk_signal_block block;
+            block.isa = _NSConcreteStackBlock;
+            block.flags = 0;
+            block.reserved = 0;
+            block.invoke = pvk_signal_block_invoke;
+            block.descriptor = &pvk_signal_block_descriptor;
+            block.semaphore = pvk_retain(sem->event);
+            block.value = sem->value;
+            pvk_MTLSharedEvent_notifyListener_atValue_block(img->release_event, pvk_MTLSharedEventListener_sharedListener(),
+                                                            img->release_value, &block);
+        }
+    }
+    if (fence) {
+        if (best_released) {
+            fence->signaled = 1;
+        } else {
+            fence->signaled = 0;
+            __atomic_store_n(&fence->value, img->release_value, __ATOMIC_RELAXED);
+            __atomic_store_n(&fence->event, (void *)img->release_event, __ATOMIC_RELEASE);
+        }
+    }
+    objc_autoreleasePoolPop(pool);
+    *pImageIndex = best;
+    return status;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImageKHR(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout,
+                                                     VkSemaphore semaphore, VkFence fence, uint32_t *pImageIndex)
+{
+    return pvk_acquire((struct pvk_device *)device, (struct pvk_swapchain *)swapchain, timeout, semaphore, fence,
+                       pImageIndex);
+}
+
+/* deviceMask is 1: the group has one device. */
+VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImage2KHR(VkDevice device, const VkAcquireNextImageInfoKHR *pAcquireInfo,
+                                                      uint32_t *pImageIndex)
+{
+    return pvk_acquire((struct pvk_device *)device, (struct pvk_swapchain *)pAcquireInfo->swapchain,
+                       pAcquireInfo->timeout, pAcquireInfo->semaphore, pAcquireInfo->fence, pImageIndex);
+}
+
+/* ---- Present ---- */
+
+/* A command buffer copying the image into the drawable. */
+static VkResult pvk_present_encode(struct pvk_queue *queue, const struct pvk_swapchain *sc,
+                                   const struct pvk_swapchain_image *img, id drawable, struct pvk_submission **out)
+{
+    const struct pvk_image *image = (const struct pvk_image *)img->image;
+    struct pvk_submission *s = pvk_queue_get_submission(queue);
+    id texture = pvk_CAMetalDrawable_texture(drawable), residency = pvk_CAMetalLayer_residencySet(sc->layer), enc;
+    pvk_MTLOrigin origin = { 0, 0, 0 };
+    pvk_MTLSize size;
+
+    if (!s)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    size.width = pvk_MTLTexture_width(texture);
+    size.height = pvk_MTLTexture_height(texture);
+    size.depth = 1;
+    if (size.width > sc->extent.width)
+        size.width = sc->extent.width;
+    if (size.height > sc->extent.height)
+        size.height = sc->extent.height;
+    pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(s->cb, s->allocator);
+    if (residency) /* the drawables' textures */
+        pvk_MTL4CommandBuffer_useResidencySet(s->cb, residency);
+    enc = pvk_MTL4CommandBuffer_computeCommandEncoder(s->cb);
+    if (enc) {
+        /* After all earlier work on the queue, as encoders after semaphore
+         * waits begin (section 16). */
+        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
+            enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, PVK_MTL4VisibilityOptionDevice);
+        pvk_MTL4ComputeCommandEncoder_copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
+            enc, image->mtl_texture, 0, 0, origin, size, texture, 0, 0, origin);
+        pvk_MTL4CommandEncoder_endEncoding(enc);
+    }
+    pvk_MTL4CommandBuffer_endCommandBuffer(s->cb);
+    if (!enc) {
+        pvk_queue_put_submissions(queue, s);
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    *out = s;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue _queue, const VkPresentInfoKHR *pPresentInfo)
+{
+    struct pvk_queue *queue = (struct pvk_queue *)_queue;
+    struct pvk_device *device = queue->device;
+    uint32_t i, n = pPresentInfo->swapchainCount;
+    struct pvk_present_batch stack_batches[4], *batches = stack_batches;
+    VkResult stack_status[4], *status = stack_status, result = VK_SUCCESS;
+    uint64_t serial;
+    void *pool;
+
+    if (pvk_device_lost(device))
+        return VK_ERROR_DEVICE_LOST;
+    if (n > PVK_ARRAY_SIZE(stack_batches)) {
+        batches = pvk_alloc(pvk_device_alloc(device), (sizeof(*batches) + sizeof(*status)) * n,
+                            VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+        if (!batches)
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        status = (VkResult *)(batches + n);
+    }
+    pool = objc_autoreleasePoolPush();
+    pvk_queue_recycle(queue);
+    for (i = 0; i < n && result == VK_SUCCESS; i++) {
+        struct pvk_swapchain *sc = (struct pvk_swapchain *)pPresentInfo->pSwapchains[i];
+        batches[i].s = NULL;
+        batches[i].drawable = NULL;
+        status[i] = pvk_swapchain_status(sc);
+        if (status[i] == VK_ERROR_OUT_OF_DATE_KHR)
+            continue;
+        /* Blocks while every drawable is queued for display; nil after a
+         * second without one (e.g. the display is asleep): the frame is
+         * dropped. */
+        batches[i].drawable = pvk_retain(pvk_CAMetalLayer_nextDrawable(sc->layer));
+        if (!batches[i].drawable) {
+            pvk_log(PVK_LOG_INFO, "vkQueuePresentKHR: no drawable within a second, a frame is dropped");
+            continue;
+        }
+        result = pvk_present_encode(queue, sc, &sc->images[pPresentInfo->pImageIndices[i]], batches[i].drawable,
+                                    &batches[i].s);
+        if (result != VK_SUCCESS) {
+            pvk_release(batches[i].drawable);
+            batches[i].drawable = NULL;
+        }
+    }
+    if (result != VK_SUCCESS) {
+        while (i-- > 0) {
+            pvk_release(batches[i].drawable);
+            if (batches[i].s)
+                pvk_queue_put_submissions(queue, batches[i].s);
+        }
+    } else {
+        result = pvk_queue_present(queue, pPresentInfo->waitSemaphoreCount, pPresentInfo->pWaitSemaphores, batches, n,
+                                   &serial);
+    }
+    if (result == VK_SUCCESS) {
+        for (i = 0; i < n; i++) {
+            struct pvk_swapchain *sc = (struct pvk_swapchain *)pPresentInfo->pSwapchains[i];
+            struct pvk_swapchain_image *img = &sc->images[pPresentInfo->pImageIndices[i]];
+            img->acquired = false;
+            img->release_event = queue->timeline;
+            img->release_value = serial;
+            img->presented = ++sc->presents;
+            if (pPresentInfo->pResults)
+                pPresentInfo->pResults[i] = status[i];
+            if (status[i] < 0 ? result >= 0 : result == VK_SUCCESS)
+                result = status[i]; /* the first error, else suboptimal */
+        }
+    }
+    objc_autoreleasePoolPop(pool);
+    if (batches != stack_batches)
+        pvk_free(pvk_device_alloc(device), batches);
+    return result;
+}
 
 /* ==========================================================================
  * 19. Unimplemented commands
@@ -52659,8 +53643,6 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
 #pragma clang diagnostic ignored "-Wunused-parameter"
 #endif
 
-VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImage2KHR(VkDevice device, const VkAcquireNextImageInfoKHR* pAcquireInfo, uint32_t* pImageIndex) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImageKHR(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t* pImageIndex) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t query, VkQueryControlFlags flags) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyQueryPoolResults(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount, VkBuffer dstBuffer, VkDeviceSize dstOffset, VkDeviceSize stride, VkQueryResultFlags flags) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdEndQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t query) { PVK_UNIMPLEMENTED(); }
@@ -52675,35 +53657,22 @@ VKAPI_ATTR void VKAPI_CALL vkCmdWaitEvents2(VkCommandBuffer commandBuffer, uint3
 VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp(VkCommandBuffer commandBuffer, VkPipelineStageFlagBits pipelineStage, VkQueryPool queryPool, uint32_t query) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp2(VkCommandBuffer commandBuffer, VkPipelineStageFlags2 stage, VkQueryPool queryPool, uint32_t query) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateEvent(VkDevice device, const VkEventCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkEvent* pEvent) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateMetalSurfaceEXT(VkInstance instance, const VkMetalSurfaceCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreatePrivateDataSlot(VkDevice device, const VkPrivateDataSlotCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkPrivateDataSlot* pPrivateDataSlot) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkQueryPool* pQueryPool) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSamplerYcbcrConversion(VkDevice device, const VkSamplerYcbcrConversionCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSamplerYcbcrConversion* pYcbcrConversion) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSwapchainKHR* pSwapchain) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkDestroyEvent(VkDevice device, VkEvent event, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyPrivateDataSlot(VkDevice device, VkPrivateDataSlot privateDataSlot, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyQueryPool(VkDevice device, VkQueryPool queryPool, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySamplerYcbcrConversion(VkDevice device, VkSamplerYcbcrConversion ycbcrConversion, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, uint32_t heapIndex, uint32_t localDeviceIndex, uint32_t remoteDeviceIndex, VkPeerMemoryFeatureFlags* pPeerMemoryFeatures) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetDeviceGroupPresentCapabilitiesKHR(VkDevice device, VkDeviceGroupPresentCapabilitiesKHR* pDeviceGroupPresentCapabilities) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetDeviceGroupSurfacePresentModesKHR(VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR* pModes) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetEventStatus(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceExternalBufferProperties(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalBufferInfo* pExternalBufferInfo, VkExternalBufferProperties* pExternalBufferProperties) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceExternalFenceProperties(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalFenceInfo* pExternalFenceInfo, VkExternalFenceProperties* pExternalFenceProperties) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceExternalSemaphoreProperties(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalSemaphoreInfo* pExternalSemaphoreInfo, VkExternalSemaphoreProperties* pExternalSemaphoreProperties) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDevicePresentRectanglesKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pRectCount, VkRect2D* pRects) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceCapabilitiesKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, VkSurfaceCapabilitiesKHR* pSurfaceCapabilities) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pSurfaceFormatCount, VkSurfaceFormatKHR* pSurfaceFormats) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfacePresentModesKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pPresentModeCount, VkPresentModeKHR* pPresentModes) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice physicalDevice, uint32_t queueFamilyIndex, VkSurfaceKHR surface, VkBool32* pSupported) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceToolProperties(VkPhysicalDevice physicalDevice, uint32_t* pToolCount, VkPhysicalDeviceToolProperties* pToolProperties) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkGetPrivateData(VkDevice device, VkObjectType objectType, uint64_t objectHandle, VkPrivateDataSlot privateDataSlot, uint64_t* pData) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetQueryPoolResults(VkDevice device, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* pData, VkDeviceSize stride, VkQueryResultFlags flags) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesKHR(VkDevice device, VkSwapchainKHR swapchain, uint32_t* pSwapchainImageCount, VkImage* pSwapchainImages) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkQueueBindSparse(VkQueue queue, uint32_t bindInfoCount, const VkBindSparseInfo* pBindInfo, VkFence fence) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkResetEvent(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkResetQueryPool(VkDevice device, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkSetEvent(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
