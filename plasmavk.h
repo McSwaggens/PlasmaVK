@@ -33421,8 +33421,8 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  *   array; OpTypeForwardPointer (structs are declared up front, so pointers
  *   may name structs defined later or themselves); OpConvertUToPtr,
  *   OpConvertPtrToU, OpBitcast to/from 64-bit integers and 2 x 32-bit
- *   vectors, OpPtrAccessChain (ArrayStride of the pointer type), OpPtrEqual,
- *   OpPtrNotEqual, atomics through them. A pointer to a runtime array is a
+ *   vectors, OpPtrAccessChain (ArrayStride of the pointer type), atomics
+ *   through them. A pointer to a runtime array is a
  *   pointer to its first element. Loaded or converted pointers are values;
  *   access chains on them stay lvalue expressions whose address is taken
  *   when used as a value. Aligned memory operands are ignored: accesses
@@ -33719,8 +33719,6 @@ enum {
     PVK_SPV_OpExecutionModeId = 331,
     PVK_SPV_OpDecorateId = 332,
     PVK_SPV_OpCopyLogical = 400,
-    PVK_SPV_OpPtrEqual = 401,
-    PVK_SPV_OpPtrNotEqual = 402,
     PVK_SPV_OpTerminateInvocation = 4416,
     PVK_SPV_OpDecorateString = 5632,
     PVK_SPV_OpMemberDecorateString = 5633,
@@ -34875,7 +34873,6 @@ static int pvk_spv_shape(uint32_t op)
     case PVK_SPV_OpInBoundsAccessChain: case PVK_SPV_OpArrayLength: case PVK_SPV_OpPhi:
     case PVK_SPV_OpCopyLogical: case PVK_SPV_OpAtomicLoad: case PVK_SPV_OpAtomicFAddEXT:
     case PVK_SPV_OpPtrAccessChain: case PVK_SPV_OpConvertPtrToU: case PVK_SPV_OpConvertUToPtr:
-    case PVK_SPV_OpPtrEqual: case PVK_SPV_OpPtrNotEqual:
         return 2;
     default:
         break;
@@ -34903,8 +34900,8 @@ static const char *pvk_spv_unsupported_reason(uint32_t op)
         return "subgroup instructions are not supported yet";
     if (op >= 207 && op <= 215)
         return "derivatives are only available in fragment shaders";
-    if (op == 70 || op == 403)
-        return "pointer arithmetic is only supported on physical storage buffer pointers";
+    if (op == 70 || (op >= 401 && op <= 403))
+        return "pointer comparison and arithmetic are not supported";
     return "unsupported instruction";
 }
 
@@ -37456,13 +37453,6 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
             pvk_spv_fail(ctx, "unsupported OpConvertPtrToU");
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(reinterpret_cast<ulong>(%s))", r->msl, pvk_spv_val(ctx, in->w[3])));
         return;
-    case PVK_SPV_OpPtrEqual:
-    case PVK_SPV_OpPtrNotEqual:
-        if (!pvk_spv_is_psb(pvk_spv_type(ctx, pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 3))->type)))
-            pvk_spv_fail(ctx, "pointer comparison is only supported on physical storage buffer pointers");
-        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s %s %s", pvk_spv_val(ctx, in->w[3]),
-                                          op == PVK_SPV_OpPtrEqual ? "==" : "!=", pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 4))));
-        return;
     case PVK_SPV_OpArrayLength:
         pvk_spv_array_length(ctx, in);
         return;
@@ -39476,6 +39466,18 @@ static void pvk_queue_finish(struct pvk_queue *queue)
     objc_autoreleasePoolPop(pool);
 }
 
+/* A submission is reusable (allocator reset) once the GPU is done. Its
+ * MTL4CommandBuffer is not: Metal's GPU validation layer
+ * (MTL_SHADER_VALIDATION=1, macOS 27.2) messages heaps a reused command
+ * buffer saw before, even after they are released, and crashes. Command
+ * buffer objects are cheap, so each batch gets a new one. */
+static void pvk_submission_reset(struct pvk_submission *s)
+{
+    pvk_MTL4CommandAllocator_reset(s->allocator);
+    pvk_release(s->cb);
+    s->cb = NULL;
+}
+
 /* Takes back what finished submissions used. */
 static void pvk_queue_recycle(struct pvk_queue *queue)
 {
@@ -39483,7 +39485,7 @@ static void pvk_queue_recycle(struct pvk_queue *queue)
     while (queue->pending && queue->pending->serial <= done) {
         struct pvk_submission *s = queue->pending;
         queue->pending = s->next;
-        pvk_MTL4CommandAllocator_reset(s->allocator);
+        pvk_submission_reset(s);
         s->next = queue->free_submissions;
         queue->free_submissions = s;
     }
@@ -39507,15 +39509,20 @@ static struct pvk_submission *pvk_queue_get_submission(struct pvk_queue *queue)
     if (s) {
         queue->free_submissions = s->next;
         s->next = NULL;
-        return s;
+    } else {
+        s = pvk_alloc(pvk_device_alloc(device), sizeof(*s), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+        if (!s)
+            return NULL;
+        s->allocator = pvk_MTLDevice_newCommandAllocator(mtl);
+        if (!s->allocator) {
+            pvk_submissions_free(device, s);
+            return NULL;
+        }
     }
-    s = pvk_alloc(pvk_device_alloc(device), sizeof(*s), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
-    if (!s)
-        return NULL;
-    s->allocator = pvk_MTLDevice_newCommandAllocator(mtl);
     s->cb = pvk_MTLDevice_newCommandBuffer(mtl);
-    if (!s->allocator || !s->cb) {
-        pvk_submissions_free(device, s);
+    if (!s->cb) {
+        s->next = queue->free_submissions;
+        queue->free_submissions = s;
         return NULL;
     }
     return s;
@@ -39527,7 +39534,7 @@ static void pvk_queue_put_submissions(struct pvk_queue *queue, struct pvk_submis
     struct pvk_submission *next;
     for (; list; list = next) {
         next = list->next;
-        pvk_MTL4CommandAllocator_reset(list->allocator);
+        pvk_submission_reset(list);
         list->next = queue->free_submissions;
         queue->free_submissions = list;
     }
@@ -40678,6 +40685,12 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, const VkC
     }
     if (res.set_mask || res.buffer_size_count) {
         pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: descriptor sets are not implemented yet");
+        pvk_msl_result_free(&res);
+        return VK_ERROR_UNKNOWN;
+    }
+    if ((res.has_push_constants && res.push_constant_offset + res.push_constant_size > PVK_MAX_PUSH_CONSTANTS_SIZE) ||
+        (res.dispatch_base && res.dispatch_base_offset > PVK_MAX_PUSH_CONSTANTS_SIZE)) {
+        pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: push constants beyond maxPushConstantsSize");
         pvk_msl_result_free(&res);
         return VK_ERROR_UNKNOWN;
     }
