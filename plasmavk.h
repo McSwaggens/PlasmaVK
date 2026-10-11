@@ -32406,7 +32406,6 @@ struct pvk_spv_type {
     struct pvk_spv_member *members;
     const uint32_t *params; /* function parameter types (in the module words) */
     bool explicit_layout;   /* struct with Offset decorations */
-    bool has_node;          /* struct: some member is stored differently from its value type */
     uint32_t pad_to;        /* struct: size an ArrayStride asks for (0: none) */
     bool pad_conflict;
     uint32_t tail_pad;
@@ -32425,7 +32424,6 @@ struct pvk_spv_const {
     uint32_t nparts;
     bool null;            /* OpConstantNull / OpUndef */
     bool spec;
-    bool named;           /* declared as a program-scope constant */
 };
 
 /* Storage of a value whose layout differs from its MSL value type: matrices
@@ -32462,7 +32460,6 @@ struct pvk_spv_id {
     uint32_t func;  /* owning function index + 1, 0 at module scope */
     uint32_t block; /* labels: block index; values: defining block index */
     uint32_t global; /* global variables: index in ctx->globals */
-    int32_t size_index; /* buffer variables: index in the buffer-sizes array */
     const char *name; /* OpName */
     const char *msl;  /* MSL name or expression */
     struct pvk_spv_type *t;
@@ -32550,21 +32547,20 @@ struct pvk_spv {
     struct pvk_spv_func *cur;     /* function being parsed */
     struct pvk_spv_block *cur_block;
     bool expect_branch, seen_non_phi;
-    uint32_t workgroup_size_const;
     uint32_t *order; /* reachable functions, callees first */
     uint32_t norder;
     uint32_t total_blocks;
 
     /* output */
-    struct pvk_sb head, types, consts, helpers, text, body;
+    struct pvk_sb head, types, consts, text, body; /* text: functions; body: the one being emitted */
     struct pvk_sb *out; /* where pvk_spv_line writes */
     uint32_t indent;
-    bool use_array, use_padded;
-    uint32_t helper_mask;
+    bool use_array, use_padded; /* emit the pvk_array / pvk_padded templates */
+    uint32_t helper_mask;       /* PVK_SPV_H_* helper functions used */
     uint32_t budget;           /* blocks left to emit */
     uint32_t aggregate_budget; /* elements left for storage aggregates */
     uint32_t depth;
-    uint32_t counter; /* unique names for emitted helpers variables */
+    uint32_t counter; /* makes switch-break flag names unique */
     struct pvk_spv_frame frames[PVK_SPV_MAX_FRAMES];
     uint32_t nframes;
     struct pvk_spv_func *fn; /* function being emitted */
@@ -33185,7 +33181,6 @@ static void pvk_spv_spec_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in, 
         if (pvk_spv_get(ctx, src)->type != rtype)
             pvk_spv_fail(ctx, "OpSpecConstantOp CompositeExtract type mismatch");
         *c = *pvk_spv_const(ctx, src);
-        c->named = false;
         return;
     }
     if (op == PVK_SPV_OpCompositeInsert) {
@@ -33786,7 +33781,6 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         }
         x->kind = PVK_SPV_K_VAR;
         x->global = ctx->nglobals;
-        x->size_index = -1;
         PVK_SPV_PUSH(ctx, ctx->globals, ctx->nglobals, ctx->cap_globals, rid);
         break;
     }
@@ -33869,6 +33863,10 @@ static void pvk_spv_parse_body(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         ctx->total_blocks++;
         return;
     }
+    case PVK_SPV_OpLine:
+    case PVK_SPV_OpNoLine:
+    case PVK_SPV_OpNop:
+        return; /* allowed anywhere, even between blocks */
     default:
         break;
     }
@@ -33885,9 +33883,6 @@ static void pvk_spv_parse_body(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         return;
     }
     switch (in->op) {
-    case PVK_SPV_OpLine:
-    case PVK_SPV_OpNoLine:
-        return;
     case PVK_SPV_OpPhi:
         if (ctx->seen_non_phi)
             pvk_spv_fail(ctx, "OpPhi after other instructions in block %u", ctx->cur_block->label);
@@ -34105,7 +34100,6 @@ static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_
             m->decl = m->node->msl; /* runtime arrays: the element slot */
             size = m->node->size;
             a = m->node->align;
-            t->has_node = true;
         } else if (mt->op == PVK_SPV_OpTypeVector && (mt->count == 3 || m->offset % mt->align != 0)) {
             /* vec3 + scalar share 16 bytes in std140/std430: packed_float3 is 12 bytes. */
             struct pvk_spv_type *sc = pvk_spv_type(ctx, mt->elem);
@@ -34449,7 +34443,6 @@ static void pvk_spv_emit_constants(struct pvk_spv *ctx)
             continue;
         text = pvk_spv_const_text(ctx, cid, 0);
         x->msl = pvk_spv_name(ctx, cid);
-        x->c->named = true;
         if (x->flags & PVK_SPV_F_SPEC_ID)
             pvk_sb_printf(ctx, &ctx->consts, "constant %s %s = %s; /* SpecId %u */\n", t->msl, x->msl, text,
                           x->spec_id);
@@ -34477,8 +34470,20 @@ static void pvk_spv_emit_types(struct pvk_spv *ctx)
                 pvk_sb_printf(ctx, &ctx->types, "    %s %s[1];", m->decl, m->msl);
             else
                 pvk_sb_printf(ctx, &ctx->types, "    %s %s;", m->decl, m->msl);
-            if (t->explicit_layout)
+            if (m->node) {
+                /* describe the matrix that is stored as an array of lines */
+                const struct pvk_spv_node *n = m->node;
+                uint32_t tid = m->type;
+                while (n->kind == PVK_SPV_N_ARRAY) {
+                    n = n->child;
+                    tid = pvk_spv_type(ctx, tid)->elem;
+                }
+                pvk_sb_printf(ctx, &ctx->types, " /* offset %u: %s%s, %s %u bytes apart */", m->offset,
+                              m->node->kind == PVK_SPV_N_ARRAY ? "array of " : "", pvk_spv_type(ctx, tid)->msl,
+                              n->row_major ? "row-major, rows" : "columns", n->size / n->count);
+            } else if (t->explicit_layout) {
                 pvk_sb_printf(ctx, &ctx->types, " /* offset %u */", m->offset);
+            }
             pvk_sb_append(ctx, &ctx->types, "\n", 1);
         }
         if (t->tail_pad)
@@ -34733,6 +34738,14 @@ static void pvk_spv_assign_resources(struct pvk_spv *ctx)
         if (!pvk_spv_bit(entry->globals, g))
             continue;
         x->msl = pvk_spv_name(ctx, var);
+        if (x->msl[0] == '_') { /* anonymous block: name it after its type */
+            struct pvk_spv_type *pt = pvk_spv_type(ctx, x->p->type);
+            uint32_t tid = pt->op == PVK_SPV_OpTypeArray ? pt->elem : x->p->type;
+            char buf[48];
+            pvk_spv_sanitize(pvk_spv_get(ctx, tid)->name, buf, sizeof(buf));
+            if (buf[0])
+                x->msl = pvk_spv_fmt(ctx, "%s_%u", buf, var);
+        }
         switch (x->p->storage) {
         case PVK_SPV_StorageStorageBuffer:
         case PVK_SPV_StorageUniform: {
@@ -36928,6 +36941,16 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
     for (i = 0; i < ctx->norder; i++)
         pvk_spv_emit_function(ctx, ctx->funcs[ctx->order[i] - 1]);
 
+    /* Metal has buffer indices 0-30; the extra buffers must not hit a set. */
+    if (res->push_constant_buffer > 30 || res->buffer_sizes_buffer > 30)
+        pvk_spv_fail(ctx, "buffer index out of range (Metal has 0-30)");
+    if (res->has_push_constants && (res->set_mask >> res->push_constant_buffer) & 1u)
+        pvk_spv_fail(ctx, "push-constant buffer %u is also descriptor set %u", res->push_constant_buffer,
+                     res->push_constant_buffer);
+    if (res->buffer_size_count && (((res->set_mask >> res->buffer_sizes_buffer) & 1u) ||
+                                   (res->has_push_constants && res->buffer_sizes_buffer == res->push_constant_buffer)))
+        pvk_spv_fail(ctx, "buffer-sizes buffer %u collides with another buffer", res->buffer_sizes_buffer);
+
     pvk_sb_printf(ctx, out, "/* Generated by PlasmaVK from SPIR-V. Kernel: %s */\n\n#include <metal_stdlib>\n\n"
                             "using namespace metal;\n\n", kernel);
     if (ctx->use_array)
@@ -36997,7 +37020,6 @@ static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const
     free(ctx->head.data);
     free(ctx->types.data);
     free(ctx->consts.data);
-    free(ctx->helpers.data);
     free(ctx->text.data);
     free(ctx->body.data);
     free(ctx);
