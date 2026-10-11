@@ -37803,6 +37803,7 @@ struct pvk_spv_block {
  * stage function gets them from attributes), as hidden parameters. */
 #define PVK_SPV_I_LANE 0x1u /* uint pvk_lane: [[thread_index_in_simdgroup]] (subgroup operations) */
 #define PVK_SPV_I_KILL 0x2u /* thread bool& pvk_killed: set by OpKill / OpTerminateInvocation */
+#define PVK_SPV_I_LOCAL_INDEX 0x4u /* kernels: uint pvk_local_index [[thread_index_in_threadgroup]] */
 
 struct pvk_spv_func {
     uint32_t fid;
@@ -37912,6 +37913,7 @@ struct pvk_spv {
     bool inline_consts;         /* pvk_spv_const_expr writes constants out (program-scope initializers) */
     uint32_t const_budget;      /* constituents left to write out that way */
     bool use_psb;               /* PhysicalStorageBuffer pointers: declare structs up front */
+    const char *dev;            /* address space of buffer memory: "device", or "device coherent(device)" (COHERENCE) */
     bool image_1d_as_2d;        /* options->image_1d_as_2d */
     uint32_t helper_mask;       /* PVK_SPV_H_* helper functions used */
     uint32_t budget;           /* blocks left to emit */
@@ -39359,8 +39361,9 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
             pvk_spv_fail(ctx, "variable %u: images and samplers must be UniformConstant variables (and only they)", rid);
         if (in->wc > 4) {
             pvk_spv_const(ctx, in->w[4]);
-            if (storage != PVK_SPV_StoragePrivate && storage != PVK_SPV_StorageOutput)
-                pvk_spv_fail(ctx, "variable %u: initializers are only supported for Private and Output variables", rid);
+            if (storage != PVK_SPV_StoragePrivate && storage != PVK_SPV_StorageOutput && storage != PVK_SPV_StorageWorkgroup)
+                pvk_spv_fail(ctx, "variable %u: initializers are only supported for Private, Output and Workgroup variables",
+                             rid);
         }
         x->kind = PVK_SPV_K_VAR;
         x->global = ctx->nglobals;
@@ -39667,12 +39670,12 @@ static void pvk_spv_psb_layout(struct pvk_spv *ctx, struct pvk_spv_type *t)
         return;
     e = pvk_spv_type(ctx, t->elem);
     if (e->op == PVK_SPV_OpTypeRuntimeArray && e->slot)
-        t->msl = pvk_spv_fmt(ctx, "device %s*", e->slot);
+        t->msl = pvk_spv_fmt(ctx, "%s %s*", ctx->dev, e->slot);
     else if (pvk_spv_is_psb(e) && e->msl)
         t->msl = pvk_spv_fmt(ctx, "%s device*", e->msl);
     else if (e->msl && e->op != PVK_SPV_OpTypeVoid && e->op != PVK_SPV_OpTypeBool && e->op != PVK_SPV_OpTypePointer &&
              e->op != PVK_SPV_OpTypeFunction && e->op != PVK_SPV_OpTypeRuntimeArray && !e->opaque)
-        t->msl = pvk_spv_fmt(ctx, "device %s*", e->msl);
+        t->msl = pvk_spv_fmt(ctx, "%s %s*", ctx->dev, e->msl);
     else
         pvk_spv_fail(ctx, "unsupported physical pointer type (pointee %u)", t->elem);
 }
@@ -40598,7 +40601,7 @@ static const char *pvk_spv_buffer_desc_type(struct pvk_spv *ctx, uint32_t block,
     if (ctx->types_ready && !(t->desc_emitted & bit)) { /* (after the block's own declaration) */
         t->desc_emitted |= bit;
         pvk_sb_printf(ctx, &ctx->types, "struct %s\n{\n    %s %s* p;\n    ulong size;\n};\n\n", name,
-                      storage ? "device" : "constant", t->msl);
+                      storage ? ctx->dev : "constant", t->msl);
     }
     return name;
 }
@@ -40965,7 +40968,7 @@ static void pvk_spv_resource_view(struct pvk_spv *ctx, uint32_t var)
         p->desc = member;
         if (p->robust)
             p->rb = member;
-        p->decl = pvk_spv_fmt(ctx, "%s %s& %s = *%s.p;", pvk_spv_is_storage_block(ctx, var) ? "device" : "constant",
+        p->decl = pvk_spv_fmt(ctx, "%s %s& %s = *%s.p;", pvk_spv_is_storage_block(ctx, var) ? ctx->dev : "constant",
                               bt->msl, x->msl, member);
     } else {
         p->decl = pvk_spv_fmt(ctx, "constant %s& %s = %s;", pvk_spv_type(ctx, obj)->msl, x->msl, member);
@@ -41812,6 +41815,78 @@ static void pvk_spv_barrier(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     }
 }
 
+/* Whether scope id `scope` is Device or QueueFamily. */
+static bool pvk_spv_device_scope(struct pvk_spv *ctx, uint32_t scope)
+{
+    uint32_t s = pvk_spv_const_u32(ctx, scope);
+    return s == PVK_SPV_ScopeDevice || s == PVK_SPV_ScopeQueueFamily;
+}
+
+/* COHERENCE: Metal keeps device memory coherent within a threadgroup; across
+ * threadgroups only coherent(device) memory is (MSL 3.2). Buffers become
+ * `device coherent(device)` (ctx->dev) in a shader that synchronizes buffer
+ * memory at device scope: Coherent or Volatile buffer variables or members
+ * (GLSL coherent), availability or visibility at Device scope on loads and
+ * stores (Vulkan memory model), device-scope acquire/release atomics and
+ * barriers on buffer memory. Textures cannot be coherent(device) in argument
+ * buffers: storage images rely on the fences alone. (On M4 Max, fences alone
+ * pass message passing between workgroups too.) */
+static void pvk_spv_coherence(struct pvk_spv *ctx)
+{
+    uint32_t i, f, bi, m, off;
+    bool coherent = false;
+    ctx->dev = "device";
+    for (i = 1; i < ctx->bound && !coherent; i++) {
+        struct pvk_spv_id *x = &ctx->ids[i];
+        if ((x->flags & PVK_SPV_F_COHERENT) && x->kind == PVK_SPV_K_VAR)
+            coherent = true;
+        if (x->kind == PVK_SPV_K_TYPE && x->t->op == PVK_SPV_OpTypeStruct)
+            for (m = 0; m < x->t->nmembers; m++)
+                coherent |= (x->t->members[m].flags & PVK_SPV_M_COHERENT) != 0;
+    }
+    for (f = 0; f < ctx->nfuncs && !coherent; f++) {
+        const struct pvk_spv_func *fn = ctx->funcs[f];
+        for (bi = 0; bi < fn->nblocks && !coherent; bi++) {
+            for (off = fn->blocks[bi].begin; off < fn->blocks[bi].end && !coherent;) {
+                struct pvk_spv_insn in = pvk_spv_insn_at(ctx, off);
+                uint32_t mask_at = 0, sem = 0, scope = 0;
+                off += in.wc;
+                switch (in.op) {
+                case PVK_SPV_OpLoad: mask_at = 4; break;
+                case PVK_SPV_OpStore: case PVK_SPV_OpCopyMemory: mask_at = 3; break;
+                case PVK_SPV_OpAtomicStore: scope = 2; sem = 3; break;
+                case PVK_SPV_OpMemoryBarrier: scope = 1; sem = 2; break;
+                case PVK_SPV_OpControlBarrier: scope = 2; sem = 3; break;
+                default:
+                    if ((in.op >= PVK_SPV_OpAtomicLoad && in.op <= PVK_SPV_OpAtomicXor) || in.op == PVK_SPV_OpAtomicFAddEXT) {
+                        scope = 4;
+                        sem = 5;
+                    }
+                    break;
+                }
+                if (mask_at && in.wc > mask_at) { /* memory operands: Aligned literal, then scopes */
+                    uint32_t mask = in.w[mask_at], k = mask_at + 1;
+                    if (mask & PVK_SPV_MemAligned)
+                        k++;
+                    if ((mask & PVK_SPV_MemMakePointerAvailable) && k < in.wc && pvk_spv_device_scope(ctx, in.w[k++]))
+                        coherent = true;
+                    if ((mask & PVK_SPV_MemMakePointerVisible) && k < in.wc && pvk_spv_device_scope(ctx, in.w[k]))
+                        coherent = true;
+                } else if (sem && in.wc > sem) {
+                    uint32_t s = pvk_spv_const_u32(ctx, in.w[sem]);
+                    if ((s & (PVK_SPV_SEM_RELEASE | PVK_SPV_SEM_ACQUIRE)) &&
+                        (s & (PVK_SPV_SemanticsUniformMemory | PVK_SPV_SemanticsCrossWorkgroupMemory) ||
+                         !(s & (PVK_SPV_SemanticsWorkgroupMemory | PVK_SPV_SemanticsImageMemory))) &&
+                        pvk_spv_device_scope(ctx, in.w[scope]))
+                        coherent = true;
+                }
+            }
+        }
+    }
+    if (coherent)
+        ctx->dev = "device coherent(device)";
+}
+
 /* Atomics on a texel (OpImageTexelPointer): Metal texture atomics, on
  * 32-bit integer storage images and texel buffers. */
 static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in, const struct pvk_spv_ptr *p)
@@ -41940,7 +42015,7 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         space = "threadgroup";
     else if ((p->storage == PVK_SPV_StorageStorageBuffer || p->storage == PVK_SPV_StorageUniform ||
               p->storage == PVK_SPV_StoragePhysicalStorageBuffer) && pvk_spv_writable(ctx, p))
-        space = "device";
+        space = ctx->dev;
     else
         pvk_spv_fail(ctx, "atomics are only supported on storage buffers and workgroup memory");
     if (t->op == PVK_SPV_OpTypeInt && t->width == 64)
@@ -44225,9 +44300,9 @@ static const char *pvk_spv_space(struct pvk_spv *ctx, const struct pvk_spv_ptr *
         return "threadgroup";
     case PVK_SPV_StorageStorageBuffer:
     case PVK_SPV_StoragePhysicalStorageBuffer:
-        return "device";
+        return ctx->dev;
     case PVK_SPV_StorageUniform:
-        return p->var && pvk_spv_get(ctx, p->var)->func == 0 && pvk_spv_is_storage_block(ctx, p->var) ? "device"
+        return p->var && pvk_spv_get(ctx, p->var)->func == 0 && pvk_spv_is_storage_block(ctx, p->var) ? ctx->dev
                                                                                                     : "constant";
     case PVK_SPV_StoragePushConstant:
     case PVK_SPV_StorageUniformConstant:
@@ -44285,6 +44360,7 @@ static const char *pvk_spv_derived_builtin(uint32_t builtin)
     case PVK_SPV_BuiltInSubgroupSize: return "32u";
     case PVK_SPV_BuiltInDeviceIndex: return "0u"; /* one device in the group */
     case PVK_SPV_BuiltInSubgroupLocalInvocationId: return "pvk_lane";
+    case PVK_SPV_BuiltInLocalInvocationIndex: return "pvk_local_index";
     case PVK_SPV_BuiltInSubgroupEqMask: return "uint4(1u << pvk_lane, 0u, 0u, 0u)";
     case PVK_SPV_BuiltInSubgroupGeMask: return "uint4(0xffffffffu << pvk_lane, 0u, 0u, 0u)";
     case PVK_SPV_BuiltInSubgroupGtMask: return "uint4(0xfffffffeu << pvk_lane, 0u, 0u, 0u)";
@@ -44305,6 +44381,7 @@ static bool pvk_spv_based(struct pvk_spv *ctx, const struct pvk_spv_id *x)
 static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
 {
     bool entry = fn->fid == ctx->entry_fid && !ctx->graphics; /* graphics: a helper behind the stage function */
+    bool zero_init = false;                                    /* Workgroup variables with initializers */
     struct pvk_msl_result *res = ctx->result;
     struct pvk_sb *out = &ctx->text;
     const char **params = NULL;
@@ -44378,6 +44455,8 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
         }
         if (fn->implicit & PVK_SPV_I_LANE)
             PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_lane [[thread_index_in_simdgroup]]");
+        if (fn->implicit & PVK_SPV_I_LOCAL_INDEX)
+            PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_local_index [[thread_index_in_threadgroup]]");
         threads = (uint64_t)res->workgroup_size[0] * res->workgroup_size[1] * res->workgroup_size[2];
         if (threads <= 1024) /* the compiler must fit the workgroup (Metal's maximum is 1024) */
             pvk_sb_printf(ctx, out, "[[max_total_threads_per_threadgroup(%u)]]\n", (uint32_t)threads);
@@ -44433,9 +44512,24 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
                 continue;
             t = pvk_spv_type(ctx, x->p->type);
             switch (x->p->storage) {
-            case PVK_SPV_StorageWorkgroup:
+            case PVK_SPV_StorageWorkgroup: {
+                /* An initializer (OpConstantNull with shaderZeroInitializeWorkgroupMemory):
+                 * the workgroup's threads write it, then wait for each other. */
+                struct pvk_spv_insn in = pvk_spv_insn_at(ctx, x->insn);
+                uint32_t threads = res->workgroup_size[0] * res->workgroup_size[1] * res->workgroup_size[2];
                 pvk_spv_line(ctx, "%s %s;", pvk_spv_qualified(ctx, "threadgroup", x->p->type), x->msl);
+                if (in.wc <= 4)
+                    break;
+                if (pvk_spv_const(ctx, in.w[4])->null)
+                    pvk_spv_line(ctx, "for (uint pvk_i = pvk_local_index; pvk_i < %uu; pvk_i += %uu)\n"
+                                      "        ((threadgroup %s*)&%s)[pvk_i] = 0;",
+                                 t->size % 4 ? t->size : t->size / 4, threads, t->size % 4 ? "uchar" : "uint", x->msl);
+                else
+                    pvk_spv_line(ctx, "if (pvk_local_index == 0u)\n        %s = %s;", x->msl,
+                                 pvk_spv_const_expr(ctx, in.w[4], 0));
+                zero_init = true;
                 break;
+            }
             case PVK_SPV_StoragePrivate: {
                 struct pvk_spv_insn in = pvk_spv_insn_at(ctx, x->insn);
                 if (in.wc > 4)
@@ -44448,6 +44542,8 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
                 break;
             }
         }
+        if (zero_init)
+            pvk_spv_line(ctx, "threadgroup_barrier(mem_flags::mem_threadgroup);");
     }
     for (g = 0; g < ctx->nglobals; g++) /* descriptors, from their sets */
         if (pvk_spv_bit(fn->globals, g) && pvk_spv_is_resource(ctx->ids[ctx->globals[g]].p))
@@ -45623,8 +45719,15 @@ static const char pvk_spv_templates[] =
     "    constexpr const device T &operator[](uint i) const device { return elems[i]; }\n"
     "    constexpr const constant T &operator[](uint i) const constant { return elems[i]; }\n"
     "    threadgroup T &operator[](uint i) threadgroup { return elems[i]; }\n"
-    "    constexpr const threadgroup T &operator[](uint i) const threadgroup { return elems[i]; }\n"
-    "};\n\n";
+    "    constexpr const threadgroup T &operator[](uint i) const threadgroup { return elems[i]; }\n";
+
+/* pvk_array's accessors on coherent(device) buffer memory (COHERENCE), then its end. */
+static const char pvk_spv_templates_coherent[] =
+    "    device coherent(device) T &operator[](uint i) device coherent(device) { return elems[i]; }\n"
+    "    constexpr const device coherent(device) T &operator[](uint i) const device coherent(device)"
+    " { return elems[i]; }\n";
+
+static const char pvk_spv_templates_end[] = "};\n\n";
 
 static const char pvk_spv_padded_template[] =
     "/* A T followed by P bytes of padding: an array element with a larger stride. */\n"
@@ -45746,6 +45849,7 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         pvk_spv_func_of(ctx, ctx->entry_fid)->nparams)
         pvk_spv_fail(ctx, "entry point function must be void(void)");
     pvk_spv_apply_member_insns(ctx);
+    pvk_spv_coherence(ctx);
     if (!ctx->graphics)
         pvk_spv_workgroup_size(ctx);
     pvk_spv_layout_types(ctx);
@@ -45763,6 +45867,11 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
             const char *d = x->p->storage == PVK_SPV_StorageInput ? pvk_spv_derived_builtin(x->builtin) : NULL;
             if (pvk_spv_bit(entry->globals, g) && d && strstr(d, "pvk_lane"))
                 entry->implicit |= PVK_SPV_I_LANE;
+            if (pvk_spv_bit(entry->globals, g) && d && strstr(d, "pvk_local_index"))
+                entry->implicit |= PVK_SPV_I_LOCAL_INDEX;
+            if (pvk_spv_bit(entry->globals, g) && x->p->storage == PVK_SPV_StorageWorkgroup &&
+                pvk_spv_insn_at(ctx, x->insn).wc > 4) /* initialized by the workgroup's threads */
+                entry->implicit |= PVK_SPV_I_LOCAL_INDEX;
         }
     }
     kernel = pvk_spv_kernel_name(ctx);
@@ -45815,8 +45924,12 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
                   : ctx->model == PVK_SPV_ExecutionModelFragment ? "Fragment function"
                                                                  : "Kernel",
                   kernel);
-    if (ctx->use_array)
+    if (ctx->use_array) {
         pvk_sb_append(ctx, out, pvk_spv_templates, sizeof(pvk_spv_templates) - 1);
+        if (strcmp(ctx->dev, "device") != 0)
+            pvk_sb_append(ctx, out, pvk_spv_templates_coherent, sizeof(pvk_spv_templates_coherent) - 1);
+        pvk_sb_append(ctx, out, pvk_spv_templates_end, sizeof(pvk_spv_templates_end) - 1);
+    }
     if (ctx->use_padded)
         pvk_sb_append(ctx, out, pvk_spv_padded_template, sizeof(pvk_spv_padded_template) - 1);
     if (ctx->use_sampled)
