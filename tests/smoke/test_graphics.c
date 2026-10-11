@@ -2869,7 +2869,7 @@ static uint32_t expect_msaa(uint32_t x, uint32_t y)
 
 /* 4x multisampling: dynamic rendering with a resolve, sample shading
  * (gl_SampleID), transient multisampled images, and render pass color and
- * depth resolves (SAMPLE_ZERO). */
+ * depth resolves (SAMPLE_ZERO), the multisampled attachments stored or not. */
 static void test_msaa(void)
 {
     struct img ms = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
@@ -2890,7 +2890,7 @@ static void test_msaa(void)
     VkSubpassDescriptionDepthStencilResolve dsr;
     VkSubpassDescription2 sp;
     VkRenderPassCreateInfo2 rpi;
-    VkRenderPass rp = VK_NULL_HANDLE;
+    VkRenderPass rp = VK_NULL_HANDLE, rp_store = VK_NULL_HANDLE;
     VkImageView views[4];
     VkFramebuffer fb;
     VkClearValue clears[4];
@@ -2974,6 +2974,8 @@ static void test_msaa(void)
     rpi.subpassCount = 1;
     rpi.pSubpasses = &sp;
     CHECK_VK(vkCreateRenderPass2(device, &rpi, NULL, &rp), VK_SUCCESS);
+    a[0].storeOp = a[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE; /* a compatible pass */
+    CHECK_VK(vkCreateRenderPass2(device, &rpi, NULL, &rp_store), VK_SUCCESS);
     views[0] = ms.view;
     views[1] = msd.view;
     views[2] = resolved.view;
@@ -2991,28 +2993,36 @@ static void test_msaa(void)
     memset(clears, 0, sizeof(clears));
     clears[0].color.float32[3] = 1.0f;
     clears[1].depthStencil.depth = 1.0f;
-    cb = begin_cmd();
-    begin_pass(cb, rp, fb, 0, 0, W, H, clears, 2);
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, rp_pipe);
-    rect(cb, -1, -1, 0, 0, 1, 0, 0, 1, 0.25f);
-    vkCmdEndRenderPass(cb);
-    download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
-    download(cb, &depth, 0, VK_IMAGE_ASPECT_DEPTH_BIT, &dout);
-    submit(cb);
-    for (y = 0; y < H; y++)
-        for (x = 0; x < W; x++) {
-            bool in = x < W / 2 && y < H / 2;
-            float d;
-            memcpy(&d, dout.data + 4 * (y * W + x), 4);
-            bad += px(&out, x, y) != (in ? RED : BLACK);
-            bad += d != (in ? 0.25f : 1.0f);
-        }
-    CHECK(bad == 0);
+    /* the multisampled attachments not stored, then stored (resolves of
+     * stored depth came out wrong at times: repeated) */
+    for (k = 0; k < 5; k++) {
+        cb = begin_cmd();
+        begin_pass(cb, k ? rp_store : rp, fb, 0, 0, W, H, clears, 2);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, rp_pipe);
+        rect(cb, -1, -1, 0, 0, 1, 0, 0, 1, 0.25f);
+        vkCmdEndRenderPass(cb);
+        download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        download(cb, &depth, 0, VK_IMAGE_ASPECT_DEPTH_BIT, &dout);
+        submit(cb);
+        bad = 0;
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++) {
+                bool in = x < W / 2 && y < H / 2;
+                float d;
+                memcpy(&d, dout.data + 4 * (y * W + x), 4);
+                bad += px(&out, x, y) != (in ? RED : BLACK);
+                bad += d != (in ? 0.25f : 1.0f);
+            }
+        if (bad)
+            fprintf(stderr, "render pass resolve (%s): %d texels wrong\n", k ? "stored" : "not stored", bad);
+        CHECK(bad == 0);
+    }
     vkDestroyPipeline(device, pipe, NULL);
     vkDestroyPipeline(device, shading, NULL);
     vkDestroyPipeline(device, rp_pipe, NULL);
     vkDestroyFramebuffer(device, fb, NULL);
     vkDestroyRenderPass(device, rp, NULL);
+    vkDestroyRenderPass(device, rp_store, NULL);
     free_buf(&out);
     free_buf(&dout);
     free_img(&ms);

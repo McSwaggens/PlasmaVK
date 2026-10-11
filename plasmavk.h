@@ -47735,7 +47735,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
  *   always stores (DONT_CARE would lose what lies outside), memoryless
  *   (transient) attachments neither load nor store, and an attachment used
  *   by subpasses of several encoders is stored and loaded between them.
- *   Color, depth and stencil resolves are store actions of their encoder.
+ *   Color, depth and stencil resolves are store actions of their encoder,
+ *   except that a stored depth/stencil attachment is resolved by an
+ *   internal pass after it (pvk_render_resolve_ds, section 16).
  *
  * STATE
  *   All graphics state Vulkan can make dynamic is one struct
@@ -49518,6 +49520,9 @@ struct pvk_render {
     bool counting;          /* visibility counting is on */
     struct pvk_render_query pending[64];
     uint32_t pending_count;
+    /* Stored depth/stencil attachments to resolve when the pass ends
+     * (texture NULL: none); see pvk_render_resolve_ds */
+    struct pvk_pass_attachment resolve_depth, resolve_stencil;
 };
 
 /* Position in a batch's primary command buffers. */
@@ -51274,6 +51279,8 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
 static void pvk_encoder_query_available(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t first,
                                         uint32_t count);
 
+static void pvk_render_resolve_ds(struct pvk_encoder *e);
+
 static void pvk_render_end(struct pvk_encoder *e)
 {
     struct pvk_render *r = &e->render;
@@ -51282,6 +51289,7 @@ static void pvk_render_end(struct pvk_encoder *e)
         pvk_MTL4CommandEncoder_endEncoding(r->enc);
         pvk_release(r->enc);
         r->enc = NULL;
+        pvk_render_resolve_ds(e);
     }
     r->suspended = false;
     r->counting = false;
@@ -51380,10 +51388,69 @@ static void pvk_pass_set_attachment(id att, const struct pvk_pass_attachment *pa
     }
 }
 
+/* Depth and stencil StoreAndMultisampleResolve leave the resolve texture's
+ * texels undefined at times (0x7fffffff, a NaN in D32_SFLOAT; Apple M4,
+ * macOS 27.2), where MultisampleResolve does not: a pass that stores a
+ * resolved depth/stencil attachment has it Store, and this internal pass
+ * after it loads the stored samples and resolves them. */
+static void pvk_render_resolve_ds(struct pvk_encoder *e)
+{
+    struct pvk_render *r = &e->render;
+    void *pool;
+    id pass, enc = NULL;
+
+    if (!r->resolve_depth.texture && !r->resolve_stencil.texture)
+        return;
+    pool = objc_autoreleasePoolPush();
+    pass = pvk_MTL4RenderPassDescriptor_new();
+    if (pass) {
+        if (r->resolve_depth.texture) {
+            id att = pvk_MTL4RenderPassDescriptor_depthAttachment(pass);
+            pvk_pass_set_attachment(att, &r->resolve_depth);
+            pvk_MTLRenderPassDepthAttachmentDescriptor_setDepthResolveFilter(att, r->resolve_depth.resolve_filter);
+        }
+        if (r->resolve_stencil.texture) {
+            id att = pvk_MTL4RenderPassDescriptor_stencilAttachment(pass);
+            pvk_pass_set_attachment(att, &r->resolve_stencil);
+            pvk_MTLRenderPassStencilAttachmentDescriptor_setStencilResolveFilter(
+                att, PVK_MTLMultisampleStencilResolveFilterSample0);
+        }
+        if (r->layers)
+            pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, r->layers);
+        enc = pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass);
+        pvk_release(pass);
+    }
+    if (enc) { /* after the pass's stores */
+        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
+            enc, PVK_STAGES_RENDER, PVK_STAGES_RENDER, PVK_MTL4VisibilityOptionDevice);
+        pvk_MTL4CommandEncoder_endEncoding(enc);
+    } else if (e->result == VK_SUCCESS) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    objc_autoreleasePoolPop(pool);
+    memset(&r->resolve_depth, 0, sizeof(r->resolve_depth));
+    memset(&r->resolve_stencil, 0, sizeof(r->resolve_stencil));
+}
+
+/* What pvk_render_resolve_ds resolves of a stored, resolved depth/stencil
+ * attachment (pa becomes Store without the resolve). */
+static void pvk_render_defer_resolve(struct pvk_pass_attachment *pa, struct pvk_pass_attachment *later)
+{
+    memset(later, 0, sizeof(*later));
+    if (!pa->texture || !pa->resolve || pa->store != PVK_MTLStoreActionStoreAndMultisampleResolve)
+        return;
+    *later = *pa;
+    later->load = PVK_MTLLoadActionLoad;
+    later->store = PVK_MTLStoreActionMultisampleResolve;
+    pa->store = PVK_MTLStoreActionStore;
+    pa->resolve = NULL;
+}
+
 static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_begin_pass *c)
 {
     struct pvk_render *r = &e->render;
     struct pvk_draw_track track;
+    struct pvk_pass_attachment depth = c->depth, stencil = c->stencil, resolve_depth, resolve_stencil;
     uint32_t s, clears = 0, values[PVK_MAX_COLOR_ATTACHMENTS][4];
     uint32_t width = UINT32_MAX, height = UINT32_MAX, samples = 0;
     id pass, enc;
@@ -51430,18 +51497,20 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
             pvk_clear_value_bits(pa->fmt, &pa->clear.color, values[s]);
         }
     }
-    if (c->depth.texture) {
+    pvk_render_defer_resolve(&depth, &resolve_depth);
+    pvk_render_defer_resolve(&stencil, &resolve_stencil);
+    if (depth.texture) {
         id att = pvk_MTL4RenderPassDescriptor_depthAttachment(pass);
-        pvk_pass_set_attachment(att, &c->depth);
-        pvk_MTLRenderPassDepthAttachmentDescriptor_setClearDepth(att, c->depth.clear.depthStencil.depth);
-        if (c->depth.resolve)
-            pvk_MTLRenderPassDepthAttachmentDescriptor_setDepthResolveFilter(att, c->depth.resolve_filter);
+        pvk_pass_set_attachment(att, &depth);
+        pvk_MTLRenderPassDepthAttachmentDescriptor_setClearDepth(att, depth.clear.depthStencil.depth);
+        if (depth.resolve)
+            pvk_MTLRenderPassDepthAttachmentDescriptor_setDepthResolveFilter(att, depth.resolve_filter);
     }
-    if (c->stencil.texture) {
+    if (stencil.texture) {
         id att = pvk_MTL4RenderPassDescriptor_stencilAttachment(pass);
-        pvk_pass_set_attachment(att, &c->stencil);
-        pvk_MTLRenderPassStencilAttachmentDescriptor_setClearStencil(att, c->stencil.clear.depthStencil.stencil & 0xffu);
-        if (c->stencil.resolve)
+        pvk_pass_set_attachment(att, &stencil);
+        pvk_MTLRenderPassStencilAttachmentDescriptor_setClearStencil(att, stencil.clear.depthStencil.stencil & 0xffu);
+        if (stencil.resolve)
             pvk_MTLRenderPassStencilAttachmentDescriptor_setStencilResolveFilter(
                 att, PVK_MTLMultisampleStencilResolveFilterSample0);
     }
@@ -51489,6 +51558,8 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
                                                            PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
     r->enc = enc;
     r->suspended = false;
+    r->resolve_depth = resolve_depth;
+    r->resolve_stencil = resolve_stencil;
     r->width = width;
     r->height = height;
     r->layers = c->layers;
