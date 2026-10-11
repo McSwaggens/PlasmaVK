@@ -1,6 +1,6 @@
 /* The C99 Objective-C bridge: typed messaging and hand-built blocks. */
 #define PLASMAVK_IMPLEMENTATION
-#include "plasmavk.h"
+#include "../../plasmavk.h"
 
 #include <time.h>
 
@@ -8,14 +8,13 @@
 
 static void test_device_messaging(void)
 {
-    id device;
+    id device = pvk_MTLCreateSystemDefaultDevice();
 
-    pvk_metal_init();
-    device = MTLCreateSystemDefaultDevice();
     REQUIRE(device != NULL);
-    CHECK(pvk_mtl_device_name(device)[0] != '\0');
-    CHECK(pvk_mtl_device_supports_family(device, PVK_MTL_GPU_FAMILY_APPLE7));
-    CHECK(pvk_mtl_device_supports_family(device, PVK_MTL_GPU_FAMILY_METAL4));
+    CHECK(pvk_ns_utf8(pvk_MTLDevice_name(device))[0] != '\0');
+    CHECK(pvk_MTLDevice_supportsFamily(device, PVK_MTLGPUFamilyApple7));
+    CHECK(pvk_MTLDevice_supportsFamily(device, PVK_MTLGPUFamilyMetal4));
+    CHECK(pvk_MTLDevice_recommendedMaxWorkingSetSize(device) > 0);
     pvk_release(device);
 }
 
@@ -42,8 +41,7 @@ static void test_stack_block(void)
     int waited_ms;
     void *pool = objc_autoreleasePoolPush(); /* commandBuffer is autoreleased */
 
-    pvk_metal_init();
-    device = MTLCreateSystemDefaultDevice();
+    device = pvk_MTLCreateSystemDefaultDevice();
     REQUIRE(device != NULL);
     queue = PVK_MSG(id, (id, SEL))(device, sel_registerName("newCommandQueue"));
     REQUIRE(queue != NULL);

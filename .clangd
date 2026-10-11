@@ -1,0 +1,8 @@
+# Editing plasmavk.h: parse it with the implementation section enabled.
+CompileFlags:
+  Add: [-xc, -std=c99, -Wall, -Wextra, -pedantic]
+---
+If:
+  PathMatch: plasmavk\.h
+CompileFlags:
+  Add: [-DPLASMAVK_IMPLEMENTATION]

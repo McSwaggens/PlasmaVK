@@ -1,5 +1,5 @@
 #define PLASMAVK_IMPLEMENTATION
-#include "plasmavk.h"
+#include "../../plasmavk.h"
 
 #include <string.h>
 

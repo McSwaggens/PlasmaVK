@@ -1,7 +1,0 @@
--xc
--std=c99
--Wall
--Wextra
--pedantic
--Isrc
--Iexternal/vulkan-headers/include

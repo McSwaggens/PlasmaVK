@@ -1,5 +1,5 @@
 #define PLASMAVK_IMPLEMENTATION
-#include "plasmavk.h"
+#include "../../plasmavk.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -85,6 +85,7 @@ static void test_physical_device(void)
         CHECK(props.vendorID == 0x106B);
         CHECK(props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU);
         CHECK(VK_API_VERSION_MINOR(props.apiVersion) == 4);
+        CHECK(props.limits.maxComputeWorkGroupSize[0] >= 1024); /* struct return through objc_msgSend */
         CHECK(strncmp(props.deviceName, "Apple", 5) == 0);
         printf("  device: %s\n", props.deviceName);
     }
@@ -103,6 +104,27 @@ static void test_proc_addr(void)
     CHECK(vkGetInstanceProcAddr(instance, "vkCmdDraw") != NULL);
     CHECK(vkGetInstanceProcAddr(instance, "vkNotARealCommand") == NULL);
     CHECK(vkGetInstanceProcAddr(instance, NULL) == NULL);
+    vkDestroyInstance(instance, NULL);
+}
+
+/* The hand-maintained table in plasmavk.h: no duplicates, every entry
+ * resolves through vkGetInstanceProcAddr, device entries through
+ * vkGetDeviceProcAddr's scope rule. */
+static void test_entrypoint_table(void)
+{
+    VkInstance instance = create_instance();
+    size_t i, j;
+    REQUIRE(instance);
+
+    for (i = 0; i < PVK_ARRAY_SIZE(pvk_entrypoints); i++) {
+        const struct pvk_entrypoint *e = &pvk_entrypoints[i];
+        CHECK(e->fn != NULL);
+        CHECK(vkGetInstanceProcAddr(instance, e->name) == e->fn);
+        for (j = i + 1; j < PVK_ARRAY_SIZE(pvk_entrypoints); j++)
+            if (strcmp(e->name, pvk_entrypoints[j].name) == 0)
+                PVK_TEST_FAIL("duplicate entry point %s", e->name);
+    }
+    CHECK(PVK_ARRAY_SIZE(pvk_entrypoints) >= 249);
     vkDestroyInstance(instance, NULL);
 }
 
@@ -162,6 +184,7 @@ int main(void)
     RUN(test_unsupported_extension);
     RUN(test_physical_device);
     RUN(test_proc_addr);
+    RUN(test_entrypoint_table);
     RUN(test_allocator);
     return TEST_RESULT();
 }

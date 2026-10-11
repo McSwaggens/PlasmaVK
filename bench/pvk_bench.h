@@ -9,12 +9,10 @@
 #ifndef PVK_BENCH_H
 #define PVK_BENCH_H
 
-#ifdef BENCH_USE_LOADER
-#include <vulkan/vulkan_core.h>
-#else
-#define PLASMAVK_IMPLEMENTATION
-#include "plasmavk.h"
+#ifndef BENCH_USE_LOADER
+#define PLASMAVK_IMPLEMENTATION /* otherwise: declarations only, linked to the loader */
 #endif
+#include "../plasmavk.h"
 
 #include <mach/mach_time.h>
 #include <stdio.h>

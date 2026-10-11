@@ -1,5 +1,5 @@
 // The declarations part of the header must be usable from C++.
-#include "plasmavk.h"
+#include "../../plasmavk.h"
 
 uint32_t plasmavk_cpp_version()
 {
