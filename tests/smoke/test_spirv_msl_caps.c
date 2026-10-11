@@ -3850,6 +3850,72 @@ static const uint32_t spv_sgq_fs[] = {
     0x00010038,
 };
 
+/*
+ * #version 450
+ * layout(location = 0) in vec4 pos;
+ * layout(location = 0) out vec2 v_uv;
+ * layout(location = 1) noperspective out float v_g;
+ * layout(location = 2) flat out float v_flat;
+ * layout(location = 3) out vec4 v_vec;
+ * invariant gl_Position;
+ * void main()
+ * {
+ *     gl_Position = pos;
+ *     v_uv = pos.xy * 0.5 + 0.5;
+ *     v_g = pos.x * 4.0;
+ *     v_flat = 7.0;
+ *     v_vec = vec4(pos.y * 2.0, 0.0, pos.x, 1.0);
+ * }
+ */
+static const uint32_t spv_inv_vs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000032, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x000b000f, 0x00000000, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000d, 0x00000011, 0x00000017,
+    0x0000001f, 0x00000026, 0x00000028, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004,
+    0x6e69616d, 0x00000000, 0x00060005, 0x0000000b, 0x505f6c67, 0x65567265, 0x78657472, 0x00000000,
+    0x00060006, 0x0000000b, 0x00000000, 0x505f6c67, 0x7469736f, 0x006e6f69, 0x00070006, 0x0000000b,
+    0x00000001, 0x505f6c67, 0x746e696f, 0x657a6953, 0x00000000, 0x00070006, 0x0000000b, 0x00000002,
+    0x435f6c67, 0x4470696c, 0x61747369, 0x0065636e, 0x00070006, 0x0000000b, 0x00000003, 0x435f6c67,
+    0x446c6c75, 0x61747369, 0x0065636e, 0x00030005, 0x0000000d, 0x00000000, 0x00030005, 0x00000011,
+    0x00736f70, 0x00040005, 0x00000017, 0x76755f76, 0x00000000, 0x00030005, 0x0000001f, 0x00675f76,
+    0x00040005, 0x00000026, 0x6c665f76, 0x00007461, 0x00040005, 0x00000028, 0x65765f76, 0x00000063,
+    0x00030047, 0x0000000b, 0x00000002, 0x00050048, 0x0000000b, 0x00000000, 0x0000000b, 0x00000000,
+    0x00040048, 0x0000000b, 0x00000000, 0x00000012, 0x00050048, 0x0000000b, 0x00000001, 0x0000000b,
+    0x00000001, 0x00050048, 0x0000000b, 0x00000002, 0x0000000b, 0x00000003, 0x00050048, 0x0000000b,
+    0x00000003, 0x0000000b, 0x00000004, 0x00040047, 0x00000011, 0x0000001e, 0x00000000, 0x00040047,
+    0x00000017, 0x0000001e, 0x00000000, 0x00030047, 0x0000001f, 0x0000000d, 0x00040047, 0x0000001f,
+    0x0000001e, 0x00000001, 0x00030047, 0x00000026, 0x0000000e, 0x00040047, 0x00000026, 0x0000001e,
+    0x00000002, 0x00040047, 0x00000028, 0x0000001e, 0x00000003, 0x00020013, 0x00000002, 0x00030021,
+    0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006,
+    0x00000004, 0x00040015, 0x00000008, 0x00000020, 0x00000000, 0x0004002b, 0x00000008, 0x00000009,
+    0x00000001, 0x0004001c, 0x0000000a, 0x00000006, 0x00000009, 0x0006001e, 0x0000000b, 0x00000007,
+    0x00000006, 0x0000000a, 0x0000000a, 0x00040020, 0x0000000c, 0x00000003, 0x0000000b, 0x0004003b,
+    0x0000000c, 0x0000000d, 0x00000003, 0x00040015, 0x0000000e, 0x00000020, 0x00000001, 0x0004002b,
+    0x0000000e, 0x0000000f, 0x00000000, 0x00040020, 0x00000010, 0x00000001, 0x00000007, 0x0004003b,
+    0x00000010, 0x00000011, 0x00000001, 0x00040020, 0x00000013, 0x00000003, 0x00000007, 0x00040017,
+    0x00000015, 0x00000006, 0x00000002, 0x00040020, 0x00000016, 0x00000003, 0x00000015, 0x0004003b,
+    0x00000016, 0x00000017, 0x00000003, 0x0004002b, 0x00000006, 0x0000001a, 0x3f000000, 0x00040020,
+    0x0000001e, 0x00000003, 0x00000006, 0x0004003b, 0x0000001e, 0x0000001f, 0x00000003, 0x0004002b,
+    0x00000008, 0x00000020, 0x00000000, 0x00040020, 0x00000021, 0x00000001, 0x00000006, 0x0004002b,
+    0x00000006, 0x00000024, 0x40800000, 0x0004003b, 0x0000001e, 0x00000026, 0x00000003, 0x0004002b,
+    0x00000006, 0x00000027, 0x40e00000, 0x0004003b, 0x00000013, 0x00000028, 0x00000003, 0x0004002b,
+    0x00000006, 0x0000002b, 0x40000000, 0x0004002b, 0x00000006, 0x0000002d, 0x00000000, 0x0004002b,
+    0x00000006, 0x00000030, 0x3f800000, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
+    0x000200f8, 0x00000005, 0x0004003d, 0x00000007, 0x00000012, 0x00000011, 0x00050041, 0x00000013,
+    0x00000014, 0x0000000d, 0x0000000f, 0x0003003e, 0x00000014, 0x00000012, 0x0004003d, 0x00000007,
+    0x00000018, 0x00000011, 0x0007004f, 0x00000015, 0x00000019, 0x00000018, 0x00000018, 0x00000000,
+    0x00000001, 0x0005008e, 0x00000015, 0x0000001b, 0x00000019, 0x0000001a, 0x00050050, 0x00000015,
+    0x0000001c, 0x0000001a, 0x0000001a, 0x00050081, 0x00000015, 0x0000001d, 0x0000001b, 0x0000001c,
+    0x0003003e, 0x00000017, 0x0000001d, 0x00050041, 0x00000021, 0x00000022, 0x00000011, 0x00000020,
+    0x0004003d, 0x00000006, 0x00000023, 0x00000022, 0x00050085, 0x00000006, 0x00000025, 0x00000023,
+    0x00000024, 0x0003003e, 0x0000001f, 0x00000025, 0x0003003e, 0x00000026, 0x00000027, 0x00050041,
+    0x00000021, 0x00000029, 0x00000011, 0x00000009, 0x0004003d, 0x00000006, 0x0000002a, 0x00000029,
+    0x00050085, 0x00000006, 0x0000002c, 0x0000002a, 0x0000002b, 0x00050041, 0x00000021, 0x0000002e,
+    0x00000011, 0x00000020, 0x0004003d, 0x00000006, 0x0000002f, 0x0000002e, 0x00070050, 0x00000007,
+    0x00000031, 0x0000002c, 0x0000002d, 0x0000002f, 0x00000030, 0x0003003e, 0x00000028, 0x00000031,
+    0x000100fd, 0x00010038,
+};
+
 
 /* ==========================================================================
  * Helpers
@@ -5022,7 +5088,7 @@ static bool fs_draw(const uint32_t *vw, size_t vn, const uint32_t *fw, size_t fn
     return ok;
 }
 
-static void check_interpolate_at(const uint32_t *fw, size_t fn)
+static void check_interpolate_at(const uint32_t *vw, size_t vn, const uint32_t *fw, size_t fn)
 {
     pvk_MTLPixelFormat fmt[2] = { PVK_MTLPixelFormatRGBA32Float, PVK_MTLPixelFormatRGBA32Float };
     id tgt[2];
@@ -5031,7 +5097,7 @@ static void check_interpolate_at(const uint32_t *fw, size_t fn)
 
     tgt[0] = mr_target(PVK_MTLTextureType2D, fmt[0], FW, FH, 1, 1);
     tgt[1] = mr_target(PVK_MTLTextureType2D, fmt[1], FW, FH, 1, 1);
-    CHECK(fs_draw(spv_ia_vs, PVK_ARRAY_SIZE(spv_ia_vs), fw, fn, fmt, tgt, 2, 1, NULL, 0));
+    CHECK(fs_draw(vw, vn, fw, fn, fmt, tgt, 2, 1, NULL, 0));
     mt_download(tgt[0], 0, 0, FW, FH, 1, 16, img[0]);
     mt_download(tgt[1], 0, 0, FW, FH, 1, 16, img[1]);
     bad = 0;
@@ -5057,12 +5123,27 @@ static void check_interpolate_at(const uint32_t *fw, size_t fn)
 
 static void test_interpolate_at(void)
 {
-    check_interpolate_at(spv_ia_fs, PVK_ARRAY_SIZE(spv_ia_fs));
+    check_interpolate_at(spv_ia_vs, PVK_ARRAY_SIZE(spv_ia_vs), spv_ia_fs, PVK_ARRAY_SIZE(spv_ia_fs));
 }
 
 static void test_interpolate_at_opt(void)
 {
-    check_interpolate_at(spv_ia_fs_opt, PVK_ARRAY_SIZE(spv_ia_fs_opt));
+    check_interpolate_at(spv_ia_vs, PVK_ARRAY_SIZE(spv_ia_vs), spv_ia_fs_opt, PVK_ARRAY_SIZE(spv_ia_fs_opt));
+}
+
+/* invariant gl_Position: [[invariant]] (the pipeline compiles it with
+ * preserveInvariance), drawing as without. */
+static void test_invariant_position(void)
+{
+    struct pvk_msl_options vo = fs_vertex_options();
+    struct pvk_msl_result vs;
+    REQUIRE(mt_translate(spv_inv_vs, PVK_ARRAY_SIZE(spv_inv_vs), &vo, &vs));
+    CHECK(vs.invariant && strstr(vs.msl, "[[position]] [[invariant]]") != NULL);
+    pvk_msl_result_free(&vs);
+    REQUIRE(mt_translate(spv_ia_vs, PVK_ARRAY_SIZE(spv_ia_vs), &vo, &vs));
+    CHECK(!vs.invariant);
+    pvk_msl_result_free(&vs);
+    check_interpolate_at(spv_inv_vs, PVK_ARRAY_SIZE(spv_inv_vs), spv_ia_fs, PVK_ARRAY_SIZE(spv_ia_fs));
 }
 
 /* interpolateAtSample on a 4x target (shaded once per pixel): Vulkan's
@@ -5172,6 +5253,7 @@ int main(void)
     RUN(test_memory_model_coherent);
     RUN(test_interpolate_at);
     RUN(test_interpolate_at_opt);
+    RUN(test_invariant_position);
     RUN(test_interpolate_at_sample);
     RUN(test_terminate_in_function);
     RUN(test_fragment_subgroups);

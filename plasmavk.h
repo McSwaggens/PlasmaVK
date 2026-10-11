@@ -37152,6 +37152,7 @@ struct pvk_msl_result {
     uint32_t vertex_table_buffer;    /* its buffer index */
     uint32_t vertex_bindings;        /* bit b: binding b is read */
     bool layered;                    /* writes Layer or ViewportIndex: set inputPrimitiveTopology */
+    bool invariant;                  /* Position is Invariant: compile with MTLCompileOptions.preserveInvariance */
     /* fragment */
     bool early_fragment_tests;
     bool depth_replacing;            /* writes FragDepth */
@@ -45645,8 +45646,22 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     pvk_spv_line(ctx, "%s(%s);", entry->msl, pvk_spv_join(ctx, "", args, nargs, ", ", ""));
 
     /* Outputs: built-ins, then locations */
-    if (vertex)
-        pvk_sb_printf(ctx, &outs, "    float4 pvk_position [[position]];\n");
+    if (vertex) { /* Invariant Position (variable or gl_PerVertex member): [[invariant]] */
+        for (g = 0; g < ctx->nglobals; g++) {
+            struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+            struct pvk_spv_type *t = pvk_spv_type(ctx, x->p->type);
+            if (!pvk_spv_stage_global(ctx, entry, g) || x->p->storage != PVK_SPV_StorageOutput)
+                continue;
+            if ((x->flags & PVK_SPV_F_BUILTIN) && x->builtin == PVK_SPV_BuiltInPosition && (x->flags & PVK_SPV_F_INVARIANT))
+                res->invariant = true;
+            for (i = 0; t->op == PVK_SPV_OpTypeStruct && i < t->nmembers; i++)
+                if ((t->members[i].flags & (PVK_SPV_M_BUILTIN | PVK_SPV_M_INVARIANT)) ==
+                        (PVK_SPV_M_BUILTIN | PVK_SPV_M_INVARIANT) &&
+                    t->members[i].builtin == PVK_SPV_BuiltInPosition)
+                    res->invariant = true;
+        }
+        pvk_sb_printf(ctx, &outs, "    float4 pvk_position [[position]]%s;\n", res->invariant ? " [[invariant]]" : "");
+    }
     for (g = 0; g < ctx->nglobals; g++) {
         struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
         struct pvk_spv_type *t;
