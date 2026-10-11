@@ -248,6 +248,39 @@ CT_TEST(gipa_available_device_extension,
     ct_env_fini(&e);
 }
 
+CT_TEST(gipa_unavailable_device_extension,
+        "Initialization > Command Function Pointers: vkGetInstanceProcAddr(instance, name) returns NULL for the "
+        "commands of a device extension no physical device of instance supports (\"any other case\"): "
+        "VK_KHR_swapchain on an instance without VK_KHR_surface (Layers & Extensions > Extension Dependencies "
+        "makes it unsupported)",
+        "vkGetInstanceProcAddr vkEnumerateDeviceExtensionProperties")
+{
+    const char *surface[] = { VK_KHR_SURFACE_EXTENSION_NAME };
+    struct ct_env e;
+    int offered;
+    size_t i;
+
+    if (!ct_instance_extension_supported(VK_KHR_SURFACE_EXTENSION_NAME))
+        ct_skip(t, "VK_KHR_surface is not offered");
+    ct_env_init_ex(t, &e, 0, surface, 1);
+    offered = ct_device_extension_supported(e.pd, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    ct_env_fini(&e);
+    if (!offered)
+        ct_skip(t, "VK_KHR_swapchain is not offered with VK_KHR_surface enabled");
+    ct_env_init(t, &e); /* no instance extension but, if offered, portability enumeration */
+    if (ct_device_extension_supported(e.pd, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
+        ct_skip(t, "VK_KHR_swapchain is offered without VK_KHR_surface, so it counts as available (that listing "
+                   "is extensions.device_extension_needs_instance_extension's failure)");
+    for (i = 0; i < ct_command_count; i++) {
+        const struct ct_command *c = &ct_commands[i];
+        if (strcmp(c->origin, "VK_KHR_swapchain") != 0)
+            continue;
+        CT_CHECKF(t, vkGetInstanceProcAddr(e.instance, c->name) == NULL, "%s (VK_KHR_swapchain unavailable) is not NULL",
+                  c->name);
+    }
+    ct_env_fini(&e);
+}
+
 CT_TEST(gdpa_core_device_commands,
         "Initialization > Command Function Pointers: vkGetDeviceProcAddr returns a valid pointer for every "
         "device-level command of the core version requested in VkApplicationInfo::apiVersion (footnote 2), for "
@@ -603,6 +636,7 @@ static const struct ct_test *const tests[] = {
     CT_REF(gipa_enabled_instance_extension),
     CT_REF(gipa_disabled_instance_extension),
     CT_REF(gipa_available_device_extension),
+    CT_REF(gipa_unavailable_device_extension),
     CT_REF(gdpa_core_device_commands),
     CT_REF(gdpa_non_device_commands),
     CT_REF(gdpa_unknown_names),

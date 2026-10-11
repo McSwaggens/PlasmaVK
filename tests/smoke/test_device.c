@@ -10,11 +10,15 @@ static VkPhysicalDevice physical_device;
 
 static void setup(void)
 {
+    /* VK_KHR_swapchain, enabled below, needs VK_KHR_surface on the instance. */
+    const char *extensions[] = { VK_KHR_SURFACE_EXTENSION_NAME };
     VkInstanceCreateInfo info;
     uint32_t count = 1;
 
     memset(&info, 0, sizeof(info));
     info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    info.enabledExtensionCount = 1;
+    info.ppEnabledExtensionNames = extensions;
     REQUIRE_VK(vkCreateInstance(&info, NULL, &instance));
     REQUIRE_VK(vkEnumeratePhysicalDevices(instance, &count, &physical_device));
     REQUIRE(count == 1);

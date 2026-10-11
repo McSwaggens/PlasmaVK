@@ -17,8 +17,8 @@ One file per chapter of the Vulkan specification:
 
 | File | Chapter | Tests |
 |---|---|---|
-| `initialization.c` | Initialization: `vkGet*ProcAddr`, instances | 24 |
-| `devsandqueues.c` | Devices and Queues: physical devices, properties, features queries, queue families, devices, queues | 31 |
+| `initialization.c` | Initialization: `vkGet*ProcAddr`, instances | 25 |
+| `devsandqueues.c` | Devices and Queues: physical devices, properties, features queries, queue families, devices, queues | 34 |
 | `memory.c` | Memory Allocation: memory properties, allocation, mapping, flushing, host/device visibility | 27 |
 | `resources.c` | Resource Creation: buffers, memory requirements, binding, device addresses | 22 |
 | `extensions.c` | Layers & Extensions: enumeration, extension dependencies | 12 |
@@ -148,8 +148,17 @@ against the specification; the tests are right:
   Layers & Extensions > Extension Dependencies: "Any device extension that has
   an instance extension dependency that is not enabled by vkCreateInstance is
   considered to be unsupported, hence it must not be returned by
-  vkEnumerateDeviceExtensionProperties". (PlasmaVK has the same bug with
-  `VK_KHR_swapchain`.)
+  vkEnumerateDeviceExtensionProperties". For the same reason
+  `initialization.gipa_unavailable_device_extension` skips on MoltenVK.
+- `devsandqueues.host_image_copy_layouts`: given an array, MoltenVK writes the
+  layouts but leaves `copySrcLayoutCount` / `copyDstLayoutCount` as the array
+  size instead of the number written, in both
+  `VkPhysicalDeviceHostImageCopyProperties` and
+  `VkPhysicalDeviceVulkan14Properties`. The specification: "copySrcLayoutCount
+  must be set by the application to the number of elements in the
+  pCopySrcLayouts array, and on return the variable is overwritten with the
+  number of values actually written to pCopySrcLayouts" (and the same for the
+  destination list).
 - `extensions.device_extensions_missing_layer`: a loader deviation, not
   MoltenVK's: the loader answers `vkEnumerateDeviceExtensionProperties` with a
   `pLayerName` itself and returns `VK_SUCCESS` and no extensions for a layer
