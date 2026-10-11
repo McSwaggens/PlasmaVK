@@ -31975,20 +31975,28 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceQueue(VkDevice device, uint32_t queueFamil
  *   result->entry_point; dispatch with result->workgroup_size threads per
  *   threadgroup.
  *
- * SUPPORTED (v1, compute)
+ * SUPPORTED (v1: GLCompute, as glslang and spirv-opt produce it)
  *   Types: bool, 8/16/32/64-bit ints, half, float (no double: Metal has none),
  *   vectors, matrices, arrays, runtime arrays, structs. Explicit layouts
  *   (Offset/ArrayStride/MatrixStride, std140/std430, row- and column-major)
  *   are reproduced byte for byte with padding members, packed vectors and
  *   pvk_padded<T, P> slots; matrices whose stride Metal cannot express are
- *   stored as arrays of lines and converted on access.
+ *   stored as arrays of lines and converted on access. Arrays are values
+ *   (pvk_array<T, N>), so they load, store, copy and return like SPIR-V's.
  *   Storage: StorageBuffer, Uniform, PushConstant, Workgroup, Private,
- *   Function, Input (builtins). Instructions: arithmetic, bit, logical,
- *   relational, conversion, composite, memory, GLSL.std.450, barriers,
- *   32-bit atomics, function calls, structured control flow (if, switch with
- *   fallthrough, loops with break/continue, early return, phis).
+ *   Function, Input (compute builtins), descriptor arrays of buffers.
+ *   Instructions: arithmetic, bit, logical, relational, conversion,
+ *   composite, memory, GLSL.std.450, barriers, 32-bit integer atomics and
+ *   float atomic add, function calls, OpArrayLength, specialization
+ *   constants (including OpSpecConstantOp on integers), structured control
+ *   flow (if, switch with fallthrough, loops with break/continue, early
+ *   returns, phis). NonSemantic debug info is ignored.
  *   Not yet: other stages, images/samplers, subgroup ops, 64-bit atomics,
- *   physical storage buffers, variable pointers, OpCopyMemorySized.
+ *   physical storage buffers, variable pointers, runtime descriptor arrays,
+ *   OpCopyMemorySized, scalar-layout corner cases Metal cannot express.
+ *   Semantics to know: atomics are memory_order_relaxed (barriers carry the
+ *   ordering); signed integer overflow is undefined in MSL where SPIR-V
+ *   wraps; NoContraction is ignored.
  *
  * HOW IT WORKS
  *   One pass records every instruction and id; then types get MSL spellings
@@ -34107,6 +34115,8 @@ static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_
             size = mt->count * sc->size;
             a = sc->size;
         }
+        if (m->offset > (1u << 30) || size > (1u << 30))
+            pvk_spv_fail(ctx, "struct %u: member %u is too large or too far", tid, i);
         if (m->offset < cur)
             pvk_spv_fail(ctx, "struct %u: member %u at offset %u overlaps the previous member", tid, i, m->offset);
         if (m->offset % a != 0)
@@ -34780,6 +34790,8 @@ static void pvk_spv_assign_resources(struct pvk_spv *ctx)
                 r.writable = k < t->nmembers;
             }
             r.size_index = -1;
+            if (res->resource_count == 4096)
+                pvk_spv_fail(ctx, "too many buffer bindings");
             if (res->resource_count == cap) {
                 void *p;
                 cap = cap ? cap * 2 : 8;
@@ -36912,6 +36924,9 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
     pvk_spv_workgroup_size(ctx);
     pvk_spv_layout_types(ctx);
 
+    /* Each function gets a bitset of the globals: keep that bounded. */
+    if ((uint64_t)ctx->nfuncs * ((ctx->nglobals + 31) / 32) > (1u << 22))
+        pvk_spv_fail(ctx, "too many functions and global variables");
     for (i = 0; i < ctx->nfuncs; i++)
         pvk_spv_analyze(ctx, i + 1);
     pvk_spv_call_graph(ctx);
