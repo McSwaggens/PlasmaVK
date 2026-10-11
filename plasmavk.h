@@ -37437,10 +37437,10 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   through them. A pointer to a runtime array is a
  *   pointer to its first element. Loaded or converted pointers are values;
  *   access chains on them stay lvalue expressions whose address is taken
- *   when used as a value. Aligned memory operands are ignored: accesses
- *   assume the alignment of the MSL type, so a vector reached through a
- *   pointer aligned to less than its size (a small buffer_reference_align)
- *   is not supported yet.
+ *   when used as a value. A vector load or store whose Aligned memory
+ *   operand is below the vector's MSL alignment (a small
+ *   buffer_reference_align) goes through a packed vector; other types
+ *   assume their MSL alignment.
  *   Images and samplers: OpTypeImage (1D, 2D, 3D, cube, buffer; arrayed,
  *   multisampled, sampled or storage, depth), OpTypeSampler,
  *   OpTypeSampledImage, OpSampledImage and OpImage (a Depth that differs
@@ -37470,9 +37470,10 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   are not color attachments (depth/stencil: Metal has no depth fetch). A
  *   texture1d has one mip level (image_1d_as_2d for mipmapped 1D images).
  *   Not yet: 64-bit atomics (shaderBufferInt64Atomics is not reported),
- *   bounds checks through variable pointers (ROBUSTNESS), Aligned memory
- *   operands below the MSL type's alignment. (OpCopyMemorySized needs the
- *   Addresses capability, which Vulkan does not allow.)
+ *   bounds checks through variable pointers (ROBUSTNESS), structs and
+ *   matrices through physical pointers aligned below their MSL alignment.
+ *   (OpCopyMemorySized needs the Addresses capability, which Vulkan does not
+ *   allow.)
  *   Semantics to know: atomics are memory_order_relaxed, memory semantics
  *   become fences (Memory model); signed integer overflow is undefined in
  *   MSL where SPIR-V wraps; NoContraction is ignored; derivatives after a
@@ -44513,6 +44514,20 @@ static void pvk_spv_dot(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     }
 }
 
+/* A physical storage buffer load or store whose Aligned memory operand (at
+ * word `at`, the mask) is below the alignment of the vector it accesses:
+ * the access as a packed vector, which needs only its scalars' alignment.
+ * NULL otherwise. */
+static const char *pvk_spv_underaligned(struct pvk_spv *ctx, const struct pvk_spv_insn *in, uint32_t at,
+                                        const struct pvk_spv_ptr *p)
+{
+    struct pvk_spv_type *t = pvk_spv_type(ctx, p->type);
+    if (in->wc <= at + 1 || !(in->w[at] & PVK_SPV_MemAligned) || p->storage != PVK_SPV_StoragePhysicalStorageBuffer ||
+        p->node || p->rm_col || t->op != PVK_SPV_OpTypeVector || in->w[at + 1] >= t->align)
+        return NULL;
+    return pvk_spv_fmt(ctx, "(*(%s packed_%s*)&%s)", ctx->dev, t->msl, p->expr);
+}
+
 static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     uint32_t op = in->op, rid = 0, rtype = 0;
@@ -44536,12 +44551,23 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         pvk_spv_glsl(ctx, in);
         return;
     }
-    case PVK_SPV_OpLoad:
-        pvk_spv_load(ctx, rid, pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 3)));
+    case PVK_SPV_OpLoad: {
+        const struct pvk_spv_ptr *p = pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 3));
+        a = pvk_spv_underaligned(ctx, in, 4, p);
+        if (a && r == pvk_spv_type(ctx, p->type))
+            pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", r->msl, a));
+        else
+            pvk_spv_load(ctx, rid, p);
         return;
+    }
     case PVK_SPV_OpStore: {
         uint32_t v = pvk_spv_arg(ctx, in, 2);
-        pvk_spv_store(ctx, pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 1)), pvk_spv_val(ctx, v), pvk_spv_get(ctx, v)->type);
+        const struct pvk_spv_ptr *p = pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 1));
+        a = pvk_spv_underaligned(ctx, in, 3, p);
+        if (a && pvk_spv_get(ctx, v)->type == p->type)
+            pvk_spv_line(ctx, "%s = %s;", a, pvk_spv_val(ctx, v));
+        else
+            pvk_spv_store(ctx, p, pvk_spv_val(ctx, v), pvk_spv_get(ctx, v)->type);
         return;
     }
     case PVK_SPV_OpCopyMemory: {
