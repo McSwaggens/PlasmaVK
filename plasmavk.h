@@ -31630,6 +31630,8 @@ static inline id pvk_MTLDevice_newCounterHeapWithDescriptor_error(id self, id de
 static inline unsigned long pvk_MTLDevice_sizeOfCounterHeapEntry(id self, pvk_MTL4CounterHeapType type) { PVK_SEL_CACHE("sizeOfCounterHeapEntry:"); return PVK_MSG(unsigned long, (id, SEL, pvk_MTL4CounterHeapType))(self, pvk_sel_, type); }
 static inline void pvk_MTL4CommandBuffer_writeTimestampIntoHeap_atIndex(id self, id counterHeap, unsigned long index) { PVK_SEL_CACHE("writeTimestampIntoHeap:atIndex:"); PVK_MSG(void, (id, SEL, id, unsigned long))(self, pvk_sel_, counterHeap, index); }
 static inline void pvk_MTL4CommandBuffer_resolveCounterHeap_withRange_intoBuffer_waitFence_updateFence(id self, id counterHeap, pvk_NSRange range, pvk_MTL4BufferRange bufferRange, id fenceToWait, id fenceToUpdate) { PVK_SEL_CACHE("resolveCounterHeap:withRange:intoBuffer:waitFence:updateFence:"); PVK_MSG(void, (id, SEL, id, pvk_NSRange, pvk_MTL4BufferRange, id, id))(self, pvk_sel_, counterHeap, range, bufferRange, fenceToWait, fenceToUpdate); }
+/* Graphics: invariant positions (section 17) */
+static inline void pvk_MTLCompileOptions_setPreserveInvariance(id self, bool preserveInvariance) { PVK_SEL_CACHE("setPreserveInvariance:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, preserveInvariance); }
 
 /* ==========================================================================
  * 5. Internals
@@ -37418,7 +37420,10 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   past options->dispatch_base_offset and the push constants); WorkgroupId
  *   and GlobalInvocationId include it. The kernel always takes the buffer.
  *
- *   Compute builtins are kernel parameters ([[thread_position_in_grid]] ...).
+ *   Compute builtins are kernel parameters ([[thread_position_in_grid]] ...);
+ *   SubgroupSize is 32, the subgroup masks and SubgroupLocalInvocationId
+ *   come from [[thread_index_in_simdgroup]] (a hidden parameter pvk_lane,
+ *   which helper functions using subgroup operations also take).
  *   Specialization constants (options->specialization, same layout as
  *   VkSpecializationInfo) are applied while translating, so the MSL and the
  *   workgroup size in the result are final. result->spec_constants lists
@@ -37474,7 +37479,18 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *     with sample shading) and out [[sample_mask]], FragDepth
  *     [[depth(any|greater|less)]], HelperInvocation (simd_is_helper_thread(),
  *     read at each load), PointCoord (origin top left), Layer, ViewportIndex,
- *     ViewIndex and PrimitiveId in fragment shaders.
+ *     ViewIndex, PrimitiveId, SubgroupSize and SubgroupLocalInvocationId
+ *     (and masks) in fragment shaders; DeviceIndex 0. An Invariant Position
+ *     is [[invariant]] (result->invariant: compile the vertex function with
+ *     MTLCompileOptions.preserveInvariance).
+ *   interpolateAtCentroid/Sample/Offset: a location they read is a Metal
+ *   interpolant<float4, perspective | no_perspective> in <ep>_in, passed to
+ *   the functions that read it (pvk_iN); its ordinary value is
+ *   interpolate_at_center/centroid/sample(). Offsets are from the pixel's
+ *   center in Vulkan, from its top-left corner in Metal: +0.5. Flat and
+ *   integer inputs (and inputs the vertex stage does not write) have one
+ *   value: interpolateAt* reads the variable. The input must be named with
+ *   constant indices.
  *   Fragment outputs: location n is [[color(n)]] (Index 1: [[color(0),
  *   index(1)]] for dual-source blending) of float4, int4 or uint4 like the
  *   variable; result->outputs. Metal rejects outputs a pipeline has no
@@ -37483,9 +37499,10 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   Fragment execution: EarlyFragmentTests -> [[early_fragment_tests]];
  *   result->sample_shading when Metal runs it per sample (SampleId,
  *   SamplePosition, Sample inputs, options->sample_shading); result->discards
- *   for OpKill/OpTerminateInvocation (discard_fragment(); return: discarded
- *   fragments write nothing, callers go on as helpers) and
- *   OpDemoteToHelperInvocation (discard_fragment(), which demotes in Metal).
+ *   for OpKill/OpTerminateInvocation (discard_fragment(); the function and
+ *   its callers return: a terminated invocation runs nothing more, see
+ *   pvk_killed) and OpDemoteToHelperInvocation (discard_fragment(), which
+ *   demotes in Metal: helper threads' stores and atomics have no effect).
  *   Input attachments: framebuffer fetch. A subpassInput variable is the
  *   color [[color(c)]] of the attachment it maps to, a value (no descriptor
  *   is read, so it has no binding in the sets): input attachment index i
@@ -37552,7 +37569,8 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   Inf and precision guarantees Vulkan gives. The kernel's name is
  *   result->entry_point; dispatch with result->workgroup_size threads per
  *   threadgroup (declared with [[max_total_threads_per_threadgroup]], so the
- *   compiler fits up to 1024).
+ *   compiler fits up to 1024). A vertex function with result->invariant
+ *   needs MTLCompileOptions.preserveInvariance.
  *
  * SUPPORTED (GLCompute, Vertex and Fragment, as glslang and spirv-opt produce them)
  *   Types: bool, 8/16/32/64-bit ints, half, float (no double: Metal has none),
@@ -37560,7 +37578,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   (Offset/ArrayStride/MatrixStride, std140/std430, row- and column-major)
  *   are reproduced byte for byte with padding members, packed vectors and
  *   pvk_padded<T, P> slots; matrices whose stride Metal cannot express are
- *   stored as arrays of lines and converted on access. Arrays are values
+ *   stored as arrays of lines and converted on access. Scalar block layout:
+ *   a struct or array placed at offsets or strides below its MSL alignment
+ *   gets packed vectors and arrays of packed matrix lines. Arrays are values
  *   (pvk_array<T, N>), so they load, store, copy and return like SPIR-V's.
  *   Storage: StorageBuffer, Uniform, PushConstant, Workgroup (compute),
  *   Private, Function, Input and Output (STAGE INTERFACE), UniformConstant
@@ -37569,11 +37589,15 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   (RuntimeDescriptorArray), indexed dynamically and non-uniformly (Metal
  *   needs nothing for NonUniform: descriptors are per-thread data).
  *   Instructions: arithmetic, bit, logical, relational, conversion,
- *   composite, memory, GLSL.std.450, barriers, 32-bit integer atomics and
- *   float atomic add, function calls, OpArrayLength, specialization
- *   constants (including OpSpecConstantOp on integers), structured control
- *   flow (if, switch with fallthrough, loops with break/continue, early
- *   returns, phis). NonSemantic debug info is ignored.
+ *   composite, memory, GLSL.std.450 (also interpolateAt*), barriers, 32-bit
+ *   integer atomics and float atomic add with memory semantics (Memory
+ *   model), GroupNonUniform operations (Subgroups), integer dot products,
+ *   OpExpectKHR and OpAssumeTrueKHR, variable pointers (VARIABLE POINTERS:
+ *   OpSelect, OpPhi, OpPtrEqual, OpPtrNotEqual, OpPtrDiff on pointers),
+ *   FPRoundingMode RTZ conversions to half, function calls, OpArrayLength,
+ *   specialization constants (including OpSpecConstantOp on integers),
+ *   structured control flow (if, switch with fallthrough, loops with
+ *   break/continue, early returns, phis). NonSemantic debug info is ignored.
  *   Physical storage buffer pointers (PhysicalStorageBuffer64 addressing,
  *   GL_EXT_buffer_reference): `device T*` values, in any memory, struct or
  *   array; OpTypeForwardPointer (structs are declared up front, so pointers
@@ -37583,10 +37607,10 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   through them. A pointer to a runtime array is a
  *   pointer to its first element. Loaded or converted pointers are values;
  *   access chains on them stay lvalue expressions whose address is taken
- *   when used as a value. Aligned memory operands are ignored: accesses
- *   assume the alignment of the MSL type, so a vector reached through a
- *   pointer aligned to less than its size (a small buffer_reference_align)
- *   is not supported yet.
+ *   when used as a value. A vector load or store whose Aligned memory
+ *   operand is below the vector's MSL alignment (a small
+ *   buffer_reference_align) goes through a packed vector; other types
+ *   assume their MSL alignment.
  *   Images and samplers: OpTypeImage (1D, 2D, 3D, cube, buffer; arrayed,
  *   multisampled, sampled or storage, depth), OpTypeSampler,
  *   OpTypeSampledImage, OpSampledImage and OpImage (a Depth that differs
@@ -37615,15 +37639,86 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   none), 64-bit and 8-bit stage inputs and outputs, input attachments that
  *   are not color attachments (depth/stencil: Metal has no depth fetch). A
  *   texture1d has one mip level (image_1d_as_2d for mipmapped 1D images).
- *   Not yet: subgroup ops, 64-bit atomics, variable pointers,
- *   OpCopyMemorySized, interpolateAt* (Metal's interpolant<>), scalar-layout
- *   corner cases Metal cannot express, robust image access (out-of-bounds
- *   texels are whatever Metal does).
- *   Semantics to know: atomics are memory_order_relaxed (barriers carry the
- *   ordering); signed integer overflow is undefined in MSL where SPIR-V
- *   wraps; NoContraction and Invariant are ignored (Metal's invariance needs
- *   a compile option); derivatives after a discard (OpKill/Terminate) are
- *   undefined, as in Vulkan.
+ *   Not yet: 64-bit atomics (shaderBufferInt64Atomics is not reported),
+ *   bounds checks through variable pointers (ROBUSTNESS), structs and
+ *   matrices through physical pointers aligned below their MSL alignment.
+ *   (OpCopyMemorySized needs the Addresses capability, which Vulkan does not
+ *   allow.)
+ *   Semantics to know: atomics are memory_order_relaxed, memory semantics
+ *   become fences (Memory model); signed integer overflow is undefined in
+ *   MSL where SPIR-V wraps; NoContraction is ignored; derivatives after a
+ *   discard (OpKill/Terminate) are undefined, as in Vulkan.
+ *
+ * SHADER CAPABILITIES
+ *   What section 7 reports that shaders depend on, the SPIR-V it allows and
+ *   its translation (tested in tests/smoke/test_spirv_msl_caps.c unless an
+ *   earlier test file has it):
+ *   robustBufferAccess, robustImageAccess, pipelineRobustness:
+ *     bounds of buffer, texel buffer, image and vertex accesses (ROBUSTNESS).
+ *   Subgroups (Vulkan 1.1; size 32, compute and fragment stages; BASIC,
+ *     VOTE, ARITHMETIC, BALLOT, SHUFFLE, SHUFFLE_RELATIVE, QUAD, ROTATE,
+ *     ROTATE_CLUSTERED), subgroupBroadcastDynamicId, shaderSubgroupRotate
+ *     (Clustered), shaderSubgroupExtendedTypes: the GroupNonUniform
+ *     capabilities but Clustered (not reported), OpGroupNonUniformRotateKHR,
+ *     SubgroupSize, SubgroupLocalInvocationId, NumSubgroups, SubgroupId,
+ *     Subgroup{Eq,Ge,Gt,Le,Lt}Mask, on 8/16/32/64-bit integers, half, float
+ *     and bool (Subgroups, below).
+ *   shaderIntegerDotProduct: DotProduct, DotProductInput*, OpSDot, OpUDot,
+ *     OpSUDot and AccSat forms, packed 4x8 and vectors (Integer dot products).
+ *   vulkanMemoryModel, vulkanMemoryModelDeviceScope: VulkanMemoryModel(Device
+ *     Scope), scopes and semantics of atomics and barriers, MakePointer
+ *     Available/Visible and NonPrivatePointer (Memory model, COHERENCE).
+ *   shaderZeroInitializeWorkgroupMemory: Workgroup variable initializers,
+ *     written by the workgroup's threads before the entry point runs.
+ *   Float controls (SignedZeroInfNanPreserve and RoundingModeRTE for 16 and
+ *     32 bits), shaderFloatControls2: the execution modes and FPFastMath*
+ *     are accepted (MTLMathModeSafe keeps signed zeros, Inf, NaN and rounds
+ *     to nearest even: stricter than any fast-math flag); FPRoundingMode RTZ
+ *     on conversions to half (16-bit storage) is pvk_f16_rtz. No denormal
+ *     modes are reported.
+ *   shaderExpectAssume: ExpectAssumeKHR; OpExpectKHR is its value,
+ *     OpAssumeTrueKHR nothing (hints).
+ *   shaderDemoteToHelperInvocation, shaderTerminateInvocation: demote is
+ *     discard_fragment (helper threads' stores and atomics have no effect);
+ *     terminate also stops the callers (pvk_killed).
+ *   variablePointers(StorageBuffer): VariablePointers(StorageBuffer)
+ *     (VARIABLE POINTERS).
+ *   scalarBlockLayout, uniformBufferStandardLayout: explicit layouts at any
+ *     offsets and strides their scalars allow (members packed where a
+ *     struct's or array's placements need it).
+ *   Always in Vulkan: InterpolationFunction (interpolateAt*: STAGE
+ *     INTERFACE), DeviceGroup (DeviceIndex is 0), Invariant (Position gets
+ *     [[invariant]]: compile with preserveInvariance, result->invariant).
+ *   Earlier, unchanged: storageBuffer8/16BitAccess, shaderInt8/16,
+ *     bufferDeviceAddress, inlineUniformBlock, descriptor indexing,
+ *     shaderImageGatherExtended, shaderStorageImageExtendedFormats,
+ *     imageCubeArray, multiview, sampleRateShading, largePoints,
+ *     maintenance4 (LocalSizeId), fragmentStoresAndAtomics.
+ *
+ * ROBUSTNESS (options->robust_*: pvk_pipeline_robustness in section 17)
+ *   Storage and uniform buffers: each load, store, atomic and copy through
+ *   an access chain from a buffer descriptor is checked against the
+ *   descriptor's range (pvk_inb: every accessed byte inside); outside it,
+ *   loads read zero and stores and atomics do nothing (atomics return 0).
+ *   A vector component is checked alone, a whole load or store (a struct,
+ *   a vector straddling the end) as a whole, a row-major matrix column as
+ *   its matrix. Texel buffers and images: texel reads and fetches outside
+ *   the image (coordinates, level, layer, cube face, sample) read zero,
+ *   writes and atomics are dropped; sampling needs no checks (the sampler
+ *   clamps). Not checked: accesses through variable pointers and pointer
+ *   parameters (bounds do not travel with a pointer value), push constants
+ *   and inline uniform blocks (always in range), physical storage buffers
+ *   (no robustness in Vulkan).
+ *
+ * VARIABLE POINTERS (VariablePointersStorageBuffer, VariablePointers)
+ *   StorageBuffer and Workgroup pointers that are selected (OpSelect, OpPhi),
+ *   loaded from Function or Private variables, returned or compared are MSL
+ *   values: `device T*` (`device coherent(device) T*`, COHERENCE) or
+ *   `threadgroup T*`; variables, access chains and pointer parameters (MSL
+ *   references) become them by taking their address. OpPtrAccessChain steps
+ *   by the pointer type's ArrayStride; null pointers are nullptr. Such a
+ *   pointer carries no descriptor: OpArrayLength and bounds checks need the
+ *   descriptor's variable.
  *
  * HOW IT WORKS
  *   One pass records every instruction and id; then types get MSL spellings
@@ -37717,6 +37812,12 @@ struct pvk_msl_options {
      * the end of the push constants). */
     bool dispatch_base;
     uint32_t dispatch_base_offset;
+    /* Robustness (ROBUSTNESS): out-of-bounds accesses of storage buffers and
+     * storage texel buffers, of uniform buffers and uniform texel buffers, of
+     * images are checked. Off: no checks, no cost. */
+    bool robust_storage_buffers;
+    bool robust_uniform_buffers;
+    bool robust_images;
 
     /* The entry point's stage (0: any; entry points are found by name). */
     VkShaderStageFlagBits stage;
@@ -37836,6 +37937,7 @@ struct pvk_msl_result {
     uint32_t vertex_table_buffer;    /* its buffer index */
     uint32_t vertex_bindings;        /* bit b: binding b is read */
     bool layered;                    /* writes Layer or ViewportIndex: set inputPrimitiveTopology */
+    bool invariant;                  /* Position is Invariant: compile with MTLCompileOptions.preserveInvariance */
     /* fragment */
     bool early_fragment_tests;
     bool depth_replacing;            /* writes FragDepth */
@@ -38075,10 +38177,56 @@ enum {
     PVK_SPV_OpModuleProcessed = 330,
     PVK_SPV_OpExecutionModeId = 331,
     PVK_SPV_OpDecorateId = 332,
+    PVK_SPV_OpGroupNonUniformElect = 333,
+    PVK_SPV_OpGroupNonUniformAll = 334,
+    PVK_SPV_OpGroupNonUniformAny = 335,
+    PVK_SPV_OpGroupNonUniformAllEqual = 336,
+    PVK_SPV_OpGroupNonUniformBroadcast = 337,
+    PVK_SPV_OpGroupNonUniformBroadcastFirst = 338,
+    PVK_SPV_OpGroupNonUniformBallot = 339,
+    PVK_SPV_OpGroupNonUniformInverseBallot = 340,
+    PVK_SPV_OpGroupNonUniformBallotBitExtract = 341,
+    PVK_SPV_OpGroupNonUniformBallotBitCount = 342,
+    PVK_SPV_OpGroupNonUniformBallotFindLSB = 343,
+    PVK_SPV_OpGroupNonUniformBallotFindMSB = 344,
+    PVK_SPV_OpGroupNonUniformShuffle = 345,
+    PVK_SPV_OpGroupNonUniformShuffleXor = 346,
+    PVK_SPV_OpGroupNonUniformShuffleUp = 347,
+    PVK_SPV_OpGroupNonUniformShuffleDown = 348,
+    PVK_SPV_OpGroupNonUniformIAdd = 349,
+    PVK_SPV_OpGroupNonUniformFAdd = 350,
+    PVK_SPV_OpGroupNonUniformIMul = 351,
+    PVK_SPV_OpGroupNonUniformFMul = 352,
+    PVK_SPV_OpGroupNonUniformSMin = 353,
+    PVK_SPV_OpGroupNonUniformUMin = 354,
+    PVK_SPV_OpGroupNonUniformFMin = 355,
+    PVK_SPV_OpGroupNonUniformSMax = 356,
+    PVK_SPV_OpGroupNonUniformUMax = 357,
+    PVK_SPV_OpGroupNonUniformFMax = 358,
+    PVK_SPV_OpGroupNonUniformBitwiseAnd = 359,
+    PVK_SPV_OpGroupNonUniformBitwiseOr = 360,
+    PVK_SPV_OpGroupNonUniformBitwiseXor = 361,
+    PVK_SPV_OpGroupNonUniformLogicalAnd = 362,
+    PVK_SPV_OpGroupNonUniformLogicalOr = 363,
+    PVK_SPV_OpGroupNonUniformLogicalXor = 364,
+    PVK_SPV_OpGroupNonUniformQuadBroadcast = 365,
+    PVK_SPV_OpGroupNonUniformQuadSwap = 366,
     PVK_SPV_OpCopyLogical = 400,
+    PVK_SPV_OpPtrEqual = 401,
+    PVK_SPV_OpPtrNotEqual = 402,
+    PVK_SPV_OpPtrDiff = 403,
     PVK_SPV_OpTerminateInvocation = 4416,
+    PVK_SPV_OpGroupNonUniformRotateKHR = 4431,
+    PVK_SPV_OpSDot = 4450,
+    PVK_SPV_OpUDot = 4451,
+    PVK_SPV_OpSUDot = 4452,
+    PVK_SPV_OpSDotAccSat = 4453,
+    PVK_SPV_OpUDotAccSat = 4454,
+    PVK_SPV_OpSUDotAccSat = 4455,
     PVK_SPV_OpDemoteToHelperInvocation = 5380,
     PVK_SPV_OpIsHelperInvocationEXT = 5381,
+    PVK_SPV_OpAssumeTrueKHR = 5630,
+    PVK_SPV_OpExpectKHR = 5631,
     PVK_SPV_OpDecorateString = 5632,
     PVK_SPV_OpMemberDecorateString = 5633,
     PVK_SPV_OpAtomicFAddEXT = 6035
@@ -38114,6 +38262,9 @@ enum {
     PVK_SPV_DecoPatch = 15,
     PVK_SPV_DecoCentroid = 16,
     PVK_SPV_DecoSample = 17,
+    PVK_SPV_DecoInvariant = 18,
+    PVK_SPV_DecoVolatile = 21,
+    PVK_SPV_DecoCoherent = 23,
     PVK_SPV_DecoNonWritable = 24,
     PVK_SPV_DecoNonReadable = 25,
     PVK_SPV_DecoLocation = 30,
@@ -38123,6 +38274,7 @@ enum {
     PVK_SPV_DecoDescriptorSet = 34,
     PVK_SPV_DecoOffset = 35,
     PVK_SPV_DecoXfbBuffer = 36,
+    PVK_SPV_DecoFPRoundingMode = 39,
     PVK_SPV_DecoInputAttachmentIndex = 43,
     PVK_SPV_DecoPerPrimitive = 5271,
     PVK_SPV_DecoPerVertex = 5285
@@ -38181,11 +38333,21 @@ enum {
     PVK_SPV_BuiltInLocalInvocationId = 27,
     PVK_SPV_BuiltInGlobalInvocationId = 28,
     PVK_SPV_BuiltInLocalInvocationIndex = 29,
+    PVK_SPV_BuiltInSubgroupSize = 36,
+    PVK_SPV_BuiltInNumSubgroups = 38,
+    PVK_SPV_BuiltInSubgroupId = 40,
+    PVK_SPV_BuiltInSubgroupLocalInvocationId = 41,
     PVK_SPV_BuiltInVertexIndex = 42,
     PVK_SPV_BuiltInInstanceIndex = 43,
+    PVK_SPV_BuiltInSubgroupEqMask = 4416,
+    PVK_SPV_BuiltInSubgroupGeMask = 4417,
+    PVK_SPV_BuiltInSubgroupGtMask = 4418,
+    PVK_SPV_BuiltInSubgroupLeMask = 4419,
+    PVK_SPV_BuiltInSubgroupLtMask = 4420,
     PVK_SPV_BuiltInBaseVertex = 4424,
     PVK_SPV_BuiltInBaseInstance = 4425,
     PVK_SPV_BuiltInDrawIndex = 4426,
+    PVK_SPV_BuiltInDeviceIndex = 4438,
     PVK_SPV_BuiltInViewIndex = 4440
 };
 
@@ -38204,10 +38366,28 @@ enum {
 #define PVK_SPV_ScopeSubgroup 3u
 #define PVK_SPV_ScopeInvocation 4u
 #define PVK_SPV_ScopeQueueFamily 5u
+#define PVK_SPV_SemanticsAcquire 0x2u
+#define PVK_SPV_SemanticsRelease 0x4u
+#define PVK_SPV_SemanticsAcquireRelease 0x8u
+#define PVK_SPV_SemanticsSequentiallyConsistent 0x10u
 #define PVK_SPV_SemanticsUniformMemory 0x40u
 #define PVK_SPV_SemanticsWorkgroupMemory 0x100u
 #define PVK_SPV_SemanticsCrossWorkgroupMemory 0x200u
 #define PVK_SPV_SemanticsImageMemory 0x800u
+#define PVK_SPV_SemanticsMakeAvailable 0x2000u
+#define PVK_SPV_SemanticsMakeVisible 0x4000u
+/* Memory Operands (OpLoad, OpStore, OpCopyMemory) */
+#define PVK_SPV_MemVolatile 0x1u
+#define PVK_SPV_MemAligned 0x2u
+#define PVK_SPV_MemNontemporal 0x4u
+#define PVK_SPV_MemMakePointerAvailable 0x8u
+#define PVK_SPV_MemMakePointerVisible 0x10u
+#define PVK_SPV_MemNonPrivatePointer 0x20u
+/* GroupOperation */
+#define PVK_SPV_GroupReduce 0u
+#define PVK_SPV_GroupInclusiveScan 1u
+#define PVK_SPV_GroupExclusiveScan 2u
+#define PVK_SPV_GroupClusteredReduce 3u
 
 enum {
     PVK_SPV_GLSL_Round = 1, PVK_SPV_GLSL_RoundEven, PVK_SPV_GLSL_Trunc, PVK_SPV_GLSL_FAbs, PVK_SPV_GLSL_SAbs,
@@ -38270,6 +38450,8 @@ enum pvk_spv_kind {
 #define PVK_SPV_F_IA_INDEX 0x4000u /* InputAttachmentIndex */
 #define PVK_SPV_F_EXPR 0x8000u     /* global whose p->expr is an rvalue available anywhere (not passed) */
 #define PVK_SPV_F_UNSUPPORTED 0x10000u /* Patch, PerPrimitive, PerVertexKHR, XfbBuffer */
+#define PVK_SPV_F_COHERENT 0x20000u    /* Coherent or Volatile (memory model: device-coherent buffers) */
+#define PVK_SPV_F_INVARIANT 0x40000u
 /* member flags */
 #define PVK_SPV_M_OFFSET 0x1u
 #define PVK_SPV_M_ROW_MAJOR 0x2u
@@ -38277,6 +38459,8 @@ enum pvk_spv_kind {
 #define PVK_SPV_M_BUILTIN 0x8u
 #define PVK_SPV_M_LOCATION 0x10u
 #define PVK_SPV_M_COMPONENT 0x20u
+#define PVK_SPV_M_COHERENT 0x40u
+#define PVK_SPV_M_INVARIANT 0x80u
 
 struct pvk_spv_node;
 
@@ -38307,6 +38491,7 @@ struct pvk_spv_type {
     const uint32_t *params; /* function parameter types (in the module words) */
     bool explicit_layout;   /* struct with Offset decorations */
     uint32_t pad_to;        /* struct: size an ArrayStride asks for (0: none) */
+    uint32_t need_align;    /* explicit layouts: the largest alignment its placements allow (0: any) */
     bool pad_conflict;
     uint32_t tail_pad;
     uint32_t end;           /* struct: end of the last member */
@@ -38360,10 +38545,17 @@ struct pvk_spv_ptr {
     const char *desc_suffix;
     const char *desc;        /* buffer descriptor of the block expr designates (OpArrayLength) */
     const char *decl;        /* descriptor variables: declaration of expr in each function */
+    /* Robust buffer access (ROBUSTNESS): rb is the buffer descriptor whose range
+     * bounds accesses through this pointer (robust: set it when a descriptor
+     * array is indexed); a vector component is not addressable, so its
+     * address is rb_vec's plus rb_comp elements. */
+    bool robust;
+    const char *rb, *rb_vec, *rb_comp;
     /* OpImageTexelPointer (storage Image): texture and coordinate arguments */
     const char *texel_image;
     const char *texel_args;
     uint32_t texel_type; /* image type */
+    const char *texel_ok; /* robust image access: the texel is in bounds */
     bool value; /* an input attachment variable: a value like an Input, not a descriptor */
     /* Combined image samplers with Y'CbCr conversions (Y'CBCR SAMPLING): the
      * conversion of the descriptor reached, or of each element of the array
@@ -38381,6 +38573,7 @@ struct pvk_spv_id {
     uint32_t insn;  /* word offset of the defining instruction */
     uint32_t set, binding, spec_id, builtin, array_stride;
     uint32_t location, component, index, ia_index, interp; /* stage interface */
+    uint32_t fp_round; /* FPRoundingMode + 1 (0: none) */
     uint32_t func;  /* owning function index + 1, 0 at module scope */
     uint32_t block; /* labels: block index; values: defining block index */
     uint32_t global; /* global variables: index in ctx->globals */
@@ -38400,6 +38593,12 @@ struct pvk_spv_block {
     bool has_phi;
 };
 
+/* pvk_spv_func.implicit: what a function needs from its caller (the kernel or
+ * stage function gets them from attributes), as hidden parameters. */
+#define PVK_SPV_I_LANE 0x1u /* uint pvk_lane: [[thread_index_in_simdgroup]] (subgroup operations) */
+#define PVK_SPV_I_KILL 0x2u /* thread bool& pvk_killed: set by OpKill / OpTerminateInvocation */
+#define PVK_SPV_I_LOCAL_INDEX 0x4u /* kernels: uint pvk_local_index [[thread_index_in_threadgroup]] */
+
 struct pvk_spv_func {
     uint32_t fid;
     uint32_t ret;
@@ -38413,6 +38612,8 @@ struct pvk_spv_func {
     uint32_t *callees;
     uint32_t ncallees, cap_callees;
     uint32_t *globals; /* bitset over ctx->globals, transitive after analysis */
+    uint32_t implicit; /* PVK_SPV_I_*: hidden parameters, transitive after analysis */
+    uint32_t interp_locs; /* fragment input locations interpolateAt* reads (interpolant parameters) */
     uint32_t state;    /* call-graph walk */
     const char *msl;
 };
@@ -38498,6 +38699,7 @@ struct pvk_spv {
     uint32_t total_blocks;
     struct pvk_spv_binding *bindings; /* used by the entry point, sorted by (set, binding) */
     uint32_t nbindings;
+    const char *interp_type[PVK_MSL_MAX_LOCATIONS]; /* interpolant<> of a fragment input location (interpolateAt*) */
 
     /* output */
     struct pvk_sb head, types, consts, text, body; /* text: functions; body: the one being emitted */
@@ -38513,6 +38715,7 @@ struct pvk_spv {
     bool inline_consts;         /* pvk_spv_const_expr writes constants out (program-scope initializers) */
     uint32_t const_budget;      /* constituents left to write out that way */
     bool use_psb;               /* PhysicalStorageBuffer pointers: declare structs up front */
+    const char *dev;            /* address space of buffer memory: "device", or "device coherent(device)" (COHERENCE) */
     bool image_1d_as_2d;        /* options->image_1d_as_2d */
     uint32_t helper_mask;       /* PVK_SPV_H_* helper functions used */
     uint32_t budget;           /* blocks left to emit */
@@ -38778,6 +38981,14 @@ static bool pvk_spv_is_scalar(const struct pvk_spv_type *t)
 static bool pvk_spv_is_psb(const struct pvk_spv_type *t)
 {
     return t->op == PVK_SPV_OpTypePointer && t->storage == PVK_SPV_StoragePhysicalStorageBuffer;
+}
+
+/* A pointer that may be a value with variable pointers (VARIABLE POINTERS):
+ * StorageBuffer and Workgroup pointers. */
+static bool pvk_spv_is_vptr(const struct pvk_spv_type *t)
+{
+    return t->op == PVK_SPV_OpTypePointer &&
+           (t->storage == PVK_SPV_StorageStorageBuffer || t->storage == PVK_SPV_StorageWorkgroup);
 }
 
 /* An input attachment image type, or an array of them. */
@@ -39311,9 +39522,9 @@ static void pvk_spv_parse_constant(struct pvk_spv *ctx, const struct pvk_spv_ins
         break;
     case PVK_SPV_OpConstantNull:
     case PVK_SPV_OpUndef:
-        if (t->op == PVK_SPV_OpTypeVoid || t->op == PVK_SPV_OpTypePointer || t->op == PVK_SPV_OpTypeFunction ||
-            t->op == PVK_SPV_OpTypeRuntimeArray)
-            pvk_spv_fail(ctx, "null constant of type %u", rtype);
+        if (t->op == PVK_SPV_OpTypeVoid || (t->op == PVK_SPV_OpTypePointer && !pvk_spv_is_vptr(t)) ||
+            t->op == PVK_SPV_OpTypeFunction || t->op == PVK_SPV_OpTypeRuntimeArray)
+            pvk_spv_fail(ctx, "null constant of type %u", rtype); /* (variable pointers may be null) */
         c->null = true;
         break;
     case PVK_SPV_OpSpecConstantOp:
@@ -39375,7 +39586,7 @@ static int pvk_spv_shape(uint32_t op)
     case PVK_SPV_OpModuleProcessed: case PVK_SPV_OpExecutionModeId: case PVK_SPV_OpDecorateId:
     case PVK_SPV_OpTerminateInvocation: case PVK_SPV_OpDecorateString: case PVK_SPV_OpMemberDecorateString:
     case PVK_SPV_OpFunctionEnd: case PVK_SPV_OpTypeForwardPointer: case PVK_SPV_OpImageWrite:
-    case PVK_SPV_OpDemoteToHelperInvocation:
+    case PVK_SPV_OpDemoteToHelperInvocation: case PVK_SPV_OpAssumeTrueKHR:
         return 0;
     case PVK_SPV_OpString: case PVK_SPV_OpExtInstImport: case PVK_SPV_OpLabel: case PVK_SPV_OpDecorationGroup:
         return 1;
@@ -39386,7 +39597,8 @@ static int pvk_spv_shape(uint32_t op)
     case PVK_SPV_OpPtrAccessChain: case PVK_SPV_OpConvertPtrToU: case PVK_SPV_OpConvertUToPtr:
     case PVK_SPV_OpImageTexelPointer: case PVK_SPV_OpImage: case PVK_SPV_OpImageQuerySizeLod:
     case PVK_SPV_OpImageQuerySize: case PVK_SPV_OpImageQueryLod: case PVK_SPV_OpImageQueryLevels:
-    case PVK_SPV_OpImageQuerySamples: case PVK_SPV_OpIsHelperInvocationEXT:
+    case PVK_SPV_OpImageQuerySamples: case PVK_SPV_OpIsHelperInvocationEXT: case PVK_SPV_OpGroupNonUniformRotateKHR:
+    case PVK_SPV_OpExpectKHR: case PVK_SPV_OpPtrEqual: case PVK_SPV_OpPtrNotEqual: case PVK_SPV_OpPtrDiff:
         return 2;
     default:
         break;
@@ -39405,7 +39617,9 @@ static int pvk_spv_shape(uint32_t op)
         (op >= PVK_SPV_OpSNegate && op <= PVK_SPV_OpSMulExtended) || (op >= PVK_SPV_OpAny && op <= PVK_SPV_OpIsInf) ||
         (op >= PVK_SPV_OpLogicalEqual && op <= PVK_SPV_OpFUnordGreaterThanEqual) ||
         (op >= PVK_SPV_OpShiftRightLogical && op <= PVK_SPV_OpBitCount) ||
-        (op >= PVK_SPV_OpAtomicExchange && op <= PVK_SPV_OpAtomicXor))
+        (op >= PVK_SPV_OpAtomicExchange && op <= PVK_SPV_OpAtomicXor) ||
+        (op >= PVK_SPV_OpGroupNonUniformElect && op <= PVK_SPV_OpGroupNonUniformQuadSwap) ||
+        (op >= PVK_SPV_OpSDot && op <= PVK_SPV_OpSUDotAccSat))
         return 2;
     return -1;
 }
@@ -39416,12 +39630,12 @@ static const char *pvk_spv_unsupported_reason(uint32_t op)
         return "sparse image instructions are not supported";
     if (op == 101 || op == 102 || op == 45 || (op >= 4500 && op <= 4504))
         return "unsupported image instruction";
-    if ((op >= 333 && op <= 366) || (op >= 4421 && op <= 4432))
-        return "subgroup instructions are not supported yet";
+    if (op >= 4421 && op <= 4432)
+        return "SPV_KHR_shader_ballot and SPV_KHR_subgroup_vote are not supported (use the GroupNonUniform instructions)";
     if (op >= 207 && op <= 215)
         return "derivatives are only available in fragment shaders";
-    if (op == 70 || (op >= 401 && op <= 403))
-        return "pointer comparison and arithmetic are not supported";
+    if (op == 70)
+        return "OpGenericPtrMemSemantics is not supported";
     return "unsupported instruction";
 }
 
@@ -39648,6 +39862,16 @@ static void pvk_spv_decorate(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     case PVK_SPV_DecoSample:
         x->interp |= PVK_MSL_INTERP_SAMPLE;
         break;
+    case PVK_SPV_DecoCoherent:
+    case PVK_SPV_DecoVolatile:
+        x->flags |= PVK_SPV_F_COHERENT;
+        break;
+    case PVK_SPV_DecoInvariant:
+        x->flags |= PVK_SPV_F_INVARIANT;
+        break;
+    case PVK_SPV_DecoFPRoundingMode:
+        x->fp_round = pvk_spv_arg(ctx, in, 3) + 1;
+        break;
     case PVK_SPV_DecoPatch:
     case PVK_SPV_DecoPerPrimitive:
     case PVK_SPV_DecoPerVertex:
@@ -39718,6 +39942,13 @@ static void pvk_spv_apply_member_insns(struct pvk_spv *ctx)
         case PVK_SPV_DecoSample:
             mb->interp |= PVK_MSL_INTERP_SAMPLE;
             break;
+        case PVK_SPV_DecoCoherent:
+        case PVK_SPV_DecoVolatile:
+            mb->flags |= PVK_SPV_M_COHERENT;
+            break;
+        case PVK_SPV_DecoInvariant:
+            mb->flags |= PVK_SPV_M_INVARIANT;
+            break;
         case PVK_SPV_DecoPatch:
         case PVK_SPV_DecoPerPrimitive:
         case PVK_SPV_DecoPerVertex:
@@ -39759,17 +39990,23 @@ static void pvk_spv_capability(struct pvk_spv *ctx, uint32_t cap)
     case 4436: /* StorageInputOutput16 */
     case 2: /* Geometry: glslang declares it for fragment Layer, ViewportIndex and PrimitiveId inputs */
     case 5379: /* DemoteToHelperInvocation */
+    case 52: /* InterpolationFunction (fragment shaders) */
+    case 61: case 62: case 63: case 64: case 65: case 66: case 68: /* GroupNonUniform: basic, vote, arithmetic, */
+    case 6026:                                                   /* ballot, shuffle(relative), quad, rotate */
+    case 4437: /* DeviceGroup (DeviceIndex) */
+    case 4441: case 4442: /* VariablePointersStorageBuffer, VariablePointers */
+    case 5629: /* ExpectAssumeKHR */
+    case 6016: case 6017: case 6018: case 6019: /* integer dot product */
+    case 6029: /* FloatControls2 (MTLMathModeSafe is stricter than any FPFastMathMode) */
         return;
     case 3: case 6: case 23: case 24:
         pvk_spv_fail(ctx, "only vertex, fragment and compute shaders are supported (no tessellation or geometry)");
     case 53: case 54:
         pvk_spv_fail(ctx, "transform feedback is not supported");
-    case 52:
-        pvk_spv_fail(ctx, "interpolateAt* functions are not supported yet");
-    case 61: case 62: case 63: case 64: case 65: case 66: case 67: case 68: case 4423:
-        pvk_spv_fail(ctx, "subgroup operations are not supported yet");
-    case 4441: case 4442:
-        pvk_spv_fail(ctx, "variable pointers are not supported");
+    case 67:
+        pvk_spv_fail(ctx, "clustered subgroup reductions are not supported (VK_SUBGROUP_FEATURE_CLUSTERED_BIT)");
+    case 4423:
+        pvk_spv_fail(ctx, "SPV_KHR_shader_ballot is not supported (use the GroupNonUniform instructions)");
     case 41:
         pvk_spv_fail(ctx, "sparse residency is not supported");
     case 36: case 37:
@@ -39934,8 +40171,9 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
             pvk_spv_fail(ctx, "variable %u: images and samplers must be UniformConstant variables (and only they)", rid);
         if (in->wc > 4) {
             pvk_spv_const(ctx, in->w[4]);
-            if (storage != PVK_SPV_StoragePrivate && storage != PVK_SPV_StorageOutput)
-                pvk_spv_fail(ctx, "variable %u: initializers are only supported for Private and Output variables", rid);
+            if (storage != PVK_SPV_StoragePrivate && storage != PVK_SPV_StorageOutput && storage != PVK_SPV_StorageWorkgroup)
+                pvk_spv_fail(ctx, "variable %u: initializers are only supported for Private, Output and Workgroup variables",
+                             rid);
         }
         x->kind = PVK_SPV_K_VAR;
         x->global = ctx->nglobals;
@@ -40092,12 +40330,17 @@ static void pvk_spv_parse_body(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         struct pvk_spv_type *t = pvk_spv_type(ctx, in->w[1]);
         bool chain = in->op == PVK_SPV_OpAccessChain || in->op == PVK_SPV_OpInBoundsAccessChain ||
                      in->op == PVK_SPV_OpPtrAccessChain;
-        x->kind = t->op == PVK_SPV_OpTypePointer && (chain || !pvk_spv_is_psb(t)) ? PVK_SPV_K_PTR : PVK_SPV_K_VALUE;
+        /* Variable pointers (selected, loaded, returned) are values too. */
+        bool vvalue = pvk_spv_is_vptr(t) && (in->op == PVK_SPV_OpSelect || in->op == PVK_SPV_OpLoad ||
+                                             in->op == PVK_SPV_OpFunctionCall);
+        x->kind = t->op == PVK_SPV_OpTypePointer && (chain || !pvk_spv_is_psb(t)) && !vvalue ? PVK_SPV_K_PTR
+                                                                                         : PVK_SPV_K_VALUE;
     } else if (shape == 1) {
         pvk_spv_fail(ctx, "unexpected instruction (opcode %u) in a function", in->op);
     } else if (in->op != PVK_SPV_OpStore && in->op != PVK_SPV_OpCopyMemory && in->op != PVK_SPV_OpControlBarrier &&
                in->op != PVK_SPV_OpMemoryBarrier && in->op != PVK_SPV_OpAtomicStore && in->op != PVK_SPV_OpNop &&
-               in->op != PVK_SPV_OpImageWrite && in->op != PVK_SPV_OpDemoteToHelperInvocation) {
+               in->op != PVK_SPV_OpImageWrite && in->op != PVK_SPV_OpDemoteToHelperInvocation &&
+               in->op != PVK_SPV_OpAssumeTrueKHR) {
         pvk_spv_fail(ctx, "unexpected instruction (opcode %u) in a function", in->op);
     }
 }
@@ -40177,7 +40420,7 @@ static uint32_t pvk_spv_vec3_scalar(struct pvk_spv *ctx, const struct pvk_spv_ty
  * type: matrices with a MatrixStride Metal does not use or row-major, and
  * arrays of those. NULL when the value type is the storage. */
 static const struct pvk_spv_node *pvk_spv_member_node(struct pvk_spv *ctx, uint32_t tid, uint32_t mstride,
-                                                      bool row_major)
+                                                      bool row_major, bool packed)
 {
     struct pvk_spv_type *t = pvk_spv_type(ctx, tid);
     struct pvk_spv_node *n;
@@ -40187,12 +40430,16 @@ static const struct pvk_spv_node *pvk_spv_member_node(struct pvk_spv *ctx, uint3
         struct pvk_spv_type *col = pvk_spv_type(ctx, t->elem), *sc = pvk_spv_type(ctx, col->elem);
         uint32_t ncomp = row_major ? t->count : col->count, lines = row_major ? col->count : t->count;
         uint32_t lsize = (ncomp == 3 ? 4 : ncomp) * sc->size;
-        if (!row_major && (mstride == 0 || mstride == col->size))
+        if (!row_major && !packed && (mstride == 0 || mstride == col->size))
             return NULL;
-        if (mstride == 0)
+        if (mstride == 0 && (row_major || !packed))
             pvk_spv_fail(ctx, "row-major matrix without MatrixStride");
-        s = pvk_spv_slot(ctx, pvk_spv_vec_msl(ctx, sc, ncomp, false), lsize, lsize, ncomp == 3 ? sc->size : 0,
-                         mstride);
+        if (packed) /* lines aligned to their scalars (scalar block layout) */
+            s = pvk_spv_slot(ctx, pvk_spv_fmt(ctx, "packed_%s", pvk_spv_vec_msl(ctx, sc, ncomp, false)), ncomp * sc->size,
+                             sc->size, 0, mstride ? mstride : ncomp * sc->size);
+        else
+            s = pvk_spv_slot(ctx, pvk_spv_vec_msl(ctx, sc, ncomp, false), lsize, lsize, ncomp == 3 ? sc->size : 0,
+                             mstride);
         n = pvk_spv_alloc(ctx, sizeof(*n));
         n->kind = PVK_SPV_N_MATRIX;
         n->row_major = row_major;
@@ -40205,7 +40452,7 @@ static const struct pvk_spv_node *pvk_spv_member_node(struct pvk_spv *ctx, uint3
         return n;
     }
     if (t->op == PVK_SPV_OpTypeArray || t->op == PVK_SPV_OpTypeRuntimeArray) {
-        const struct pvk_spv_node *child = pvk_spv_member_node(ctx, t->elem, mstride, row_major);
+        const struct pvk_spv_node *child = pvk_spv_member_node(ctx, t->elem, mstride, row_major, packed);
         uint32_t stride = pvk_spv_get(ctx, tid)->array_stride;
         if (!child)
             return NULL;
@@ -40225,6 +40472,25 @@ static const struct pvk_spv_node *pvk_spv_member_node(struct pvk_spv *ctx, uint3
     return NULL;
 }
 
+/* The largest power of two dividing v (0: v is 0, any). */
+static uint32_t pvk_spv_pow2(uint32_t v)
+{
+    return v & (0u - v);
+}
+
+/* The smaller of two alignment limits, 0 meaning none. */
+static uint32_t pvk_spv_min_align(uint32_t a, uint32_t b)
+{
+    return !a ? b : !b ? a : a < b ? a : b;
+}
+
+/* Whether pvk_spv_slot can place an element (size, align, vec3) at stride. */
+static bool pvk_spv_slot_fits(uint32_t size, uint32_t align, uint32_t vec3, uint32_t stride)
+{
+    return stride == 0 || (stride == size && stride % align == 0) || (vec3 && stride == 3 * vec3) ||
+           (stride > size && stride % align == 0);
+}
+
 static uint32_t pvk_spv_round(uint32_t v, uint32_t align)
 {
     return align > 1 ? (v + align - 1) / align * align : v;
@@ -40241,12 +40507,12 @@ static void pvk_spv_psb_layout(struct pvk_spv *ctx, struct pvk_spv_type *t)
         return;
     e = pvk_spv_type(ctx, t->elem);
     if (e->op == PVK_SPV_OpTypeRuntimeArray && e->slot)
-        t->msl = pvk_spv_fmt(ctx, "device %s*", e->slot);
+        t->msl = pvk_spv_fmt(ctx, "%s %s*", ctx->dev, e->slot);
     else if (pvk_spv_is_psb(e) && e->msl)
         t->msl = pvk_spv_fmt(ctx, "%s device*", e->msl);
     else if (e->msl && e->op != PVK_SPV_OpTypeVoid && e->op != PVK_SPV_OpTypeBool && e->op != PVK_SPV_OpTypePointer &&
              e->op != PVK_SPV_OpTypeFunction && e->op != PVK_SPV_OpTypeRuntimeArray && !e->opaque)
-        t->msl = pvk_spv_fmt(ctx, "device %s*", e->msl);
+        t->msl = pvk_spv_fmt(ctx, "%s %s*", ctx->dev, e->msl);
     else
         pvk_spv_fail(ctx, "unsupported physical pointer type (pointee %u)", t->elem);
 }
@@ -40260,7 +40526,7 @@ static void pvk_spv_name_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_sp
 
 static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_spv_type *t)
 {
-    uint32_t i, cur = 0, align = 1, nexplicit = 0;
+    uint32_t i, cur = 0, align = 1, nexplicit = 0, limit = t->need_align;
     char buf[48];
 
     for (i = 0; i < t->nmembers; i++)
@@ -40294,12 +40560,24 @@ static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_
             align = a > align ? a : align;
             continue;
         }
-        m->node = pvk_spv_member_node(ctx, m->type, m->matrix_stride, (m->flags & PVK_SPV_M_ROW_MAJOR) != 0);
+        /* Scalar block layout: members whose MSL alignment exceeds what the
+         * struct's placements allow (need_align) or their offset are packed:
+         * vectors as packed_ types, matrices as arrays of packed lines. */
+        {
+            struct pvk_spv_type *base = mt;
+            uint32_t depth = 0;
+            bool pack;
+            while ((base->op == PVK_SPV_OpTypeArray || base->op == PVK_SPV_OpTypeRuntimeArray) && depth++ < 64)
+                base = pvk_spv_type(ctx, base->elem);
+            pack = base->op == PVK_SPV_OpTypeMatrix && (m->offset % base->align != 0 || (limit && base->align > limit));
+            m->node = pvk_spv_member_node(ctx, m->type, m->matrix_stride, (m->flags & PVK_SPV_M_ROW_MAJOR) != 0, pack);
+        }
         if (m->node) {
             m->decl = m->node->msl; /* runtime arrays: the element slot */
             size = m->node->size;
             a = m->node->align;
-        } else if (mt->op == PVK_SPV_OpTypeVector && (mt->count == 3 || m->offset % mt->align != 0)) {
+        } else if (mt->op == PVK_SPV_OpTypeVector &&
+                   (mt->count == 3 || m->offset % mt->align != 0 || (limit && mt->align > limit))) {
             /* vec3 + scalar share 16 bytes in std140/std430: packed_float3 is 12 bytes. */
             struct pvk_spv_type *sc = pvk_spv_type(ctx, mt->elem);
             m->decl = pvk_spv_fmt(ctx, "packed_%s", mt->msl);
@@ -40441,6 +40719,26 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
     for (i = 0; i < ctx->ntypes; i++)
         if (ctx->ids[ctx->type_order[i]].t->op == PVK_SPV_OpTypeStruct)
             pvk_spv_name_struct(ctx, ctx->type_order[i], ctx->ids[ctx->type_order[i]].t);
+    /* Scalar block layout: the largest alignment each struct and array may
+     * have, from the offsets and strides it is placed at (containers come
+     * after their members: one pass from the last type). */
+    for (i = ctx->ntypes; i-- > 0;) {
+        struct pvk_spv_type *t = ctx->ids[ctx->type_order[i]].t, *e;
+        uint32_t stride = ctx->ids[ctx->type_order[i]].array_stride, m;
+        if (t->op == PVK_SPV_OpTypeStruct) {
+            for (m = 0; m < t->nmembers; m++) {
+                e = pvk_spv_type(ctx, t->members[m].type);
+                if ((t->members[m].flags & PVK_SPV_M_OFFSET) &&
+                    (e->op == PVK_SPV_OpTypeStruct || e->op == PVK_SPV_OpTypeArray || e->op == PVK_SPV_OpTypeRuntimeArray))
+                    e->need_align = pvk_spv_min_align(e->need_align, pvk_spv_min_align(pvk_spv_pow2(t->members[m].offset),
+                                                                                       t->need_align));
+            }
+        } else if ((t->op == PVK_SPV_OpTypeArray || t->op == PVK_SPV_OpTypeRuntimeArray) && stride) {
+            e = pvk_spv_type(ctx, t->elem);
+            if (e->op == PVK_SPV_OpTypeStruct || e->op == PVK_SPV_OpTypeArray)
+                e->need_align = pvk_spv_min_align(e->need_align, pvk_spv_min_align(pvk_spv_pow2(stride), t->need_align));
+        }
+    }
 
     for (i = 0; i < ctx->ntypes; i++) {
         uint32_t tid = ctx->type_order[i];
@@ -40470,6 +40768,18 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
         case PVK_SPV_OpTypePointer:
             if (pvk_spv_is_psb(t))
                 pvk_spv_psb_layout(ctx, t);
+            else if (pvk_spv_is_vptr(t)) { /* a variable pointer's value type (VARIABLE POINTERS) */
+                e = pvk_spv_type(ctx, t->elem);
+                if (e->op == PVK_SPV_OpTypeRuntimeArray && e->slot)
+                    t->msl = pvk_spv_fmt(ctx, "%s %s*", t->storage == PVK_SPV_StorageWorkgroup ? "threadgroup" : ctx->dev,
+                                         e->slot);
+                else if (e->msl && !e->opaque && e->op != PVK_SPV_OpTypePointer && e->op != PVK_SPV_OpTypeFunction &&
+                         e->op != PVK_SPV_OpTypeVoid && e->op != PVK_SPV_OpTypeRuntimeArray)
+                    t->msl = pvk_spv_fmt(ctx, "%s %s*", t->storage == PVK_SPV_StorageWorkgroup ? "threadgroup" : ctx->dev,
+                                         e->msl);
+                if (t->msl)
+                    t->size = t->align = 8;
+            }
             break;
         case PVK_SPV_OpTypeImage:
             if (t->img.dim == PVK_SPV_DimSubpassData) { /* the fetched color */
@@ -40499,7 +40809,22 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
                 pvk_spv_psb_layout(ctx, e);
             if (!e->msl || !e->size)
                 pvk_spv_fail(ctx, "array of unsized type");
-            s = pvk_spv_slot(ctx, e->msl, e->size, e->align, pvk_spv_vec3_scalar(ctx, e), ctx->ids[tid].array_stride);
+            {
+                uint32_t stride = ctx->ids[tid].array_stride, esize = e->size, ealign = e->align;
+                uint32_t vec3 = pvk_spv_vec3_scalar(ctx, e);
+                const char *emsl = e->msl;
+                if (e->op == PVK_SPV_OpTypeVector && t->need_align && e->align > t->need_align) {
+                    /* scalar block layout: elements aligned to their scalars */
+                    struct pvk_spv_type *sc = pvk_spv_type(ctx, e->elem);
+                    emsl = pvk_spv_fmt(ctx, "packed_%s", e->msl);
+                    esize = e->count * sc->size;
+                    ealign = sc->size;
+                    vec3 = 0;
+                }
+                if (e->op == PVK_SPV_OpTypeMatrix && !pvk_spv_slot_fits(esize, ealign, vec3, stride))
+                    stride = 0; /* stored as a struct member's node (lines): the value keeps the natural layout */
+                s = pvk_spv_slot(ctx, emsl, esize, ealign, vec3, stride);
+            }
             t->slot = s.msl;
             t->slot_padded = s.padded;
             t->stride = s.size;
@@ -40621,6 +40946,8 @@ static const char *pvk_spv_zero(struct pvk_spv *ctx, uint32_t tid)
     struct pvk_spv_type *t = pvk_spv_type(ctx, tid);
     if (pvk_spv_is_scalar(t))
         return pvk_spv_literal(ctx, t, 0);
+    if (pvk_spv_is_psb(t) || (t->op == PVK_SPV_OpTypePointer && t->msl))
+        return pvk_spv_fmt(ctx, "(%s)nullptr", t->msl);
     if (t->op == PVK_SPV_OpTypeVector)
         return pvk_spv_fmt(ctx, "%s(%s)", t->msl, pvk_spv_literal(ctx, pvk_spv_type(ctx, t->elem), 0));
     return pvk_spv_fmt(ctx, "%s{}", t->msl);
@@ -40860,10 +41187,13 @@ static void pvk_spv_id_range(const struct pvk_spv_insn *in, int shape, uint32_t 
     *end = e;
 }
 
-/* Word index of an image instruction's Image Operands mask (a literal among
- * the ids), 0 if it has none. */
-static uint32_t pvk_spv_image_mask_word(uint32_t op)
+/* Word index of a literal among an instruction's <id> operands (an image
+ * instruction's Image Operands mask, a group operation), 0 if it has none. */
+static uint32_t pvk_spv_literal_word(uint32_t op)
 {
+    if (op == PVK_SPV_OpGroupNonUniformBallotBitCount ||
+        (op >= PVK_SPV_OpGroupNonUniformIAdd && op <= PVK_SPV_OpGroupNonUniformLogicalXor))
+        return 4;
     switch (op) {
     case PVK_SPV_OpImageSampleImplicitLod: case PVK_SPV_OpImageSampleExplicitLod:
     case PVK_SPV_OpImageSampleProjImplicitLod: case PVK_SPV_OpImageSampleProjExplicitLod: case PVK_SPV_OpImageFetch:
@@ -40926,7 +41256,12 @@ static void pvk_spv_analyze(struct pvk_spv *ctx, uint32_t fidx)
                        (pvk_spv_get(ctx, in.w[3])->flags & PVK_SPV_F_NONSEMANTIC)) {
                 /* debug info */
             } else {
-                uint32_t mask = pvk_spv_image_mask_word(in.op);
+                uint32_t mask = pvk_spv_literal_word(in.op);
+                if ((in.op >= PVK_SPV_OpGroupNonUniformElect && in.op <= PVK_SPV_OpGroupNonUniformQuadSwap) ||
+                    in.op == PVK_SPV_OpGroupNonUniformRotateKHR)
+                    fn->implicit |= PVK_SPV_I_LANE;
+                if (in.op == PVK_SPV_OpKill || in.op == PVK_SPV_OpTerminateInvocation)
+                    fn->implicit |= PVK_SPV_I_KILL;
                 pvk_spv_id_range(&in, shape, &b, &e);
                 for (i = b; i < e; i++)
                     if (i != mask)
@@ -40998,6 +41333,8 @@ static void pvk_spv_call_graph(struct pvk_spv *ctx)
             uint32_t k;
             for (k = 0; k < words; k++)
                 fn->globals[k] |= callee->globals[k];
+            fn->implicit |= callee->implicit;
+            fn->interp_locs |= callee->interp_locs;
         }
         fn->state = 2;
         ctx->order[ctx->norder++] = stack[n - 2];
@@ -41160,7 +41497,7 @@ static const char *pvk_spv_buffer_desc_type(struct pvk_spv *ctx, uint32_t block,
     if (ctx->types_ready && !(t->desc_emitted & bit)) { /* (after the block's own declaration) */
         t->desc_emitted |= bit;
         pvk_sb_printf(ctx, &ctx->types, "struct %s\n{\n    %s %s* p;\n    ulong size;\n};\n\n", name,
-                      storage ? "device" : "constant", t->msl);
+                      storage ? ctx->dev : "constant", t->msl);
     }
     return name;
 }
@@ -41425,6 +41762,16 @@ static void pvk_spv_assign_resources(struct pvk_spv *ctx)
                 if (pt->op != PVK_SPV_OpTypeInt || pt->width != 32)
                     pvk_spv_fail(ctx, "LocalInvocationIndex must be a 32-bit integer");
                 break;
+            case PVK_SPV_BuiltInSubgroupSize: case PVK_SPV_BuiltInSubgroupLocalInvocationId:
+            case PVK_SPV_BuiltInNumSubgroups: case PVK_SPV_BuiltInSubgroupId: case PVK_SPV_BuiltInDeviceIndex:
+                if (pt->op != PVK_SPV_OpTypeInt || pt->width != 32)
+                    pvk_spv_fail(ctx, "built-in %u must be a 32-bit integer", x->builtin);
+                break;
+            case PVK_SPV_BuiltInSubgroupEqMask: case PVK_SPV_BuiltInSubgroupGeMask: case PVK_SPV_BuiltInSubgroupGtMask:
+            case PVK_SPV_BuiltInSubgroupLeMask: case PVK_SPV_BuiltInSubgroupLtMask:
+                if (pt->op != PVK_SPV_OpTypeVector || pt->count != 4 || sc->op != PVK_SPV_OpTypeInt || sc->width != 32)
+                    pvk_spv_fail(ctx, "subgroup mask built-ins must be 32-bit integer 4-vectors");
+                break;
             default:
                 pvk_spv_fail(ctx, "built-in %u is not supported", x->builtin);
             }
@@ -41504,6 +41851,9 @@ static void pvk_spv_resource_view(struct pvk_spv *ctx, uint32_t var)
     bool is_array, buffer = pvk_spv_is_buffer_type(b->layout.type), cast;
 
     pvk_spv_desc_count(ctx, var, &is_array);
+    if (buffer && ctx->options) /* robust buffer access: bound by the descriptor's range */
+        p->robust = pvk_spv_is_storage_block(ctx, var) ? ctx->options->robust_storage_buffers
+                                                       : ctx->options->robust_uniform_buffers;
     if (b->ycbcr_planes) {
         /* Y'CBCR SAMPLING: the conversion of the descriptor, or of each one
          * when they differ (the access chain picks one). */
@@ -41551,7 +41901,9 @@ static void pvk_spv_resource_view(struct pvk_spv *ctx, uint32_t var)
     if (buffer) {
         struct pvk_spv_type *bt = pvk_spv_buffer_block(ctx, var, &block);
         p->desc = member;
-        p->decl = pvk_spv_fmt(ctx, "%s %s& %s = *%s.p;", pvk_spv_is_storage_block(ctx, var) ? "device" : "constant",
+        if (p->robust)
+            p->rb = member;
+        p->decl = pvk_spv_fmt(ctx, "%s %s& %s = *%s.p;", pvk_spv_is_storage_block(ctx, var) ? ctx->dev : "constant",
                               bt->msl, x->msl, member);
     } else {
         p->decl = pvk_spv_fmt(ctx, "constant %s& %s = %s;", p->ycbcr_desc ? wrap : pvk_spv_type(ctx, obj)->msl,
@@ -41597,6 +41949,29 @@ static void pvk_spv_emit_sets(struct pvk_spv *ctx)
     }
 }
 
+/* MSL helper functions (pvk_spv_helper_text), emitted when used. */
+enum {
+    PVK_SPV_H_SMOD = 1u << 0,
+    PVK_SPV_H_FMOD = 1u << 1,
+    PVK_SPV_H_SSIGN = 1u << 2,
+    PVK_SPV_H_FIND_LSB = 1u << 3,
+    PVK_SPV_H_FIND_UMSB = 1u << 4,
+    PVK_SPV_H_FIND_SMSB = 1u << 5,
+    PVK_SPV_H_INVERSE = 1u << 6,
+    PVK_SPV_H_REFRACT = 1u << 7,
+    PVK_SPV_H_SRGB = 1u << 8,
+    PVK_SPV_H_BALLOT = 1u << 9,
+    PVK_SPV_H_SG_SCAN = 1u << 10,
+    PVK_SPV_H_INB = 1u << 11,
+    PVK_SPV_H_F16_RTZ = 1u << 12
+};
+
+static const char *pvk_spv_helper(struct pvk_spv *ctx, uint32_t bit, const char *name)
+{
+    ctx->helper_mask |= bit;
+    return name;
+}
+
 /* ---- Values, pointers, copies ---- */
 
 static uint32_t pvk_spv_fidx(struct pvk_spv *ctx)
@@ -41616,7 +41991,7 @@ static struct pvk_spv_type *pvk_spv_data_type(struct pvk_spv *ctx, uint32_t tid)
             return t;
         break;
     case PVK_SPV_OpTypePointer:
-        if (pvk_spv_is_psb(t) && t->msl)
+        if ((pvk_spv_is_psb(t) || pvk_spv_is_vptr(t)) && t->msl)
             return t;
         break;
     default:
@@ -41625,26 +42000,43 @@ static struct pvk_spv_type *pvk_spv_data_type(struct pvk_spv *ctx, uint32_t tid)
     pvk_spv_fail(ctx, "type %u is not a value type", tid);
 }
 
+/* Whether pointer id x (variable, access chain, parameter) has a variable
+ * pointer type with an MSL value spelling (VARIABLE POINTERS). */
+static bool pvk_spv_vptr_value(struct pvk_spv *ctx, const struct pvk_spv_id *x)
+{
+    struct pvk_spv_type *t = x->type ? pvk_spv_type(ctx, x->type) : NULL;
+    return t && pvk_spv_is_vptr(t) && t->msl;
+}
+
 /* MSL expression of a value operand. */
 static const char *pvk_spv_val(struct pvk_spv *ctx, uint32_t v)
 {
     struct pvk_spv_id *x = pvk_spv_get(ctx, v);
     switch (x->kind) {
+    case PVK_SPV_K_VAR: /* a variable as a variable pointer value: its address */
+        if (!x->p || !x->p->expr || (x->func && x->func != pvk_spv_fidx(ctx)) || !pvk_spv_vptr_value(ctx, x) ||
+            x->p->desc_array)
+            break;
+        return pvk_spv_fmt(ctx, pvk_spv_type(ctx, x->p->type)->op == PVK_SPV_OpTypeRuntimeArray ? "(%s)" : "(&%s)",
+                           x->p->expr);
     case PVK_SPV_K_CONST:
         pvk_spv_data_type(ctx, x->type);
         return pvk_spv_const_expr(ctx, v, 0);
     case PVK_SPV_K_VALUE:
     case PVK_SPV_K_PARAM:
-        if (x->p || x->func != pvk_spv_fidx(ctx) || !x->msl)
+        if (x->p || x->func != pvk_spv_fidx(ctx) || !x->msl) {
+            if (x->p && x->p->expr && x->func == pvk_spv_fidx(ctx) && pvk_spv_vptr_value(ctx, x))
+                return pvk_spv_fmt(ctx, "(&%s)", x->p->expr); /* a pointer parameter (a reference) as a value */
             break;
+        }
         pvk_spv_data_type(ctx, x->type);
         return x->msl;
-    case PVK_SPV_K_PTR: /* a physical pointer made by an access chain: its address */
+    case PVK_SPV_K_PTR: /* a physical (or variable) pointer made by an access chain: its address */
         if (!x->p || !x->p->expr || x->func != pvk_spv_fidx(ctx) ||
-            x->p->storage != PVK_SPV_StoragePhysicalStorageBuffer)
+            (x->p->storage != PVK_SPV_StoragePhysicalStorageBuffer && !pvk_spv_vptr_value(ctx, x)))
             break;
-        if (x->p->node || x->p->rm_col)
-            pvk_spv_fail(ctx, "cannot take the address of this physical storage buffer location");
+        if (x->p->node || x->p->rm_col || x->p->desc_array)
+            pvk_spv_fail(ctx, "cannot take the address of this location");
         pvk_spv_data_type(ctx, x->type);
         if (pvk_spv_type(ctx, x->p->type)->op == PVK_SPV_OpTypeRuntimeArray)
             return pvk_spv_fmt(ctx, "(%s)", x->p->expr); /* decays to its first element */
@@ -41668,14 +42060,15 @@ static const struct pvk_spv_ptr *pvk_spv_ptr_of(struct pvk_spv *ctx, uint32_t v)
     if ((x->kind == PVK_SPV_K_VAR || x->kind == PVK_SPV_K_PTR || x->kind == PVK_SPV_K_PARAM) && x->p && x->p->expr &&
         (x->func == 0 || x->func == pvk_spv_fidx(ctx)))
         return x->p;
-    if ((x->kind == PVK_SPV_K_VALUE || x->kind == PVK_SPV_K_PARAM) && !x->p && x->type &&
-        pvk_spv_is_psb(t = pvk_spv_type(ctx, x->type))) {
-        /* A physical pointer value: what it points at. A pointer to a
-         * runtime array is a pointer to its first element: index it. */
+    if ((x->kind == PVK_SPV_K_VALUE || x->kind == PVK_SPV_K_PARAM || x->kind == PVK_SPV_K_CONST) && !x->p && x->type &&
+        (pvk_spv_is_psb(t = pvk_spv_type(ctx, x->type)) || (pvk_spv_is_vptr(t) && t->msl))) {
+        /* A physical (or variable) pointer value: what it points at. A
+         * pointer to a runtime array is a pointer to its first element:
+         * index it. */
         struct pvk_spv_ptr *p = pvk_spv_alloc(ctx, sizeof(*p));
         const char *val = pvk_spv_val(ctx, v);
         p->type = t->elem;
-        p->storage = PVK_SPV_StoragePhysicalStorageBuffer;
+        p->storage = t->storage;
         p->expr = pvk_spv_type(ctx, t->elem)->op == PVK_SPV_OpTypeRuntimeArray ? val : pvk_spv_fmt(ctx, "(*%s)", val);
         return p;
     }
@@ -41811,6 +42204,8 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
         p->desc_index = NULL;
         if (p->desc_buffer) {
             p->desc = pvk_spv_fmt(ctx, "%s[%s]%s", p->expr, idx, p->desc_suffix);
+            if (p->robust)
+                p->rb = p->desc;
             p->expr = pvk_spv_fmt(ctx, "(*%s.p)", p->desc);
         } else {
             p->expr = pvk_spv_fmt(ctx, "%s[%s]%s", p->expr, idx, p->desc_suffix);
@@ -41818,6 +42213,8 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
         return;
     }
     p->desc = NULL; /* below the block */
+    if (cidx >= 0) /* constant indices in decimal: the stage interface matches leaves by name */
+        idx = pvk_spv_fmt(ctx, "%u", (uint32_t)cidx);
     switch (t->op) {
     case PVK_SPV_OpTypeStruct: {
         const struct pvk_spv_member *m;
@@ -41849,6 +42246,10 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
         p->node = NULL;
         return;
     case PVK_SPV_OpTypeVector:
+        if (p->rb) { /* a component: not addressable (ROBUSTNESS) */
+            p->rb_vec = p->rm_col ? pvk_spv_fmt(ctx, "%s[%s]%s", p->expr, idx, p->node->padded ? ".v" : "") : p->expr;
+            p->rb_comp = p->rm_col ? p->rm_col : cidx >= 0 ? pvk_spv_fmt(ctx, "%u", (uint32_t)cidx) : idx;
+        }
         if (p->rm_col) {
             p->expr = pvk_spv_fmt(ctx, "%s[%s]%s[%s]", p->expr, idx, p->node->padded ? ".v" : "", p->rm_col);
             p->rm_col = NULL;
@@ -41863,6 +42264,23 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
     default:
         pvk_spv_fail(ctx, "cannot index into type %u", p->type);
     }
+}
+
+/* With robust buffer access, the check that pointer p's access lies in its
+ * descriptor's range (ROBUSTNESS); NULL when unchecked. A column of a
+ * row-major matrix is checked as the whole matrix. */
+static const char *pvk_spv_bounds(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
+{
+    uint32_t size;
+    if (!p->rb)
+        return NULL;
+    pvk_spv_helper(ctx, PVK_SPV_H_INB, "pvk_inb");
+    if (p->rb_vec) {
+        size = pvk_spv_type(ctx, p->type)->size;
+        return pvk_spv_fmt(ctx, "pvk_inb(%s, reinterpret_cast<ulong>(&%s) + ulong(%s) * %uul, %uul)", p->rb, p->rb_vec,
+                           p->rb_comp, size, size);
+    }
+    return pvk_spv_fmt(ctx, "pvk_inb(%s, reinterpret_cast<ulong>(&%s), sizeof(%s))", p->rb, p->expr, p->expr);
 }
 
 /* A combined image sampler loaded from a binding with Y'CbCr conversions
@@ -41893,10 +42311,11 @@ static void pvk_spv_ycbcr_load(struct pvk_spv *ctx, uint32_t rid, const struct p
         x->msl = pvk_spv_fmt(ctx, "(%s)", p->expr);
 }
 
-/* Value of what p points at, as result rid. */
+/* Value of what p points at, as result rid (zero outside a robust buffer). */
 static void pvk_spv_load(struct pvk_spv *ctx, uint32_t rid, const struct pvk_spv_ptr *p)
 {
     struct pvk_spv_id *x = pvk_spv_get(ctx, rid);
+    const char *ok = pvk_spv_bounds(ctx, p), *name;
     if (x->type != p->type)
         pvk_spv_fail(ctx, "load of %u: type mismatch", rid);
     if (p->desc_array)
@@ -41909,14 +42328,45 @@ static void pvk_spv_load(struct pvk_spv *ctx, uint32_t rid, const struct pvk_spv
         uint32_t r;
         for (r = 0; r < t->count; r++)
             e = pvk_spv_fmt(ctx, "%s%s%s[%u]%s[%s]", e, r ? ", " : "", p->expr, r, p->node->padded ? ".v" : "", p->rm_col);
-        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s)", e));
+        e = pvk_spv_fmt(ctx, "%s)", e);
+        pvk_spv_set(ctx, rid, ok ? pvk_spv_fmt(ctx, "%s ? %s : %s", ok, e, pvk_spv_zero(ctx, p->type)) : e);
     } else if (p->node) {
-        pvk_spv_copy(ctx, pvk_spv_result(ctx, rid), NULL, p->type, p->expr, p->node, p->type, 0);
+        name = pvk_spv_result(ctx, rid);
+        if (ok) {
+            pvk_spv_line(ctx, "if (!%s)", ok);
+            pvk_spv_line(ctx, "    %s = %s;", name, pvk_spv_zero(ctx, p->type));
+            pvk_spv_line(ctx, "else");
+            pvk_spv_line(ctx, "{");
+            ctx->indent++;
+        }
+        pvk_spv_copy(ctx, name, NULL, p->type, p->expr, p->node, p->type, 0);
+        if (ok) {
+            ctx->indent--;
+            pvk_spv_line(ctx, "}");
+        }
     } else if (p->ycbcr && !p->desc_array) {
         pvk_spv_ycbcr_load(ctx, rid, p);
     } else {
-        pvk_spv_set(ctx, rid, p->expr);
+        pvk_spv_set(ctx, rid, ok ? pvk_spv_fmt(ctx, "%s ? %s : %s", ok, p->expr, pvk_spv_zero(ctx, p->type)) : p->expr);
     }
+}
+
+/* Opens `if (ok) {` around a robust access (ok NULL: nothing). */
+static void pvk_spv_if_open(struct pvk_spv *ctx, const char *ok)
+{
+    if (!ok)
+        return;
+    pvk_spv_line(ctx, "if (%s)", ok);
+    pvk_spv_line(ctx, "{");
+    ctx->indent++;
+}
+
+static void pvk_spv_if_close(struct pvk_spv *ctx, const char *ok)
+{
+    if (!ok)
+        return;
+    ctx->indent--;
+    pvk_spv_line(ctx, "}");
 }
 
 static bool pvk_spv_writable(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
@@ -41934,24 +42384,26 @@ static bool pvk_spv_writable(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
     }
 }
 
+/* *p = val (discarded outside a robust buffer). */
 static void pvk_spv_store(struct pvk_spv *ctx, const struct pvk_spv_ptr *p, const char *val, uint32_t vtype)
 {
+    const char *ok = pvk_spv_bounds(ctx, p);
     if (!pvk_spv_writable(ctx, p))
         pvk_spv_fail(ctx, "store to read-only memory");
     if (p->desc_array)
         pvk_spv_fail(ctx, "cannot store a whole descriptor array");
+    if (vtype != p->type)
+        pvk_spv_fail(ctx, "store: type mismatch");
+    pvk_spv_if_open(ctx, ok);
     if (p->rm_col) {
         struct pvk_spv_type *t = pvk_spv_type(ctx, p->type);
         uint32_t r;
-        if (vtype != p->type)
-            pvk_spv_fail(ctx, "store: type mismatch");
         for (r = 0; r < t->count; r++)
             pvk_spv_line(ctx, "%s[%u]%s[%s] = %s[%u];", p->expr, r, p->node->padded ? ".v" : "", p->rm_col, val, r);
-        return;
+    } else {
+        pvk_spv_copy(ctx, p->expr, p->node, p->type, val, NULL, vtype, 0);
     }
-    if (vtype != p->type)
-        pvk_spv_fail(ctx, "store: type mismatch");
-    pvk_spv_copy(ctx, p->expr, p->node, p->type, val, NULL, vtype, 0);
+    pvk_spv_if_close(ctx, ok);
 }
 
 /* ---- Instructions ---- */
@@ -41991,18 +42443,6 @@ static const char *pvk_spv_shift_amount(struct pvk_spv *ctx, uint32_t base_type_
     return pvk_spv_fmt(ctx, "%s(%s)", want, pvk_spv_val(ctx, v));
 }
 
-enum {
-    PVK_SPV_H_SMOD = 1u << 0,
-    PVK_SPV_H_FMOD = 1u << 1,
-    PVK_SPV_H_SSIGN = 1u << 2,
-    PVK_SPV_H_FIND_LSB = 1u << 3,
-    PVK_SPV_H_FIND_UMSB = 1u << 4,
-    PVK_SPV_H_FIND_SMSB = 1u << 5,
-    PVK_SPV_H_INVERSE = 1u << 6,
-    PVK_SPV_H_REFRACT = 1u << 7,
-    PVK_SPV_H_SRGB = 1u << 8
-};
-
 static const char *const pvk_spv_helper_text[] = {
     "template <typename T>\ninline T pvk_smod(T a, T b)\n{\n    T r = a % b;\n"
     "    return select(r, T(r + b), (r != T(0)) && ((r < T(0)) != (b < T(0))));\n}\n\n",
@@ -42041,13 +42481,58 @@ static const char *const pvk_spv_helper_text[] = {
     "    T k = T(1) - eta * eta * (T(1) - d * d);\n    return k < T(0) ? T(0) : eta * i - (eta * d + sqrt(k)) * n;\n}\n\n",
     "inline float pvk_srgb_to_linear(float c)\n{\n"
     "    return c <= 0.04045f ? c / 12.92f : pow((c + 0.055f) / 1.055f, 2.4f);\n}\n\n",
+    "/* Subgroup ballots: a SIMD-group is 32 threads, the first word of Vulkan's uvec4. */\n"
+    "inline uint pvk_ballot1(bool p)\n{\n    return uint(simd_vote::vote_t(simd_ballot(p)));\n}\n\n"
+    "inline uint4 pvk_ballot(bool p)\n{\n    return uint4(pvk_ballot1(p), 0u, 0u, 0u);\n}\n\n"
+    "inline bool pvk_ballot_bit(uint4 v, uint i)\n{\n    return ((v[(i >> 5) & 3u] >> (i & 31u)) & 1u) != 0u;\n}\n\n",
+    "/* Subgroup reductions and scans Metal has no function for: a loop over the\n"
+    " * active lanes, in lane order, with uniform shuffles. */\n"
+    "template <typename T>\ninline T pvk_bcast(T x, ushort l)\n{\n    return simd_shuffle(x, l);\n}\n\n"
+    "inline long pvk_bcast(long x, ushort l)\n{\n    return as_type<long>(simd_shuffle(as_type<uint2>(x), l));\n}\n\n"
+    "inline ulong pvk_bcast(ulong x, ushort l)\n{\n    return as_type<ulong>(simd_shuffle(as_type<uint2>(x), l));\n}\n\n"
+    "inline long2 pvk_bcast(long2 x, ushort l)\n{\n    return long2(pvk_bcast(x.x, l), pvk_bcast(x.y, l));\n}\n\n"
+    "inline long3 pvk_bcast(long3 x, ushort l)\n{\n    return long3(pvk_bcast(x.x, l), pvk_bcast(x.y, l), pvk_bcast(x.z, l));\n}\n\n"
+    "inline long4 pvk_bcast(long4 x, ushort l)\n{\n"
+    "    return long4(pvk_bcast(x.x, l), pvk_bcast(x.y, l), pvk_bcast(x.z, l), pvk_bcast(x.w, l));\n}\n\n"
+    "inline ulong2 pvk_bcast(ulong2 x, ushort l)\n{\n    return ulong2(pvk_bcast(x.x, l), pvk_bcast(x.y, l));\n}\n\n"
+    "inline ulong3 pvk_bcast(ulong3 x, ushort l)\n{\n    return ulong3(pvk_bcast(x.x, l), pvk_bcast(x.y, l), pvk_bcast(x.z, l));\n}\n\n"
+    "inline ulong4 pvk_bcast(ulong4 x, ushort l)\n{\n"
+    "    return ulong4(pvk_bcast(x.x, l), pvk_bcast(x.y, l), pvk_bcast(x.z, l), pvk_bcast(x.w, l));\n}\n\n"
+    "struct pvk_op_add\n{\n    template <typename T> T operator()(T a, T b) const { return T(a + b); }\n};\n\n"
+    "struct pvk_op_mul\n{\n    template <typename T> T operator()(T a, T b) const { return T(a * b); }\n};\n\n"
+    "struct pvk_op_min\n{\n    template <typename T> T operator()(T a, T b) const { return select(a, b, b < a); }\n};\n\n"
+    "struct pvk_op_max\n{\n    template <typename T> T operator()(T a, T b) const { return select(a, b, b > a); }\n};\n\n"
+    "struct pvk_op_and\n{\n    template <typename T> T operator()(T a, T b) const { return T(a & b); }\n};\n\n"
+    "struct pvk_op_or\n{\n    template <typename T> T operator()(T a, T b) const { return T(a | b); }\n};\n\n"
+    "struct pvk_op_xor\n{\n    template <typename T> T operator()(T a, T b) const { return T(a ^ b); }\n};\n\n"
+    "/* mode 0: reduce, 1: inclusive scan, 2: exclusive scan */\n"
+    "template <typename O, typename T>\ninline T pvk_simd_scan(T x, T identity, uint mode)\n{\n"
+    "    uint active = uint(simd_vote::vote_t(simd_active_threads_mask()));\n"
+    "    uint rank = simd_prefix_exclusive_sum(1u), k = 0u;\n"
+    "    T acc = identity;\n"
+    "    for (uint m = active; m != 0u; m &= m - 1u, k++) {\n"
+    "        T v = pvk_bcast(x, ushort(ctz(m)));\n"
+    "        if (mode == 0u || k < rank || (mode == 1u && k == rank))\n"
+    "            acc = O()(acc, v);\n"
+    "    }\n"
+    "    return acc;\n}\n\n",
+    "/* Robust buffer access: [addr, addr + n) lies in descriptor d's range. */\n"
+    "template <typename D, typename A>\ninline bool pvk_inb(D d, A addr, ulong n)\n{\n"
+    "    ulong o = ulong(addr) - reinterpret_cast<ulong>(d.p);\n"
+    "    return o < d.size && n <= d.size - o;\n}\n\n",
+    "/* float -> half rounded toward zero (FPRoundingMode RTZ): Metal rounds to\n"
+    " * nearest even, then one step toward zero where that rounded away. */\n"
+    "inline half pvk_f16_rtz(float f)\n{\n"
+    "    half h = half(f);\n"
+    "    return isnan(f) || abs(float(h)) <= abs(f) ? h : as_type<half>(ushort(as_type<ushort>(h) - 1u));\n}\n\n"
+    "template <int N>\ninline vec<half, N> pvk_f16_rtz(vec<float, N> f)\n{\n"
+    "    vec<half, N> r;\n"
+    "    for (int i = 0; i < N; i++)\n"
+    "        r[i] = pvk_f16_rtz(f[i]);\n"
+    "    return r;\n}\n\n",
 };
 
-static const char *pvk_spv_helper(struct pvk_spv *ctx, uint32_t bit, const char *name)
-{
-    ctx->helper_mask |= bit;
-    return name;
-}
+static void pvk_spv_interpolate_at(struct pvk_spv *ctx, const struct pvk_spv_insn *in);
 
 static void pvk_spv_glsl(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
@@ -42082,6 +42567,10 @@ static void pvk_spv_glsl(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 
     if (pvk_spv_arg(ctx, in, 3) != ctx->glsl)
         pvk_spv_fail(ctx, "unsupported extended instruction set");
+    if (inst >= PVK_SPV_GLSL_InterpolateAtCentroid && inst <= PVK_SPV_GLSL_InterpolateAtOffset) {
+        pvk_spv_interpolate_at(ctx, in);
+        return;
+    }
     if (nops > 3)
         pvk_spv_fail(ctx, "GLSL.std.450 instruction %u has too many operands", inst);
     for (i = 0; i < nops; i++)
@@ -42267,27 +42756,145 @@ static uint32_t pvk_spv_const_u32(struct pvk_spv *ctx, uint32_t cid)
     return (uint32_t)pvk_spv_const_uint(ctx, cid);
 }
 
+/* ---- Memory model ----
+ *
+ * Metal's atomics are relaxed and MSL 3.2's fences are seq_cst (the only
+ * other order it has), so SPIR-V's memory semantics become fences: a
+ * release (Release, AcquireRelease, SequentiallyConsistent, MakeAvailable)
+ * is atomic_thread_fence before the operation, an acquire (Acquire, ...,
+ * MakeVisible) one after it, over the storage classes the semantics name
+ * (the atomic's own when it names none), at the memory scope's
+ * thread_scope (Device and QueueFamily: thread_scope_device). Device-scope
+ * coherence of buffer memory itself: COHERENCE in pvk_spv_coherence. */
+
+#define PVK_SPV_SEM_RELEASE \
+    (PVK_SPV_SemanticsRelease | PVK_SPV_SemanticsAcquireRelease | PVK_SPV_SemanticsSequentiallyConsistent | \
+     PVK_SPV_SemanticsMakeAvailable)
+#define PVK_SPV_SEM_ACQUIRE \
+    (PVK_SPV_SemanticsAcquire | PVK_SPV_SemanticsAcquireRelease | PVK_SPV_SemanticsSequentiallyConsistent | \
+     PVK_SPV_SemanticsMakeVisible)
+
+static const char *pvk_spv_thread_scope(uint32_t scope)
+{
+    return scope == PVK_SPV_ScopeWorkgroup ? "thread_scope_threadgroup"
+           : scope == PVK_SPV_ScopeSubgroup ? "thread_scope_simdgroup"
+                                            : "thread_scope_device";
+}
+
+/* The fence of a release (want PVK_SPV_SEM_RELEASE) or acquire for memory
+ * scope `scope` and semantics `sem`; own: the storage of the atomic it
+ * orders (NULL: none). Emitted when the semantics ask for it. */
+static void pvk_spv_fence(struct pvk_spv *ctx, uint32_t scope, uint32_t sem, uint32_t want, const char *own)
+{
+    const char *flags = pvk_spv_mem_flags(ctx, sem);
+    if (!(sem & want) || scope == PVK_SPV_ScopeInvocation)
+        return;
+    if (!flags)
+        flags = own;
+    if (flags)
+        pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, pvk_spv_thread_scope(scope));
+}
+
 static void pvk_spv_barrier(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     if (in->op == PVK_SPV_OpControlBarrier) {
         uint32_t exec = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 1));
-        const char *flags = pvk_spv_mem_flags(ctx, pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 3)));
-        pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2));
+        uint32_t scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2));
+        uint32_t sem = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 3));
+        const char *flags = pvk_spv_mem_flags(ctx, sem);
+        /* Metal's barriers order memory for the threadgroup (SIMD-group); a
+         * wider memory scope adds device-scope fences around them. */
+        uint32_t dev = sem & (PVK_SPV_SemanticsUniformMemory | PVK_SPV_SemanticsCrossWorkgroupMemory |
+                              PVK_SPV_SemanticsImageMemory);
+        bool wide = dev && (scope == PVK_SPV_ScopeDevice || scope == PVK_SPV_ScopeQueueFamily);
+        if (wide)
+            pvk_spv_fence(ctx, scope, dev | PVK_SPV_SemanticsRelease, PVK_SPV_SEM_RELEASE, NULL);
         if (exec == PVK_SPV_ScopeWorkgroup)
             pvk_spv_line(ctx, "threadgroup_barrier(%s);", flags ? flags : "mem_flags::mem_none");
         else if (exec == PVK_SPV_ScopeSubgroup)
             pvk_spv_line(ctx, "simdgroup_barrier(%s);", flags ? flags : "mem_flags::mem_none");
         else
             pvk_spv_fail(ctx, "OpControlBarrier with execution scope %u is not supported", exec);
+        if (wide)
+            pvk_spv_fence(ctx, scope, dev | PVK_SPV_SemanticsAcquire, PVK_SPV_SEM_ACQUIRE, NULL);
     } else {
         uint32_t scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 1));
         const char *flags = pvk_spv_mem_flags(ctx, pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2)));
-        const char *ts = scope == PVK_SPV_ScopeWorkgroup ? "thread_scope_threadgroup"
-                         : scope == PVK_SPV_ScopeSubgroup ? "thread_scope_simdgroup"
-                                                          : "thread_scope_device";
         if (flags && scope != PVK_SPV_ScopeInvocation)
-            pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, ts);
+            pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, pvk_spv_thread_scope(scope));
     }
+}
+
+/* Whether scope id `scope` is Device or QueueFamily. */
+static bool pvk_spv_device_scope(struct pvk_spv *ctx, uint32_t scope)
+{
+    uint32_t s = pvk_spv_const_u32(ctx, scope);
+    return s == PVK_SPV_ScopeDevice || s == PVK_SPV_ScopeQueueFamily;
+}
+
+/* COHERENCE: Metal keeps device memory coherent within a threadgroup; across
+ * threadgroups only coherent(device) memory is (MSL 3.2). Buffers become
+ * `device coherent(device)` (ctx->dev) in a shader that synchronizes buffer
+ * memory at device scope: Coherent or Volatile buffer variables or members
+ * (GLSL coherent), availability or visibility at Device scope on loads and
+ * stores (Vulkan memory model), device-scope acquire/release atomics and
+ * barriers on buffer memory. Textures cannot be coherent(device) in argument
+ * buffers: storage images rely on the fences alone. (On M4 Max, fences alone
+ * pass message passing between workgroups too.) */
+static void pvk_spv_coherence(struct pvk_spv *ctx)
+{
+    uint32_t i, f, bi, m, off;
+    bool coherent = false;
+    ctx->dev = "device";
+    for (i = 1; i < ctx->bound && !coherent; i++) {
+        struct pvk_spv_id *x = &ctx->ids[i];
+        if ((x->flags & PVK_SPV_F_COHERENT) && x->kind == PVK_SPV_K_VAR)
+            coherent = true;
+        if (x->kind == PVK_SPV_K_TYPE && x->t->op == PVK_SPV_OpTypeStruct)
+            for (m = 0; m < x->t->nmembers; m++)
+                coherent |= (x->t->members[m].flags & PVK_SPV_M_COHERENT) != 0;
+    }
+    for (f = 0; f < ctx->nfuncs && !coherent; f++) {
+        const struct pvk_spv_func *fn = ctx->funcs[f];
+        for (bi = 0; bi < fn->nblocks && !coherent; bi++) {
+            for (off = fn->blocks[bi].begin; off < fn->blocks[bi].end && !coherent;) {
+                struct pvk_spv_insn in = pvk_spv_insn_at(ctx, off);
+                uint32_t mask_at = 0, sem = 0, scope = 0;
+                off += in.wc;
+                switch (in.op) {
+                case PVK_SPV_OpLoad: mask_at = 4; break;
+                case PVK_SPV_OpStore: case PVK_SPV_OpCopyMemory: mask_at = 3; break;
+                case PVK_SPV_OpAtomicStore: scope = 2; sem = 3; break;
+                case PVK_SPV_OpMemoryBarrier: scope = 1; sem = 2; break;
+                case PVK_SPV_OpControlBarrier: scope = 2; sem = 3; break;
+                default:
+                    if ((in.op >= PVK_SPV_OpAtomicLoad && in.op <= PVK_SPV_OpAtomicXor) || in.op == PVK_SPV_OpAtomicFAddEXT) {
+                        scope = 4;
+                        sem = 5;
+                    }
+                    break;
+                }
+                if (mask_at && in.wc > mask_at) { /* memory operands: Aligned literal, then scopes */
+                    uint32_t mask = in.w[mask_at], k = mask_at + 1;
+                    if (mask & PVK_SPV_MemAligned)
+                        k++;
+                    if ((mask & PVK_SPV_MemMakePointerAvailable) && k < in.wc && pvk_spv_device_scope(ctx, in.w[k++]))
+                        coherent = true;
+                    if ((mask & PVK_SPV_MemMakePointerVisible) && k < in.wc && pvk_spv_device_scope(ctx, in.w[k]))
+                        coherent = true;
+                } else if (sem && in.wc > sem) {
+                    uint32_t s = pvk_spv_const_u32(ctx, in.w[sem]);
+                    if ((s & (PVK_SPV_SEM_RELEASE | PVK_SPV_SEM_ACQUIRE)) &&
+                        (s & (PVK_SPV_SemanticsUniformMemory | PVK_SPV_SemanticsCrossWorkgroupMemory) ||
+                         !(s & (PVK_SPV_SemanticsWorkgroupMemory | PVK_SPV_SemanticsImageMemory))) &&
+                        pvk_spv_device_scope(ctx, in.w[scope]))
+                        coherent = true;
+                }
+            }
+        }
+    }
+    if (coherent)
+        ctx->dev = "device coherent(device)";
 }
 
 /* Atomics on a texel (OpImageTexelPointer): Metal texture atomics, on
@@ -42299,6 +42906,8 @@ static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn 
     struct pvk_spv_type *t = pvk_spv_type(ctx, p->type), *it = pvk_spv_type(ctx, p->texel_type);
     struct pvk_spv_type *st = pvk_spv_type(ctx, it->elem);
     const char *img = p->texel_image, *args = p->texel_args, *t4, *e = NULL, *v = NULL, *what = NULL;
+    const char *ok = p->texel_ok, *own = "mem_flags::mem_texture";
+    uint32_t scope, sem;
 
     if (t->op == PVK_SPV_OpTypeFloat)
         pvk_spv_fail(ctx, "float image atomics are not supported (Metal texture atomics are integer)");
@@ -42310,7 +42919,10 @@ static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn 
         pvk_spv_fail(ctx, "atomics on cube images are not supported");
     if (!store && pvk_spv_get(ctx, rid)->type != p->type)
         pvk_spv_fail(ctx, "atomic result type differs from the pointee type");
-    pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 2 : 4)); /* scope */
+    scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 2 : 4));
+    sem = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 3 : 5));
+    if (in->op == PVK_SPV_OpAtomicCompareExchange || in->op == PVK_SPV_OpAtomicCompareExchangeWeak)
+        sem |= pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 6)) & PVK_SPV_SEM_ACQUIRE;
     tsg = sg = st->is_signed;
     if (in->op == PVK_SPV_OpAtomicSMin || in->op == PVK_SPV_OpAtomicSMax)
         sg = true;
@@ -42329,13 +42941,19 @@ static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn 
     case PVK_SPV_OpAtomicStore:
         if (!v)
             pvk_spv_fail(ctx, "OpAtomicStore without a value");
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_RELEASE, own);
+        pvk_spv_if_open(ctx, ok);
         pvk_spv_line(ctx, "%s.atomic_store(%s(%s), %s);", img, t4, v, args);
+        pvk_spv_if_close(ctx, ok);
         return;
     case PVK_SPV_OpAtomicCompareExchange:
     case PVK_SPV_OpAtomicCompareExchangeWeak: {
         const char *val = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 7), tsg);
         const char *cmp = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 8), tsg);
         const char *name = pvk_spv_result(ctx, rid);
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_RELEASE, own);
+        if (ok)
+            pvk_spv_line(ctx, "if (%s)", ok);
         pvk_spv_line(ctx, "{");
         ctx->indent++;
         pvk_spv_line(ctx, "%s pvk_expected = %s(%s);", t4, t4, cmp);
@@ -42349,6 +42967,9 @@ static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn 
             pvk_spv_line(ctx, "%s = pvk_expected.x;", name);
         ctx->indent--;
         pvk_spv_line(ctx, "}");
+        if (ok)
+            pvk_spv_line(ctx, "else\n%*s    %s = 0;", (int)ctx->indent * 4, "", name);
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_ACQUIRE, own);
         return;
     }
     case PVK_SPV_OpAtomicIIncrement:
@@ -42373,17 +42994,23 @@ static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn 
         pvk_spv_fail(ctx, "image atomic min/max with the other signedness than the image is not supported");
     if (what)
         e = pvk_spv_fmt(ctx, "%s.atomic_%s(%s, %s(%s)).x", img, what, args, t4, v);
+    if (in->op != PVK_SPV_OpAtomicLoad)
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_RELEASE, own);
+    if (ok) /* robust image access: no effect outside the image */
+        e = pvk_spv_fmt(ctx, "(%s ? %s : 0)", ok, e);
     pvk_spv_set_int(ctx, rid, e, tsg);
+    pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_ACQUIRE, own);
 }
 
 static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     bool store = in->op == PVK_SPV_OpAtomicStore, sg;
     uint32_t ptr = pvk_spv_arg(ctx, in, store ? 1 : 3), rid = store ? 0 : in->w[2];
+    uint32_t scope, sem;
     uint32_t first = store ? 4 : 6; /* first value operand */
     const struct pvk_spv_ptr *p = pvk_spv_ptr_of(ctx, ptr);
     struct pvk_spv_type *t = pvk_spv_type(ctx, p->type);
-    const char *space, *atype, *obj, *e = NULL, *v = NULL;
+    const char *space, *atype, *obj, *e = NULL, *v = NULL, *own, *ok = pvk_spv_bounds(ctx, p);
     const char *ord = "memory_order_relaxed";
 
     if (p->storage == PVK_SPV_StorageImage) {
@@ -42398,7 +43025,7 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         space = "threadgroup";
     else if ((p->storage == PVK_SPV_StorageStorageBuffer || p->storage == PVK_SPV_StorageUniform ||
               p->storage == PVK_SPV_StoragePhysicalStorageBuffer) && pvk_spv_writable(ctx, p))
-        space = "device";
+        space = ctx->dev;
     else
         pvk_spv_fail(ctx, "atomics are only supported on storage buffers and workgroup memory");
     if (t->op == PVK_SPV_OpTypeInt && t->width == 64)
@@ -42420,7 +43047,11 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
             pvk_spv_fail(ctx, "OpAtomicFAddEXT on an integer");
         atype = sg ? "atomic_int" : "atomic_uint";
     }
-    pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 2 : 4)); /* scope */
+    scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 2 : 4));
+    sem = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 3 : 5));
+    if (in->op == PVK_SPV_OpAtomicCompareExchange || in->op == PVK_SPV_OpAtomicCompareExchangeWeak)
+        sem |= pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 6)) & PVK_SPV_SEM_ACQUIRE; /* Unequal */
+    own = p->storage == PVK_SPV_StorageWorkgroup ? "mem_flags::mem_threadgroup" : "mem_flags::mem_device";
     obj = pvk_spv_fmt(ctx, "(%s %s*)&%s", space, atype, p->expr);
     if (in->wc > first && in->op != PVK_SPV_OpAtomicIIncrement && in->op != PVK_SPV_OpAtomicIDecrement &&
         in->op != PVK_SPV_OpAtomicLoad && in->op != PVK_SPV_OpAtomicCompareExchange &&
@@ -42434,13 +43065,19 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     case PVK_SPV_OpAtomicStore:
         if (!v)
             pvk_spv_fail(ctx, "OpAtomicStore without a value");
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_RELEASE, own);
+        pvk_spv_if_open(ctx, ok);
         pvk_spv_line(ctx, "atomic_store_explicit(%s, %s, %s);", obj, v, ord);
+        pvk_spv_if_close(ctx, ok);
         return;
     case PVK_SPV_OpAtomicCompareExchange:
     case PVK_SPV_OpAtomicCompareExchangeWeak: {
         const char *val = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 7), sg);
         const char *cmp = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 8), sg);
         const char *name = pvk_spv_result(ctx, rid);
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_RELEASE, own);
+        if (ok)
+            pvk_spv_line(ctx, "if (%s)", ok);
         pvk_spv_line(ctx, "{");
         ctx->indent++;
         pvk_spv_line(ctx, "%s pvk_expected = %s;", sg ? "int" : "uint", cmp);
@@ -42454,6 +43091,9 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
             pvk_spv_line(ctx, "%s = pvk_expected;", name);
         ctx->indent--;
         pvk_spv_line(ctx, "}");
+        if (ok)
+            pvk_spv_line(ctx, "else\n%*s    %s = 0;", (int)ctx->indent * 4, "", name);
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_ACQUIRE, own);
         return;
     }
     case PVK_SPV_OpAtomicIIncrement:
@@ -42480,10 +43120,15 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         break;
     }
     }
+    if (in->op != PVK_SPV_OpAtomicLoad)
+        pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_RELEASE, own);
+    if (ok) /* robust buffer access: no effect outside the range, the result is 0 */
+        e = pvk_spv_fmt(ctx, "(%s ? %s : 0)", ok, e);
     if (t->op == PVK_SPV_OpTypeFloat)
         pvk_spv_set(ctx, rid, e);
     else
         pvk_spv_set_int(ctx, rid, e, sg);
+    pvk_spv_fence(ctx, scope, sem, PVK_SPV_SEM_ACQUIRE, own);
 }
 
 static const char *pvk_spv_join_vals(struct pvk_spv *ctx, const uint32_t *ids, uint32_t n)
@@ -42583,14 +43228,17 @@ static void pvk_spv_access_chain(struct pvk_spv *ctx, const struct pvk_spv_insn 
         uint32_t elem = pvk_spv_arg(ctx, in, 4);
         struct pvk_spv_type *bt = pvk_spv_type(ctx, btid), *e = pvk_spv_type(ctx, p->type);
         bool zero = pvk_spv_get(ctx, elem)->kind == PVK_SPV_K_CONST && pvk_spv_const_uint(ctx, elem) == 0;
-        if (!pvk_spv_is_psb(bt))
-            pvk_spv_fail(ctx, "OpPtrAccessChain is only supported on physical storage buffer pointers");
+        if (!pvk_spv_is_psb(bt) && !(pvk_spv_is_vptr(bt) && bt->msl))
+            pvk_spv_fail(ctx, "OpPtrAccessChain needs a physical storage buffer or variable pointer");
+        p->rb = NULL; /* (robust buffer access does not follow variable pointers) */
+        p->desc = NULL;
         if (!stride)
             stride = e->op == PVK_SPV_OpTypeRuntimeArray ? 0 : e->size;
         if (!stride)
             pvk_spv_fail(ctx, "OpPtrAccessChain on a pointer without ArrayStride");
         if (!zero) {
-            const char *addr = pvk_spv_fmt(ctx, "(%s)((device char*)%s + long(%s) * %ul)", bt->msl,
+            const char *addr = pvk_spv_fmt(ctx, "(%s)((%s char*)%s + long(%s) * %ul)", bt->msl,
+                                           bt->storage == PVK_SPV_StorageWorkgroup ? "threadgroup" : ctx->dev,
                                            pvk_spv_val(ctx, base), pvk_spv_ival(ctx, elem, true), stride);
             p->expr = e->op == PVK_SPV_OpTypeRuntimeArray ? pvk_spv_fmt(ctx, "(%s)", addr)
                                                            : pvk_spv_fmt(ctx, "(*%s)", addr);
@@ -42644,6 +43292,27 @@ static uint32_t pvk_spv_func_sets(struct pvk_spv *ctx, const struct pvk_spv_func
     return sets;
 }
 
+/* The hidden parameters of fn (PVK_SPV_I_*, interpolants for interpolateAt*)
+ * into list, as declarations (decl) or as the arguments of a call from a
+ * function (or from the stage function: stage). Returns how many. */
+static uint32_t pvk_spv_hidden(struct pvk_spv *ctx, const struct pvk_spv_func *fn, const char **list, bool decl,
+                               bool stage)
+{
+    uint32_t n = 0, loc;
+    if (fn->implicit & PVK_SPV_I_LANE)
+        list[n++] = decl ? "uint pvk_lane" : "pvk_lane";
+    if (fn->implicit & PVK_SPV_I_KILL)
+        list[n++] = decl ? "thread bool& pvk_killed" : "pvk_killed";
+    for (loc = 0; loc < PVK_MSL_MAX_LOCATIONS; loc++) {
+        if (!(fn->interp_locs & (1u << loc)))
+            continue;
+        list[n++] = decl    ? pvk_spv_fmt(ctx, "thread %s& pvk_i%u", ctx->interp_type[loc], loc)
+                    : stage ? pvk_spv_fmt(ctx, "pvk_in.pvk_l%u", loc)
+                            : pvk_spv_fmt(ctx, "pvk_i%u", loc);
+    }
+    return n;
+}
+
 static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     uint32_t rid = in->w[2], i, g, sets;
@@ -42654,7 +43323,7 @@ static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 
     if (in->wc - 4 != ft->count)
         pvk_spv_fail(ctx, "OpFunctionCall: wrong number of arguments");
-    list = pvk_spv_alloc(ctx, sizeof(*list) * (ft->count + ctx->nglobals + PVK_MSL_MAX_SETS));
+    list = pvk_spv_alloc(ctx, sizeof(*list) * (ft->count + ctx->nglobals + PVK_MSL_MAX_SETS + PVK_MSL_MAX_LOCATIONS + 2));
     for (i = 0; i < ft->count; i++) {
         struct pvk_spv_type *pt = pvk_spv_type(ctx, ft->params[i]);
         const char *arg;
@@ -42685,11 +43354,19 @@ static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     for (g = 0; g < PVK_MSL_MAX_SETS; g++)
         if (sets & (1u << g))
             list[n++] = pvk_spv_fmt(ctx, "set%u", g);
+    n += pvk_spv_hidden(ctx, callee, list + n, false, false);
     args = pvk_spv_join(ctx, "", list, n, ", ", "");
     if (pvk_spv_type(ctx, callee->ret)->op == PVK_SPV_OpTypeVoid)
         pvk_spv_line(ctx, "%s(%s);", callee->msl, args);
     else
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", callee->msl, args));
+    ctx->fn->interp_locs |= callee->interp_locs;
+    if (callee->implicit & PVK_SPV_I_KILL) { /* the callee terminated the invocation: so does the caller */
+        if (pvk_spv_type(ctx, ctx->fn->ret)->op == PVK_SPV_OpTypeVoid)
+            pvk_spv_line(ctx, "if (pvk_killed)\n%*s    return;", (int)ctx->indent * 4, "");
+        else
+            pvk_spv_line(ctx, "if (pvk_killed)\n%*s    return %s;", (int)ctx->indent * 4, "", pvk_spv_zero(ctx, ctx->fn->ret));
+    }
 }
 
 static const char *pvk_spv_binary_op(uint32_t op)
@@ -42827,13 +43504,15 @@ static const char *pvk_spv_sample_coord(struct pvk_spv *ctx, const struct pvk_sp
     return c;
 }
 
-/* An integer texel coordinate as Metal's arguments: "uint2(x, y)[, face][, layer]".
+/* The spatial part of an integer texel coordinate, as uint/uint2/uint3
+ * (negative values wrap to large ones); *n receives the component count.
  * off: an offset operand added first (0: none). */
-static const char *pvk_spv_texel_args(struct pvk_spv *ctx, const struct pvk_spv_type *it, uint32_t coord, uint32_t off)
+static const char *pvk_spv_texel_coord(struct pvk_spv *ctx, const struct pvk_spv_type *it, uint32_t coord, uint32_t off,
+                                       uint32_t *pn)
 {
     struct pvk_spv_type *cs = pvk_spv_scalar_of(ctx, pvk_spv_vtype(ctx, coord));
     uint32_t n = it->img.dim == PVK_SPV_Dim3D ? 3 : it->img.dim == PVK_SPV_Dim2D || it->img.dim == PVK_SPV_DimCube ? 2 : 1;
-    const char *c = pvk_spv_comps(ctx, coord, 0, n), *e;
+    const char *c = pvk_spv_comps(ctx, coord, 0, n);
     if (!cs || cs->op != PVK_SPV_OpTypeInt)
         pvk_spv_fail(ctx, "texel coordinates must be integers");
     if (off) {
@@ -42844,7 +43523,63 @@ static const char *pvk_spv_texel_args(struct pvk_spv *ctx, const struct pvk_spv_
             pvk_spv_fail(ctx, "image offset %u has the wrong number of components", off);
         c = pvk_spv_fmt(ctx, "%s(%s) + %s(%s)", iv, c, iv, pvk_spv_val(ctx, off));
     }
-    e = n == 1 ? pvk_spv_fmt(ctx, "uint(%s)", c) : pvk_spv_fmt(ctx, "uint%u(%s)", n, c);
+    *pn = n;
+    return n == 1 ? pvk_spv_fmt(ctx, "uint(%s)", c) : pvk_spv_fmt(ctx, "uint%u(%s)", n, c);
+}
+
+/* Whether accesses of image type it are bounds-checked (ROBUSTNESS): texel
+ * buffers by robust buffer access, other images by robust image access. */
+static bool pvk_spv_image_robust(struct pvk_spv *ctx, const struct pvk_spv_type *it)
+{
+    const struct pvk_msl_options *o = ctx->options;
+    if (!o)
+        return false;
+    if (it->img.dim == PVK_SPV_DimBuffer)
+        return it->img.sampled == 1 ? o->robust_uniform_buffers : o->robust_storage_buffers;
+    return o->robust_images;
+}
+
+/* Robust image access: whether texel coordinate `coord` (+ off), level
+ * `lod` and sample `sample` (MSL expressions, NULL: none) are inside image
+ * tex of type it; NULL when the image is not checked. */
+static const char *pvk_spv_texel_bounds(struct pvk_spv *ctx, const struct pvk_spv_type *it, const char *tex,
+                                        uint32_t coord, uint32_t off, const char *lod, const char *sample)
+{
+    uint32_t n;
+    const char *c, *l = "", *e = "", *z;
+    bool native_1d = it->img.dim == PVK_SPV_Dim1D && !pvk_spv_image_as_2d(ctx, it);
+    if (!pvk_spv_image_robust(ctx, it))
+        return NULL;
+    c = pvk_spv_texel_coord(ctx, it, coord, off, &n);
+    if (lod && !native_1d && it->img.dim != PVK_SPV_DimBuffer && !it->img.ms) {
+        l = lod;
+        e = pvk_spv_fmt(ctx, "%s < %s.get_num_mip_levels() && ", lod, tex); /* (first: get_width needs a level) */
+    }
+    if (n == 1)
+        e = pvk_spv_fmt(ctx, "%s%s < %s.get_width(%s)", e, c, tex, l);
+    else if (n == 2)
+        e = pvk_spv_fmt(ctx, "%sall(%s < uint2(%s.get_width(%s), %s.get_height(%s)))", e, c, tex, l, tex, l);
+    else
+        e = pvk_spv_fmt(ctx, "%sall(%s < uint3(%s.get_width(%s), %s.get_height(%s), %s.get_depth(%s)))", e, c, tex, l, tex,
+                        l, tex, l);
+    if (it->img.dim == PVK_SPV_DimCube) { /* face, or face + 6 * cube */
+        z = pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_comps(ctx, coord, 2, 1));
+        e = it->img.arrayed ? pvk_spv_fmt(ctx, "%s && %s / 6u < %s.get_array_size()", e, z, tex)
+                            : pvk_spv_fmt(ctx, "%s && %s < 6u", e, z);
+    } else if (it->img.arrayed) {
+        e = pvk_spv_fmt(ctx, "%s && uint(%s) < %s.get_array_size()", e, pvk_spv_comps(ctx, coord, n, 1), tex);
+    }
+    if (sample)
+        e = pvk_spv_fmt(ctx, "%s && %s < %s.get_num_samples()", e, sample, tex);
+    return pvk_spv_fmt(ctx, "(%s)", e);
+}
+
+/* An integer texel coordinate as Metal's arguments: "uint2(x, y)[, face][, layer]".
+ * off: an offset operand added first (0: none). */
+static const char *pvk_spv_texel_args(struct pvk_spv *ctx, const struct pvk_spv_type *it, uint32_t coord, uint32_t off)
+{
+    uint32_t n;
+    const char *e = pvk_spv_texel_coord(ctx, it, coord, off, &n);
     if (pvk_spv_image_as_2d(ctx, it))
         e = pvk_spv_fmt(ctx, "uint2(%s, 0u)", e);
     if (it->img.dim == PVK_SPV_DimCube) {
@@ -43312,7 +44047,7 @@ static void pvk_spv_image_read(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     bool fetch = in->op == PVK_SPV_OpImageFetch;
     struct pvk_spv_type *it = pvk_spv_image_type(ctx, img, false);
     struct pvk_spv_imgops o;
-    const char *tex = pvk_spv_val(ctx, img), *args, *e;
+    const char *tex = pvk_spv_val(ctx, img), *args, *e, *ok;
 
     pvk_spv_image_operands(ctx, in, 5, &o);
     if (o.mask & (PVK_SPV_ImgBias | PVK_SPV_ImgGrad | PVK_SPV_ImgConstOffsets | PVK_SPV_ImgMinLod))
@@ -43343,6 +44078,13 @@ static void pvk_spv_image_read(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         e = pvk_spv_fmt(ctx, "%s.read(%s, %s)", tex, args, o.lod ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.lod)) : "0u");
     else
         e = pvk_spv_fmt(ctx, "%s.read(%s)", tex, args);
+    ok = pvk_spv_texel_bounds(ctx, it, tex, coord, o.const_offset ? o.const_offset : o.offset,
+                              fetch ? (o.lod ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.lod)) : "0u") : NULL,
+                              o.sample ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.sample)) : NULL);
+    if (ok) /* robust access: zero outside the image */
+        e = pvk_spv_fmt(ctx, "(%s ? %s : %s)", ok, e,
+                        strncmp(it->msl, "depth", 5) == 0 ? "0.0f"
+                                                          : pvk_spv_fmt(ctx, "%s4(0)", pvk_spv_type(ctx, it->elem)->msl));
     pvk_spv_texel_result(ctx, rid, e, strncmp(it->msl, "depth", 5) == 0 ? 1 : 4, it);
 }
 
@@ -43352,7 +44094,7 @@ static void pvk_spv_image_write(struct pvk_spv *ctx, const struct pvk_spv_insn *
     struct pvk_spv_type *it = pvk_spv_image_type(ctx, img, false), *s = pvk_spv_type(ctx, it->elem);
     struct pvk_spv_type *tt = pvk_spv_vtype(ctx, texel), *ts = pvk_spv_scalar_of(ctx, tt);
     struct pvk_spv_imgops o;
-    const char *tex = pvk_spv_val(ctx, img), *v = pvk_spv_val(ctx, texel);
+    const char *tex = pvk_spv_val(ctx, img), *v = pvk_spv_val(ctx, texel), *ok;
 
     pvk_spv_image_operands(ctx, in, 4, &o);
     if (o.mask & (PVK_SPV_ImgBias | PVK_SPV_ImgLod | PVK_SPV_ImgGrad | PVK_SPV_ImgConstOffset | PVK_SPV_ImgOffset |
@@ -43370,7 +44112,10 @@ static void pvk_spv_image_write(struct pvk_spv *ctx, const struct pvk_spv_insn *
                                   : pvk_spv_fmt(ctx, "%s(%s)", pvk_spv_vec_msl(ctx, s, n, s->is_signed), v);
     if (n < 4) /* components past the format's are ignored */
         v = pvk_spv_fmt(ctx, "%s4(%s%s)", s->msl, v, n == 1 ? ", 0, 0, 0" : n == 2 ? ", 0, 0" : ", 0");
+    ok = pvk_spv_texel_bounds(ctx, it, tex, coord, 0, NULL, NULL);
+    pvk_spv_if_open(ctx, ok); /* robust access: discarded outside the image */
     pvk_spv_line(ctx, "%s.write(%s, %s);", tex, v, pvk_spv_texel_args(ctx, it, coord, 0));
+    pvk_spv_if_close(ctx, ok);
     if (it->img.access == (PVK_SPV_ACCESS_READ | PVK_SPV_ACCESS_WRITE))
         pvk_spv_line(ctx, "%s.fence();", tex); /* this invocation's later reads see the write */
 }
@@ -43483,6 +44228,7 @@ static void pvk_spv_image_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         p->var = ip->var;
         p->expr = p->texel_image = ip->expr;
         p->texel_args = pvk_spv_texel_args(ctx, it, pvk_spv_arg(ctx, in, 4), 0);
+        p->texel_ok = pvk_spv_texel_bounds(ctx, it, ip->expr, in->w[4], 0, NULL, NULL);
         p->texel_type = ip->type;
         pvk_spv_get(ctx, rid)->p = p;
         return;
@@ -43527,6 +44273,431 @@ static void pvk_spv_image_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     }
 }
 
+/* ---- Subgroups ----
+ *
+ * A subgroup is a Metal SIMD-group of 32 threads. The GroupNonUniform
+ * instructions become simd_* and quad_* functions, which act on the active
+ * threads of the SIMD-group as Vulkan's operations do (checked on M4 Max
+ * with partially active SIMD-groups). Metal's functions take 8/16/32-bit
+ * integers, half and float scalars and vectors: bools go through ushort and
+ * 64-bit integers through uint2. Reductions and scans Metal lacks (min, max
+ * and bitwise scans, 64-bit arithmetic) loop over the active lanes in lane
+ * order with uniform shuffles (pvk_simd_scan); boolean ones count ballot
+ * bits. A quad is four consecutive lanes, laid out in fragment shaders as
+ * Vulkan's (lane 1 is to the right of lane 0, lane 2 below it). Functions
+ * that use subgroup operations take the lane id as a hidden parameter
+ * (pvk_lane, PVK_SPV_I_LANE). */
+
+/* pattern with each '$' replaced by s. */
+static const char *pvk_spv_subst(struct pvk_spv *ctx, const char *pattern, const char *s)
+{
+    size_t n = 0, ls = strlen(s);
+    const char *p;
+    char *out, *o;
+    for (p = pattern; *p; p++)
+        n += *p == '$' ? ls : 1;
+    o = out = pvk_spv_alloc(ctx, n + 1);
+    for (p = pattern; *p; p++) {
+        if (*p == '$') {
+            memcpy(o, s, ls);
+            o += ls;
+        } else {
+            *o++ = *p;
+        }
+    }
+    *o = '\0';
+    return out;
+}
+
+/* A SIMD-group function call `pattern` ('$': the value) on value v of type
+ * t, through the types Metal's functions take. */
+static const char *pvk_spv_sg_apply(struct pvk_spv *ctx, struct pvk_spv_type *t, const char *v, const char *pattern)
+{
+    struct pvk_spv_type *s = pvk_spv_scalar_of(ctx, t);
+    uint32_t n = pvk_spv_components(t), i;
+    const char *e;
+    if (!s)
+        pvk_spv_fail(ctx, "subgroup operation on a value that is not a scalar or vector");
+    if (s->op == PVK_SPV_OpTypeBool)
+        return pvk_spv_fmt(ctx, "%s(%s)", t->msl,
+                           pvk_spv_subst(ctx, pattern, pvk_spv_fmt(ctx, "%s(%s)", n > 1 ? pvk_spv_fmt(ctx, "ushort%u", n)
+                                                                                         : "ushort", v)));
+    if (s->width != 64)
+        return pvk_spv_subst(ctx, pattern, v);
+    if (n == 1)
+        return pvk_spv_fmt(ctx, "as_type<%s>(%s)", s->msl,
+                           pvk_spv_subst(ctx, pattern, pvk_spv_fmt(ctx, "as_type<uint2>(%s)", v)));
+    e = pvk_spv_fmt(ctx, "%s(", t->msl);
+    for (i = 0; i < n; i++)
+        e = pvk_spv_fmt(ctx, "%s%sas_type<%s>(%s)", e, i ? ", " : "", s->msl,
+                        pvk_spv_subst(ctx, pattern, pvk_spv_fmt(ctx, "as_type<uint2>(%s.%c)", v, "xyzw"[i])));
+    return pvk_spv_fmt(ctx, "%s)", e);
+}
+
+/* A ushort lane, delta or mask operand; *konst receives a constant's value
+ * (UINT32_MAX when not constant). */
+static const char *pvk_spv_sg_lane(struct pvk_spv *ctx, uint32_t v, uint32_t *konst)
+{
+    struct pvk_spv_type *t = pvk_spv_vtype(ctx, v);
+    if (t->op != PVK_SPV_OpTypeInt)
+        pvk_spv_fail(ctx, "subgroup lane operands must be integer scalars");
+    *konst = UINT32_MAX;
+    if (pvk_spv_get(ctx, v)->kind == PVK_SPV_K_CONST) {
+        uint64_t c = pvk_spv_const_uint(ctx, v);
+        *konst = c < 0x10000u ? (uint32_t)c : 0xffffu;
+        return pvk_spv_fmt(ctx, "ushort(%uu)", *konst);
+    }
+    return pvk_spv_fmt(ctx, "ushort(%s)", pvk_spv_val(ctx, v));
+}
+
+/* The identity of a group arithmetic operation for MSL type t (signedness
+ * sg for integers). */
+static const char *pvk_spv_sg_identity(struct pvk_spv *ctx, uint32_t op, struct pvk_spv_type *t, bool sg)
+{
+    struct pvk_spv_type s = *pvk_spv_scalar_of(ctx, t);
+    uint64_t v = 0;
+    uint32_t n = pvk_spv_components(t);
+    const char *lit;
+    if (s.op == PVK_SPV_OpTypeInt) {
+        s.is_signed = sg;
+        s.msl = pvk_spv_scalar_msl(s.op, s.width, sg);
+    }
+    switch (op) {
+    case PVK_SPV_OpGroupNonUniformIMul: case PVK_SPV_OpGroupNonUniformFMul:
+        v = s.op == PVK_SPV_OpTypeFloat ? (s.width == 16 ? 0x3c00u : 0x3f800000u) : 1u;
+        break;
+    case PVK_SPV_OpGroupNonUniformBitwiseAnd: case PVK_SPV_OpGroupNonUniformUMin:
+        v = pvk_spv_mask(s.width);
+        break;
+    case PVK_SPV_OpGroupNonUniformSMin:
+        v = pvk_spv_mask(s.width) >> 1;
+        break;
+    case PVK_SPV_OpGroupNonUniformSMax:
+        v = (uint64_t)1 << (s.width - 1);
+        break;
+    case PVK_SPV_OpGroupNonUniformFMin:
+        v = s.width == 16 ? 0x7c00u : 0x7f800000u; /* +inf */
+        break;
+    case PVK_SPV_OpGroupNonUniformFMax:
+        v = s.width == 16 ? 0xfc00u : 0xff800000u; /* -inf */
+        break;
+    default: /* add, or, xor, unsigned max: 0 */
+        break;
+    }
+    lit = pvk_spv_literal(ctx, &s, v);
+    return n > 1 ? pvk_spv_fmt(ctx, "%s%u(%s)", s.msl, n, lit) : lit;
+}
+
+/* A boolean group operation on one bool expression b. */
+static const char *pvk_spv_sg_logical(struct pvk_spv *ctx, uint32_t op, uint32_t gop, const char *b)
+{
+    const char *mask = gop == PVK_SPV_GroupInclusiveScan   ? " & ((2u << pvk_lane) - 1u)"
+                       : gop == PVK_SPV_GroupExclusiveScan ? " & ((1u << pvk_lane) - 1u)"
+                                                           : "";
+    pvk_spv_helper(ctx, PVK_SPV_H_BALLOT, "pvk_ballot1");
+    switch (op) {
+    case PVK_SPV_OpGroupNonUniformLogicalAnd: /* no active lane (up to this one) has false */
+        return gop == PVK_SPV_GroupReduce ? pvk_spv_fmt(ctx, "simd_all(%s)", b)
+                                          : pvk_spv_fmt(ctx, "(pvk_ballot1(!%s)%s) == 0u", b, mask);
+    case PVK_SPV_OpGroupNonUniformLogicalOr:
+        return gop == PVK_SPV_GroupReduce ? pvk_spv_fmt(ctx, "simd_any(%s)", b)
+                                          : pvk_spv_fmt(ctx, "(pvk_ballot1(%s)%s) != 0u", b, mask);
+    default: /* xor: an odd number of trues */
+        return pvk_spv_fmt(ctx, "(popcount(pvk_ballot1(%s)%s) & 1u) != 0u", b, mask);
+    }
+}
+
+/* Group arithmetic: OpGroupNonUniform{I,F}Add, Mul, Min, Max, Bitwise and Logical ops. */
+static void pvk_spv_sg_arith(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    uint32_t op = in->op, rid = in->w[2], gop = pvk_spv_arg(ctx, in, 4), val = pvk_spv_arg(ctx, in, 5), i, n;
+    struct pvk_spv_type *t = pvk_spv_vtype(ctx, val), *s = pvk_spv_scalar_of(ctx, t);
+    bool fl = op == PVK_SPV_OpGroupNonUniformFAdd || op == PVK_SPV_OpGroupNonUniformFMul ||
+              op == PVK_SPV_OpGroupNonUniformFMin || op == PVK_SPV_OpGroupNonUniformFMax;
+    bool logical = op >= PVK_SPV_OpGroupNonUniformLogicalAnd, sg = false;
+    const char *v, *e, *tm, *fn = NULL, *functor = NULL;
+    static const char *const names[2][3] = {
+        { "simd_sum", "simd_prefix_inclusive_sum", "simd_prefix_exclusive_sum" },
+        { "simd_product", "simd_prefix_inclusive_product", "simd_prefix_exclusive_product" },
+    };
+
+    if (in->wc > 6 || gop == PVK_SPV_GroupClusteredReduce)
+        pvk_spv_fail(ctx, "clustered subgroup reductions are not supported");
+    if (gop > PVK_SPV_GroupExclusiveScan)
+        pvk_spv_fail(ctx, "unsupported group operation %u", gop);
+    if (!s || pvk_spv_get(ctx, val)->type != in->w[1] || (s->op == PVK_SPV_OpTypeBool) != logical ||
+        (s->op == PVK_SPV_OpTypeFloat) != fl)
+        pvk_spv_fail(ctx, "group arithmetic (opcode %u) on a value of the wrong type", op);
+    if (logical) {
+        v = pvk_spv_val(ctx, val);
+        n = pvk_spv_components(t);
+        if (n == 1) {
+            pvk_spv_set(ctx, rid, pvk_spv_sg_logical(ctx, op, gop, v));
+            return;
+        }
+        e = pvk_spv_fmt(ctx, "%s(", t->msl);
+        for (i = 0; i < n; i++)
+            e = pvk_spv_fmt(ctx, "%s%s%s", e, i ? ", " : "",
+                            pvk_spv_sg_logical(ctx, op, gop, pvk_spv_fmt(ctx, "%s.%c", v, "xyzw"[i])));
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s)", e));
+        return;
+    }
+    if (!fl)
+        sg = op == PVK_SPV_OpGroupNonUniformSMin || op == PVK_SPV_OpGroupNonUniformSMax;
+    v = fl ? pvk_spv_val(ctx, val) : pvk_spv_ival(ctx, val, sg);
+    tm = fl ? t->msl : pvk_spv_int_msl(ctx, t, sg);
+    switch (op) {
+    case PVK_SPV_OpGroupNonUniformIAdd: case PVK_SPV_OpGroupNonUniformFAdd:
+        fn = names[0][gop];
+        functor = "pvk_op_add";
+        break;
+    case PVK_SPV_OpGroupNonUniformIMul: case PVK_SPV_OpGroupNonUniformFMul:
+        fn = names[1][gop];
+        functor = "pvk_op_mul";
+        break;
+    case PVK_SPV_OpGroupNonUniformSMin: case PVK_SPV_OpGroupNonUniformUMin: case PVK_SPV_OpGroupNonUniformFMin:
+        fn = gop == PVK_SPV_GroupReduce ? "simd_min" : NULL;
+        functor = "pvk_op_min";
+        break;
+    case PVK_SPV_OpGroupNonUniformSMax: case PVK_SPV_OpGroupNonUniformUMax: case PVK_SPV_OpGroupNonUniformFMax:
+        fn = gop == PVK_SPV_GroupReduce ? "simd_max" : NULL;
+        functor = "pvk_op_max";
+        break;
+    case PVK_SPV_OpGroupNonUniformBitwiseAnd:
+        fn = gop == PVK_SPV_GroupReduce ? "simd_and" : NULL;
+        functor = "pvk_op_and";
+        break;
+    case PVK_SPV_OpGroupNonUniformBitwiseOr:
+        fn = gop == PVK_SPV_GroupReduce ? "simd_or" : NULL;
+        functor = "pvk_op_or";
+        break;
+    default:
+        fn = gop == PVK_SPV_GroupReduce ? "simd_xor" : NULL;
+        functor = "pvk_op_xor";
+        break;
+    }
+    if (s->width == 64)
+        fn = NULL; /* Metal's functions take no 64-bit integers */
+    if (fn)
+        e = pvk_spv_fmt(ctx, "%s(%s)", fn, v);
+    else
+        e = pvk_spv_fmt(ctx, "%s<%s, %s>(%s, %s, %uu)", pvk_spv_helper(ctx, PVK_SPV_H_SG_SCAN, "pvk_simd_scan"), functor,
+                        tm, v, pvk_spv_sg_identity(ctx, op, t, sg), gop);
+    if (fl)
+        pvk_spv_set(ctx, rid, e);
+    else
+        pvk_spv_set_int(ctx, rid, e, sg);
+}
+
+static void pvk_spv_subgroup(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    uint32_t op = in->op, rid = in->w[2], scope, k = 0, val = 0;
+    struct pvk_spv_type *r = pvk_spv_type(ctx, in->w[1]), *t = NULL;
+    const char *v = NULL, *lane, *e;
+
+    if (ctx->model != PVK_SPV_ExecutionModelGLCompute && ctx->model != PVK_SPV_ExecutionModelFragment)
+        pvk_spv_fail(ctx, "subgroup operations are only supported in compute and fragment shaders");
+    scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 3));
+    if (scope != PVK_SPV_ScopeSubgroup)
+        pvk_spv_fail(ctx, "group operations need Subgroup scope (scope %u)", scope);
+    if (op >= PVK_SPV_OpGroupNonUniformIAdd && op <= PVK_SPV_OpGroupNonUniformLogicalXor) {
+        pvk_spv_sg_arith(ctx, in);
+        return;
+    }
+    if (op != PVK_SPV_OpGroupNonUniformElect && op != PVK_SPV_OpGroupNonUniformBallotBitCount) {
+        val = pvk_spv_arg(ctx, in, 4);
+        t = pvk_spv_vtype(ctx, val);
+        v = pvk_spv_val(ctx, val);
+    }
+    switch (op) {
+    case PVK_SPV_OpGroupNonUniformElect:
+        pvk_spv_set(ctx, rid, "simd_is_first()");
+        return;
+    case PVK_SPV_OpGroupNonUniformAll:
+    case PVK_SPV_OpGroupNonUniformAny:
+        if (t->op != PVK_SPV_OpTypeBool)
+            pvk_spv_fail(ctx, "subgroup vote on a non-boolean");
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", op == PVK_SPV_OpGroupNonUniformAll ? "simd_all" : "simd_any", v));
+        return;
+    case PVK_SPV_OpGroupNonUniformAllEqual:
+        e = pvk_spv_sg_apply(ctx, t, v, "simd_broadcast_first($)");
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, t->op == PVK_SPV_OpTypeVector ? "simd_all(all(%s == %s))" : "simd_all(%s == %s)",
+                                          v, e));
+        return;
+    case PVK_SPV_OpGroupNonUniformBallot:
+        if (t->op != PVK_SPV_OpTypeBool)
+            pvk_spv_fail(ctx, "subgroup ballot of a non-boolean");
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", pvk_spv_helper(ctx, PVK_SPV_H_BALLOT, "pvk_ballot"), v));
+        return;
+    case PVK_SPV_OpGroupNonUniformInverseBallot:
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "((%s.x >> pvk_lane) & 1u) != 0u", v));
+        return;
+    case PVK_SPV_OpGroupNonUniformBallotBitExtract:
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s, uint(%s))", pvk_spv_helper(ctx, PVK_SPV_H_BALLOT, "pvk_ballot_bit"),
+                                          v, pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 5))));
+        return;
+    case PVK_SPV_OpGroupNonUniformBallotBitCount: {
+        uint32_t gop = pvk_spv_arg(ctx, in, 4);
+        v = pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 5));
+        if (gop > PVK_SPV_GroupExclusiveScan)
+            pvk_spv_fail(ctx, "unsupported group operation %u", gop);
+        pvk_spv_set_int(ctx, rid,
+                        pvk_spv_fmt(ctx, "popcount(%s.x%s)", v,
+                                    gop == PVK_SPV_GroupInclusiveScan   ? " & ((2u << pvk_lane) - 1u)"
+                                    : gop == PVK_SPV_GroupExclusiveScan ? " & ((1u << pvk_lane) - 1u)"
+                                                                        : ""),
+                        false);
+        return;
+    }
+    case PVK_SPV_OpGroupNonUniformBallotFindLSB:
+        pvk_spv_set_int(ctx, rid, pvk_spv_fmt(ctx, "ctz(%s.x)", v), false);
+        return;
+    case PVK_SPV_OpGroupNonUniformBallotFindMSB:
+        pvk_spv_set_int(ctx, rid, pvk_spv_fmt(ctx, "31u - clz(%s.x)", v), false);
+        return;
+    default:
+        break;
+    }
+
+    /* Data movement: the value comes back in its own type. */
+    if (pvk_spv_get(ctx, val)->type != in->w[1])
+        pvk_spv_fail(ctx, "subgroup operation (opcode %u): result and value types differ", op);
+    if (op == PVK_SPV_OpGroupNonUniformBroadcastFirst) {
+        pvk_spv_set(ctx, rid, pvk_spv_sg_apply(ctx, r, v, "simd_broadcast_first($)"));
+        return;
+    }
+    lane = pvk_spv_sg_lane(ctx, pvk_spv_arg(ctx, in, 5), &k);
+    switch (op) {
+    case PVK_SPV_OpGroupNonUniformBroadcast:
+        e = pvk_spv_fmt(ctx, "%s($, %s)", k != UINT32_MAX ? "simd_broadcast" : "simd_shuffle", lane);
+        break;
+    case PVK_SPV_OpGroupNonUniformShuffle:
+        e = pvk_spv_fmt(ctx, "simd_shuffle($, %s)", lane);
+        break;
+    case PVK_SPV_OpGroupNonUniformShuffleXor: /* Metal's xor, up and down take uniform operands */
+        e = k != UINT32_MAX ? pvk_spv_fmt(ctx, "simd_shuffle_xor($, %s)", lane)
+                            : pvk_spv_fmt(ctx, "simd_shuffle($, ushort(pvk_lane) ^ %s)", lane);
+        break;
+    case PVK_SPV_OpGroupNonUniformShuffleUp:
+        e = k != UINT32_MAX ? pvk_spv_fmt(ctx, "simd_shuffle_up($, %s)", lane)
+                            : pvk_spv_fmt(ctx, "simd_shuffle($, ushort(ushort(pvk_lane) - %s))", lane);
+        break;
+    case PVK_SPV_OpGroupNonUniformShuffleDown:
+        e = k != UINT32_MAX ? pvk_spv_fmt(ctx, "simd_shuffle_down($, %s)", lane)
+                            : pvk_spv_fmt(ctx, "simd_shuffle($, ushort(ushort(pvk_lane) + %s))", lane);
+        break;
+    case PVK_SPV_OpGroupNonUniformQuadBroadcast:
+        e = pvk_spv_fmt(ctx, "quad_broadcast($, %s)", lane);
+        break;
+    case PVK_SPV_OpGroupNonUniformQuadSwap:
+        if (k > 2)
+            pvk_spv_fail(ctx, "OpGroupNonUniformQuadSwap direction must be a constant 0-2");
+        e = pvk_spv_fmt(ctx, "quad_shuffle_xor($, ushort(%uu))", k + 1); /* horizontal, vertical, diagonal */
+        break;
+    case PVK_SPV_OpGroupNonUniformRotateKHR: {
+        /* lane (id + delta) mod size within clusters of `size` lanes (32: all) */
+        uint32_t size = 32;
+        if (in->wc > 6) {
+            uint32_t c = pvk_spv_arg(ctx, in, 6);
+            if (pvk_spv_get(ctx, c)->kind != PVK_SPV_K_CONST || pvk_spv_vtype(ctx, c)->op != PVK_SPV_OpTypeInt)
+                pvk_spv_fail(ctx, "the rotate cluster size must be an integer constant");
+            size = (uint32_t)pvk_spv_const_uint(ctx, c);
+            if (!size || size > 32 || (size & (size - 1)))
+                pvk_spv_fail(ctx, "invalid rotate cluster size %u", size);
+        }
+        e = size == 32 ? pvk_spv_fmt(ctx, "simd_shuffle_rotate_down($, %s)", lane)
+                       : pvk_spv_fmt(ctx, "simd_shuffle($, ushort((pvk_lane & %uu) | ((pvk_lane + uint(%s)) & %uu)))",
+                                     ~(size - 1), lane, size - 1);
+        break;
+    }
+    default:
+        pvk_spv_fail(ctx, "unsupported subgroup instruction (opcode %u)", op);
+    }
+    pvk_spv_set(ctx, rid, pvk_spv_sg_apply(ctx, r, v, e));
+}
+
+/* ---- Integer dot products ----
+ *
+ * OpSDot, OpUDot, OpSUDot and their AccSat forms, on integer vectors or on
+ * 32-bit integers holding four 8-bit lanes (PackedVectorFormat4x8Bit).
+ * MSL has no such instruction (integerDotProduct*Accelerated stay
+ * VK_FALSE): each lane is sign- or zero-extended to 64 bits, the products
+ * and their sum are computed in ulong (the low bits of the exact result),
+ * and the result keeps its low bits, or for AccSat the exact dot plus the
+ * accumulator clamped to the result type's range. */
+static void pvk_spv_dot(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    uint32_t op = in->op, rid = in->w[2], a = pvk_spv_arg(ctx, in, 3), b = pvk_spv_arg(ctx, in, 4), n, i, w;
+    bool acc = op >= PVK_SPV_OpSDotAccSat, packed = in->wc > (acc ? 6u : 5u);
+    uint32_t base = acc ? op - 3 : op;
+    bool s1 = base != PVK_SPV_OpUDot, s2 = base == PVK_SPV_OpSDot, rs;
+    struct pvk_spv_type *r = pvk_spv_vtype(ctx, rid), *ta = pvk_spv_vtype(ctx, a), *tb = pvk_spv_vtype(ctx, b);
+    const char *va, *vb, *d = "0ul", *e;
+
+    if (r->op != PVK_SPV_OpTypeInt || !pvk_spv_scalar_of(ctx, ta) || pvk_spv_scalar_of(ctx, ta)->op != PVK_SPV_OpTypeInt ||
+        !pvk_spv_scalar_of(ctx, tb) || pvk_spv_scalar_of(ctx, tb)->op != PVK_SPV_OpTypeInt || ta->op != tb->op ||
+        pvk_spv_components(ta) != pvk_spv_components(tb))
+        pvk_spv_fail(ctx, "malformed integer dot product");
+    rs = r->is_signed;
+    w = r->width;
+    if (packed) {
+        if (in->w[in->wc - 1] != 0 || ta->op != PVK_SPV_OpTypeInt || ta->width != 32 || tb->width != 32)
+            pvk_spv_fail(ctx, "unsupported packed dot product format");
+        n = 4;
+        va = pvk_spv_fmt(ctx, "as_type<%s>(%s)", s1 ? "char4" : "uchar4", pvk_spv_val(ctx, a));
+        vb = pvk_spv_fmt(ctx, "as_type<%s>(%s)", s2 ? "char4" : "uchar4", pvk_spv_val(ctx, b));
+    } else {
+        if (ta->op != PVK_SPV_OpTypeVector)
+            pvk_spv_fail(ctx, "integer dot products take vectors (or packed 32-bit integers)");
+        n = ta->count;
+        va = pvk_spv_ival(ctx, a, s1);
+        vb = pvk_spv_ival(ctx, b, s2);
+    }
+    for (i = 0; i < n; i++) /* (signed lanes go through long: sign extension) */
+        d = pvk_spv_fmt(ctx, "%s%sulong(%s%s.%c%s) * ulong(%s%s.%c%s)", i ? d : "", i ? " + " : "", s1 ? "long(" : "", va,
+                        "xyzw"[i], s1 ? ")" : "", s2 ? "long(" : "", vb, "xyzw"[i], s2 ? ")" : "");
+    d = pvk_spv_fmt(ctx, "(%s)", d);
+    if (!acc) { /* the low w bits */
+        pvk_spv_set_int(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", pvk_spv_scalar_msl(PVK_SPV_OpTypeInt, w, false), d), false);
+        return;
+    }
+    {
+        const char *c = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 5), rs), *sd = pvk_spv_fmt(ctx, "as_type<long>(%s)", d);
+        bool sdot = s1 || s2;
+        if (pvk_spv_get(ctx, in->w[5])->type != in->w[1])
+            pvk_spv_fail(ctx, "the dot product accumulator must have the result type");
+        if (w < 64 && rs)
+            e = pvk_spv_fmt(ctx, "clamp(%s + long(%s), %lldl, %lldl)", sdot ? sd : pvk_spv_fmt(ctx, "long(%s)", d), c,
+                            -(long long)(1ull << (w - 1)), (long long)((1ull << (w - 1)) - 1));
+        else if (w < 64 && sdot)
+            e = pvk_spv_fmt(ctx, "clamp(%s + long(%s), 0l, %lldl)", sd, c, (long long)pvk_spv_mask(w));
+        else if (w < 64)
+            e = pvk_spv_fmt(ctx, "min(%s + ulong(%s), %lluul)", d, c, (unsigned long long)pvk_spv_mask(w));
+        else if (rs)
+            e = pvk_spv_fmt(ctx, "addsat(%s, %s)", sdot ? sd : pvk_spv_fmt(ctx, "long(%s)", d), c);
+        else if (sdot) /* a signed dot added to an unsigned accumulator, saturated to [0, 2^64) */
+            e = pvk_spv_fmt(ctx, "(%s < 0l ? (%s > ulong(-%s) ? %s - ulong(-%s) : 0ul) : addsat(%s, %s))", sd, c, sd, c, sd,
+                            c, d);
+        else
+            e = pvk_spv_fmt(ctx, "addsat(%s, %s)", d, c);
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", r->msl, e));
+    }
+}
+
+/* A physical storage buffer load or store whose Aligned memory operand (at
+ * word `at`, the mask) is below the alignment of the vector it accesses:
+ * the access as a packed vector, which needs only its scalars' alignment.
+ * NULL otherwise. */
+static const char *pvk_spv_underaligned(struct pvk_spv *ctx, const struct pvk_spv_insn *in, uint32_t at,
+                                        const struct pvk_spv_ptr *p)
+{
+    struct pvk_spv_type *t = pvk_spv_type(ctx, p->type);
+    if (in->wc <= at + 1 || !(in->w[at] & PVK_SPV_MemAligned) || p->storage != PVK_SPV_StoragePhysicalStorageBuffer ||
+        p->node || p->rm_col || t->op != PVK_SPV_OpTypeVector || in->w[at + 1] >= t->align)
+        return NULL;
+    return pvk_spv_fmt(ctx, "(*(%s packed_%s*)&%s)", ctx->dev, t->msl, p->expr);
+}
+
 static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     uint32_t op = in->op, rid = 0, rtype = 0;
@@ -43550,12 +44721,23 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         pvk_spv_glsl(ctx, in);
         return;
     }
-    case PVK_SPV_OpLoad:
-        pvk_spv_load(ctx, rid, pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 3)));
+    case PVK_SPV_OpLoad: {
+        const struct pvk_spv_ptr *p = pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 3));
+        a = pvk_spv_underaligned(ctx, in, 4, p);
+        if (a && r == pvk_spv_type(ctx, p->type))
+            pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", r->msl, a));
+        else
+            pvk_spv_load(ctx, rid, p);
         return;
+    }
     case PVK_SPV_OpStore: {
         uint32_t v = pvk_spv_arg(ctx, in, 2);
-        pvk_spv_store(ctx, pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 1)), pvk_spv_val(ctx, v), pvk_spv_get(ctx, v)->type);
+        const struct pvk_spv_ptr *p = pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 1));
+        a = pvk_spv_underaligned(ctx, in, 3, p);
+        if (a && pvk_spv_get(ctx, v)->type == p->type)
+            pvk_spv_line(ctx, "%s = %s;", a, pvk_spv_val(ctx, v));
+        else
+            pvk_spv_store(ctx, p, pvk_spv_val(ctx, v), pvk_spv_get(ctx, v)->type);
         return;
     }
     case PVK_SPV_OpCopyMemory: {
@@ -43566,7 +44748,22 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
             pvk_spv_fail(ctx, "unsupported OpCopyMemory");
         if (!pvk_spv_writable(ctx, d))
             pvk_spv_fail(ctx, "store to read-only memory");
+        a = pvk_spv_bounds(ctx, d);
+        b = pvk_spv_bounds(ctx, sp);
+        pvk_spv_if_open(ctx, a); /* robust buffer access: no write outside the range */
+        pvk_spv_if_open(ctx, b);
         pvk_spv_copy(ctx, d->expr, d->node, d->type, sp->expr, sp->node, sp->type, 0);
+        pvk_spv_if_close(ctx, b);
+        if (b) { /* a source outside the range reads zero */
+            pvk_spv_line(ctx, "else");
+            pvk_spv_line(ctx, "{");
+            ctx->indent++;
+            pvk_spv_line(ctx, "%s pvk_zero = {};", pvk_spv_type(ctx, d->type)->msl);
+            pvk_spv_copy(ctx, d->expr, d->node, d->type, "pvk_zero", NULL, d->type, 0);
+            ctx->indent--;
+            pvk_spv_line(ctx, "}");
+        }
+        pvk_spv_if_close(ctx, a);
         return;
     }
     case PVK_SPV_OpAccessChain:
@@ -43779,7 +44976,19 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
                                           pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 4), sg)));
         return;
     }
-    case PVK_SPV_OpConvertFToU: case PVK_SPV_OpConvertFToS: case PVK_SPV_OpFConvert:
+    case PVK_SPV_OpFConvert:
+        if (pvk_spv_get(ctx, rid)->fp_round > 1) { /* FPRoundingMode (16-bit storage conversions) */
+            struct pvk_spv_type *s = pvk_spv_scalar_of(ctx, r);
+            if (pvk_spv_get(ctx, rid)->fp_round != 2)
+                pvk_spv_fail(ctx, "Vulkan allows only the RTE and RTZ rounding modes");
+            if (s && s->width == 16) {
+                pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", pvk_spv_helper(ctx, PVK_SPV_H_F16_RTZ, "pvk_f16_rtz"),
+                                                  pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3))));
+                return;
+            }
+        }
+        /* fall through */
+    case PVK_SPV_OpConvertFToU: case PVK_SPV_OpConvertFToS:
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", r->msl, pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3))));
         return;
     case PVK_SPV_OpConvertSToF: case PVK_SPV_OpSConvert:
@@ -43884,6 +45093,34 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", names[(op - PVK_SPV_OpDPdx) % 3], pvk_spv_val(ctx, in->w[3])));
         return;
     }
+    case PVK_SPV_OpGroupNonUniformRotateKHR:
+        pvk_spv_subgroup(ctx, in);
+        return;
+    case PVK_SPV_OpSDot: case PVK_SPV_OpUDot: case PVK_SPV_OpSUDot: case PVK_SPV_OpSDotAccSat: case PVK_SPV_OpUDotAccSat:
+    case PVK_SPV_OpSUDotAccSat:
+        pvk_spv_dot(ctx, in);
+        return;
+    case PVK_SPV_OpPtrEqual: /* variable pointers: address comparisons */
+    case PVK_SPV_OpPtrNotEqual:
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s %s %s", pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3)),
+                                          op == PVK_SPV_OpPtrEqual ? "==" : "!=", pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 4))));
+        return;
+    case PVK_SPV_OpPtrDiff: /* elements of the pointee type between them */
+        if (r->op != PVK_SPV_OpTypeInt)
+            pvk_spv_fail(ctx, "OpPtrDiff returns an integer");
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s - %s)", r->msl, pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3)),
+                                          pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 4))));
+        return;
+    case PVK_SPV_OpExpectKHR: /* a hint: the value */
+        if (pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 3))->type != rtype || pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 4))->type != rtype)
+            pvk_spv_fail(ctx, "OpExpectKHR: type mismatch");
+        pvk_spv_set(ctx, rid, pvk_spv_val(ctx, in->w[3]));
+        return;
+    case PVK_SPV_OpAssumeTrueKHR: /* a hint: nothing to do */
+        if (pvk_spv_vtype(ctx, pvk_spv_arg(ctx, in, 1))->op != PVK_SPV_OpTypeBool)
+            pvk_spv_fail(ctx, "OpAssumeTrueKHR needs a boolean");
+        pvk_spv_val(ctx, in->w[1]);
+        return;
     case PVK_SPV_OpIsHelperInvocationEXT:
         if (ctx->model != PVK_SPV_ExecutionModelFragment || r->op != PVK_SPV_OpTypeBool)
             pvk_spv_fail(ctx, "OpIsHelperInvocationEXT is only available in fragment shaders");
@@ -43896,6 +45133,10 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         pvk_spv_line(ctx, "discard_fragment();"); /* Metal's discard demotes: helpers keep running */
         return;
     default:
+        if (op >= PVK_SPV_OpGroupNonUniformElect && op <= PVK_SPV_OpGroupNonUniformQuadSwap) {
+            pvk_spv_subgroup(ctx, in);
+            return;
+        }
         if ((op >= PVK_SPV_OpSampledImage && op <= PVK_SPV_OpImage) ||
             (op >= PVK_SPV_OpImageQuerySizeLod && op <= PVK_SPV_OpImageQuerySamples)) {
             pvk_spv_image_insn(ctx, in);
@@ -44306,12 +45547,15 @@ static void pvk_spv_emit_chain(struct pvk_spv *ctx, uint32_t label, bool in_loop
             break;
         case PVK_SPV_OpKill:
         case PVK_SPV_OpTerminateInvocation:
-            /* Discarded fragments write nothing (not even device memory), so
-             * returning from this function is enough; callers go on as helpers. */
+            /* Discarded fragments write nothing (not even device memory: a
+             * helper thread's stores and atomics have no effect, checked on
+             * M4 Max). The invocation stops: this function returns and its
+             * callers return when they see pvk_killed (pvk_spv_call). */
             if (ctx->model != PVK_SPV_ExecutionModelFragment)
                 pvk_spv_fail(ctx, "OpKill is only valid in fragment shaders");
             ctx->result->discards = true;
             pvk_spv_line(ctx, "discard_fragment();");
+            pvk_spv_line(ctx, "pvk_killed = true;");
             if (pvk_spv_type(ctx, ctx->fn->ret)->op == PVK_SPV_OpTypeVoid)
                 pvk_spv_line(ctx, "return;");
             else
@@ -44377,9 +45621,9 @@ static const char *pvk_spv_space(struct pvk_spv *ctx, const struct pvk_spv_ptr *
         return "threadgroup";
     case PVK_SPV_StorageStorageBuffer:
     case PVK_SPV_StoragePhysicalStorageBuffer:
-        return "device";
+        return ctx->dev;
     case PVK_SPV_StorageUniform:
-        return p->var && pvk_spv_get(ctx, p->var)->func == 0 && pvk_spv_is_storage_block(ctx, p->var) ? "device"
+        return p->var && pvk_spv_get(ctx, p->var)->func == 0 && pvk_spv_is_storage_block(ctx, p->var) ? ctx->dev
                                                                                                     : "constant";
     case PVK_SPV_StoragePushConstant:
     case PVK_SPV_StorageUniformConstant:
@@ -44396,7 +45640,7 @@ static const char *pvk_spv_space(struct pvk_spv *ctx, const struct pvk_spv_ptr *
 static const char *pvk_spv_qualified(struct pvk_spv *ctx, const char *space, uint32_t tid)
 {
     struct pvk_spv_type *t = pvk_spv_type(ctx, tid);
-    if (pvk_spv_is_psb(t))
+    if (pvk_spv_is_psb(t) || (pvk_spv_is_vptr(t) && t->msl))
         return pvk_spv_fmt(ctx, "%s %s", t->msl, space);
     return pvk_spv_fmt(ctx, "%s %s", space, t->msl);
 }
@@ -44423,7 +45667,27 @@ static const char *pvk_spv_builtin_attr(uint32_t builtin)
     case PVK_SPV_BuiltInWorkgroupId: return "threadgroup_position_in_grid";
     case PVK_SPV_BuiltInLocalInvocationId: return "thread_position_in_threadgroup";
     case PVK_SPV_BuiltInGlobalInvocationId: return "thread_position_in_grid";
+    case PVK_SPV_BuiltInNumSubgroups: return "simdgroups_per_threadgroup";
+    case PVK_SPV_BuiltInSubgroupId: return "simdgroup_index_in_threadgroup";
     default: return "thread_index_in_threadgroup";
+    }
+}
+
+/* Built-ins computed from the lane id (hidden parameter pvk_lane: a
+ * SIMD-group is the 32-lane subgroup) or constant; NULL for others. */
+static const char *pvk_spv_derived_builtin(uint32_t builtin)
+{
+    switch (builtin) {
+    case PVK_SPV_BuiltInSubgroupSize: return "32u";
+    case PVK_SPV_BuiltInDeviceIndex: return "0u"; /* one device in the group */
+    case PVK_SPV_BuiltInSubgroupLocalInvocationId: return "pvk_lane";
+    case PVK_SPV_BuiltInLocalInvocationIndex: return "pvk_local_index";
+    case PVK_SPV_BuiltInSubgroupEqMask: return "uint4(1u << pvk_lane, 0u, 0u, 0u)";
+    case PVK_SPV_BuiltInSubgroupGeMask: return "uint4(0xffffffffu << pvk_lane, 0u, 0u, 0u)";
+    case PVK_SPV_BuiltInSubgroupGtMask: return "uint4(0xfffffffeu << pvk_lane, 0u, 0u, 0u)";
+    case PVK_SPV_BuiltInSubgroupLeMask: return "uint4((2u << pvk_lane) - 1u, 0u, 0u, 0u)";
+    case PVK_SPV_BuiltInSubgroupLtMask: return "uint4((1u << pvk_lane) - 1u, 0u, 0u, 0u)";
+    default: return NULL;
     }
 }
 
@@ -44438,6 +45702,7 @@ static bool pvk_spv_based(struct pvk_spv *ctx, const struct pvk_spv_id *x)
 static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
 {
     bool entry = fn->fid == ctx->entry_fid && !ctx->graphics; /* graphics: a helper behind the stage function */
+    bool zero_init = false;                                    /* Workgroup variables with initializers */
     struct pvk_msl_result *res = ctx->result;
     struct pvk_sb *out = &ctx->text;
     const char **params = NULL;
@@ -44502,12 +45767,17 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
         }
         for (g = 0; g < ctx->nglobals; g++) {
             struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
-            if (pvk_spv_bit(fn->globals, g) && x->p->storage == PVK_SPV_StorageInput)
+            if (pvk_spv_bit(fn->globals, g) && x->p->storage == PVK_SPV_StorageInput &&
+                !pvk_spv_derived_builtin(x->builtin))
                 PVK_SPV_PUSH(ctx, params, nparams, cap,
                              pvk_spv_fmt(ctx, "%s %s%s [[%s]]", pvk_spv_type(ctx, x->p->type)->msl,
                                          pvk_spv_based(ctx, x) ? "pvk_raw_" : "", x->msl,
                                          pvk_spv_builtin_attr(x->builtin)));
         }
+        if (fn->implicit & PVK_SPV_I_LANE)
+            PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_lane [[thread_index_in_simdgroup]]");
+        if (fn->implicit & PVK_SPV_I_LOCAL_INDEX)
+            PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_local_index [[thread_index_in_threadgroup]]");
         threads = (uint64_t)res->workgroup_size[0] * res->workgroup_size[1] * res->workgroup_size[2];
         if (threads <= 1024) /* the compiler must fit the workgroup (Metal's maximum is 1024) */
             pvk_sb_printf(ctx, out, "[[max_total_threads_per_threadgroup(%u)]]\n", (uint32_t)threads);
@@ -44519,6 +45789,12 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
         for (set = 0; set < PVK_MSL_MAX_SETS; set++)
             if (sets & (1u << set))
                 PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_fmt(ctx, "constant pvk_set%u& set%u", set, set));
+        {
+            const char *hidden[PVK_MSL_MAX_LOCATIONS + 2];
+            uint32_t nh = pvk_spv_hidden(ctx, fn, hidden, true, false), h;
+            for (h = 0; h < nh; h++)
+                PVK_SPV_PUSH(ctx, params, nparams, cap, hidden[h]);
+        }
         pvk_sb_printf(ctx, out, "static inline %s %s(", pvk_spv_type(ctx, fn->ret)->msl, fn->msl);
     }
     for (i = 0; i < nparams; i++)
@@ -44546,6 +45822,8 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             else if (x->p->storage == PVK_SPV_StorageInput && pvk_spv_based(ctx, x))
                 pvk_spv_line(ctx, "%s %s = pvk_raw_%s + %s(pvk_dispatch_base * uint3(%uu, %uu, %uu));", t, x->msl,
                              x->msl, t, res->workgroup_size[0], res->workgroup_size[1], res->workgroup_size[2]);
+            else if (x->p->storage == PVK_SPV_StorageInput && pvk_spv_derived_builtin(x->builtin))
+                pvk_spv_line(ctx, "%s %s = %s(%s);", t, x->msl, t, pvk_spv_derived_builtin(x->builtin));
         }
         for (g = 0; g < ctx->nglobals; g++) {
             uint32_t var = ctx->globals[g];
@@ -44555,9 +45833,24 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
                 continue;
             t = pvk_spv_type(ctx, x->p->type);
             switch (x->p->storage) {
-            case PVK_SPV_StorageWorkgroup:
+            case PVK_SPV_StorageWorkgroup: {
+                /* An initializer (OpConstantNull with shaderZeroInitializeWorkgroupMemory):
+                 * the workgroup's threads write it, then wait for each other. */
+                struct pvk_spv_insn in = pvk_spv_insn_at(ctx, x->insn);
+                uint32_t threads = res->workgroup_size[0] * res->workgroup_size[1] * res->workgroup_size[2];
                 pvk_spv_line(ctx, "%s %s;", pvk_spv_qualified(ctx, "threadgroup", x->p->type), x->msl);
+                if (in.wc <= 4)
+                    break;
+                if (pvk_spv_const(ctx, in.w[4])->null)
+                    pvk_spv_line(ctx, "for (uint pvk_i = pvk_local_index; pvk_i < %uu; pvk_i += %uu)\n"
+                                      "        ((threadgroup %s*)&%s)[pvk_i] = 0;",
+                                 t->size % 4 ? t->size : t->size / 4, threads, t->size % 4 ? "uchar" : "uint", x->msl);
+                else
+                    pvk_spv_line(ctx, "if (pvk_local_index == 0u)\n        %s = %s;", x->msl,
+                                 pvk_spv_const_expr(ctx, in.w[4], 0));
+                zero_init = true;
                 break;
+            }
             case PVK_SPV_StoragePrivate: {
                 struct pvk_spv_insn in = pvk_spv_insn_at(ctx, x->insn);
                 if (in.wc > 4)
@@ -44570,6 +45863,8 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
                 break;
             }
         }
+        if (zero_init)
+            pvk_spv_line(ctx, "threadgroup_barrier(mem_flags::mem_threadgroup);");
     }
     for (g = 0; g < ctx->nglobals; g++) /* descriptors, from their sets */
         if (pvk_spv_bit(fn->globals, g) && pvk_spv_is_resource(ctx->ids[ctx->globals[g]].p))
@@ -44780,6 +46075,133 @@ static const char *pvk_spv_interp_attr(uint32_t interp, bool integer)
     if (interp & PVK_MSL_INTERP_CENTROID)
         return np ? "centroid_no_perspective" : "centroid_perspective";
     return np ? "center_no_perspective" : "center_perspective";
+}
+
+static bool pvk_spv_stage_global(struct pvk_spv *ctx, const struct pvk_spv_func *entry, uint32_t g);
+
+/* Flattens stage interface variable globals[g] (a user Input or Output; not
+ * a built-in) into f's leaves. */
+static void pvk_spv_iface_var(struct pvk_spv *ctx, struct pvk_spv_iface *f, uint32_t g)
+{
+    struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+    uint32_t st = x->p->storage, loc, idx, at;
+    struct pvk_spv_type *t = pvk_spv_type(ctx, x->p->type);
+    bool vertex = ctx->model == PVK_SPV_ExecutionModelVertex;
+    if ((x->flags & PVK_SPV_F_BUILTIN) ||
+        (t->op == PVK_SPV_OpTypeStruct && t->nmembers && (t->members[0].flags & PVK_SPV_M_BUILTIN)))
+        return; /* built-ins: pvk_spv_stage_builtin */
+    loc = x->location;
+    idx = (x->flags & PVK_SPV_F_INDEX) ? x->index : 0;
+    if (!(x->flags & PVK_SPV_F_LOCATION) && t->op != PVK_SPV_OpTypeStruct)
+        pvk_spv_fail(ctx, "stage %s variable %u has no Location", st == PVK_SPV_StorageInput ? "input" : "output",
+                     ctx->globals[g]);
+    if (idx > 1 || (idx && (vertex || st != PVK_SPV_StorageOutput || loc != 0)))
+        pvk_spv_fail(ctx, "variable %u: Index 1 is only for fragment output location 0 (dual-source blending)",
+                     ctx->globals[g]);
+    if (!(x->flags & PVK_SPV_F_LOCATION) && t->op == PVK_SPV_OpTypeStruct && t->nmembers &&
+        !(t->members[0].flags & PVK_SPV_M_LOCATION))
+        pvk_spv_fail(ctx, "stage interface block %u has no Location", ctx->globals[g]);
+    at = loc;
+    if (!(x->flags & PVK_SPV_F_LOCATION) && t->op == PVK_SPV_OpTypeStruct && t->nmembers)
+        at = t->members[0].location;
+    pvk_spv_flatten(ctx, f, x->p->type, x->msl, &at, (x->flags & PVK_SPV_F_COMPONENT) ? x->component : 0, x->interp,
+                    idx, 0);
+}
+
+/* The entry point's user inputs as leaves, and the slot type of each input
+ * location (a linked fragment shader's: the vertex stage's output type,
+ * NONE where the vertex stage writes nothing). */
+static void pvk_spv_stage_inputs(struct pvk_spv *ctx, struct pvk_spv_iface *in, enum pvk_msl_scalar_type *in_type)
+{
+    const struct pvk_msl_options *o = ctx->options;
+    struct pvk_spv_func *entry = ctx->funcs[pvk_spv_get(ctx, ctx->entry_fid)->func - 1];
+    bool vertex = ctx->model == PVK_SPV_ExecutionModelVertex;
+    uint32_t g, loc, i;
+
+    memset(in, 0, sizeof(*in));
+    for (g = 0; g < ctx->nglobals; g++)
+        if (pvk_spv_stage_global(ctx, entry, g) && ctx->ids[ctx->globals[g]].p->storage == PVK_SPV_StorageInput)
+            pvk_spv_iface_var(ctx, in, g);
+    for (loc = 0; loc < PVK_MSL_MAX_LOCATIONS; loc++) {
+        in_type[loc] = pvk_spv_slot_type(ctx, in, loc, 0, !vertex);
+        if (!vertex && in_type[loc] != PVK_SPV_SLOT_NONE && o && o->linked) {
+            enum pvk_msl_scalar_type vt = PVK_SPV_SLOT_NONE;
+            for (i = 0; i < o->vertex_output_count && o->vertex_outputs; i++)
+                if (o->vertex_outputs[i].location == loc)
+                    vt = o->vertex_outputs[i].type;
+            if (vt == PVK_SPV_SLOT_NONE) {
+                in_type[loc] = PVK_SPV_SLOT_NONE; /* not written (undefined in Vulkan): reads 0 */
+                continue;
+            }
+            /* A float read from a vertex location that mixes types (uint) is
+             * reinterpreted; integers cannot come from a float location. */
+            if (vt == PVK_MSL_SCALAR_FLOAT && in_type[loc] != PVK_MSL_SCALAR_FLOAT)
+                pvk_spv_fail(ctx, "location %u: the fragment input does not match the vertex output's type", loc);
+            in_type[loc] = vt;
+        }
+    }
+}
+
+/* interpolateAtCentroid/Sample/Offset (GLSL.std.450 76-78) in fragment
+ * shaders: a fragment input location read this way is a Metal
+ * interpolant<float4, ...> in the stage_in struct, passed to the functions
+ * that need it (pvk_iN, pvk_spv_func.interp_locs); the stage function reads
+ * its ordinary value with interpolate_at_center/centroid/sample. Metal's
+ * offsets are from the pixel's top-left corner, Vulkan's from its center
+ * (checked on M4 Max): +0.5. Flat and integer inputs (and inputs the vertex
+ * stage does not write) have one value: the variable's. The operand must
+ * name its input with constant indices (a dynamically indexed array is not
+ * supported). */
+static void pvk_spv_interpolate_at(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    uint32_t inst = in->w[4], rid = in->w[2], i, n, comp;
+    const struct pvk_spv_ptr *p;
+    struct pvk_spv_iface ifc;
+    enum pvk_msl_scalar_type in_type[PVK_MSL_MAX_LOCATIONS];
+    const struct pvk_spv_leaf *leaf = NULL;
+    struct pvk_spv_type *r = pvk_spv_vtype(ctx, rid), *rs = pvk_spv_scalar_of(ctx, r);
+    const char *e, *sel = "";
+
+    if (ctx->model != PVK_SPV_ExecutionModelFragment)
+        pvk_spv_fail(ctx, "interpolateAt* is only available in fragment shaders");
+    if (in->wc != (inst == PVK_SPV_GLSL_InterpolateAtCentroid ? 6u : 7u))
+        pvk_spv_fail(ctx, "GLSL.std.450 instruction %u: wrong operand count", inst);
+    p = pvk_spv_ptr_of(ctx, in->w[5]);
+    if (p->storage != PVK_SPV_StorageInput || p->type != in->w[1] || !rs || rs->op != PVK_SPV_OpTypeFloat)
+        pvk_spv_fail(ctx, "interpolateAt* needs a pointer to a floating-point input");
+    pvk_spv_stage_inputs(ctx, &ifc, in_type);
+    for (i = 0; i < ifc.nleaves && !leaf; i++) { /* the leaf p points into, by its selectors */
+        size_t l = strlen(ifc.leaves[i].lvalue);
+        if (strncmp(p->expr, ifc.leaves[i].lvalue, l) == 0 && (p->expr[l] == '\0' || p->expr[l] == '.' || p->expr[l] == '[')) {
+            leaf = &ifc.leaves[i];
+            sel = p->expr + l;
+        }
+    }
+    if (!leaf)
+        pvk_spv_fail(ctx, "interpolateAt* of an input with a dynamic index is not supported");
+    n = pvk_spv_components(r);
+    comp = leaf->component;
+    if (sel[0] == '.' && sel[1] >= 'w' && sel[1] <= 'z' && sel[2] == '\0' && n == 1)
+        comp += sel[1] == 'w' ? 3u : (uint32_t)(sel[1] - 'x'); /* a component of a vector input */
+    else if (sel[0] != '\0')
+        pvk_spv_fail(ctx, "interpolateAt* of a dynamically selected component is not supported");
+    if (in_type[leaf->location] != PVK_MSL_SCALAR_FLOAT || (leaf->interp & PVK_MSL_INTERP_FLAT)) {
+        pvk_spv_load(ctx, rid, p); /* one value per primitive */
+        return;
+    }
+    ctx->fn->interp_locs |= 1u << leaf->location;
+    ctx->interp_type[leaf->location] = (leaf->interp & PVK_MSL_INTERP_NO_PERSPECTIVE)
+                                           ? "interpolant<float4, interpolation::no_perspective>"
+                                           : "interpolant<float4, interpolation::perspective>";
+    if (inst == PVK_SPV_GLSL_InterpolateAtCentroid)
+        e = pvk_spv_fmt(ctx, "pvk_i%u.interpolate_at_centroid()", leaf->location);
+    else if (inst == PVK_SPV_GLSL_InterpolateAtSample)
+        e = pvk_spv_fmt(ctx, "pvk_i%u.interpolate_at_sample(uint(%s))", leaf->location, pvk_spv_val(ctx, in->w[6]));
+    else
+        e = pvk_spv_fmt(ctx, "pvk_i%u.interpolate_at_offset(float2(%s) + 0.5f)", leaf->location,
+                        pvk_spv_val(ctx, in->w[6]));
+    e = pvk_spv_swizzle(ctx, e, comp, n);
+    pvk_spv_set(ctx, rid, rs->width == 16 ? pvk_spv_fmt(ctx, "%s(%s)", r->msl, e) : e);
 }
 
 /* Whether the reachable functions may write member m of the global block
@@ -45044,6 +46466,7 @@ static void pvk_spv_vertex_fetch(struct pvk_spv *ctx, uint32_t loc, enum pvk_msl
 #define PVK_SPV_NEED_LAYER 0x400u
 #define PVK_SPV_NEED_VIEWPORT 0x800u
 #define PVK_SPV_NEED_PRIMITIVE_ID 0x1000u
+#define PVK_SPV_NEED_LANE 0x2000u
 
 /* Global indices the entry point's OpEntryPoint lists. */
 static uint32_t *pvk_spv_interface_list(struct pvk_spv *ctx)
@@ -45178,6 +46601,19 @@ static void pvk_spv_stage_builtin(struct pvk_spv *ctx, uint32_t builtin, uint32_
     }
 
     /* inputs: the variable is initialized from the stage function's parameters */
+    if (pvk_spv_derived_builtin(builtin)) {
+        e = pvk_spv_derived_builtin(builtin);
+        if (vertex && builtin != PVK_SPV_BuiltInDeviceIndex) /* (no SIMD-group functions: subgroupSupportedStages) */
+            pvk_spv_fail(ctx, "subgroup built-ins are not supported in vertex shaders");
+        if (strstr(e, "pvk_lane"))
+            *need |= PVK_SPV_NEED_LANE;
+        if (!s || s->op != PVK_SPV_OpTypeInt || s->width != 32 || pvk_spv_components(t) != (e[0] == 'u' ? 4u : 1u))
+            pvk_spv_fail(ctx, "built-in %u has the wrong type", builtin);
+        pvk_spv_line(ctx, "%s = %s(%s);", lv, t->msl, e);
+        return;
+    }
+    if (builtin == PVK_SPV_BuiltInNumSubgroups || builtin == PVK_SPV_BuiltInSubgroupId)
+        pvk_spv_fail(ctx, "NumSubgroups and SubgroupId are only available in compute shaders");
     switch (vertex ? builtin + 100000u : builtin) {
     case 100000u + PVK_SPV_BuiltInVertexIndex:
         res->builtins |= PVK_MSL_BUILTIN_VERTEX_INDEX;
@@ -45300,6 +46736,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     uint32_t nparams = 0, cap = 0, nargs = 0, cap_args = 0, g, i, loc, idx, set, need = 0;
     uint32_t fetch_colors = 0, sample_inputs = 0, nin = 0, nout = 0;
     enum pvk_msl_scalar_type in_type[PVK_MSL_MAX_LOCATIONS], out_type[2][PVK_MSL_MAX_LOCATIONS];
+    uint32_t loc_interp[PVK_MSL_MAX_LOCATIONS];
     struct pvk_msl_varying vin[PVK_MSL_MAX_LOCATIONS], vout[PVK_MSL_MAX_LOCATIONS + 1];
     struct pvk_sb *text = &ctx->text;
 
@@ -45340,58 +46777,17 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     }
     res->early_fragment_tests = early;
 
-    /* Interface variables: user locations into leaves */
-    for (g = 0; g < ctx->nglobals; g++) {
-        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
-        uint32_t st = x->p->storage;
-        struct pvk_spv_type *t = pvk_spv_type(ctx, x->p->type);
-        if (!pvk_spv_stage_global(ctx, entry, g) || (st != PVK_SPV_StorageInput && st != PVK_SPV_StorageOutput))
-            continue;
-        if ((x->flags & PVK_SPV_F_BUILTIN) || (t->op == PVK_SPV_OpTypeStruct && t->nmembers &&
-                                                (t->members[0].flags & PVK_SPV_M_BUILTIN)))
-            continue; /* built-ins below */
-        loc = x->location;
-        idx = (x->flags & PVK_SPV_F_INDEX) ? x->index : 0;
-        if (!(x->flags & PVK_SPV_F_LOCATION) && t->op != PVK_SPV_OpTypeStruct)
-            pvk_spv_fail(ctx, "stage %s variable %u has no Location", st == PVK_SPV_StorageInput ? "input" : "output",
-                         ctx->globals[g]);
-        if (idx > 1 || (idx && (vertex || st != PVK_SPV_StorageOutput || loc != 0)))
-            pvk_spv_fail(ctx, "variable %u: Index 1 is only for fragment output location 0 (dual-source blending)",
-                         ctx->globals[g]);
-        if ((x->flags & PVK_SPV_F_LOCATION) || t->op != PVK_SPV_OpTypeStruct || t->nmembers == 0 ||
-            (t->members[0].flags & PVK_SPV_M_LOCATION)) {
-            uint32_t at = loc;
-            if (!(x->flags & PVK_SPV_F_LOCATION) && t->op == PVK_SPV_OpTypeStruct)
-                at = t->members[0].location;
-            pvk_spv_flatten(ctx, st == PVK_SPV_StorageInput ? &in : &out, x->p->type, x->msl, &at,
-                            (x->flags & PVK_SPV_F_COMPONENT) ? x->component : 0, x->interp, idx, 0);
-        } else {
-            pvk_spv_fail(ctx, "stage interface block %u has no Location", ctx->globals[g]);
-        }
-    }
-
-    /* Slot types: per location (fragment inputs: the vertex stage's when linked) */
+    /* Interface variables: user locations into leaves; slot types per
+     * location (fragment inputs: the vertex stage's when linked) */
+    pvk_spv_stage_inputs(ctx, &in, in_type);
+    for (g = 0; g < ctx->nglobals; g++)
+        if (pvk_spv_stage_global(ctx, entry, g) && ctx->ids[ctx->globals[g]].p->storage == PVK_SPV_StorageOutput)
+            pvk_spv_iface_var(ctx, &out, g);
     for (loc = 0; loc < PVK_MSL_MAX_LOCATIONS; loc++) {
-        in_type[loc] = pvk_spv_slot_type(ctx, &in, loc, 0, !vertex);
         out_type[0][loc] = pvk_spv_slot_type(ctx, &out, loc, 0, vertex);
         out_type[1][loc] = pvk_spv_slot_type(ctx, &out, loc, 1, vertex);
         if (!vertex && out_type[0][loc] != PVK_SPV_SLOT_NONE && loc >= 8)
             pvk_spv_fail(ctx, "fragment output location %u is out of range (0-7)", loc);
-        if (!vertex && in_type[loc] != PVK_SPV_SLOT_NONE && o && o->linked) {
-            enum pvk_msl_scalar_type vt = PVK_SPV_SLOT_NONE;
-            for (i = 0; i < o->vertex_output_count && o->vertex_outputs; i++)
-                if (o->vertex_outputs[i].location == loc)
-                    vt = o->vertex_outputs[i].type;
-            if (vt == PVK_SPV_SLOT_NONE) {
-                in_type[loc] = PVK_SPV_SLOT_NONE; /* not written (undefined in Vulkan): reads 0 */
-                continue;
-            }
-            /* A float read from a vertex location that mixes types (uint) is
-             * reinterpreted; integers cannot come from a float location. */
-            if (vt == PVK_MSL_SCALAR_FLOAT && in_type[loc] != PVK_MSL_SCALAR_FLOAT)
-                pvk_spv_fail(ctx, "location %u: the fragment input does not match the vertex output's type", loc);
-            in_type[loc] = vt;
-        }
     }
     if (!vertex) { /* per-sample execution: Sample inputs, SampleId, SamplePosition, sample shading */
         for (i = 0; i < in.nleaves; i++)
@@ -45497,33 +46893,44 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         }
         res->vertex_table_buffer = o && o->vertex_table_buffer ? o->vertex_table_buffer : PVK_MSL_VERTEX_TABLE_BUFFER;
     }
+    for (loc = 0; !vertex && loc < PVK_MSL_MAX_LOCATIONS; loc++) { /* each fragment input location's interpolation */
+        loc_interp[loc] = 0;
+        for (i = 0; i < in.nleaves; i++)
+            if (in.leaves[i].location == loc)
+                loc_interp[loc] = in.leaves[i].interp; /* (a location's variables must agree) */
+        if (per_sample && !(loc_interp[loc] & PVK_MSL_INTERP_FLAT)) /* sample shading: interpolated at the sample */
+            loc_interp[loc] = (loc_interp[loc] & ~PVK_MSL_INTERP_CENTROID) | PVK_MSL_INTERP_SAMPLE;
+        if (in_type[loc] != PVK_MSL_SCALAR_FLOAT)
+            loc_interp[loc] = PVK_MSL_INTERP_FLAT;
+    }
     for (i = 0; i < in.nleaves; i++) {
         const struct pvk_spv_leaf *l = &in.leaves[i];
         enum pvk_msl_scalar_type k = in_type[l->location];
+        const char *slot;
         if (k == PVK_SPV_SLOT_NONE)
             continue; /* (an unwritten fragment input: 0) */
+        slot = vertex ? pvk_spv_fmt(ctx, "pvk_attr%u", l->location) : pvk_spv_fmt(ctx, "pvk_in.pvk_l%u", l->location);
+        if (!vertex && (entry->interp_locs & (1u << l->location))) /* an interpolant (interpolateAt*) */
+            slot = pvk_spv_fmt(ctx, "%s.%s", slot,
+                               (loc_interp[l->location] & PVK_MSL_INTERP_SAMPLE)     ? "interpolate_at_sample(pvk_sample_id)"
+                               : (loc_interp[l->location] & PVK_MSL_INTERP_CENTROID) ? "interpolate_at_centroid()"
+                                                                                     : "interpolate_at_center()");
         pvk_spv_line(ctx, "%s = %s;", l->lvalue,
-                     pvk_spv_from_slot(ctx, pvk_spv_swizzle(ctx, vertex ? pvk_spv_fmt(ctx, "pvk_attr%u", l->location)
-                                                                         : pvk_spv_fmt(ctx, "pvk_in.pvk_l%u", l->location),
-                                                            l->component, l->ncomp),
-                                       k, l));
+                     pvk_spv_from_slot(ctx, pvk_spv_swizzle(ctx, slot, l->component, l->ncomp), k, l));
     }
     if (!vertex) {
         for (loc = 0; loc < PVK_MSL_MAX_LOCATIONS; loc++) {
-            uint32_t interp = 0;
+            uint32_t interp = loc_interp[loc];
             if (in_type[loc] == PVK_SPV_SLOT_NONE)
                 continue;
             for (i = 0; i < in.nleaves; i++)
-                if (in.leaves[i].location == loc) {
-                    interp = in.leaves[i].interp; /* (a location's variables must agree) */
+                if (in.leaves[i].location == loc)
                     vin[nin].components |= ((1u << in.leaves[i].ncomp) - 1) << in.leaves[i].component;
-                }
-            if (per_sample && !(interp & PVK_MSL_INTERP_FLAT)) /* sample shading: interpolated at the sample */
-                interp = (interp & ~PVK_MSL_INTERP_CENTROID) | PVK_MSL_INTERP_SAMPLE;
-            if (in_type[loc] != PVK_MSL_SCALAR_FLOAT)
-                interp = PVK_MSL_INTERP_FLAT;
-            pvk_sb_printf(ctx, &ins, "    %s pvk_l%u [[user(locn%u)]] [[%s]];\n", pvk_spv_kind_msl(ctx, in_type[loc], 4),
-                          loc, loc, pvk_spv_interp_attr(interp, in_type[loc] != PVK_MSL_SCALAR_FLOAT));
+            if (entry->interp_locs & (1u << loc))
+                pvk_sb_printf(ctx, &ins, "    %s pvk_l%u [[user(locn%u)]];\n", ctx->interp_type[loc], loc, loc);
+            else
+                pvk_sb_printf(ctx, &ins, "    %s pvk_l%u [[user(locn%u)]] [[%s]];\n", pvk_spv_kind_msl(ctx, in_type[loc], 4),
+                              loc, loc, pvk_spv_interp_attr(interp, in_type[loc] != PVK_MSL_SCALAR_FLOAT));
             vin[nin].location = loc;
             vin[nin].type = in_type[loc];
             vin[nin].interpolation = interp;
@@ -45538,11 +46945,35 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     for (set = 0; set < PVK_MSL_MAX_SETS; set++)
         if (pvk_spv_func_sets(ctx, entry) & (1u << set))
             PVK_SPV_PUSH(ctx, args, nargs, cap_args, pvk_spv_fmt(ctx, "set%u", set));
+    {
+        const char *hidden[PVK_MSL_MAX_LOCATIONS + 2];
+        uint32_t nh = pvk_spv_hidden(ctx, entry, hidden, false, true), h;
+        for (h = 0; h < nh; h++)
+            PVK_SPV_PUSH(ctx, args, nargs, cap_args, hidden[h]);
+    }
+    if (entry->implicit & PVK_SPV_I_KILL)
+        pvk_spv_line(ctx, "bool pvk_killed = false;");
+    if (entry->implicit & PVK_SPV_I_LANE)
+        need |= PVK_SPV_NEED_LANE;
     pvk_spv_line(ctx, "%s(%s);", entry->msl, pvk_spv_join(ctx, "", args, nargs, ", ", ""));
 
     /* Outputs: built-ins, then locations */
-    if (vertex)
-        pvk_sb_printf(ctx, &outs, "    float4 pvk_position [[position]];\n");
+    if (vertex) { /* Invariant Position (variable or gl_PerVertex member): [[invariant]] */
+        for (g = 0; g < ctx->nglobals; g++) {
+            struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+            struct pvk_spv_type *t = pvk_spv_type(ctx, x->p->type);
+            if (!pvk_spv_stage_global(ctx, entry, g) || x->p->storage != PVK_SPV_StorageOutput)
+                continue;
+            if ((x->flags & PVK_SPV_F_BUILTIN) && x->builtin == PVK_SPV_BuiltInPosition && (x->flags & PVK_SPV_F_INVARIANT))
+                res->invariant = true;
+            for (i = 0; t->op == PVK_SPV_OpTypeStruct && i < t->nmembers; i++)
+                if ((t->members[i].flags & (PVK_SPV_M_BUILTIN | PVK_SPV_M_INVARIANT)) ==
+                        (PVK_SPV_M_BUILTIN | PVK_SPV_M_INVARIANT) &&
+                    t->members[i].builtin == PVK_SPV_BuiltInPosition)
+                    res->invariant = true;
+        }
+        pvk_sb_printf(ctx, &outs, "    float4 pvk_position [[position]]%s;\n", res->invariant ? " [[invariant]]" : "");
+    }
     for (g = 0; g < ctx->nglobals; g++) {
         struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
         struct pvk_spv_type *t;
@@ -45642,6 +47073,8 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_viewport [[viewport_array_index]]");
     if (need & PVK_SPV_NEED_PRIMITIVE_ID)
         PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_primitive_id [[primitive_id]]");
+    if (need & PVK_SPV_NEED_LANE)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_lane [[thread_index_in_simdgroup]]");
     for (set = 0; set < PVK_MSL_MAX_SETS; set++)
         if (res->set_mask & (1u << set))
             PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_fmt(ctx, "constant pvk_set%u& set%u [[buffer(%u)]]", set, set, set));
@@ -45719,8 +47152,15 @@ static const char pvk_spv_templates[] =
     "    constexpr const device T &operator[](uint i) const device { return elems[i]; }\n"
     "    constexpr const constant T &operator[](uint i) const constant { return elems[i]; }\n"
     "    threadgroup T &operator[](uint i) threadgroup { return elems[i]; }\n"
-    "    constexpr const threadgroup T &operator[](uint i) const threadgroup { return elems[i]; }\n"
-    "};\n\n";
+    "    constexpr const threadgroup T &operator[](uint i) const threadgroup { return elems[i]; }\n";
+
+/* pvk_array's accessors on coherent(device) buffer memory (COHERENCE), then its end. */
+static const char pvk_spv_templates_coherent[] =
+    "    device coherent(device) T &operator[](uint i) device coherent(device) { return elems[i]; }\n"
+    "    constexpr const device coherent(device) T &operator[](uint i) const device coherent(device)"
+    " { return elems[i]; }\n";
+
+static const char pvk_spv_templates_end[] = "};\n\n";
 
 static const char pvk_spv_padded_template[] =
     "/* A T followed by P bytes of padding: an array element with a larger stride. */\n"
@@ -45851,6 +47291,7 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         pvk_spv_func_of(ctx, ctx->entry_fid)->nparams)
         pvk_spv_fail(ctx, "entry point function must be void(void)");
     pvk_spv_apply_member_insns(ctx);
+    pvk_spv_coherence(ctx);
     if (!ctx->graphics)
         pvk_spv_workgroup_size(ctx);
     pvk_spv_layout_types(ctx);
@@ -45861,6 +47302,20 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
     for (i = 0; i < ctx->nfuncs; i++)
         pvk_spv_analyze(ctx, i + 1);
     pvk_spv_call_graph(ctx);
+    if (!ctx->graphics) { /* kernel built-ins computed from the lane id */
+        struct pvk_spv_func *entry = ctx->funcs[pvk_spv_get(ctx, ctx->entry_fid)->func - 1];
+        for (g = 0; g < ctx->nglobals; g++) {
+            const struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+            const char *d = x->p->storage == PVK_SPV_StorageInput ? pvk_spv_derived_builtin(x->builtin) : NULL;
+            if (pvk_spv_bit(entry->globals, g) && d && strstr(d, "pvk_lane"))
+                entry->implicit |= PVK_SPV_I_LANE;
+            if (pvk_spv_bit(entry->globals, g) && d && strstr(d, "pvk_local_index"))
+                entry->implicit |= PVK_SPV_I_LOCAL_INDEX;
+            if (pvk_spv_bit(entry->globals, g) && x->p->storage == PVK_SPV_StorageWorkgroup &&
+                pvk_spv_insn_at(ctx, x->insn).wc > 4) /* initialized by the workgroup's threads */
+                entry->implicit |= PVK_SPV_I_LOCAL_INDEX;
+        }
+    }
     kernel = pvk_spv_kernel_name(ctx);
     for (i = 0; i < ctx->norder; i++) {
         struct pvk_spv_func *fn = ctx->funcs[ctx->order[i] - 1];
@@ -45911,8 +47366,12 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
                   : ctx->model == PVK_SPV_ExecutionModelFragment ? "Fragment function"
                                                                  : "Kernel",
                   kernel);
-    if (ctx->use_array)
+    if (ctx->use_array) {
         pvk_sb_append(ctx, out, pvk_spv_templates, sizeof(pvk_spv_templates) - 1);
+        if (strcmp(ctx->dev, "device") != 0)
+            pvk_sb_append(ctx, out, pvk_spv_templates_coherent, sizeof(pvk_spv_templates_coherent) - 1);
+        pvk_sb_append(ctx, out, pvk_spv_templates_end, sizeof(pvk_spv_templates_end) - 1);
+    }
     if (ctx->use_padded)
         pvk_sb_append(ctx, out, pvk_spv_padded_template, sizeof(pvk_spv_padded_template) - 1);
     if (ctx->use_sampled)
@@ -50435,15 +51894,18 @@ static id pvk_device_compiler(struct pvk_device *device)
     return compiler;
 }
 
-/* MSL compiled as section 13 asks (MSL 3.2, safe math) into a library
- * (retained), NULL with a message in error[]. */
-static id pvk_msl_library(struct pvk_device *device, const char *msl, char *error, size_t error_size)
+/* MSL compiled as section 13 asks (MSL 3.2, safe math, invariance preserved
+ * for an invariant position) into a library (retained), NULL with a message
+ * in error[]. */
+static id pvk_msl_library(struct pvk_device *device, const char *msl, bool invariant, char *error, size_t error_size)
 {
     void *pool = objc_autoreleasePoolPush();
     id options = pvk_MTLCompileOptions_new(), library = NULL, err = NULL;
     if (options) {
         pvk_MTLCompileOptions_setMathMode(options, PVK_MTLMathModeSafe);
         pvk_MTLCompileOptions_setLanguageVersion(options, PVK_MTLLanguageVersion3_2);
+        if (invariant)
+            pvk_MTLCompileOptions_setPreserveInvariance(options, true);
         library = pvk_MTLDevice_newLibraryWithSource_options_error(device->physical_device->mtl_device,
                                                                  pvk_NSString_stringWithUTF8String(msl), options, &err);
     }
@@ -51073,7 +52535,7 @@ static id pvk_clear_pipeline(struct pvk_device *device, const struct pvk_clear_k
     if (!c) {
         void *pool = objc_autoreleasePoolPush();
         char *msl = pvk_clear_msl(device, k), error[256];
-        id library = msl ? pvk_msl_library(device, msl, error, sizeof(error)) : NULL;
+        id library = msl ? pvk_msl_library(device, msl, false, error, sizeof(error)) : NULL;
         bool colors = false;
         uint32_t s;
         if (library) {
@@ -53397,7 +54859,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkResetEvent(VkDevice device, VkEvent event)
  * the translator's push-constant index; descriptor set N is a table
  * (section 11 format) bound at index N, laid out as the pipeline layout's
  * set layout N says (section 12), with the Y'CbCr conversions of its
- * immutable samplers, which the shader applies.
+ * immutable samplers, which the shader applies. The shader checks bounds as
+ * the device's robustness features and VkPipelineRobustnessCreateInfo ask
+ * (pvk_pipeline_robustness).
  *
  * A graphics pipeline translates its vertex and fragment shaders together
  * (pvk_spirv_to_msl_graphics), compiles each into a library, and makes an
@@ -53586,6 +55050,47 @@ static VkResult pvk_msl_set_layouts(const struct pvk_pipeline_layout *layout, co
     return VK_SUCCESS;
 }
 
+/* The bounds checks a pipeline stage's shader makes (section 13,
+ * ROBUSTNESS): the device's robustBufferAccess (storage, uniform and texel
+ * buffers, vertex input) and robustImageAccess, unless
+ * VkPipelineRobustnessCreateInfo in the pipeline's pNext, then in the
+ * stage's, says otherwise: every behavior but DISABLED gets the checks. */
+static void pvk_pipeline_robustness(const struct pvk_device *device, const void *pipeline_next, const void *stage_next,
+                                    struct pvk_msl_options *options)
+{
+    VkPipelineRobustnessBufferBehavior storage = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT;
+    VkPipelineRobustnessBufferBehavior uniform = storage, vertex = storage;
+    VkPipelineRobustnessImageBehavior images = VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DEVICE_DEFAULT;
+    const void *chains[2];
+    const VkBaseInStructure *ext;
+    bool rba = device->features.core.robustBufferAccess, ria = device->features.v13.robustImageAccess;
+    unsigned i;
+
+    chains[0] = pipeline_next;
+    chains[1] = stage_next; /* the stage's overrides the pipeline's */
+    for (i = 0; i < 2; i++) {
+        for (ext = chains[i]; ext; ext = ext->pNext) {
+            const VkPipelineRobustnessCreateInfo *r = (const VkPipelineRobustnessCreateInfo *)ext;
+            if (ext->sType != VK_STRUCTURE_TYPE_PIPELINE_ROBUSTNESS_CREATE_INFO)
+                continue;
+            if (r->storageBuffers != VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT)
+                storage = r->storageBuffers;
+            if (r->uniformBuffers != VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT)
+                uniform = r->uniformBuffers;
+            if (r->vertexInputs != VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT)
+                vertex = r->vertexInputs;
+            if (r->images != VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DEVICE_DEFAULT)
+                images = r->images;
+        }
+    }
+#define PVK_ROBUST(b, def, off) ((b) == 0 ? (def) : (b) != (off))
+    options->robust_storage_buffers = PVK_ROBUST(storage, rba, VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED);
+    options->robust_uniform_buffers = PVK_ROBUST(uniform, rba, VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED);
+    options->robust_vertex_input = PVK_ROBUST(vertex, rba, VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED);
+    options->robust_images = PVK_ROBUST(images, ria, VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DISABLED);
+#undef PVK_ROBUST
+}
+
 /* The Y'CbCr conversions of the layout's immutable samplers (section 12),
  * which the shader applies: options->ycbcr_bindings, in one allocation (*out,
  * free with pvk_free; NULL if there are none). */
@@ -53746,6 +55251,9 @@ static void pvk_key_add_ycbcr(struct pvk_key *k, const struct pvk_msl_options *o
 struct pvk_cache_info {
     uint32_t push_size, set_mask, vertex_bindings, dispatch_base;
     uint32_t dispatch_base_offset, workgroup[3];
+    /* graphics pipelines: dispatch_base is "layered" (the vertex shader
+     * writes Layer or ViewportIndex), dispatch_base_offset "invariant"
+     * (Position is invariant: compile with preserveInvariance) */
 };
 
 struct pvk_cache_entry {
@@ -54092,6 +55600,7 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
     memset(&res, 0, sizeof(res));
     options.specialization = stage->pSpecializationInfo;
     options.image_1d_as_2d = true; /* 1D image views are 2D textures of height 1 (section 11) */
+    pvk_pipeline_robustness(device, info->pNext, stage->pNext, &options);
     if (flags & VK_PIPELINE_CREATE_2_DISPATCH_BASE_BIT) {
         options.dispatch_base = true;
         options.dispatch_base_offset = layout ? layout->push_constant_size : 0;
@@ -54767,15 +56276,15 @@ static void pvk_stencil_face_state(struct pvk_stencil_face *f, const VkStencilOp
 /* A render pipeline state from translated shaders (retained), NULL with a
  * message in error[]. */
 static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *d, const char *vs_msl,
-                          const char *vs_entry, const char *fs_msl, const char *fs_entry, bool layered, char *error,
-                          size_t error_size)
+                          const char *vs_entry, const char *fs_msl, const char *fs_entry, bool layered, bool invariant,
+                          char *error, size_t error_size)
 {
     void *pool = objc_autoreleasePoolPush();
-    id vs_lib = pvk_msl_library(device, vs_msl, error, error_size), fs_lib = NULL, desc = NULL, vf = NULL, ff = NULL;
-    id pso = NULL;
+    id vs_lib = pvk_msl_library(device, vs_msl, invariant, error, error_size), fs_lib = NULL, desc = NULL, vf = NULL;
+    id ff = NULL, pso = NULL;
     uint32_t l;
     if (vs_lib && fs_msl)
-        fs_lib = pvk_msl_library(device, fs_msl, error, error_size);
+        fs_lib = pvk_msl_library(device, fs_msl, false, error, error_size);
     if (vs_lib && (fs_lib || !fs_msl))
         desc = pvk_MTL4RenderPipelineDescriptor_new();
     if (desc) {
@@ -54846,7 +56355,6 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     const VkPipelineRenderingCreateInfo *rendering = NULL;
     const VkRenderingAttachmentLocationInfo *locations = NULL;
     const VkRenderingInputAttachmentIndexInfo *input_indices = NULL;
-    const VkPipelineRobustnessCreateInfo *robustness = NULL;
     uint32_t loc_ids[PVK_MAX_COLOR_ATTACHMENTS], input_ids[PVK_MAX_INPUT_ATTACHMENTS], ids[PVK_MAX_COLOR_ATTACHMENTS];
     uint32_t input_colors[PVK_MAX_INPUT_ATTACHMENTS];
     uint8_t input_logical[PVK_MAX_INPUT_ATTACHMENTS];
@@ -54890,8 +56398,6 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
             locations = (const VkRenderingAttachmentLocationInfo *)ext;
         else if (ext->sType == VK_STRUCTURE_TYPE_RENDERING_INPUT_ATTACHMENT_INDEX_INFO)
             input_indices = (const VkRenderingInputAttachmentIndexInfo *)ext;
-        else if (ext->sType == VK_STRUCTURE_TYPE_PIPELINE_ROBUSTNESS_CREATE_INFO)
-            robustness = (const VkPipelineRobustnessCreateInfo *)ext;
     }
     if (info->pDynamicState)
         for (i = 0; i < info->pDynamicState->dynamicStateCount; i++)
@@ -55027,9 +56533,6 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     d.view_mask = view_mask;
     d.point_size = d.topology_class == PVK_MTLPrimitiveTopologyClassPoint;
     d.dynamic_strides = (dynamic & PVK_DYN_BIT(VERTEX_STRIDE)) != 0;
-    d.robust = device->features.core.robustBufferAccess ||
-               (robustness && robustness->vertexInputs != VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT &&
-                robustness->vertexInputs != VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED);
     d.has_fragment = fs != NULL;
     gfx.samples = d.samples;
     gfx.view_mask = view_mask;
@@ -55055,6 +56558,12 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     }
     vo.specialization = vs->pSpecializationInfo;
     vo.image_1d_as_2d = fo.image_1d_as_2d = true;
+    pvk_pipeline_robustness(device, info->pNext, vs->pNext, &vo);
+    pvk_pipeline_robustness(device, info->pNext, fs ? fs->pNext : NULL, &fo);
+    d.robust = (uint32_t)vo.robust_storage_buffers | (uint32_t)vo.robust_uniform_buffers << 1 |
+               (uint32_t)vo.robust_vertex_input << 2 | (uint32_t)vo.robust_images << 3 |
+               (uint32_t)fo.robust_storage_buffers << 4 | (uint32_t)fo.robust_uniform_buffers << 5 |
+               (uint32_t)fo.robust_images << 6;
     if (vi) {
         vo.vertex_attributes = vi->pVertexAttributeDescriptions;
         vo.vertex_attribute_count = vi->vertexAttributeDescriptionCount;
@@ -55066,7 +56575,6 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         vo.vertex_divisor_count = divisors->vertexBindingDivisorCount;
     }
     vo.dynamic_vertex_strides = d.dynamic_strides != 0;
-    vo.robust_vertex_input = d.robust != 0;
     vo.point_size = d.point_size != 0;
     vo.view_mask = fo.view_mask = view_mask;
     if (fs)
@@ -55136,6 +56644,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         ci.set_mask = vres.set_mask | fres.set_mask;
         ci.vertex_bindings = vres.vertex_bindings;
         ci.dispatch_base = vres.layered; /* graphics: the vertex shader writes Layer or ViewportIndex */
+        ci.dispatch_base_offset = vres.invariant; /* graphics: Position is invariant */
     }
     pvk_free(alloc, bindings);
     pvk_free(alloc, ycbcr);
@@ -55145,7 +56654,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     names[1] = hit ? entry[1] : fres.entry_point;
     layered = ci.dispatch_base != 0;
     if (!pso)
-        pso = pvk_gfx_compile(device, &d, sources[0], names[0], sources[1], names[1], layered, error, sizeof(error));
+        pso = pvk_gfx_compile(device, &d, sources[0], names[0], sources[1], names[1], layered,
+                              ci.dispatch_base_offset != 0, error, sizeof(error));
     if (!pso) {
         pvk_log(PVK_LOG_ERROR, "vkCreateGraphicsPipelines: %s", error);
         pvk_log(PVK_LOG_DEBUG, "vertex MSL:\n%s", sources[0]);

@@ -1116,6 +1116,97 @@ static void test_buffers(void)
     free_buf(&dst);
 }
 
+/* Robust buffer access (enabled here with every feature) and
+ * VkPipelineRobustnessCreateInfo (section 17): src's descriptor covers 16 of
+ * the 64 words the shader reads; past the range they read 0 when the shader
+ * checks bounds, else the memory after the range (inside the buffer). The
+ * stage's structure overrides the pipeline's. */
+static void test_pipeline_robustness(void)
+{
+    struct buf params = make_buf(256), src = make_buf(512), dst = make_buf(256);
+    VkDescriptorSetLayoutBinding b[3];
+    VkDescriptorPoolSize sizes[2];
+    VkDescriptorSetLayout sl;
+    VkPipelineLayout pl;
+    VkDescriptorPool pool;
+    VkDescriptorSet set;
+    VkCommandBuffer cb;
+    uint32_t i, k;
+    /* pipeline's, stage's storage buffer behavior (DEVICE_DEFAULT: none chained); robust? */
+    static const struct {
+        VkPipelineRobustnessBufferBehavior pipeline, stage;
+        bool robust;
+    } cases[] = {
+        { VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT, VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT, true },
+        { VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED, VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT, false },
+        { VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS, VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED, false },
+        { VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED, VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS, true },
+    };
+
+    ubo_ssbo_bindings(b);
+    sl = make_set_layout(b, 3, 0, NULL);
+    pl = make_pipeline_layout(&sl, 1, 0);
+    sizes[0] = ps(UBO, 1);
+    sizes[1] = ps(SSBO, 2);
+    pool = make_pool(1, sizes, 2, 0, NULL);
+    REQUIRE(sl && pl && pool && params.data && src.data && dst.data);
+    set = alloc_set(pool, sl);
+    REQUIRE(set);
+    put_params(&params, 0, 64, 1, 5);
+    for (i = 0; i < 128; i++)
+        put(&src, i, 100 + i);
+    write_buffer(set, 0, 0, UBO, &params, 0, 12);
+    write_buffer(set, 1, 0, SSBO, &src, 64, 64); /* words 16-31 */
+    write_buffer(set, 2, 0, SSBO, &dst, 0, VK_WHOLE_SIZE);
+    for (k = 0; k < PVK_ARRAY_SIZE(cases); k++) {
+        VkShaderModuleCreateInfo module_info;
+        VkPipelineRobustnessCreateInfo pr, sr;
+        VkComputePipelineCreateInfo info;
+        VkPipeline p = VK_NULL_HANDLE;
+        memset(&module_info, 0, sizeof(module_info));
+        module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        module_info.codeSize = sizeof(spv_ubo_ssbo);
+        module_info.pCode = spv_ubo_ssbo;
+        memset(&pr, 0, sizeof(pr));
+        pr.sType = VK_STRUCTURE_TYPE_PIPELINE_ROBUSTNESS_CREATE_INFO;
+        pr.storageBuffers = cases[k].pipeline;
+        sr = pr;
+        sr.storageBuffers = cases[k].stage;
+        sr.pNext = &module_info;
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        info.pNext = cases[k].pipeline ? &pr : NULL;
+        info.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        info.stage.pNext = cases[k].stage ? (const void *)&sr : (const void *)&module_info;
+        info.stage.stage = COMPUTE;
+        info.stage.pName = "main";
+        info.layout = pl;
+        CHECK_VK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &info, NULL, &p), VK_SUCCESS);
+        REQUIRE(p);
+        memset(dst.data, 0, 256);
+        cb = begin();
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
+        vkCmdDispatch(cb, 1, 1, 1);
+        REQUIRE_VK(finish(cb));
+        for (i = 0; i < 64; i++) {
+            uint32_t want = i < 16 || !cases[k].robust ? 100 + 16 + i + 5 : 5;
+            if (word(&dst, i) != want) {
+                fprintf(stderr, "  case %u word %u: %u, want %u\n", k, i, word(&dst, i), want);
+                CHECK(word(&dst, i) == want);
+                break;
+            }
+        }
+        vkDestroyPipeline(device, p, NULL);
+    }
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyPipelineLayout(device, pl, NULL);
+    vkDestroyDescriptorSetLayout(device, sl, NULL);
+    free_buf(&params);
+    free_buf(&src);
+    free_buf(&dst);
+}
+
 /* The OpArrayLength of a storage buffer comes from the descriptor's range. */
 static void test_array_length(void)
 {
@@ -2216,6 +2307,7 @@ int main(void)
     RUN(test_layout_support);
     RUN(test_pools);
     RUN(test_buffers);
+    RUN(test_pipeline_robustness);
     RUN(test_array_length);
     RUN(test_dynamic_offsets);
     RUN(test_inline_uniform_block);
