@@ -27,16 +27,22 @@ static void setup(void)
 static void test_queue_families(void)
 {
     VkQueueFamilyProperties props[4];
+    VkPhysicalDeviceFeatures features;
+    VkQueueFlags sparse;
     uint32_t count = 0;
 
+    vkGetPhysicalDeviceFeatures(physical_device, &features);
+    sparse = features.sparseBinding ? VK_QUEUE_SPARSE_BINDING_BIT : 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, NULL);
     REQUIRE(count == 2);
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, props);
     CHECK(props[0].queueFlags & VK_QUEUE_GRAPHICS_BIT);
     CHECK(props[0].queueFlags & VK_QUEUE_COMPUTE_BIT);
     CHECK(props[0].queueCount >= 1);
-    /* Family 1: async compute, transfer implied (no explicit TRANSFER_BIT). */
-    CHECK(props[1].queueFlags == VK_QUEUE_COMPUTE_BIT);
+    /* Family 1: async compute, transfer implied (no explicit TRANSFER_BIT).
+     * Both families bind sparse resources where the sparse features are. */
+    CHECK(props[1].queueFlags == (VK_QUEUE_COMPUTE_BIT | sparse));
+    CHECK((props[0].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) == sparse);
     CHECK(props[1].queueCount >= 1);
 }
 

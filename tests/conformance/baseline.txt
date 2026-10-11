@@ -45,6 +45,7 @@ devsandqueues.features_vulkan12
 devsandqueues.features_vulkan13
 devsandqueues.features_vulkan14
 devsandqueues.queue_families
+devsandqueues.queue_families_sparse_protected
 devsandqueues.queue_families_incomplete
 devsandqueues.queue_families2
 devsandqueues.queue_family_global_priority
@@ -439,7 +440,6 @@ capabilities.image_format_sample_counts
 capabilities.image_format_monotonic
 capabilities.image_format_host_transfer
 capabilities.image_format_properties2
-capabilities.sparse_image_format_properties
 capabilities.ycbcr_descriptor_count
 capabilities.external_buffer_properties
 capabilities.external_semaphore_properties
@@ -634,5 +634,18 @@ dispatch.dispatch_base
 dispatch.dispatch_indirect_after_base
 
 sparsemem.sparse_requirements_non_sparse
+sparsemem.sparse_requirements_residency
+sparsemem.queue_bind_sparse
+sparsemem.sparse_buffer_requirements
+sparsemem.sparse_buffer_residency
+sparsemem.sparse_buffer_rebind
+sparsemem.sparse_buffer_aliased
+sparsemem.bind_sparse_batches_order
+sparsemem.sparse_image_format_queries
+sparsemem.sparse_image_requirements_rules
+sparsemem.sparse_image_blocks
+sparsemem.sparse_image_mip_tail
+sparsemem.sparse_image_opaque
+sparsemem.sparse_image_3d
 
 debugging.tool_properties

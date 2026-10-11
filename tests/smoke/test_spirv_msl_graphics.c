@@ -2120,6 +2120,116 @@ static const uint32_t spv_lod_fs_opt[] = {
     0x0000004a, 0x00000035, 0x00000048, 0x0003003e, 0x00000025, 0x0000004b, 0x000100fd, 0x00010038,
 };
 
+/* Sparse residency in a fragment shader (implicit LOD): Bias, MinLod and a
+ * depth comparison, on ordinary textures (always resident), and MinLod on a
+ * plain sample.
+ * #version 450
+ * #extension GL_ARB_sparse_texture2 : require
+ * #extension GL_ARB_sparse_texture_clamp : require
+ * layout(set = 0, binding = 0) uniform sampler2D tex;
+ * layout(set = 0, binding = 1) uniform sampler2DShadow shadow;
+ * layout(push_constant) uniform P { float bias; float ref; } p;
+ * layout(location = 0) in vec2 v_uv;
+ * layout(location = 0) out vec4 o_bias;
+ * layout(location = 1) out vec4 o_clamp;
+ * layout(location = 2) out vec4 o_misc;
+ * void main()
+ * {
+ *     vec4 a, b;
+ *     float d;
+ *     int c0 = sparseTextureARB(tex, v_uv, a, p.bias);
+ *     int c1 = sparseTextureClampARB(tex, v_uv, 3.0, b);
+ *     int c2 = sparseTextureARB(shadow, vec3(v_uv, p.ref), d);
+ *     vec4 m = textureClampARB(tex, v_uv, 3.0);
+ *     o_bias = a;
+ *     o_clamp = b;
+ *     o_misc = vec4(float(sparseTexelsResidentARB(c0)) + 2.0 * float(sparseTexelsResidentARB(c1)) +
+ *                       4.0 * float(sparseTexelsResidentARB(c2)),
+ *                   d, m.r, m.g);
+ * }
+ */
+static const uint32_t spv_sparse_lod_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000063, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000029, 0x00020011, 0x0000002a, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e,
+    0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x000c000f, 0x00000004, 0x00000004, 0x6e69616d,
+    0x00000000, 0x0000000d, 0x00000011, 0x00000018, 0x0000002d, 0x00000043, 0x00000045, 0x00000047,
+    0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00070004, 0x415f4c47,
+    0x735f4252, 0x73726170, 0x65745f65, 0x72757478, 0x00003265, 0x00080004, 0x415f4c47, 0x735f4252,
+    0x73726170, 0x65745f65, 0x72757478, 0x6c635f65, 0x00706d61, 0x00040005, 0x00000004, 0x6e69616d,
+    0x00000000, 0x00030005, 0x00000008, 0x00003063, 0x00030005, 0x0000000d, 0x00786574, 0x00040005,
+    0x00000011, 0x76755f76, 0x00000000, 0x00030005, 0x00000015, 0x00000061, 0x00030005, 0x00000016,
+    0x00000050, 0x00050006, 0x00000016, 0x00000000, 0x73616962, 0x00000000, 0x00040006, 0x00000016,
+    0x00000001, 0x00666572, 0x00030005, 0x00000018, 0x00000070, 0x00040005, 0x0000001d, 0x54736552,
+    0x00657079, 0x00030005, 0x00000021, 0x00003163, 0x00030005, 0x00000025, 0x00000062, 0x00030005,
+    0x00000029, 0x00003263, 0x00040005, 0x0000002d, 0x64616873, 0x0000776f, 0x00030005, 0x00000038,
+    0x00000064, 0x00040005, 0x0000003a, 0x54736552, 0x00657079, 0x00030005, 0x0000003e, 0x0000006d,
+    0x00040005, 0x00000043, 0x69625f6f, 0x00007361, 0x00040005, 0x00000045, 0x6c635f6f, 0x00706d61,
+    0x00040005, 0x00000047, 0x696d5f6f, 0x00006373, 0x00040047, 0x0000000d, 0x00000021, 0x00000000,
+    0x00040047, 0x0000000d, 0x00000022, 0x00000000, 0x00040047, 0x00000011, 0x0000001e, 0x00000000,
+    0x00030047, 0x00000016, 0x00000002, 0x00050048, 0x00000016, 0x00000000, 0x00000023, 0x00000000,
+    0x00050048, 0x00000016, 0x00000001, 0x00000023, 0x00000004, 0x00040047, 0x0000002d, 0x00000021,
+    0x00000001, 0x00040047, 0x0000002d, 0x00000022, 0x00000000, 0x00040047, 0x00000043, 0x0000001e,
+    0x00000000, 0x00040047, 0x00000045, 0x0000001e, 0x00000001, 0x00040047, 0x00000047, 0x0000001e,
+    0x00000002, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006,
+    0x00000020, 0x00000001, 0x00040020, 0x00000007, 0x00000007, 0x00000006, 0x00030016, 0x00000009,
+    0x00000020, 0x00090019, 0x0000000a, 0x00000009, 0x00000001, 0x00000000, 0x00000000, 0x00000000,
+    0x00000001, 0x00000000, 0x0003001b, 0x0000000b, 0x0000000a, 0x00040020, 0x0000000c, 0x00000000,
+    0x0000000b, 0x0004003b, 0x0000000c, 0x0000000d, 0x00000000, 0x00040017, 0x0000000f, 0x00000009,
+    0x00000002, 0x00040020, 0x00000010, 0x00000001, 0x0000000f, 0x0004003b, 0x00000010, 0x00000011,
+    0x00000001, 0x00040017, 0x00000013, 0x00000009, 0x00000004, 0x00040020, 0x00000014, 0x00000007,
+    0x00000013, 0x0004001e, 0x00000016, 0x00000009, 0x00000009, 0x00040020, 0x00000017, 0x00000009,
+    0x00000016, 0x0004003b, 0x00000017, 0x00000018, 0x00000009, 0x0004002b, 0x00000006, 0x00000019,
+    0x00000000, 0x00040020, 0x0000001a, 0x00000009, 0x00000009, 0x0004001e, 0x0000001d, 0x00000006,
+    0x00000013, 0x0004002b, 0x00000009, 0x00000024, 0x40400000, 0x00090019, 0x0000002a, 0x00000009,
+    0x00000001, 0x00000001, 0x00000000, 0x00000000, 0x00000001, 0x00000000, 0x0003001b, 0x0000002b,
+    0x0000002a, 0x00040020, 0x0000002c, 0x00000000, 0x0000002b, 0x0004003b, 0x0000002c, 0x0000002d,
+    0x00000000, 0x0004002b, 0x00000006, 0x00000030, 0x00000001, 0x00040017, 0x00000033, 0x00000009,
+    0x00000003, 0x00040020, 0x00000037, 0x00000007, 0x00000009, 0x0004001e, 0x0000003a, 0x00000006,
+    0x00000009, 0x00040020, 0x00000042, 0x00000003, 0x00000013, 0x0004003b, 0x00000042, 0x00000043,
+    0x00000003, 0x0004003b, 0x00000042, 0x00000045, 0x00000003, 0x0004003b, 0x00000042, 0x00000047,
+    0x00000003, 0x00020014, 0x00000049, 0x0004002b, 0x00000009, 0x0000004b, 0x00000000, 0x0004002b,
+    0x00000009, 0x0000004c, 0x3f800000, 0x0004002b, 0x00000009, 0x0000004e, 0x40000000, 0x0004002b,
+    0x00000009, 0x00000054, 0x40800000, 0x00040015, 0x0000005b, 0x00000020, 0x00000000, 0x0004002b,
+    0x0000005b, 0x0000005c, 0x00000000, 0x0004002b, 0x0000005b, 0x0000005f, 0x00000001, 0x00050036,
+    0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003b, 0x00000007,
+    0x00000008, 0x00000007, 0x0004003b, 0x00000014, 0x00000015, 0x00000007, 0x0004003b, 0x00000007,
+    0x00000021, 0x00000007, 0x0004003b, 0x00000014, 0x00000025, 0x00000007, 0x0004003b, 0x00000007,
+    0x00000029, 0x00000007, 0x0004003b, 0x00000037, 0x00000038, 0x00000007, 0x0004003b, 0x00000014,
+    0x0000003e, 0x00000007, 0x0004003d, 0x0000000b, 0x0000000e, 0x0000000d, 0x0004003d, 0x0000000f,
+    0x00000012, 0x00000011, 0x00050041, 0x0000001a, 0x0000001b, 0x00000018, 0x00000019, 0x0004003d,
+    0x00000009, 0x0000001c, 0x0000001b, 0x00070131, 0x0000001d, 0x0000001e, 0x0000000e, 0x00000012,
+    0x00000001, 0x0000001c, 0x00050051, 0x00000013, 0x0000001f, 0x0000001e, 0x00000001, 0x0003003e,
+    0x00000015, 0x0000001f, 0x00050051, 0x00000006, 0x00000020, 0x0000001e, 0x00000000, 0x0003003e,
+    0x00000008, 0x00000020, 0x0004003d, 0x0000000b, 0x00000022, 0x0000000d, 0x0004003d, 0x0000000f,
+    0x00000023, 0x00000011, 0x00070131, 0x0000001d, 0x00000026, 0x00000022, 0x00000023, 0x00000080,
+    0x00000024, 0x00050051, 0x00000013, 0x00000027, 0x00000026, 0x00000001, 0x0003003e, 0x00000025,
+    0x00000027, 0x00050051, 0x00000006, 0x00000028, 0x00000026, 0x00000000, 0x0003003e, 0x00000021,
+    0x00000028, 0x0004003d, 0x0000002b, 0x0000002e, 0x0000002d, 0x0004003d, 0x0000000f, 0x0000002f,
+    0x00000011, 0x00050041, 0x0000001a, 0x00000031, 0x00000018, 0x00000030, 0x0004003d, 0x00000009,
+    0x00000032, 0x00000031, 0x00050051, 0x00000009, 0x00000034, 0x0000002f, 0x00000000, 0x00050051,
+    0x00000009, 0x00000035, 0x0000002f, 0x00000001, 0x00060050, 0x00000033, 0x00000036, 0x00000034,
+    0x00000035, 0x00000032, 0x00050051, 0x00000009, 0x00000039, 0x00000036, 0x00000002, 0x00060133,
+    0x0000003a, 0x0000003b, 0x0000002e, 0x00000036, 0x00000039, 0x00050051, 0x00000009, 0x0000003c,
+    0x0000003b, 0x00000001, 0x0003003e, 0x00000038, 0x0000003c, 0x00050051, 0x00000006, 0x0000003d,
+    0x0000003b, 0x00000000, 0x0003003e, 0x00000029, 0x0000003d, 0x0004003d, 0x0000000b, 0x0000003f,
+    0x0000000d, 0x0004003d, 0x0000000f, 0x00000040, 0x00000011, 0x00070057, 0x00000013, 0x00000041,
+    0x0000003f, 0x00000040, 0x00000080, 0x00000024, 0x0003003e, 0x0000003e, 0x00000041, 0x0004003d,
+    0x00000013, 0x00000044, 0x00000015, 0x0003003e, 0x00000043, 0x00000044, 0x0004003d, 0x00000013,
+    0x00000046, 0x00000025, 0x0003003e, 0x00000045, 0x00000046, 0x0004003d, 0x00000006, 0x00000048,
+    0x00000008, 0x0004013c, 0x00000049, 0x0000004a, 0x00000048, 0x000600a9, 0x00000009, 0x0000004d,
+    0x0000004a, 0x0000004c, 0x0000004b, 0x0004003d, 0x00000006, 0x0000004f, 0x00000021, 0x0004013c,
+    0x00000049, 0x00000050, 0x0000004f, 0x000600a9, 0x00000009, 0x00000051, 0x00000050, 0x0000004c,
+    0x0000004b, 0x00050085, 0x00000009, 0x00000052, 0x0000004e, 0x00000051, 0x00050081, 0x00000009,
+    0x00000053, 0x0000004d, 0x00000052, 0x0004003d, 0x00000006, 0x00000055, 0x00000029, 0x0004013c,
+    0x00000049, 0x00000056, 0x00000055, 0x000600a9, 0x00000009, 0x00000057, 0x00000056, 0x0000004c,
+    0x0000004b, 0x00050085, 0x00000009, 0x00000058, 0x00000054, 0x00000057, 0x00050081, 0x00000009,
+    0x00000059, 0x00000053, 0x00000058, 0x0004003d, 0x00000009, 0x0000005a, 0x00000038, 0x00050041,
+    0x00000037, 0x0000005d, 0x0000003e, 0x0000005c, 0x0004003d, 0x00000009, 0x0000005e, 0x0000005d,
+    0x00050041, 0x00000037, 0x00000060, 0x0000003e, 0x0000005f, 0x0004003d, 0x00000009, 0x00000061,
+    0x00000060, 0x00070050, 0x00000013, 0x00000062, 0x00000059, 0x0000005a, 0x0000005e, 0x00000061,
+    0x0003003e, 0x00000047, 0x00000062, 0x000100fd, 0x00010038,
+};
+
 /*
  * #version 450
  * layout(location = 0) out vec4 o;
@@ -4204,6 +4314,79 @@ static void test_implicit_lod_opt(void)
     check_implicit_lod(spv_lod_fs_opt, PVK_ARRAY_SIZE(spv_lod_fs_opt));
 }
 
+/* spv_sparse_lod_fs with the implicit-LOD test's textures (LOD 2): Bias 1
+ * and MinLod 3 sample level 3, the depth comparison passes, and every
+ * residency code says resident (OpImageSparseSample(Dref)ImplicitLod). */
+static void test_sparse_implicit_lod(void)
+{
+    static const pvk_MTLPixelFormat fmts[3] = { PVK_MTLPixelFormatRGBA32Float, PVK_MTLPixelFormatRGBA32Float,
+                                                PVK_MTLPixelFormatRGBA32Float };
+    struct mr_pipeline_desc desc = colors_desc(3, fmts);
+    struct pvk_msl_options vo = pos4_options();
+    struct pvk_msl_result vs, fs;
+    struct mt_buffer vb = mt_buffer(sizeof(fullscreen), fullscreen, sizeof(fullscreen));
+    struct mt_sampler_desc sd = { PVK_MTLSamplerMinMagFilterNearest, 1, PVK_MTLSamplerAddressModeClampToEdge, false, 0 };
+    struct mt_binding binds[2];
+    id pso, tgt[3], tex, depth, smp, shadow_smp;
+    struct mr_pass pass;
+    struct mr_draw draw;
+    static uint32_t level[64 * 64];
+    static float img[3][W * H * 4], dimg[W * H];
+    struct { float bias, ref; } push = { 1.0f, 0.25f };
+    unsigned long l, s;
+    int k, bad = 0;
+
+    tex = mt_texture(PVK_MTLTextureType2D, PVK_MTLPixelFormatRGBA8Unorm, 64, 64, 1, 1, 7, 1);
+    for (l = 0; l < 7; l++) {
+        for (s = 0; s < 64 * 64; s++)
+            level[s] = (uint32_t)(l * 32) | (uint32_t)(255 - l * 32) << 8 | (uint32_t)(l * 16) << 16 | 0xffu << 24;
+        mt_upload(tex, l, 0, 64 >> l, 64 >> l, 1, 4, level);
+    }
+    depth = mt_texture(PVK_MTLTextureType2D, PVK_MTLPixelFormatDepth32Float, W, H, 1, 1, 1, 1);
+    for (s = 0; s < W * H; s++)
+        dimg[s] = 0.5f;
+    mt_upload(depth, 0, 0, W, H, 1, 4, dimg);
+    smp = mt_sampler(&sd);
+    sd.compare = PVK_MTLCompareFunctionLessEqual;
+    shadow_smp = mt_sampler(&sd);
+    for (k = 0; k < 3; k++)
+        tgt[k] = mr_target(PVK_MTLTextureType2D, fmts[k], W, H, 1, 1);
+    REQUIRE(mr_build(spv_pos4_vs, PVK_ARRAY_SIZE(spv_pos4_vs), &vo, spv_sparse_lod_fs, PVK_ARRAY_SIZE(spv_sparse_lod_fs),
+                     NULL, &desc, &vs, &fs, &pso));
+    memset(binds, 0, sizeof(binds));
+    binds[0].binding = 0;
+    binds[0].texture = tex;
+    binds[0].sampler = smp;
+    binds[1].binding = 1;
+    binds[1].texture = depth;
+    binds[1].sampler = shadow_smp;
+    pass_init(&pass, tgt, 3);
+    draw_init(&draw, pso, &vs, &fs, &vb, 3);
+    draw.bindings = binds;
+    draw.nbindings = 2;
+    draw.push = &push;
+    draw.push_size = sizeof(push);
+    REQUIRE(mr_render(&pass, &draw, 1));
+    for (k = 0; k < 3; k++)
+        mt_download(tgt[k], 0, 0, W, H, 1, 16, img[k]);
+    for (s = 0; s < W * H; s++) {
+        const float *a = &img[0][s * 4], *b = &img[1][s * 4], *m = &img[2][s * 4];
+        bad += !near(a[0], 96 / 255.0, 1e-6) || !near(a[1], 159 / 255.0, 1e-6) || !near(a[2], 48 / 255.0, 1e-6);
+        bad += !near(b[0], 96 / 255.0, 1e-6) || !near(b[1], 159 / 255.0, 1e-6) || !near(b[2], 48 / 255.0, 1e-6);
+        bad += m[0] != 7.0f || m[1] != 1.0f || !near(m[2], 96 / 255.0, 1e-6) || !near(m[3], 159 / 255.0, 1e-6);
+    }
+    CHECK(bad == 0);
+    pvk_release(pso);
+    release_all(tgt, 3);
+    pvk_release(tex);
+    pvk_release(depth);
+    pvk_release(smp);
+    pvk_release(shadow_smp);
+    mt_buffer_free(&vb);
+    pvk_msl_result_free(&vs);
+    pvk_msl_result_free(&fs);
+}
+
 /* FragDepth against a depth test (any, and depth_greater), and early
  * fragment tests: a fragment that fails them never runs. */
 static void test_frag_depth(void)
@@ -4958,6 +5141,7 @@ int main(void)
     RUN(test_demote_opt);
     RUN(test_implicit_lod);
     RUN(test_implicit_lod_opt);
+    RUN(test_sparse_implicit_lod);
     RUN(test_frag_depth);
     RUN(test_sample_shading);
     RUN(test_input_attachments);

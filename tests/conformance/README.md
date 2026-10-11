@@ -41,7 +41,7 @@ One file per chapter of the Vulkan specification:
 | `fragops.c` | Fragment Operations: scissor test, every depth compare op, every stencil op (clamping, wrapping, fail and depth-fail ops, write and compare masks), depth bounds (static and dynamic), sample mask (alone, and with the SampleMask built-ins), alpha to one | 8 |
 | `framebuffer.c` | The Framebuffer: blend factors and operations (constants static and dynamic), color write masks, independent blending, dual-source blending, sRGB blending in linear space, logic operations (XOR on UNORM, every operation on UINT with a write mask, the bits of SNORM) | 8 |
 | `dispatch.c` | Dispatching Commands: `vkCmdDispatchIndirect` (parameters read at execution, zero counts), `vkCmdDispatchBase` (WorkgroupId, NumWorkgroups, GlobalInvocationId), no base carried over | 3 |
-| `sparsemem.c` | Sparse Resources: sparse image memory requirements (none without sparse residency), `vkQueueBindSparse` on a sparse binding queue | 3 |
+| `sparsemem.c` | Sparse Resources: memory requirements of sparse buffers and images (none without sparse residency), sparse image format properties and standard block shapes, mip tail rules; `vkQueueBindSparse` on a sparse binding queue: buffer blocks (residency, rebinding, unbinding, aliasing), image blocks, mip tails, fully resident images bound opaquely, 3D images, the order of batches; unbound regions where `residencyNonResidentStrict` | 14 |
 | `wsi.c` | Window System Integration: Metal surfaces, surface queries (support, capabilities, formats, present modes, present rectangles, device group modes), swapchains (images, allocation callbacks, `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`, recreation with `oldSwapchain`, aliasing a swapchain image), acquire and present (semaphores, fences, timeouts, two swapchains in one present), swapchain images as transfer source and destination | 20 |
 | `debugging.c` | Debugging > Active Tooling Information: `vkGetPhysicalDeviceToolProperties` (count protocol, strings) | 1 |
 
@@ -258,13 +258,14 @@ corrected to accept either answer, as long as no extensions are reported.
 
 ## Tests PlasmaVK skips
 
-Each skip below is an optional capability PlasmaVK does not offer; none hides
-a required behaviour.
+Each skip below is an optional capability PlasmaVK does not offer, or a check
+of the case without a capability PlasmaVK has; none hides a required
+behaviour.
 
 | Tests | Why |
 |---|---|
-| `devsandqueues.get_device_queue2_protected`, `features.pipelineProtectedAccess`, `devsandqueues.queue_families_sparse_protected` | Apple GPUs have no protected memory; sparse resources are not implemented. |
-| `sparsemem.sparse_requirements_residency`, `sparsemem.queue_bind_sparse` | Sparse resources are not implemented: no `sparseResidencyImage2D`, no queue family with `VK_QUEUE_SPARSE_BINDING_BIT` (which `vkQueueBindSparse` requires). `sparsemem.sparse_requirements_non_sparse` covers the sparse requirement queries PlasmaVK answers. |
+| `devsandqueues.get_device_queue2_protected`, `features.pipelineProtectedAccess` | Apple GPUs have no protected memory. |
+| `capabilities.sparse_image_format_properties` | It checks the zero count of a format without sparse residency where `sparseResidencyImage2D` is not supported; PlasmaVK supports it (`sparsemem.sparse_image_format_queries` covers the query). |
 | `memory.peer_memory_features` | Every device group has one physical device: `vkGetDeviceGroupPeerMemoryFeatures` has no valid call (its local and remote device indices must differ). |
 | `resources.buffer_capture_replay` | Metal cannot place a resource at a requested GPU address, so `bufferDeviceAddressCaptureReplay` is unsupported. |
 | `extensions.instance_layer_extensions` | No layers: PlasmaVK is linked directly, without a loader. |
@@ -276,7 +277,10 @@ a required behaviour.
 None: every test that does not skip is in `baseline.txt`.
 
 Running under the validation layer on MoltenVK reports no valid usage errors
-from the tests. Image view and sampler tests avoid component swizzles, format
+from the tests. (MoltenVK has no sparse features, so the sparse binding tests
+of `sparsemem.c` skip there and were checked against the chapter's valid usage
+by hand; the validation layer cannot run on PlasmaVK, which has no loader.)
+Image view and sampler tests avoid component swizzles, format
 reinterpretation and LOD bias on devices with `VK_KHR_portability_subset`,
 whose features may forbid them (MoltenVK's do). It reports `UNASSIGNED-vkAllocateMemory-maxMemoryAllocationSize`
 for `memory.allocate_too_large`, which deliberately exceeds that limit: the

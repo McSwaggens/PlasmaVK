@@ -426,7 +426,8 @@ static void test_image_format_properties(void)
     CHECK(vkGetPhysicalDeviceImageFormatProperties(pd, VK_FORMAT_R8_UNORM, VK_IMAGE_TYPE_3D, VK_IMAGE_TILING_OPTIMAL,
                                                    VK_IMAGE_USAGE_SAMPLED_BIT, 0, &p) == VK_SUCCESS &&
           p.maxArrayLayers == 1 && p.maxExtent.depth == 2048 && p.maxMipLevels == 12);
-    /* not supported: depth 3D, ETC2 3D, linear depth, sparse, depth storage */
+    /* not supported: depth 3D, ETC2 3D, linear depth, sparse combined
+     * depth/stencil (test_sparse.c), sparse linear, depth storage */
     CHECK(vkGetPhysicalDeviceImageFormatProperties(pd, VK_FORMAT_D32_SFLOAT, VK_IMAGE_TYPE_3D, VK_IMAGE_TILING_OPTIMAL,
                                                    VK_IMAGE_USAGE_SAMPLED_BIT, 0, &p) == VK_ERROR_FORMAT_NOT_SUPPORTED);
     CHECK(vkGetPhysicalDeviceImageFormatProperties(pd, VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK, VK_IMAGE_TYPE_3D,
@@ -434,7 +435,10 @@ static void test_image_format_properties(void)
                                                    &p) == VK_ERROR_FORMAT_NOT_SUPPORTED);
     CHECK(vkGetPhysicalDeviceImageFormatProperties(pd, VK_FORMAT_D32_SFLOAT, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_LINEAR,
                                                    VK_IMAGE_USAGE_SAMPLED_BIT, 0, &p) == VK_ERROR_FORMAT_NOT_SUPPORTED);
-    CHECK(vkGetPhysicalDeviceImageFormatProperties(pd, VK_FORMAT_R8_UNORM, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
+    CHECK(vkGetPhysicalDeviceImageFormatProperties(pd, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_IMAGE_TYPE_2D,
+                                                   VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                   VK_IMAGE_CREATE_SPARSE_BINDING_BIT, &p) == VK_ERROR_FORMAT_NOT_SUPPORTED);
+    CHECK(vkGetPhysicalDeviceImageFormatProperties(pd, VK_FORMAT_R8_UNORM, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_LINEAR,
                                                    VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_CREATE_SPARSE_BINDING_BIT,
                                                    &p) == VK_ERROR_FORMAT_NOT_SUPPORTED);
     CHECK(vkGetPhysicalDeviceImageFormatProperties(pd, VK_FORMAT_D16_UNORM, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,

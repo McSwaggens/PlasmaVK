@@ -31632,6 +31632,18 @@ static inline void pvk_MTL4CommandBuffer_writeTimestampIntoHeap_atIndex(id self,
 static inline void pvk_MTL4CommandBuffer_resolveCounterHeap_withRange_intoBuffer_waitFence_updateFence(id self, id counterHeap, pvk_NSRange range, pvk_MTL4BufferRange bufferRange, id fenceToWait, id fenceToUpdate) { PVK_SEL_CACHE("resolveCounterHeap:withRange:intoBuffer:waitFence:updateFence:"); PVK_MSG(void, (id, SEL, id, pvk_NSRange, pvk_MTL4BufferRange, id, id))(self, pvk_sel_, counterHeap, range, bufferRange, fenceToWait, fenceToUpdate); }
 /* Graphics: invariant positions (section 17) */
 static inline void pvk_MTLCompileOptions_setPreserveInvariance(id self, bool preserveInvariance) { PVK_SEL_CACHE("setPreserveInvariance:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, preserveInvariance); }
+/* Sparse resources: placement sparse buffers and textures (sections 7, 10, 11, 16) */
+static inline bool pvk_MTLDevice_supportsPlacementSparse(id self) { PVK_SEL_CACHE("supportsPlacementSparse"); return PVK_MSG(bool, (id, SEL))(self, pvk_sel_); }
+static inline pvk_MTLSize pvk_MTLDevice_sparseTileSizeWithTextureType_pixelFormat_sampleCount_sparsePageSize(id self, pvk_MTLTextureType textureType, pvk_MTLPixelFormat pixelFormat, unsigned long sampleCount, pvk_MTLSparsePageSize sparsePageSize) { PVK_SEL_CACHE("sparseTileSizeWithTextureType:pixelFormat:sampleCount:sparsePageSize:"); return PVK_MSG(pvk_MTLSize, (id, SEL, pvk_MTLTextureType, pvk_MTLPixelFormat, unsigned long, pvk_MTLSparsePageSize))(self, pvk_sel_, textureType, pixelFormat, sampleCount, sparsePageSize); }
+static inline unsigned long pvk_MTLDevice_sparseTileSizeInBytesForSparsePageSize(id self, pvk_MTLSparsePageSize sparsePageSize) { PVK_SEL_CACHE("sparseTileSizeInBytesForSparsePageSize:"); return PVK_MSG(unsigned long, (id, SEL, pvk_MTLSparsePageSize))(self, pvk_sel_, sparsePageSize); }
+static inline id pvk_MTLDevice_newBufferWithLength_options_placementSparsePageSize(id self, unsigned long length, pvk_MTLResourceOptions options, pvk_MTLSparsePageSize placementSparsePageSize) { PVK_SEL_CACHE("newBufferWithLength:options:placementSparsePageSize:"); return PVK_MSG(id, (id, SEL, unsigned long, pvk_MTLResourceOptions, pvk_MTLSparsePageSize))(self, pvk_sel_, length, options, placementSparsePageSize); }
+static inline void pvk_MTLHeapDescriptor_setMaxCompatiblePlacementSparsePageSize(id self, pvk_MTLSparsePageSize maxCompatiblePlacementSparsePageSize) { PVK_SEL_CACHE("setMaxCompatiblePlacementSparsePageSize:"); PVK_MSG(void, (id, SEL, pvk_MTLSparsePageSize))(self, pvk_sel_, maxCompatiblePlacementSparsePageSize); }
+static inline void pvk_MTLTextureDescriptor_setPlacementSparsePageSize(id self, pvk_MTLSparsePageSize placementSparsePageSize) { PVK_SEL_CACHE("setPlacementSparsePageSize:"); PVK_MSG(void, (id, SEL, pvk_MTLSparsePageSize))(self, pvk_sel_, placementSparsePageSize); }
+static inline void pvk_MTLTextureDescriptor_setAllowGPUOptimizedContents(id self, bool allowGPUOptimizedContents) { PVK_SEL_CACHE("setAllowGPUOptimizedContents:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, allowGPUOptimizedContents); }
+static inline unsigned long pvk_MTLTexture_firstMipmapInTail(id self) { PVK_SEL_CACHE("firstMipmapInTail"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
+static inline unsigned long pvk_MTLTexture_tailSizeInBytes(id self) { PVK_SEL_CACHE("tailSizeInBytes"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTL4CommandQueue_updateTextureMappings_heap_operations_count(id self, id texture, id heap, const pvk_MTL4UpdateSparseTextureMappingOperation * operations, unsigned long count) { PVK_SEL_CACHE("updateTextureMappings:heap:operations:count:"); PVK_MSG(void, (id, SEL, id, id, const pvk_MTL4UpdateSparseTextureMappingOperation *, unsigned long))(self, pvk_sel_, texture, heap, operations, count); }
+static inline void pvk_MTL4CommandQueue_updateBufferMappings_heap_operations_count(id self, id buffer, id heap, const pvk_MTL4UpdateSparseBufferMappingOperation * operations, unsigned long count) { PVK_SEL_CACHE("updateBufferMappings:heap:operations:count:"); PVK_MSG(void, (id, SEL, id, id, const pvk_MTL4UpdateSparseBufferMappingOperation *, unsigned long))(self, pvk_sel_, buffer, heap, operations, count); }
 
 /* ==========================================================================
  * 5. Internals
@@ -31883,6 +31895,7 @@ struct pvk_physical_device {
     bool bc_formats;      /* supportsBCTextureCompression */
     bool filter_32bit;    /* supports32BitFloatFiltering: filter and resolve 32-bit floats */
     bool filter_minmax;   /* sampler min/max reduction (FST: Apple10) */
+    bool sparse;          /* placement sparse resources: the sparse features (section 7, SPARSE RESOURCES) */
 };
 
 struct pvk_submission;
@@ -31929,6 +31942,11 @@ struct pvk_device {
     id residency_set; /* MTLResidencySet attached to every queue (section 9) */
     pthread_mutex_t residency_lock;
     /* GPU execution (sections 15-17) */
+    /* What every barrier makes visible: the device coherence point, and with
+     * sparseBinding the aliased virtual addresses too (GPU caches are
+     * virtually addressed: a sparse resource's pages alias its memory's heap
+     * and other sparse resources, section 7, SPARSE RESOURCES) */
+    pvk_MTL4VisibilityOptions visibility;
     int lost;              /* a command buffer failed: VK_ERROR_DEVICE_LOST (atomic) */
     long feedback_pending; /* commit feedback handlers still to run (atomic) */
     id fill_pipeline;      /* internal kernel of vkCmdFillBuffer, made on first use */
@@ -31953,6 +31971,17 @@ struct pvk_device {
     id query_copy_pipeline; /* internal kernel of vkCmdCopyQueryPoolResults, made on first use */
     /* Private data (section 9): slots reserved by VkDevicePrivateDataCreateInfo */
     struct pvk_private_data_slot *private_data_reserve;
+    /* Sparse binding (section 16, vkQueueBindSparse): with sparseBinding
+     * enabled, a one-block placement heap and a one-block sparse buffer and
+     * texture mapped onto it after unbinds, which makes them take effect */
+    id sparse_heap, sparse_flush_buffer, sparse_flush_texture;
+    /* Texel buffer views of sparse buffers (section 11): the queue and event
+     * that map a new view as its buffer is bound, and the lock of the
+     * buffers' page tables and view lists */
+    id sparse_queue, sparse_event;
+    uint64_t sparse_serial;
+    pthread_mutex_t sparse_lock;
+    bool sparse_lock_ready;
 };
 
 /* Section 13: a queue's submission state, and waiting for the GPU before
@@ -32115,7 +32144,7 @@ static void pvk_physical_device_init_limits(struct pvk_physical_device *pd)
     if (unique_samplers > UINT32_MAX)
         unique_samplers = UINT32_MAX;
     l->maxSamplerAllocationCount = unique_samplers > 4000 ? (uint32_t)unique_samplers : 4000;
-    l->sparseAddressSpaceSize = 0; /* sparseBinding is not supported */
+    /* sparseAddressSpaceSize: pvk_physical_device_init_sparse */
 
     /* Descriptors (design limits above). The images and texel buffers of a
      * stage are all Metal textures; maxPerStageResources keeps their total
@@ -32423,8 +32452,10 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
  * VK_VERSION_1_0..1_4), plus hostImageCopy, which a 1.4 device must support
  * when its only transfer-capable queue family supports graphics, as here.
  * The only optional features reported are those of the formats and samplers
- * the GPU has (pvk_physical_device_init_texture_features) and descriptor
- * indexing (pvk_physical_device_init_descriptor_features).
+ * the GPU has (pvk_physical_device_init_texture_features), descriptor
+ * indexing (pvk_physical_device_init_descriptor_features), graphics
+ * (pvk_physical_device_init_graphics_features) and sparse resources
+ * (pvk_physical_device_init_sparse).
  *
  * Most of these have no implementation yet (their commands are stubs in
  * section 19): reporting them follows from claiming 1.4, and each subsystem
@@ -32624,6 +32655,10 @@ static void pvk_physical_device_init_graphics_features(struct pvk_physical_devic
     pd->features.v12.shaderOutputLayer = VK_TRUE;
 }
 
+/* Sparse resources: features, sparseProperties and sparseAddressSpaceSize
+ * (SPARSE RESOURCES, after the formats). */
+static void pvk_physical_device_init_sparse(struct pvk_physical_device *pd);
+
 static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
 {
     VkPhysicalDeviceProperties *p = &pd->properties;
@@ -32643,7 +32678,6 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
                  PLASMAVK_VERSION_PATCH);
         pvk_make_uuid(p->pipelineCacheUUID, "PlasmaVK pipeline cache", name);
     }
-    /* sparseProperties stay VK_FALSE: no sparse residency. */
     pvk_physical_device_init_limits(pd);
     pvk_physical_device_init_memory_limits(pd);
     pvk_physical_device_init_properties_1x(pd);
@@ -32651,6 +32685,7 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     pvk_physical_device_init_texture_features(pd);
     pvk_physical_device_init_descriptor_features(pd);
     pvk_physical_device_init_graphics_features(pd);
+    pvk_physical_device_init_sparse(pd);
 
     /* Apple GPUs have unified memory: one heap; private, shared (twice) and
      * lazily allocated (memoryless tile memory) types. The order follows the
@@ -33051,21 +33086,36 @@ static const VkQueueFamilyProperties pvk_queue_families[] = {
     { VK_QUEUE_COMPUTE_BIT, PVK_MAX_QUEUES_PER_FAMILY, 64, { 1, 1, 1 } },
 };
 
+/* A family's properties. Sparse binding is a queue operation of every
+ * MTL4CommandQueue (-updateBufferMappings:..., -updateTextureMappings:...),
+ * so with the sparse features both families support it (section 16). */
+static VkQueueFamilyProperties pvk_queue_family(const struct pvk_physical_device *pd, uint32_t i)
+{
+    VkQueueFamilyProperties p = pvk_queue_families[i];
+    if (pd->sparse)
+        p.queueFlags |= VK_QUEUE_SPARSE_BINDING_BIT;
+    return p;
+}
+
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceQueueFamilyProperties(VkPhysicalDevice physicalDevice,
                                                                     uint32_t *pQueueFamilyPropertyCount,
                                                                     VkQueueFamilyProperties *pQueueFamilyProperties)
 {
-    (void)physicalDevice;
-    pvk_enumerate(pvk_queue_families, sizeof(pvk_queue_families[0]), PVK_ARRAY_SIZE(pvk_queue_families),
-                  pQueueFamilyPropertyCount, pQueueFamilyProperties);
+    const struct pvk_physical_device *pd = (const struct pvk_physical_device *)physicalDevice;
+    VkQueueFamilyProperties families[PVK_ARRAY_SIZE(pvk_queue_families)];
+    uint32_t i;
+    for (i = 0; i < PVK_ARRAY_SIZE(pvk_queue_families); i++)
+        families[i] = pvk_queue_family(pd, i);
+    pvk_enumerate(families, sizeof(families[0]), PVK_ARRAY_SIZE(families), pQueueFamilyPropertyCount,
+                  pQueueFamilyProperties);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceQueueFamilyProperties2(VkPhysicalDevice physicalDevice,
                                                                      uint32_t *pQueueFamilyPropertyCount,
                                                                      VkQueueFamilyProperties2 *pQueueFamilyProperties)
 {
+    const struct pvk_physical_device *pd = (const struct pvk_physical_device *)physicalDevice;
     uint32_t i, n = PVK_ARRAY_SIZE(pvk_queue_families);
-    (void)physicalDevice;
     if (!pQueueFamilyProperties) {
         *pQueueFamilyPropertyCount = n;
         return;
@@ -33075,7 +33125,7 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceQueueFamilyProperties2(VkPhysicalD
     *pQueueFamilyPropertyCount = n;
     for (i = 0; i < n; i++) {
         VkBaseOutStructure *s;
-        pQueueFamilyProperties[i].queueFamilyProperties = pvk_queue_families[i];
+        pQueueFamilyProperties[i].queueFamilyProperties = pvk_queue_family(pd, i);
         for (s = pQueueFamilyProperties[i].pNext; s; s = s->pNext) {
             if (s->sType == VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES) {
                 /* Metal queues have no priorities: one level, the default. */
@@ -33671,9 +33721,250 @@ static uint32_t pvk_mip_levels(uint32_t w, uint32_t h, uint32_t d)
     return n;
 }
 
-/* Image creation flags PlasmaVK supports. Sparse images, protected memory,
- * device-group split binding and block-texel views (Metal cannot view a
- * compressed texture with an uncompressed format) are not supported. */
+/* ---- Sparse resources ----
+ *
+ * SPARSE RESOURCES
+ *   Metal 4's placement sparse resources (supportsPlacementSparse, macOS/iOS
+ *   26.4) are buffers and textures without memory of their own, whose pages
+ *   map onto the tiles of placement heaps: the heaps VkDeviceMemory already
+ *   is (section 10). A sparse VkBuffer is a placement sparse MTLBuffer, a
+ *   sparse VkImage a placement sparse MTLTexture, both made when the
+ *   resource is created, and vkQueueBindSparse maps their pages onto the
+ *   bound memory's heap with the queue operations -updateBufferMappings: and
+ *   -updateTextureMappings: (section 16). A sparse block is Metal's 64 KB
+ *   page (MTLSparsePageSize64): Vulkan's standard block shapes are 64 KB, and
+ *   Metal's 64 KB tiles of single-sample 2D textures are those shapes
+ *   (checked per format by pvk_physical_device_init_sparse).
+ *
+ *   Memory: every memory type but the lazily allocated one backs sparse
+ *   resources (Metal makes only private sparse resources, but maps them onto
+ *   shared and private heaps alike). A heap can back them only if made with
+ *   a maxCompatiblePlacementSparsePageSize of 64 KB, which rounds its size up
+ *   to a multiple of 64 KB (heap creation costs the same), so on a device with
+ *   sparseBinding enabled every allocation of 64 KB or more is made that way
+ *   (smaller ones cannot hold a block). Sparse resources join the device's
+ *   residency set when created; the heaps they map onto are in it already.
+ *
+ *   Measured on M4 Max (Apple9, macOS 27.2):
+ *   - Unmapped buffer pages read 0 and drop writes (MTLBufferSparseTier1);
+ *     unmapped texture tiles read as if their memory were zeros, decoded by
+ *     the format (BC1 (0,0,0,1), ETC2 2/255, ASTC its error color), and drop
+ *     writes. But GPU caches are virtually addressed: within a command
+ *     buffer, after a barrier with MTL4VisibilityOptionDevice, a write to an
+ *     unmapped page still reads back, and a write through one mapping of a
+ *     heap tile (a sparse resource's page, the heap's own buffer, another
+ *     sparse resource) is not seen through another. Barriers that also flush
+ *     aliased virtual addresses (MTL4VisibilityOptionResourceAlias) fix both,
+ *     so on devices with sparseBinding every barrier does (struct
+ *     pvk_device's visibility, sections 15 and 16). Then unbound regions
+ *     read 0 and drop writes at every memory dependency:
+ *     residencyNonResidentStrict.
+ *   - Lossless compression (allowGPUOptimizedContents) keeps state outside
+ *     the heap: a tile rendered through one texture read zeros through
+ *     another mapping it. Sparse textures are made without it; then a heap
+ *     tile holds the same data through every buffer, and through every
+ *     texture of a compatible format and the same block shape, whatever its
+ *     usage, size, level or layer: sparseResidencyAliased.
+ *   - An unmap takes effect only at the next map of a page of the same kind
+ *     (buffer or texture), on any resource and queue: until then the GPU
+ *     still reads and writes the old memory. vkQueueBindSparse maps a page of
+ *     its own after unbinding (section 16).
+ *   - The mapping updates of a queue are done when a later -signalEvent: of
+ *     that queue signals, for that queue's later command buffers and for
+ *     other queues (10000 remapped pages checked).
+ *   - Depth32Float_Stencil8 tiles hold the depth only: the stencil reads 0.
+ *     Combined depth/stencil formats are not offered.
+ *   - 3D tiles are one slice deep (128x128x1 for 32-bit texels), unlike
+ *     Vulkan's standard 3D shapes; 2-sample tiles are Vulkan's standard 2x
+ *     shapes transposed (256x128 for 8-bit texels), 4-sample ones are the
+ *     standard 4x shapes. The images report their shapes with
+ *     VK_SPARSE_IMAGE_FORMAT_NONSTANDARD_BLOCK_SIZE_BIT. 8 samples (Apple10)
+ *     are unverified and not offered for sparse images.
+ *   - Metal packs mip levels into a per-slice tail starting at the first
+ *     level with a dimension at most half a tile (later for some usages):
+ *     for 4096x64 32-bit texels, level 0 (1 MB). Vulkan's default tail holds
+ *     only levels smaller than a block in bytes, so sparse images report
+ *     VK_SPARSE_IMAGE_FORMAT_ALIGNED_MIP_SIZE_BIT (residencyAlignedMipSize):
+ *     their tail starts at the first level that is not a whole number of
+ *     blocks, never after Metal's (section 11, SPARSE IMAGES).
+ *   - Metal makes no texture buffer over a placement sparse buffer: texel
+ *     buffer views of sparse buffers are sparse texture buffers of their own
+ *     whose pages follow the buffer's (section 11, BUFFER VIEWS); only views
+ *     starting at a multiple of 64 KB are supported. */
+
+#define PVK_SPARSE_BLOCK 65536u                  /* bytes of a sparse block */
+#define PVK_SPARSE_PAGE PVK_MTLSparsePageSize64 /* its Metal page size */
+#define PVK_IMAGE_CREATE_SPARSE \
+    (VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT | VK_IMAGE_CREATE_SPARSE_ALIASED_BIT)
+#define PVK_SPARSE_SAMPLES (VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT)
+
+/* The Metal texture type whose tiles a sparse image of a type and sample
+ * count has (arrays and cubes have the tiles of their 2D type; 1D images are
+ * 2D textures, section 11). */
+static pvk_MTLTextureType pvk_sparse_mtl_type(VkImageType type, uint32_t samples)
+{
+    if (type == VK_IMAGE_TYPE_3D)
+        return PVK_MTLTextureType3D;
+    return samples > 1 ? PVK_MTLTextureType2DMultisample : PVK_MTLTextureType2D;
+}
+
+/* The sparse block of sparse images of a format, type and sample count, in
+ * texels (Metal's 64 KB tile); false where sparse images are not offered. */
+static bool pvk_sparse_block(const struct pvk_physical_device *pd, const struct pvk_format *f, VkImageType type,
+                             uint32_t samples, VkExtent3D *block)
+{
+    pvk_MTLSize t;
+    if (!pd->sparse || !f || !f->mtl || (f->flags & PVK_FF_YCBCR) || f->kind == PVK_FK_DEPTH_STENCIL ||
+        !(samples & PVK_SPARSE_SAMPLES) || (type == VK_IMAGE_TYPE_3D && samples > 1) ||
+        ((f->caps & PVK_FC_BC) && !pd->bc_formats))
+        return false;
+    t = pvk_MTLDevice_sparseTileSizeWithTextureType_pixelFormat_sampleCount_sparsePageSize(
+        pd->mtl_device, pvk_sparse_mtl_type(type, samples), f->mtl, samples, PVK_SPARSE_PAGE);
+    if (!t.width || !t.height || !t.depth || t.width % f->block_w || t.height % f->block_h)
+        return false;
+    block->width = (uint32_t)t.width;
+    block->height = (uint32_t)t.height;
+    block->depth = (uint32_t)t.depth;
+    return true;
+}
+
+/* Whether a block is Sparse Resources > Standard Sparse Image Block Shapes
+ * for the format (texel blocks of 8 to 128 bits; others have none). */
+static bool pvk_sparse_standard_block(const struct pvk_format *f, VkImageType type, uint32_t samples, VkExtent3D b)
+{
+    /* by log2(bytes per texel block): width, height (in texel blocks), depth */
+    static const uint16_t shape_2d[5][2] = { { 256, 256 }, { 256, 128 }, { 128, 128 }, { 128, 64 }, { 64, 64 } };
+    static const uint16_t shape_3d[5][3] = {
+        { 64, 32, 32 }, { 32, 32, 32 }, { 32, 32, 16 }, { 32, 16, 16 }, { 16, 16, 16 }
+    };
+    static const uint16_t shape_ms[4][5][2] = {
+        { { 128, 256 }, { 128, 128 }, { 64, 128 }, { 64, 64 }, { 32, 64 } },  /* 2 samples */
+        { { 128, 128 }, { 128, 64 }, { 64, 64 }, { 64, 32 }, { 32, 32 } },    /* 4 */
+        { { 64, 128 }, { 64, 64 }, { 32, 64 }, { 32, 32 }, { 16, 32 } },      /* 8 */
+        { { 64, 64 }, { 64, 32 }, { 32, 32 }, { 32, 16 }, { 16, 16 } },       /* 16 */
+    };
+    uint32_t w, h, d = 1, k;
+    switch (f->bytes) {
+    case 1: k = 0; break;
+    case 2: k = 1; break;
+    case 4: k = 2; break;
+    case 8: k = 3; break;
+    case 16: k = 4; break;
+    default: return false;
+    }
+    if (type == VK_IMAGE_TYPE_3D) {
+        w = shape_3d[k][0];
+        h = shape_3d[k][1];
+        d = shape_3d[k][2];
+    } else if (samples > 1) {
+        uint32_t s = samples == 2 ? 0 : samples == 4 ? 1 : samples == 8 ? 2 : 3;
+        w = shape_ms[s][k][0];
+        h = shape_ms[s][k][1];
+    } else {
+        w = shape_2d[k][0];
+        h = shape_2d[k][1];
+    }
+    return b.width == w * f->block_w && b.height == h * f->block_h && b.depth == d;
+}
+
+/* The aspects of a format's images (sparse requirements and properties). */
+static VkImageAspectFlags pvk_format_aspects(const struct pvk_format *f)
+{
+    if (pvk_format_is_color(f))
+        return VK_IMAGE_ASPECT_COLOR_BIT;
+    return (pvk_format_has_depth(f) ? VK_IMAGE_ASPECT_DEPTH_BIT : 0) |
+           (pvk_format_has_stencil(f) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0);
+}
+
+/* VkSparseImageFormatProperties::flags of a block. */
+static VkSparseImageFormatFlags pvk_sparse_format_flags(const struct pvk_format *f, VkImageType type,
+                                                        uint32_t samples, VkExtent3D block)
+{
+    return VK_SPARSE_IMAGE_FORMAT_ALIGNED_MIP_SIZE_BIT |
+           (pvk_sparse_standard_block(f, type, samples, block) ? 0 : VK_SPARSE_IMAGE_FORMAT_NONSTANDARD_BLOCK_SIZE_BIT);
+}
+
+/* Whether the sparse images of a format (any type and sample count Metal
+ * has) all have the standard block shapes, per kind; cleared where not. */
+static void pvk_sparse_standard_shapes(const struct pvk_physical_device *pd, const struct pvk_format *f,
+                                       VkBool32 *std2d, VkBool32 *std2dms, VkBool32 *std3d)
+{
+    VkFormatFeatureFlags2 features = pvk_format_image_features(pd, f, false);
+    VkExtent3D b;
+    uint32_t s;
+    if (!features)
+        return;
+    if (pvk_sparse_block(pd, f, VK_IMAGE_TYPE_2D, 1, &b) && !pvk_sparse_standard_block(f, VK_IMAGE_TYPE_2D, 1, b))
+        *std2d = VK_FALSE;
+    if ((f->caps & PVK_FC_MSAA) &&
+        (features & (VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT)))
+        for (s = 2; s <= 4; s *= 2)
+            if (pvk_MTLDevice_supportsTextureSampleCount(pd->mtl_device, s) &&
+                pvk_sparse_block(pd, f, VK_IMAGE_TYPE_2D, s, &b) && !pvk_sparse_standard_block(f, VK_IMAGE_TYPE_2D, s, b))
+                *std2dms = VK_FALSE;
+    if (pvk_format_is_color(f) && !(f->flags & PVK_FF_NO_3D) && pvk_sparse_block(pd, f, VK_IMAGE_TYPE_3D, 1, &b) &&
+        !pvk_sparse_standard_block(f, VK_IMAGE_TYPE_3D, 1, b))
+        *std3d = VK_FALSE;
+}
+
+/* The sparse features (SPARSE RESOURCES), where Metal has placement sparse
+ * resources with 64 KB pages:
+ *   sparseBinding, sparseResidencyBuffer, sparseResidencyImage2D/3D
+ *   sparseResidency2Samples, 4Samples   where the GPU has the sample count
+ *   sparseResidencyAliased              (measured, above)
+ *   shaderResourceResidency             the OpImageSparse* instructions are
+ *                                       MSL's sparse_sample, sparse_read, ...
+ *                                       whose resident() is the residency code
+ *                                       (section 13)
+ * shaderResourceMinLod is independent of them: the MinLod operand is MSL's
+ * min_lod_clamp, or a level() of at least it (section 13). sparseProperties:
+ * each residencyStandard*BlockShape where every format's blocks of that kind
+ * are the standard shapes (checked per format here: on M4 Max single-sample
+ * 2D, not 2 samples nor 3D), residencyAlignedMipSize and
+ * residencyNonResidentStrict (measured, above). sparseAddressSpaceSize:
+ * placement sparse buffers of maxBufferLength each, about 2 TB of them, fit
+ * on M4 Max (macOS 27.2); half of it is reported. Before macOS/iOS 26.4
+ * (no supportsPlacementSparse) none of the sparse features is reported. */
+static void pvk_physical_device_init_sparse(struct pvk_physical_device *pd)
+{
+    VkPhysicalDeviceFeatures *c = &pd->features.core;
+    VkPhysicalDeviceSparseProperties *sp = &pd->properties.sparseProperties;
+    id mtl = pd->mtl_device;
+    VkBool32 std2d = VK_TRUE, std2dms = VK_TRUE, std3d = VK_TRUE;
+    size_t i;
+
+    c->shaderResourceMinLod = VK_TRUE;
+    pd->sparse = pvk_NSObject_respondsToSelector(mtl, sel_registerName("supportsPlacementSparse")) &&
+                 pvk_MTLDevice_supportsPlacementSparse(mtl) &&
+                 pvk_MTLDevice_sparseTileSizeInBytesForSparsePageSize(mtl, PVK_SPARSE_PAGE) == PVK_SPARSE_BLOCK;
+    if (!pd->sparse)
+        return;
+    c->sparseBinding = VK_TRUE;
+    c->sparseResidencyBuffer = VK_TRUE;
+    c->sparseResidencyImage2D = VK_TRUE;
+    c->sparseResidencyImage3D = VK_TRUE;
+    c->sparseResidency2Samples = pvk_MTLDevice_supportsTextureSampleCount(mtl, 2) ? VK_TRUE : VK_FALSE;
+    c->sparseResidency4Samples = pvk_MTLDevice_supportsTextureSampleCount(mtl, 4) ? VK_TRUE : VK_FALSE;
+    c->sparseResidencyAliased = VK_TRUE;
+    c->shaderResourceResidency = VK_TRUE;
+    pd->properties.limits.sparseAddressSpaceSize = 1ull << 40;
+
+    for (i = 0; i < PVK_ARRAY_SIZE(pvk_core_formats); i++)
+        if (pvk_format((VkFormat)i))
+            pvk_sparse_standard_shapes(pd, pvk_format((VkFormat)i), &std2d, &std2dms, &std3d);
+    for (i = 0; i < PVK_ARRAY_SIZE(pvk_later_formats); i++)
+        pvk_sparse_standard_shapes(pd, &pvk_later_formats[i].info, &std2d, &std2dms, &std3d);
+    sp->residencyStandard2DBlockShape = std2d;
+    sp->residencyStandard2DMultisampleBlockShape = std2dms;
+    sp->residencyStandard3DBlockShape = std3d;
+    sp->residencyAlignedMipSize = VK_TRUE;
+    sp->residencyNonResidentStrict = VK_TRUE;
+}
+
+/* Image creation flags PlasmaVK supports (sparse ones with the sparse
+ * features: PVK_IMAGE_CREATE_SPARSE). Protected memory, device-group split
+ * binding and block-texel views (Metal cannot view a compressed texture with
+ * an uncompressed format) are not supported. */
 #define PVK_IMAGE_CREATE_FLAGS                                                                                    \
     (VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT | VK_IMAGE_CREATE_ALIAS_BIT |      \
      VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT)
@@ -33726,10 +34017,19 @@ static VkResult pvk_image_format_properties(const struct pvk_physical_device *pd
         props->maxResourceSize = max_size < (1ul << 31) ? (1ul << 31) : max_size;
         return VK_SUCCESS;
     }
-    if (!features || (info->flags & ~(VkImageCreateFlags)PVK_IMAGE_CREATE_FLAGS))
+    if (!features || (info->flags & ~(VkImageCreateFlags)(PVK_IMAGE_CREATE_FLAGS | PVK_IMAGE_CREATE_SPARSE)))
         return VK_ERROR_FORMAT_NOT_SUPPORTED;
     if (!(info->flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT) && !pvk_image_usage_supported(usage, features))
         return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    if (info->flags & PVK_IMAGE_CREATE_SPARSE) {
+        /* Sparse images (SPARSE RESOURCES): optimal tiling, private storage
+         * (no host image copies), 2D or 3D with residency. */
+        VkExtent3D block;
+        if (linear || (usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT) ||
+            !pvk_sparse_block(pd, f, info->type, 1, &block) ||
+            ((info->flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) && info->type == VK_IMAGE_TYPE_1D))
+            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    }
     switch (info->type) {
     case VK_IMAGE_TYPE_1D:
         if (f->block_w > 1 || linear)
@@ -33756,6 +34056,14 @@ static VkResult pvk_image_format_properties(const struct pvk_physical_device *pd
                                                      props->maxExtent.depth);
     props->maxArrayLayers = linear || info->type == VK_IMAGE_TYPE_3D ? 1 : l->maxImageArrayLayers;
     props->sampleCounts = pvk_image_sample_counts(pd, f, info->type, info->tiling, info->flags, usage, optimal);
+    if (info->flags & PVK_IMAGE_CREATE_SPARSE) {
+        VkSampleCountFlags s, counts = props->sampleCounts;
+        VkExtent3D block;
+        props->sampleCounts = 0;
+        for (s = 1; s <= counts; s <<= 1)
+            if ((counts & s) && pvk_sparse_block(pd, f, info->type, s, &block))
+                props->sampleCounts |= s;
+    }
     /* A texture is placed in one MTLHeap, at most maxBufferLength long. */
     max_size = pvk_MTLDevice_maxBufferLength(pd->mtl_device);
     props->maxResourceSize = max_size < (1ul << 31) ? (1ul << 31) : max_size;
@@ -33810,21 +34118,53 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceImageFormatProperties(VkPhysic
                                        pImageFormatProperties);
 }
 
-/* Sparse images are not supported: no format has sparse properties. */
+/* Sparse Resources > Sparse Image Format Properties: one entry, for all the
+ * format's aspects (images are one texture), where sparse residency is
+ * supported for the arguments (SPARSE RESOURCES); else none. */
+static uint32_t pvk_sparse_image_format_properties(const struct pvk_physical_device *pd,
+                                                   const VkPhysicalDeviceSparseImageFormatInfo2 *in,
+                                                   VkSparseImageFormatProperties *out)
+{
+    const struct pvk_format *f = pvk_format(in->format);
+    VkPhysicalDeviceImageFormatInfo2 info;
+    VkImageFormatProperties props;
+    VkExtent3D block;
+
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
+    info.format = in->format;
+    info.type = in->type;
+    info.tiling = in->tiling;
+    info.usage = in->usage;
+    info.flags = VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT;
+    if (pvk_image_format_properties(pd, &info, &props) != VK_SUCCESS || !(props.sampleCounts & in->samples) ||
+        !pvk_sparse_block(pd, f, in->type, (uint32_t)in->samples, &block))
+        return 0;
+    out->aspectMask = pvk_format_aspects(f);
+    out->imageGranularity = block;
+    out->flags = pvk_sparse_format_flags(f, in->type, (uint32_t)in->samples, block);
+    return 1;
+}
+
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceSparseImageFormatProperties(VkPhysicalDevice physicalDevice, VkFormat format,
                                                                           VkImageType type, VkSampleCountFlagBits samples,
                                                                           VkImageUsageFlags usage, VkImageTiling tiling,
                                                                           uint32_t *pPropertyCount,
                                                                           VkSparseImageFormatProperties *pProperties)
 {
-    (void)physicalDevice;
-    (void)format;
-    (void)type;
-    (void)samples;
-    (void)usage;
-    (void)tiling;
-    (void)pProperties;
-    *pPropertyCount = 0;
+    VkPhysicalDeviceSparseImageFormatInfo2 info;
+    VkSparseImageFormatProperties p;
+    uint32_t n;
+
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SPARSE_IMAGE_FORMAT_INFO_2;
+    info.format = format;
+    info.type = type;
+    info.samples = samples;
+    info.usage = usage;
+    info.tiling = tiling;
+    n = pvk_sparse_image_format_properties((const struct pvk_physical_device *)physicalDevice, &info, &p);
+    pvk_enumerate(&p, sizeof(p), n, pPropertyCount, pProperties);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceSparseImageFormatProperties2(VkPhysicalDevice physicalDevice,
@@ -33832,10 +34172,17 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceSparseImageFormatProperties2(VkPhy
                                                                            uint32_t *pPropertyCount,
                                                                            VkSparseImageFormatProperties2 *pProperties)
 {
-    (void)physicalDevice;
-    (void)pFormatInfo;
-    (void)pProperties;
-    *pPropertyCount = 0;
+    VkSparseImageFormatProperties p;
+    uint32_t n = pvk_sparse_image_format_properties((const struct pvk_physical_device *)physicalDevice, pFormatInfo, &p);
+    if (!pProperties) {
+        *pPropertyCount = n;
+        return;
+    }
+    if (*pPropertyCount < n)
+        n = *pPropertyCount;
+    if (n)
+        pProperties[0].properties = p; /* (keeps sType and pNext) */
+    *pPropertyCount = n;
 }
 
 /* ---- External handles, tools ----
@@ -34399,6 +34746,13 @@ static void pvk_device_free(struct pvk_device *device)
     uint32_t i;
     pvk_device_finish(device);
     pvk_private_data_free_reserve(device);
+    pvk_release(device->sparse_flush_texture);
+    pvk_release(device->sparse_flush_buffer);
+    pvk_release(device->sparse_heap);
+    pvk_release(device->sparse_queue);
+    pvk_release(device->sparse_event);
+    if (device->sparse_lock_ready)
+        pthread_mutex_destroy(&device->sparse_lock);
     for (i = 0; i < device->queue_count; i++) {
         pvk_queue_finish(&device->queues[i]);
         pvk_release(device->queues[i].mtl_queue);
@@ -34446,6 +34800,59 @@ static void pvk_device_evict(struct pvk_device *device, id allocation)
     pthread_mutex_unlock(&device->residency_lock);
 }
 
+/* With sparseBinding: what vkQueueBindSparse maps after unbinding to make
+ * the unbinds take effect (section 16): a one-block placement heap, a
+ * one-block placement sparse buffer and a texture of one tile (128x128
+ * 32-bit texels), all resident; and what texel buffer views of sparse
+ * buffers need (section 11). */
+static VkResult pvk_device_init_sparse(struct pvk_device *device)
+{
+    id mtl = device->physical_device->mtl_device, desc;
+    pvk_MTLResourceOptions options = PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked;
+    void *pool;
+
+    if (pthread_mutex_init(&device->sparse_lock, NULL) != 0)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    device->sparse_lock_ready = true;
+    device->sparse_queue = pvk_MTLDevice_newMTL4CommandQueue(mtl);
+    device->sparse_event = pvk_MTLDevice_newSharedEvent(mtl);
+    if (!device->sparse_queue || !device->sparse_event)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    pvk_MTL4CommandQueue_addResidencySet(device->sparse_queue, device->residency_set);
+    pool = objc_autoreleasePoolPush();
+
+    desc = pvk_MTLHeapDescriptor_new();
+    if (desc) {
+        pvk_MTLHeapDescriptor_setType(desc, PVK_MTLHeapTypePlacement);
+        pvk_MTLHeapDescriptor_setResourceOptions(desc, options);
+        pvk_MTLHeapDescriptor_setSize(desc, PVK_SPARSE_BLOCK);
+        pvk_MTLHeapDescriptor_setMaxCompatiblePlacementSparsePageSize(desc, PVK_SPARSE_PAGE);
+        device->sparse_heap = pvk_MTLDevice_newHeapWithDescriptor(mtl, desc);
+        pvk_release(desc);
+    }
+    device->sparse_flush_buffer =
+        pvk_MTLDevice_newBufferWithLength_options_placementSparsePageSize(mtl, PVK_SPARSE_BLOCK, options, PVK_SPARSE_PAGE);
+    desc = pvk_MTLTextureDescriptor_new();
+    if (desc) {
+        pvk_MTLTextureDescriptor_setPixelFormat(desc, PVK_MTLPixelFormatR32Uint);
+        pvk_MTLTextureDescriptor_setWidth(desc, 128);
+        pvk_MTLTextureDescriptor_setHeight(desc, 128);
+        pvk_MTLTextureDescriptor_setResourceOptions(desc, options);
+        pvk_MTLTextureDescriptor_setUsage(desc, PVK_MTLTextureUsageShaderRead);
+        pvk_MTLTextureDescriptor_setAllowGPUOptimizedContents(desc, false);
+        pvk_MTLTextureDescriptor_setPlacementSparsePageSize(desc, PVK_SPARSE_PAGE);
+        device->sparse_flush_texture = pvk_MTLDevice_newTextureWithDescriptor(mtl, desc);
+        pvk_release(desc);
+    }
+    objc_autoreleasePoolPop(pool);
+    if (!device->sparse_heap || !device->sparse_flush_buffer || !device->sparse_flush_texture)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    pvk_device_make_resident(device, device->sparse_heap);
+    pvk_device_make_resident(device, device->sparse_flush_buffer);
+    pvk_device_make_resident(device, device->sparse_flush_texture);
+    return VK_SUCCESS;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
                                               const VkDeviceCreateInfo *pCreateInfo,
                                               const VkAllocationCallbacks *pAllocator,
@@ -34470,6 +34877,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
     }
     device->physical_device = pd;
     device->features = features;
+    device->visibility = PVK_MTL4VisibilityOptionDevice;
+    if (features.core.sparseBinding)
+        device->visibility |= PVK_MTL4VisibilityOptionResourceAlias;
     if (alloc) {
         device->alloc = *alloc;
         device->has_alloc = true;
@@ -34481,6 +34891,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
     if (pvk_private_data_reserve(device, pCreateInfo) != VK_SUCCESS) {
         pvk_device_free(device);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    if (features.core.sparseBinding && pvk_device_init_sparse(device) != VK_SUCCESS) {
+        pvk_device_free(device);
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
 
     for (i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
@@ -34605,6 +35019,12 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, u
  * A VkBuffer is only (memory, offset, size). Metal 4 binds buffers by GPU
  * address, so its device address is the memory's gpuAddress + offset;
  * commands that want an id<MTLBuffer> take the memory's buffer and offset.
+ *
+ * Sparse buffers (section 7, SPARSE RESOURCES) are placement sparse
+ * MTLBuffers made with the VkBuffer, posing as memory of their own (struct
+ * pvk_buffer's sparse) so commands treat them like any bound buffer; with
+ * sparseBinding enabled, allocations of 64 KB or more are heaps sparse
+ * resources can map onto.
  * ========================================================================== */
 
 struct pvk_device_memory {
@@ -34616,13 +35036,30 @@ struct pvk_device_memory {
     uint32_t type_index;
 };
 
+/* Where a page of a sparse buffer with texel buffer usage is bound. */
+struct pvk_sparse_page {
+    id heap;            /* the bound memory's MTLHeap, retained; NULL: unbound */
+    unsigned long tile; /* in it, in 64 KB tiles */
+};
+
+struct pvk_buffer_view;
+
 struct pvk_buffer {
     VkDeviceSize size;
     VkBufferUsageFlags2 usage;
     VkBufferCreateFlags flags;
-    struct pvk_device_memory *memory; /* NULL until bound */
+    struct pvk_device_memory *memory; /* NULL until bound; sparse buffers: &sparse */
     VkDeviceSize offset;
     pvk_MTLGPUAddress gpu_address; /* memory->gpu_address + offset */
+    /* Sparse buffers (SPARSE RESOURCES, section 7): their placement sparse
+     * MTLBuffer as memory of their own, private, never host-visible, with
+     * no heap. Commands use it like any memory's buffer; vkQueueBindSparse
+     * maps its pages (section 16). With texel buffer usage, also where each
+     * page is bound and the views that mirror the binding (section 11,
+     * BUFFER VIEWS), under the device's sparse_lock. */
+    struct pvk_device_memory sparse;
+    struct pvk_sparse_page *pages;
+    struct pvk_buffer_view *views;
 };
 
 /* Resource options of the memory types in section 7. Hazard tracking is off:
@@ -34675,6 +35112,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemory
         pvk_MTLHeapDescriptor_setType(desc, PVK_MTLHeapTypePlacement);
         pvk_MTLHeapDescriptor_setResourceOptions(desc, options);
         pvk_MTLHeapDescriptor_setSize(desc, pvk_MTLDevice_heapBufferSizeAndAlignWithLength_options(mtl, size, options).size);
+        /* Memory sparse resources may map onto (SPARSE RESOURCES, section 7):
+         * the heap's size becomes a multiple of 64 KB. */
+        if (device->features.core.sparseBinding && size >= PVK_SPARSE_BLOCK)
+            pvk_MTLHeapDescriptor_setMaxCompatiblePlacementSparsePageSize(desc, PVK_SPARSE_PAGE);
         memory->mtl_heap = pvk_MTLDevice_newHeapWithDescriptor(mtl, desc);
         pvk_release(desc);
     }
@@ -34794,10 +35235,19 @@ static VkBufferUsageFlags2 pvk_buffer_usage(const VkBufferCreateInfo *info)
     return info->usage;
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateBuffer(VkDevice device, const VkBufferCreateInfo *pCreateInfo,
+#define PVK_BUFFER_CREATE_SPARSE \
+    (VK_BUFFER_CREATE_SPARSE_BINDING_BIT | VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT | VK_BUFFER_CREATE_SPARSE_ALIASED_BIT)
+
+static VkDeviceSize pvk_round_up(VkDeviceSize x, VkDeviceSize align)
+{
+    return (x + align - 1) / align * align;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateBuffer(VkDevice _device, const VkBufferCreateInfo *pCreateInfo,
                                               const VkAllocationCallbacks *pAllocator, VkBuffer *pBuffer)
 {
-    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
     struct pvk_buffer *buffer = pvk_alloc(alloc, sizeof(*buffer), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
 
     if (!buffer)
@@ -34805,13 +35255,57 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateBuffer(VkDevice device, const VkBufferCre
     buffer->size = pCreateInfo->size;
     buffer->usage = pvk_buffer_usage(pCreateInfo);
     buffer->flags = pCreateInfo->flags;
+    if (buffer->flags & PVK_BUFFER_CREATE_SPARSE) {
+        struct pvk_device_memory *m = &buffer->sparse;
+        void *pool = objc_autoreleasePoolPush();
+        m->size = pvk_round_up(buffer->size, PVK_SPARSE_BLOCK);
+        m->mtl_buffer = pvk_MTLDevice_newBufferWithLength_options_placementSparsePageSize(
+            device->physical_device->mtl_device, m->size,
+            PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked, PVK_SPARSE_PAGE);
+        objc_autoreleasePoolPop(pool);
+        if (!m->mtl_buffer) {
+            pvk_free(alloc, buffer);
+            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        }
+        if (buffer->usage & (VK_BUFFER_USAGE_2_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_2_STORAGE_TEXEL_BUFFER_BIT)) {
+            buffer->pages = pvk_alloc(alloc, sizeof(*buffer->pages) * (size_t)(m->size / PVK_SPARSE_BLOCK),
+                                      VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+            if (!buffer->pages) {
+                pvk_release(m->mtl_buffer);
+                pvk_free(alloc, buffer);
+                return VK_ERROR_OUT_OF_HOST_MEMORY;
+            }
+        }
+        m->gpu_address = pvk_MTLBuffer_gpuAddress(m->mtl_buffer);
+        m->type_index = 0; /* private (pvk_memory_type_options) */
+        pvk_device_make_resident(device, m->mtl_buffer);
+        buffer->memory = m;
+        buffer->gpu_address = m->gpu_address;
+    }
     *pBuffer = (VkBuffer)buffer;
     return VK_SUCCESS;
 }
 
-VKAPI_ATTR void VKAPI_CALL vkDestroyBuffer(VkDevice device, VkBuffer buffer, const VkAllocationCallbacks *pAllocator)
+/* Section 11: detaches a sparse buffer's views and releases its page table
+ * (device->sparse_lock held). */
+static void pvk_sparse_buffer_forget(struct pvk_buffer *buffer);
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyBuffer(VkDevice _device, VkBuffer _buffer, const VkAllocationCallbacks *pAllocator)
 {
-    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), buffer);
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    struct pvk_buffer *buffer = (struct pvk_buffer *)_buffer;
+    if (buffer && buffer->pages) {
+        pthread_mutex_lock(&device->sparse_lock);
+        pvk_sparse_buffer_forget(buffer);
+        pthread_mutex_unlock(&device->sparse_lock);
+        pvk_free(alloc, buffer->pages);
+    }
+    if (buffer && buffer->sparse.mtl_buffer) {
+        pvk_device_evict(device, buffer->sparse.mtl_buffer);
+        pvk_release(buffer->sparse.mtl_buffer);
+    }
+    pvk_free(alloc, buffer);
 }
 
 /* Every memory type but the lazily allocated one, which only transient
@@ -34829,9 +35323,11 @@ static uint32_t pvk_buffer_memory_type_bits(const struct pvk_physical_device *pd
  * address it constrains placement: the largest binding alignment of section 7,
  * whatever the usage (vkGetDeviceBufferMemoryRequirements then needs no
  * buffer). It also covers Metal's 4 B index/indirect and 16 B
- * texture-to-buffer copy alignments. Sizes round up to it. Any memory type. */
+ * texture-to-buffer copy alignments. Sizes round up to it. Any memory type.
+ * Sparse buffers are bound in 64 KB blocks (SPARSE RESOURCES, section 7):
+ * that is their alignment, and their size a whole number of blocks. */
 static void pvk_buffer_memory_requirements(const struct pvk_device *device, VkDeviceSize size,
-                                           VkMemoryRequirements2 *pMemoryRequirements)
+                                           VkBufferCreateFlags flags, VkMemoryRequirements2 *pMemoryRequirements)
 {
     const struct pvk_physical_device *pd = device->physical_device;
     const VkPhysicalDeviceLimits *limits = &pd->properties.limits;
@@ -34843,6 +35339,8 @@ static void pvk_buffer_memory_requirements(const struct pvk_device *device, VkDe
         align = limits->minUniformBufferOffsetAlignment;
     if (limits->minTexelBufferOffsetAlignment > align)
         align = limits->minTexelBufferOffsetAlignment;
+    if (flags & PVK_BUFFER_CREATE_SPARSE)
+        align = PVK_SPARSE_BLOCK;
     req->size = (size + align - 1) & ~(align - 1);
     req->alignment = align;
     req->memoryTypeBits = pvk_buffer_memory_type_bits(pd);
@@ -34859,8 +35357,8 @@ static void pvk_buffer_memory_requirements(const struct pvk_device *device, VkDe
 VKAPI_ATTR void VKAPI_CALL vkGetBufferMemoryRequirements2(VkDevice device, const VkBufferMemoryRequirementsInfo2 *pInfo,
                                                           VkMemoryRequirements2 *pMemoryRequirements)
 {
-    pvk_buffer_memory_requirements((struct pvk_device *)device, ((struct pvk_buffer *)pInfo->buffer)->size,
-                                   pMemoryRequirements);
+    const struct pvk_buffer *buffer = (const struct pvk_buffer *)pInfo->buffer;
+    pvk_buffer_memory_requirements((struct pvk_device *)device, buffer->size, buffer->flags, pMemoryRequirements);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkGetBufferMemoryRequirements(VkDevice device, VkBuffer buffer,
@@ -34869,7 +35367,8 @@ VKAPI_ATTR void VKAPI_CALL vkGetBufferMemoryRequirements(VkDevice device, VkBuff
     VkMemoryRequirements2 req;
     memset(&req, 0, sizeof(req));
     req.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
-    pvk_buffer_memory_requirements((struct pvk_device *)device, ((struct pvk_buffer *)buffer)->size, &req);
+    pvk_buffer_memory_requirements((struct pvk_device *)device, ((struct pvk_buffer *)buffer)->size,
+                                   ((struct pvk_buffer *)buffer)->flags, &req);
     *pMemoryRequirements = req.memoryRequirements;
 }
 
@@ -34877,7 +35376,8 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceBufferMemoryRequirements(VkDevice device,
                                                                const VkDeviceBufferMemoryRequirements *pInfo,
                                                                VkMemoryRequirements2 *pMemoryRequirements)
 {
-    pvk_buffer_memory_requirements((struct pvk_device *)device, pInfo->pCreateInfo->size, pMemoryRequirements);
+    pvk_buffer_memory_requirements((struct pvk_device *)device, pInfo->pCreateInfo->size, pInfo->pCreateInfo->flags,
+                                   pMemoryRequirements);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkBindBufferMemory2(VkDevice device, uint32_t bindInfoCount,
@@ -34942,6 +35442,7 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  *                     (-[MTLBuffer newTextureWithDescriptor:offset:bytesPerRow:]),
  *                     rows aligned to minimumLinearTextureAlignmentForPixelFormat:;
  *     lazily allocated memory   a memoryless texture (tile memory only).
+ *   Sparse images are textures made at creation instead (SPARSE IMAGES).
  *   The heap and its buffer are in the device's residency set (section 10),
  *   which makes placed and linear textures resident. Memoryless textures own
  *   no memory, and Metal's validation layer rejects them in residency sets.
@@ -35083,11 +35584,18 @@ struct pvk_image_view {
 };
 
 struct pvk_buffer_view {
-    id mtl_texture; /* texture buffer over the bound memory's MTLBuffer */
+    id mtl_texture; /* texture buffer over the bound memory's MTLBuffer (sparse buffers: of its own) */
     /* section 11: */
     VkFormat format;
     VkDeviceSize offset, elements;
     bool resident; /* mtl_texture is in the device residency set */
+    /* Views of sparse buffers (BUFFER VIEWS): mtl_texture is a placement
+     * sparse texture buffer whose pages mirror the buffer's from page
+     * first_page on, in the buffer's list (device->sparse_lock); buffer
+     * NULL once the buffer is destroyed. */
+    struct pvk_buffer *sparse_buffer;
+    struct pvk_buffer_view *sparse_next;
+    unsigned long first_page, npages;
 };
 
 struct pvk_sampler {
@@ -35110,6 +35618,20 @@ struct pvk_image_plane {
     VkDeviceSize memory_offset; /* of the texture in memory */
 };
 
+/* Where the blocks of a sparse image are (SPARSE IMAGES). */
+#define PVK_SPARSE_MAX_LEVELS 16 /* pvk_mip_levels of the largest images: 15 */
+struct pvk_sparse_layout {
+    VkExtent3D block;        /* in texels: Metal's 64 KB tile */
+    VkSparseImageFormatFlags flags;
+    uint32_t layers;         /* array layers (Metal slices); 3D: 1 */
+    uint32_t levels;
+    uint32_t tail_first;     /* imageMipTailFirstLod; levels: no tail */
+    uint32_t metal_tail;     /* MTLTexture.firstMipmapInTail; levels: no Metal tail */
+    VkDeviceSize metal_tail_size; /* tailSizeInBytes, per slice */
+    VkDeviceSize level_offset[PVK_SPARSE_MAX_LEVELS + 1]; /* in a layer, for levels up to metal_tail */
+    VkDeviceSize layer_size; /* bytes of a layer's blocks: level_offset[metal_tail] + metal_tail_size */
+};
+
 struct pvk_image {
     VkFormat format;
     const struct pvk_format *fmt;
@@ -35129,6 +35651,7 @@ struct pvk_image {
     const struct pvk_ycbcr_format *ycbcr; /* a format requiring a sampler Y'CbCr conversion */
     uint32_t plane_count;                 /* multi-planar formats: 2 or 3 planes[], else 0 */
     struct pvk_image_plane planes[3];
+    struct pvk_sparse_layout *sparse;     /* sparse images (mtl_texture made at creation), else NULL */
 };
 
 /* Whether a view format makes Metal reinterpret the image's pixels (beyond
@@ -35373,9 +35896,108 @@ static uint32_t pvk_image_memory_type_bits(const struct pvk_physical_device *pd,
     return bits;
 }
 
-/* plane_aspect: the plane of a disjoint image (VkImagePlaneMemoryRequirementsInfo), else 0. */
+/* ---- Sparse images ----
+ *
+ * SPARSE IMAGES (SPARSE RESOURCES, section 7)
+ *   A sparse image is a placement sparse MTLTexture, private, without
+ *   lossless compression, made by vkCreateImage and resident from then on.
+ *   Its blocks are Metal's 64 KB tiles, its memory requirements those blocks
+ *   laid out layer by layer (struct pvk_sparse_layout): in each layer the
+ *   blocks of level 0, 1, ... up to Metal's tail, each level's in row-major
+ *   order (x, then y, then z: the order in which Metal maps a region's tiles
+ *   onto consecutive heap tiles), then the blocks of Metal's tail for that
+ *   slice. That is the opaque layout of VkSparseImageOpaqueMemoryBindInfo.
+ *   The mip tail (VK_SPARSE_IMAGE_FORMAT_ALIGNED_MIP_SIZE_BIT) starts at the
+ *   first level that is not a whole number of blocks in each dimension, or
+ *   at Metal's tail if that comes first; Metal's tail starts at the same
+ *   level or later, and the levels before it are mapped tile by tile, part
+ *   of the Vulkan tail. Each layer has its own tail (stride: a layer's
+ *   blocks). There is no metadata aspect. */
+
+/* A new placement sparse texture of a sparse image (section 7's checks passed). */
+static id pvk_sparse_texture(const struct pvk_physical_device *pd, const struct pvk_image *image)
+{
+    id desc = pvk_image_descriptor(image, PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked);
+    id texture = NULL;
+    if (desc) {
+        pvk_MTLTextureDescriptor_setAllowGPUOptimizedContents(desc, false);
+        pvk_MTLTextureDescriptor_setPlacementSparsePageSize(desc, PVK_SPARSE_PAGE);
+        texture = pvk_MTLDevice_newTextureWithDescriptor(pd->mtl_device, desc);
+        pvk_release(desc);
+    }
+    return texture;
+}
+
+/* The block layout of a sparse image made as texture (its Metal tail). */
+static bool pvk_sparse_layout_init(const struct pvk_physical_device *pd, const struct pvk_image *image, id texture,
+                                   struct pvk_sparse_layout *l)
+{
+    VkDeviceSize off = 0;
+    uint32_t lv;
+
+    memset(l, 0, sizeof(*l));
+    if (!pvk_sparse_block(pd, image->fmt, image->type, image->samples, &l->block) ||
+        image->levels > PVK_SPARSE_MAX_LEVELS)
+        return false;
+    l->flags = pvk_sparse_format_flags(image->fmt, image->type, image->samples, l->block);
+    l->layers = image->type == VK_IMAGE_TYPE_3D ? 1 : image->layers;
+    l->levels = image->levels;
+    l->metal_tail = (uint32_t)pvk_MTLTexture_firstMipmapInTail(texture);
+    if (l->metal_tail > l->levels)
+        l->metal_tail = l->levels;
+    l->metal_tail_size = l->metal_tail < l->levels ? pvk_MTLTexture_tailSizeInBytes(texture) : 0;
+    l->tail_first = l->metal_tail;
+    for (lv = 0; lv < l->metal_tail; lv++) {
+        uint32_t w = image->extent.width >> lv, h = image->type == VK_IMAGE_TYPE_1D ? 1 : image->extent.height >> lv;
+        uint32_t d = image->type == VK_IMAGE_TYPE_3D ? image->extent.depth >> lv : 1;
+        w = w ? w : 1;
+        h = h ? h : 1;
+        d = d ? d : 1;
+        if (lv < l->tail_first && (w % l->block.width || h % l->block.height || d % l->block.depth))
+            l->tail_first = lv;
+        l->level_offset[lv] = off;
+        off += (VkDeviceSize)((w + l->block.width - 1) / l->block.width) * ((h + l->block.height - 1) / l->block.height) *
+               ((d + l->block.depth - 1) / l->block.depth) * PVK_SPARSE_BLOCK;
+    }
+    l->level_offset[l->metal_tail] = off;
+    l->layer_size = off + pvk_round_up(l->metal_tail_size, PVK_SPARSE_BLOCK);
+    return true;
+}
+
+/* The block layout of sparse images of a create info (vkGetDevice*): of a
+ * texture made for the query. */
+static bool pvk_sparse_layout_query(const struct pvk_physical_device *pd, const struct pvk_image *image,
+                                    struct pvk_sparse_layout *l)
+{
+    void *pool = objc_autoreleasePoolPush();
+    id texture = pvk_sparse_texture(pd, image);
+    bool ok = texture && pvk_sparse_layout_init(pd, image, texture, l);
+    pvk_release(texture);
+    objc_autoreleasePoolPop(pool);
+    return ok;
+}
+
+/* VkSparseImageMemoryRequirements of a layout: one, for every aspect. */
+static void pvk_sparse_requirements(const struct pvk_image *image, const struct pvk_sparse_layout *l,
+                                    VkSparseImageMemoryRequirements *r)
+{
+    memset(r, 0, sizeof(*r));
+    r->formatProperties.aspectMask = pvk_format_aspects(image->fmt);
+    r->formatProperties.imageGranularity = l->block;
+    r->formatProperties.flags = l->flags;
+    r->imageMipTailFirstLod = l->tail_first;
+    if (l->tail_first < l->levels) {
+        r->imageMipTailOffset = l->level_offset[l->tail_first];
+        r->imageMipTailSize = l->layer_size - l->level_offset[l->tail_first];
+        r->imageMipTailStride = l->layer_size;
+    }
+}
+
+/* plane_aspect: the plane of a disjoint image (VkImagePlaneMemoryRequirementsInfo), else 0.
+ * layout: a sparse image's blocks (NULL: not sparse). */
 static void pvk_image_memory_requirements(const struct pvk_device *device, const struct pvk_image *image,
-                                          VkImageAspectFlags plane_aspect, VkMemoryRequirements2 *pMemoryRequirements)
+                                          VkImageAspectFlags plane_aspect, const struct pvk_sparse_layout *layout,
+                                          VkMemoryRequirements2 *pMemoryRequirements)
 {
     const struct pvk_physical_device *pd = device->physical_device;
     VkMemoryRequirements *req = &pMemoryRequirements->memoryRequirements;
@@ -35384,7 +36006,10 @@ static void pvk_image_memory_requirements(const struct pvk_device *device, const
     uint32_t p;
 
     req->memoryTypeBits = pvk_image_memory_type_bits(pd, image);
-    if (image->plane_count && plane_aspect && (image->flags & VK_IMAGE_CREATE_DISJOINT_BIT)) {
+    if (layout) {
+        size = layout->layer_size * layout->layers;
+        align = PVK_SPARSE_BLOCK;
+    } else if (image->plane_count && plane_aspect && (image->flags & VK_IMAGE_CREATE_DISJOINT_BIT)) {
         const struct pvk_image_plane *pl = &image->planes[pvk_aspect_plane(image, plane_aspect)];
         size = pl->size;
         align = pl->align;
@@ -35424,43 +36049,65 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImage(VkDevice _device, const VkImageCrea
     if (!image)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     pvk_image_init(device->physical_device, image, pCreateInfo);
+    if (image->flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) { /* SPARSE IMAGES */
+        void *pool = objc_autoreleasePoolPush();
+        image->mtl_texture = pvk_sparse_texture(device->physical_device, image);
+        objc_autoreleasePoolPop(pool);
+        image->sparse = pvk_alloc(alloc, sizeof(*image->sparse), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+        if (!image->mtl_texture || !image->sparse ||
+            !pvk_sparse_layout_init(device->physical_device, image, image->mtl_texture, image->sparse)) {
+            VkResult r = image->sparse ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_ERROR_OUT_OF_HOST_MEMORY;
+            pvk_release(image->mtl_texture);
+            pvk_free(alloc, image->sparse);
+            pvk_free(alloc, image);
+            return r;
+        }
+        pvk_device_make_resident(device, image->mtl_texture);
+    }
     *pImage = (VkImage)image;
     return VK_SUCCESS;
 }
 
-VKAPI_ATTR void VKAPI_CALL vkDestroyImage(VkDevice device, VkImage _image, const VkAllocationCallbacks *pAllocator)
+VKAPI_ATTR void VKAPI_CALL vkDestroyImage(VkDevice _device, VkImage _image, const VkAllocationCallbacks *pAllocator)
 {
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
     struct pvk_image *image = (struct pvk_image *)_image;
     uint32_t p;
     if (!image)
         return;
+    if (image->sparse) {
+        pvk_device_evict(device, image->mtl_texture);
+        pvk_free(alloc, image->sparse);
+    }
     if (image->plane_count)
         for (p = 0; p < image->plane_count; p++)
             pvk_release(image->planes[p].mtl_texture);
     else
         pvk_release(image->mtl_texture);
-    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), image);
+    pvk_free(alloc, image);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkGetImageMemoryRequirements2(VkDevice device, const VkImageMemoryRequirementsInfo2 *pInfo,
                                                          VkMemoryRequirements2 *pMemoryRequirements)
 {
+    const struct pvk_image *image = (const struct pvk_image *)pInfo->image;
     const VkBaseInStructure *ext;
     VkImageAspectFlags plane = 0;
     for (ext = pInfo->pNext; ext; ext = ext->pNext)
         if (ext->sType == VK_STRUCTURE_TYPE_IMAGE_PLANE_MEMORY_REQUIREMENTS_INFO)
             plane = ((const VkImagePlaneMemoryRequirementsInfo *)ext)->planeAspect;
-    pvk_image_memory_requirements((struct pvk_device *)device, (const struct pvk_image *)pInfo->image, plane,
-                                  pMemoryRequirements);
+    pvk_image_memory_requirements((struct pvk_device *)device, image, plane, image->sparse, pMemoryRequirements);
 }
 
-VKAPI_ATTR void VKAPI_CALL vkGetImageMemoryRequirements(VkDevice device, VkImage image,
+VKAPI_ATTR void VKAPI_CALL vkGetImageMemoryRequirements(VkDevice device, VkImage _image,
                                                         VkMemoryRequirements *pMemoryRequirements)
 {
+    const struct pvk_image *image = (const struct pvk_image *)_image;
     VkMemoryRequirements2 req;
     memset(&req, 0, sizeof(req));
     req.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
-    pvk_image_memory_requirements((struct pvk_device *)device, (const struct pvk_image *)image, 0, &req);
+    pvk_image_memory_requirements((struct pvk_device *)device, image, 0, image->sparse, &req);
     *pMemoryRequirements = req.memoryRequirements;
 }
 
@@ -35468,44 +36115,80 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageMemoryRequirements(VkDevice _device, 
                                                               VkMemoryRequirements2 *pMemoryRequirements)
 {
     struct pvk_device *device = (struct pvk_device *)_device;
+    struct pvk_sparse_layout layout;
     struct pvk_image image;
+    bool sparse;
     pvk_image_init(device->physical_device, &image, pInfo->pCreateInfo);
-    if (!image.fmt || !image.fmt->mtl) {
+    sparse = (image.flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) != 0;
+    if (!image.fmt || !image.fmt->mtl || (sparse && !pvk_sparse_layout_query(device->physical_device, &image, &layout))) {
         memset(&pMemoryRequirements->memoryRequirements, 0, sizeof(pMemoryRequirements->memoryRequirements));
         return;
     }
-    pvk_image_memory_requirements(device, &image, pInfo->planeAspect, pMemoryRequirements);
+    pvk_image_memory_requirements(device, &image, pInfo->planeAspect, sparse ? &layout : NULL, pMemoryRequirements);
 }
 
-/* Sparse images are not supported: no image has sparse requirements. */
-VKAPI_ATTR void VKAPI_CALL vkGetImageSparseMemoryRequirements(VkDevice device, VkImage image,
+/* Sparse Resources > Sparse Image Memory Requirements: one entry for images
+ * with sparse residency (SPARSE IMAGES), none for others. */
+static uint32_t pvk_image_sparse_requirements(const struct pvk_image *image, const struct pvk_sparse_layout *layout,
+                                              VkSparseImageMemoryRequirements *r)
+{
+    if (!layout || !(image->flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT))
+        return 0;
+    pvk_sparse_requirements(image, layout, r);
+    return 1;
+}
+
+/* The count protocol for VkSparseImageMemoryRequirements2 (sType and pNext kept). */
+static void pvk_sparse_requirements2(uint32_t n, const VkSparseImageMemoryRequirements *r, uint32_t *pCount,
+                                     VkSparseImageMemoryRequirements2 *out)
+{
+    if (!out) {
+        *pCount = n;
+        return;
+    }
+    if (*pCount < n)
+        n = *pCount;
+    if (n)
+        out[0].memoryRequirements = *r;
+    *pCount = n;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetImageSparseMemoryRequirements(VkDevice device, VkImage _image,
                                                               uint32_t *pSparseMemoryRequirementCount,
                                                               VkSparseImageMemoryRequirements *pSparseMemoryRequirements)
 {
+    const struct pvk_image *image = (const struct pvk_image *)_image;
+    VkSparseImageMemoryRequirements r;
+    uint32_t n = pvk_image_sparse_requirements(image, image->sparse, &r);
     (void)device;
-    (void)image;
-    (void)pSparseMemoryRequirements;
-    *pSparseMemoryRequirementCount = 0;
+    pvk_enumerate(&r, sizeof(r), n, pSparseMemoryRequirementCount, pSparseMemoryRequirements);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkGetImageSparseMemoryRequirements2(VkDevice device, const VkImageSparseMemoryRequirementsInfo2 *pInfo,
                                                                uint32_t *pSparseMemoryRequirementCount,
                                                                VkSparseImageMemoryRequirements2 *pSparseMemoryRequirements)
 {
+    const struct pvk_image *image = (const struct pvk_image *)pInfo->image;
+    VkSparseImageMemoryRequirements r;
+    uint32_t n = pvk_image_sparse_requirements(image, image->sparse, &r);
     (void)device;
-    (void)pInfo;
-    (void)pSparseMemoryRequirements;
-    *pSparseMemoryRequirementCount = 0;
+    pvk_sparse_requirements2(n, &r, pSparseMemoryRequirementCount, pSparseMemoryRequirements);
 }
 
-VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageSparseMemoryRequirements(VkDevice device, const VkDeviceImageMemoryRequirements *pInfo,
+VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageSparseMemoryRequirements(VkDevice _device, const VkDeviceImageMemoryRequirements *pInfo,
                                                                     uint32_t *pSparseMemoryRequirementCount,
                                                                     VkSparseImageMemoryRequirements2 *pSparseMemoryRequirements)
 {
-    (void)device;
-    (void)pInfo;
-    (void)pSparseMemoryRequirements;
-    *pSparseMemoryRequirementCount = 0;
+    struct pvk_device *device = (struct pvk_device *)_device;
+    struct pvk_sparse_layout layout;
+    VkSparseImageMemoryRequirements r;
+    struct pvk_image image;
+    uint32_t n = 0;
+    pvk_image_init(device->physical_device, &image, pInfo->pCreateInfo);
+    if (image.fmt && image.fmt->mtl && (image.flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) &&
+        pvk_sparse_layout_query(device->physical_device, &image, &layout))
+        n = pvk_image_sparse_requirements(&image, &layout, &r);
+    pvk_sparse_requirements2(n, &r, pSparseMemoryRequirementCount, pSparseMemoryRequirements);
 }
 
 /* Binds the planes of a multi-planar image: every plane, at its offset, or
@@ -35938,16 +36621,123 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyImageView(VkDevice device, VkImageView image
 
 /* ---- Buffer views ----
  *
- * A texture buffer over the memory's MTLBuffer at the buffer's offset plus
- * the view's (section 7's minTexelBufferOffsetAlignment covers
- * minimumTextureBufferAlignmentForPixelFormat:). */
+ * BUFFER VIEWS
+ *   A texture buffer over the memory's MTLBuffer at the buffer's offset plus
+ *   the view's (section 7's minTexelBufferOffsetAlignment covers
+ *   minimumTextureBufferAlignmentForPixelFormat:).
+ *   Metal makes no texture buffer over a placement sparse buffer, so a view
+ *   of a sparse buffer is a placement sparse texture buffer of its own,
+ *   whose pages (its tail's tiles, linear: page k holds the view's bytes
+ *   k * 64 KB on, checked on M4 Max) are mapped onto the heap tiles the
+ *   buffer's pages are bound to: when the view is made, from the buffer's
+ *   page table (on the device's sparse queue, waited for), and by every
+ *   later bind of the buffer, on the binding queue right after the buffer's
+ *   own mapping (pvk_sparse_mirror). The view's first byte must be a page's:
+ *   views of sparse buffers at an offset that is not a multiple of 64 KB are
+ *   not supported (VK_ERROR_OUT_OF_DEVICE_MEMORY, logged), as their texels
+ *   would straddle pages. */
+
+static void pvk_sparse_buffer_forget(struct pvk_buffer *buffer)
+{
+    struct pvk_buffer_view *v;
+    unsigned long i, n = (unsigned long)(buffer->sparse.size / PVK_SPARSE_BLOCK);
+    for (v = buffer->views; v; v = v->sparse_next)
+        v->sparse_buffer = NULL;
+    buffer->views = NULL;
+    for (i = 0; i < n; i++)
+        pvk_release(buffer->pages[i].heap);
+}
+
+/* A buffer mapping operation of a sparse buffer with texel buffer usage, on
+ * its page table and views (device->sparse_lock held): the same mapping on
+ * the views' pages, issued on mtl_queue. */
+static void pvk_sparse_mirror(id mtl_queue, struct pvk_buffer *buffer, id heap,
+                              const pvk_MTL4UpdateSparseBufferMappingOperation *op)
+{
+    unsigned long first = op->bufferRange.location, end = first + op->bufferRange.length, i;
+    struct pvk_buffer_view *v;
+    for (i = first; i < end; i++) {
+        pvk_release(buffer->pages[i].heap);
+        buffer->pages[i].heap = pvk_retain(heap);
+        buffer->pages[i].tile = heap ? op->heapOffset + (i - first) : 0;
+    }
+    for (v = buffer->views; v; v = v->sparse_next) {
+        unsigned long a = first > v->first_page ? first : v->first_page;
+        unsigned long b = end < v->first_page + v->npages ? end : v->first_page + v->npages;
+        pvk_MTL4UpdateSparseTextureMappingOperation t;
+        if (a >= b)
+            continue;
+        memset(&t, 0, sizeof(t));
+        t.mode = op->mode;
+        t.textureRegion.origin.x = a - v->first_page;
+        t.textureRegion.size.width = b - a;
+        t.textureRegion.size.height = t.textureRegion.size.depth = 1;
+        t.heapOffset = heap ? op->heapOffset + (a - first) : 0;
+        pvk_MTL4CommandQueue_updateTextureMappings_heap_operations_count(mtl_queue, v->mtl_texture, heap, &t, 1);
+    }
+}
+
+/* A view of a sparse buffer (BUFFER VIEWS): its texture buffer, mapped as
+ * the buffer is bound. */
+static id pvk_sparse_buffer_view(struct pvk_device *device, struct pvk_buffer *buffer, struct pvk_buffer_view *view,
+                                 const struct pvk_format *f, pvk_MTLTextureUsage usage)
+{
+    id desc, texture = NULL;
+    unsigned long i;
+
+    if (view->offset % PVK_SPARSE_BLOCK) {
+        pvk_log(PVK_LOG_WARN, "vkCreateBufferView: views of sparse buffers must start at a multiple of 64 KB");
+        return NULL;
+    }
+    desc = pvk_MTLTextureDescriptor_textureBufferDescriptorWithPixelFormat_width_resourceOptions_usage(
+        f->mtl, view->elements, PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked, usage);
+    if (desc) {
+        pvk_MTLTextureDescriptor_setPlacementSparsePageSize(desc, PVK_SPARSE_PAGE);
+        texture = pvk_MTLDevice_newTextureWithDescriptor(device->physical_device->mtl_device, desc);
+    }
+    if (!texture || pvk_MTLTexture_firstMipmapInTail(texture) != 0) {
+        pvk_release(texture);
+        return NULL;
+    }
+    view->first_page = (unsigned long)(view->offset / PVK_SPARSE_BLOCK);
+    view->npages = (unsigned long)((view->elements * f->bytes + PVK_SPARSE_BLOCK - 1) / PVK_SPARSE_BLOCK);
+    view->mtl_texture = texture;
+    pthread_mutex_lock(&device->sparse_lock);
+    for (i = 0; i < view->npages;) { /* runs of pages bound to consecutive tiles of one heap */
+        const struct pvk_sparse_page *p = &buffer->pages[view->first_page + i];
+        pvk_MTL4UpdateSparseTextureMappingOperation t;
+        unsigned long n = 1;
+        if (!p->heap) {
+            i++;
+            continue;
+        }
+        while (i + n < view->npages && p[n].heap == p->heap && p[n].tile == p->tile + n)
+            n++;
+        memset(&t, 0, sizeof(t));
+        t.mode = PVK_MTLSparseTextureMappingModeMap;
+        t.textureRegion.origin.x = i;
+        t.textureRegion.size.width = n;
+        t.textureRegion.size.height = t.textureRegion.size.depth = 1;
+        t.heapOffset = p->tile;
+        pvk_MTL4CommandQueue_updateTextureMappings_heap_operations_count(device->sparse_queue, texture, p->heap, &t, 1);
+        i += n;
+    }
+    pvk_MTL4CommandQueue_signalEvent_value(device->sparse_queue, device->sparse_event, ++device->sparse_serial);
+    while (!pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(device->sparse_event, device->sparse_serial, 1000))
+        ;
+    view->sparse_buffer = buffer;
+    view->sparse_next = buffer->views;
+    buffer->views = view;
+    pthread_mutex_unlock(&device->sparse_lock);
+    return texture;
+}
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
                                                   const VkAllocationCallbacks *pAllocator, VkBufferView *pView)
 {
     struct pvk_device *device = (struct pvk_device *)_device;
     const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
-    const struct pvk_buffer *buffer = (const struct pvk_buffer *)pCreateInfo->buffer;
+    struct pvk_buffer *buffer = (struct pvk_buffer *)pCreateInfo->buffer;
     const struct pvk_format *f = pvk_format(pCreateInfo->format);
     VkBufferUsageFlags2 usage = buffer->usage;
     pvk_MTLTextureUsage mtl_usage = 0;
@@ -35977,15 +36767,19 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateBufferView(VkDevice _device, const VkBuff
     view->offset = pCreateInfo->offset;
     view->elements = range / f->bytes;
     pool = objc_autoreleasePoolPush();
-    desc = pvk_MTLTextureDescriptor_textureBufferDescriptorWithPixelFormat_width_resourceOptions_usage(
-        f->mtl, view->elements, pvk_memory_type_options[buffer->memory->type_index], mtl_usage);
-    if (desc && view->elements)
-        view->mtl_texture = pvk_MTLBuffer_newTextureWithDescriptor_offset_bytesPerRow(
-            buffer->memory->mtl_buffer, desc, buffer->offset + pCreateInfo->offset, view->elements * f->bytes);
+    if (buffer->pages && view->elements) { /* a sparse buffer */
+        pvk_sparse_buffer_view(device, buffer, view, f, mtl_usage);
+    } else {
+        desc = pvk_MTLTextureDescriptor_textureBufferDescriptorWithPixelFormat_width_resourceOptions_usage(
+            f->mtl, view->elements, pvk_memory_type_options[buffer->memory->type_index], mtl_usage);
+        if (desc && view->elements && !buffer->sparse.mtl_buffer)
+            view->mtl_texture = pvk_MTLBuffer_newTextureWithDescriptor_offset_bytesPerRow(
+                buffer->memory->mtl_buffer, desc, buffer->offset + pCreateInfo->offset, view->elements * f->bytes);
+    }
     objc_autoreleasePoolPop(pool);
     if (!view->mtl_texture) {
         pvk_free(alloc, view);
-        return VK_ERROR_OUT_OF_HOST_MEMORY;
+        return buffer->sparse.mtl_buffer ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_ERROR_OUT_OF_HOST_MEMORY;
     }
     pvk_device_make_resident(device, view->mtl_texture); /* as for image views */
     view->resident = true;
@@ -35998,6 +36792,18 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyBufferView(VkDevice device, VkBufferView buf
     struct pvk_buffer_view *view = (struct pvk_buffer_view *)bufferView;
     if (!view)
         return;
+    if (view->npages) { /* a view of a sparse buffer: off its list */
+        struct pvk_device *d = (struct pvk_device *)device;
+        pthread_mutex_lock(&d->sparse_lock);
+        if (view->sparse_buffer) {
+            struct pvk_buffer_view **p = &view->sparse_buffer->views;
+            while (*p && *p != view)
+                p = &(*p)->sparse_next;
+            if (*p)
+                *p = view->sparse_next;
+        }
+        pthread_mutex_unlock(&d->sparse_lock);
+    }
     if (view->resident)
         pvk_device_evict((struct pvk_device *)device, view->mtl_texture);
     pvk_release(view->mtl_texture);
@@ -37785,10 +38591,20 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   storage image's access (read, write, read_write) is what the variables
  *   of its type allow; read_write writes are followed by fence(), so the
  *   invocation's own later reads see them.
+ *   SPARSE RESIDENCY: OpImageSparseSample(Dref)Implicit/ExplicitLod,
+ *   OpImageSparseFetch, OpImageSparseRead and OpImageSparse(Dref)Gather are
+ *   the same calls as their non-sparse instructions with MSL's sparse_
+ *   functions (sparse_sample, sparse_sample_compare, sparse_read,
+ *   sparse_gather, sparse_gather_compare); their result struct is
+ *   { resident() ? 0 : 1, value() } (a ConstOffsets gather: resident if all
+ *   four are), and OpImageSparseTexelsResident tests the code for 0. Texel
+ *   buffers are never sparse (code 0); a robust read outside the image reads
+ *   nothing (code 0, zero texel).
  *   Not supported: implicit LOD and derivatives outside fragment shaders,
- *   sparse residency, atomics on cube images (not on Apple GPUs up to M4)
- *   and on float or 64-bit images, image atomic min/max of the other
- *   signedness than the image, writes to multisampled images; tessellation,
+ *   OpImageSparseSampleProj* (Vulkan forbids them), atomics on cube images
+ *   (not on Apple GPUs up to M4) and on float or 64-bit images, image atomic
+ *   min/max of the other signedness than the image, writes to multisampled
+ *   images; tessellation,
  *   geometry and mesh shaders, transform feedback; CullDistance (Metal has
  *   none), 64-bit and 8-bit stage inputs and outputs. A texture1d has one
  *   mip level (image_1d_as_2d for mipmapped 1D images).
@@ -38415,7 +39231,16 @@ enum {
     PVK_SPV_OpReturn = 253,
     PVK_SPV_OpReturnValue = 254,
     PVK_SPV_OpUnreachable = 255,
+    PVK_SPV_OpImageSparseSampleImplicitLod = 305,
+    PVK_SPV_OpImageSparseSampleExplicitLod = 306,
+    PVK_SPV_OpImageSparseSampleDrefImplicitLod = 307,
+    PVK_SPV_OpImageSparseSampleDrefExplicitLod = 308,
+    PVK_SPV_OpImageSparseFetch = 313,
+    PVK_SPV_OpImageSparseGather = 314,
+    PVK_SPV_OpImageSparseDrefGather = 315,
+    PVK_SPV_OpImageSparseTexelsResident = 316,
     PVK_SPV_OpNoLine = 317,
+    PVK_SPV_OpImageSparseRead = 320,
     PVK_SPV_OpModuleProcessed = 330,
     PVK_SPV_OpExecutionModeId = 331,
     PVK_SPV_OpDecorateId = 332,
@@ -39913,6 +40738,10 @@ static int pvk_spv_shape(uint32_t op)
     case PVK_SPV_OpImageQuerySize: case PVK_SPV_OpImageQueryLod: case PVK_SPV_OpImageQueryLevels:
     case PVK_SPV_OpImageQuerySamples: case PVK_SPV_OpIsHelperInvocationEXT: case PVK_SPV_OpGroupNonUniformRotateKHR:
     case PVK_SPV_OpExpectKHR: case PVK_SPV_OpPtrEqual: case PVK_SPV_OpPtrNotEqual: case PVK_SPV_OpPtrDiff:
+    case PVK_SPV_OpImageSparseSampleImplicitLod: case PVK_SPV_OpImageSparseSampleExplicitLod:
+    case PVK_SPV_OpImageSparseSampleDrefImplicitLod: case PVK_SPV_OpImageSparseSampleDrefExplicitLod:
+    case PVK_SPV_OpImageSparseFetch: case PVK_SPV_OpImageSparseGather: case PVK_SPV_OpImageSparseDrefGather:
+    case PVK_SPV_OpImageSparseTexelsResident: case PVK_SPV_OpImageSparseRead:
         return 2;
     default:
         break;
@@ -39940,8 +40769,10 @@ static int pvk_spv_shape(uint32_t op)
 
 static const char *pvk_spv_unsupported_reason(uint32_t op)
 {
-    if (op >= 305 && op <= 320)
-        return "sparse image instructions are not supported";
+    if (op >= 309 && op <= 312)
+        return "OpImageSparseSampleProj* are not allowed in Vulkan";
+    if (op == 318 || op == 319)
+        return "OpAtomicFlagTestAndSet and OpAtomicFlagClear need the Kernel capability";
     if (op == 101 || op == 102 || op == 45 || (op >= 4500 && op <= 4504))
         return "unsupported image instruction";
     if (op >= 4421 && op <= 4432)
@@ -40283,6 +41114,7 @@ static void pvk_spv_capability(struct pvk_spv *ctx, uint32_t cap)
     case 22: case 39: /* Int16, Int8 */
     case 28: case 29: case 30: case 31: /* Uniform/SampledImage/StorageBuffer/StorageImageArrayDynamicIndexing */
     case 25: case 27: case 34: /* ImageGatherExtended, StorageImageMultisample, ImageCubeArray */
+    case 41: /* SparseResidency (SPARSE RESIDENCY) */
     case 42: case 43: case 44: case 45: /* MinLod, Sampled1D, Image1D, SampledCubeArray */
     case 46: case 47: case 48: case 49: /* SampledBuffer, ImageBuffer, ImageMSArray, StorageImageExtendedFormats */
     case 50: /* ImageQuery */
@@ -40321,8 +41153,6 @@ static void pvk_spv_capability(struct pvk_spv *ctx, uint32_t cap)
         pvk_spv_fail(ctx, "clustered subgroup reductions are not supported (VK_SUBGROUP_FEATURE_CLUSTERED_BIT)");
     case 4423:
         pvk_spv_fail(ctx, "SPV_KHR_shader_ballot is not supported (use the GroupNonUniform instructions)");
-    case 41:
-        pvk_spv_fail(ctx, "sparse residency is not supported");
     case 36: case 37:
         pvk_spv_fail(ctx, "rectangle images are not supported (Vulkan has none)");
     case 5288: case 5350:
@@ -41511,11 +42341,14 @@ static uint32_t pvk_spv_literal_word(uint32_t op)
     switch (op) {
     case PVK_SPV_OpImageSampleImplicitLod: case PVK_SPV_OpImageSampleExplicitLod:
     case PVK_SPV_OpImageSampleProjImplicitLod: case PVK_SPV_OpImageSampleProjExplicitLod: case PVK_SPV_OpImageFetch:
-    case PVK_SPV_OpImageRead:
+    case PVK_SPV_OpImageRead: case PVK_SPV_OpImageSparseSampleImplicitLod: case PVK_SPV_OpImageSparseSampleExplicitLod:
+    case PVK_SPV_OpImageSparseFetch: case PVK_SPV_OpImageSparseRead:
         return 5;
     case PVK_SPV_OpImageSampleDrefImplicitLod: case PVK_SPV_OpImageSampleDrefExplicitLod:
     case PVK_SPV_OpImageSampleProjDrefImplicitLod: case PVK_SPV_OpImageSampleProjDrefExplicitLod:
-    case PVK_SPV_OpImageGather: case PVK_SPV_OpImageDrefGather:
+    case PVK_SPV_OpImageGather: case PVK_SPV_OpImageDrefGather: case PVK_SPV_OpImageSparseSampleDrefImplicitLod:
+    case PVK_SPV_OpImageSparseSampleDrefExplicitLod: case PVK_SPV_OpImageSparseGather:
+    case PVK_SPV_OpImageSparseDrefGather:
         return 6;
     case PVK_SPV_OpImageWrite:
         return 4;
@@ -43905,12 +44738,13 @@ static const char *pvk_spv_texel_args(struct pvk_spv *ctx, const struct pvk_spv_
     return e;
 }
 
-/* Result rid from a texel e: 4 components of the image's sampled type, or
- * a depth texture's scalar (n == 1), which reads as (d, 0, 0, 1). */
-static void pvk_spv_texel_result(struct pvk_spv *ctx, uint32_t rid, const char *e, uint32_t n,
-                                 const struct pvk_spv_type *it)
+/* A texel e as type r (of result rid): e is 4 components of the image's
+ * sampled type, or a depth texture's scalar (n == 1), which reads as
+ * (d, 0, 0, 1). */
+static const char *pvk_spv_texel_as(struct pvk_spv *ctx, uint32_t rid, struct pvk_spv_type *r, const char *e,
+                                    uint32_t n, const struct pvk_spv_type *it)
 {
-    struct pvk_spv_type *r = pvk_spv_vtype(ctx, rid), *rs = pvk_spv_scalar_of(ctx, r);
+    struct pvk_spv_type *rs = pvk_spv_scalar_of(ctx, r);
     struct pvk_spv_type *s = pvk_spv_type(ctx, it->elem);
     uint32_t rn = pvk_spv_components(r);
     if (!rs || rs->op == PVK_SPV_OpTypeBool || (rs->op == PVK_SPV_OpTypeFloat) != (s->op == PVK_SPV_OpTypeFloat))
@@ -43923,7 +44757,63 @@ static void pvk_spv_texel_result(struct pvk_spv *ctx, uint32_t rid, const char *
         e = pvk_spv_fmt(ctx, "%s.%.*s", e, (int)rn, "xyzw");
     if (strcmp(rs->msl, s->msl) != 0)
         e = rs->width == s->width ? pvk_spv_fmt(ctx, "as_type<%s>(%s)", r->msl, e) : pvk_spv_fmt(ctx, "%s(%s)", r->msl, e);
-    pvk_spv_set(ctx, rid, e);
+    return e;
+}
+
+/* Result rid from a texel e (pvk_spv_texel_as). */
+static void pvk_spv_texel_result(struct pvk_spv *ctx, uint32_t rid, const char *e, uint32_t n,
+                                 const struct pvk_spv_type *it)
+{
+    pvk_spv_set(ctx, rid, pvk_spv_texel_as(ctx, rid, pvk_spv_vtype(ctx, rid), e, n, it));
+}
+
+/* Result rid of an OpImageSparse* instruction (SPARSE RESIDENCY) from the
+ * MSL sparse_* calls e[0..count) (four for a ConstOffsets gather, whose
+ * texel is .w of each): the struct { residency code, texel }. The code is 0
+ * when every texel was resident, else 1 (OpImageSparseTexelsResident tests
+ * for 0). ok: the robust access condition (NULL: none); outside it nothing
+ * is read and the result is code 0 with a zero texel. n: as for
+ * pvk_spv_texel_as. */
+static void pvk_spv_sparse_result(struct pvk_spv *ctx, uint32_t rid, const char *const *e, uint32_t count, uint32_t n,
+                                  const struct pvk_spv_type *it, const char *ok)
+{
+    struct pvk_spv_id *x = pvk_spv_get(ctx, rid);
+    struct pvk_spv_type *r = pvk_spv_vtype(ctx, rid), *ct, *tt;
+    const char *tmp[4], *vals[2], *resident = NULL, *texel, *name = NULL;
+    uint32_t k;
+
+    if (r->op != PVK_SPV_OpTypeStruct || pvk_spv_type_parts(ctx, r) != 2)
+        pvk_spv_fail(ctx, "a sparse image instruction returns a struct of a residency code and a texel");
+    ct = pvk_spv_type(ctx, pvk_spv_part_type(ctx, r, 0));
+    tt = pvk_spv_type(ctx, pvk_spv_part_type(ctx, r, 1));
+    if (ct->op != PVK_SPV_OpTypeInt || ct->width != 32)
+        pvk_spv_fail(ctx, "a residency code is a 32-bit integer");
+    if (ok) {
+        name = pvk_spv_result(ctx, rid);
+        pvk_spv_if_open(ctx, ok);
+    }
+    for (k = 0; k < count; k++) {
+        tmp[k] = pvk_spv_fmt(ctx, "%s_sparse%u", x->msl, k);
+        pvk_spv_line(ctx, "auto %s = %s;", tmp[k], e[k]);
+        resident = pvk_spv_fmt(ctx, "%s%s%s.resident()", resident ? resident : "", resident ? " && " : "", tmp[k]);
+    }
+    if (count == 4)
+        texel = pvk_spv_fmt(ctx, "%s4(%s.value().w, %s.value().w, %s.value().w, %s.value().w)",
+                            pvk_spv_type(ctx, it->elem)->msl, tmp[0], tmp[1], tmp[2], tmp[3]);
+    else
+        texel = pvk_spv_fmt(ctx, "%s.value()", tmp[0]);
+    vals[0] = pvk_spv_fmt(ctx, "%s((%s) ? 0 : 1)", ct->msl, resident);
+    vals[1] = pvk_spv_texel_as(ctx, rid, tt, texel, n, it);
+    if (!ok) {
+        pvk_spv_set(ctx, rid, pvk_spv_struct_init(ctx, r, vals));
+        return;
+    }
+    pvk_spv_line(ctx, "%s = %s;", name, pvk_spv_struct_init(ctx, r, vals));
+    pvk_spv_if_close(ctx, ok);
+    vals[0] = pvk_spv_zero(ctx, pvk_spv_part_type(ctx, r, 0));
+    vals[1] = pvk_spv_zero(ctx, pvk_spv_part_type(ctx, r, 1));
+    pvk_spv_line(ctx, "else");
+    pvk_spv_line(ctx, "    %s = %s;", name, pvk_spv_struct_init(ctx, r, vals));
 }
 
 /* tex as the depth texture type of image type it (a Dref on an image not
@@ -44191,10 +45081,13 @@ static void pvk_spv_ycbcr_sample(struct pvk_spv *ctx, uint32_t rid, uint32_t si,
     pvk_spv_texel_result(ctx, rid, e, 4, it);
 }
 
-/* OpImageSample*Lod (Dref, Proj; implicit LOD in fragment shaders). */
+/* OpImageSample*Lod (Dref, Proj; implicit LOD in fragment shaders), and
+ * OpImageSparseSample*Lod (Dref; SPARSE RESIDENCY): MSL's sparse_sample. */
 static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
-    uint32_t op = in->op, rid = in->w[2], si = pvk_spv_arg(ctx, in, 3), coord = pvk_spv_arg(ctx, in, 4);
+    bool sparse = in->op >= PVK_SPV_OpImageSparseSampleImplicitLod && in->op <= PVK_SPV_OpImageSparseSampleDrefExplicitLod;
+    uint32_t op = sparse ? in->op - PVK_SPV_OpImageSparseSampleImplicitLod + PVK_SPV_OpImageSampleImplicitLod : in->op;
+    uint32_t rid = in->w[2], si = pvk_spv_arg(ctx, in, 3), coord = pvk_spv_arg(ctx, in, 4);
     bool dref = op == PVK_SPV_OpImageSampleDrefExplicitLod || op == PVK_SPV_OpImageSampleProjDrefExplicitLod ||
                 op == PVK_SPV_OpImageSampleDrefImplicitLod || op == PVK_SPV_OpImageSampleProjDrefImplicitLod;
     bool proj = op == PVK_SPV_OpImageSampleProjExplicitLod || op == PVK_SPV_OpImageSampleProjDrefExplicitLod ||
@@ -44225,8 +45118,9 @@ static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn 
         pvk_spv_fail(ctx, "multisampled images cannot be sampled");
     c = pvk_spv_sample_coord(ctx, it, tex, coord, proj, &layer, &q);
     if (pvk_spv_get(ctx, si)->ycbcr) {
-        if (dref || o.const_offset || o.offset || it->img.dim != PVK_SPV_Dim2D || it->img.arrayed)
-            pvk_spv_fail(ctx, "sampling with a Y'CbCr conversion takes no depth reference or offset, on a 2D image");
+        if (dref || o.const_offset || o.offset || it->img.dim != PVK_SPV_Dim2D || it->img.arrayed || sparse)
+            pvk_spv_fail(ctx, "sampling with a Y'CbCr conversion takes no depth reference or offset, on a 2D image, "
+                              "and has no residency code (Y'CbCr images are not sparse)");
         pvk_spv_ycbcr_sample(ctx, rid, si, pvk_spv_get(ctx, si)->ycbcr, it, c, implicit, &o);
         return;
     }
@@ -44271,7 +45165,7 @@ static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn 
     /* texture1d: sample(s, x[, layer]) only (a single level). */
     if (native_1d)
         opt = NULL;
-    e = pvk_spv_fmt(ctx, "%s.%s(%s, %s", tex, dref ? "sample_compare" : "sample", smp, c);
+    e = pvk_spv_fmt(ctx, "%s.%s%s(%s, %s", tex, sparse ? "sparse_" : "", dref ? "sample_compare" : "sample", smp, c);
     if (layer)
         e = pvk_spv_fmt(ctx, "%s, %s", e, layer);
     if (d)
@@ -44281,6 +45175,11 @@ static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn 
     if (off)
         e = pvk_spv_fmt(ctx, "%s, %s", e, off);
     e = pvk_spv_fmt(ctx, "%s)", e);
+    if (sparse) {
+        pvk_spv_sparse_result(ctx, rid, &e, 1,
+                              dref || strncmp(tex, "depth", 5) == 0 || strncmp(it->msl, "depth", 5) == 0 ? 1 : 4, it, NULL);
+        return;
+    }
     if (dref) {
         if (pvk_spv_vtype(ctx, rid)->op != PVK_SPV_OpTypeFloat)
             pvk_spv_fail(ctx, "a depth comparison returns a float");
@@ -44290,11 +45189,13 @@ static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn 
     pvk_spv_texel_result(ctx, rid, e, strncmp(tex, "depth", 5) == 0 || strncmp(it->msl, "depth", 5) == 0 ? 1 : 4, it);
 }
 
-/* OpImageGather / OpImageDrefGather. */
+/* OpImageGather / OpImageDrefGather, and OpImageSparse(Dref)Gather
+ * (SPARSE RESIDENCY): MSL's sparse_gather(_compare). */
 static void pvk_spv_image_gather(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     uint32_t rid = in->w[2], si = pvk_spv_arg(ctx, in, 3), coord = pvk_spv_arg(ctx, in, 4), k;
-    bool dref = in->op == PVK_SPV_OpImageDrefGather;
+    bool sparse = in->op == PVK_SPV_OpImageSparseGather || in->op == PVK_SPV_OpImageSparseDrefGather;
+    bool dref = in->op == PVK_SPV_OpImageDrefGather || in->op == PVK_SPV_OpImageSparseDrefGather;
     struct pvk_spv_type *it = pvk_spv_image_type(ctx, si, true);
     struct pvk_spv_imgops o;
     const char *tex = pvk_spv_fmt(ctx, "%s.t", pvk_spv_val(ctx, si)), *smp = pvk_spv_fmt(ctx, "%s.s", pvk_spv_val(ctx, si));
@@ -44338,7 +45239,8 @@ static void pvk_spv_image_gather(struct pvk_spv *ctx, const struct pvk_spv_insn 
     if (!offs[0] && comp && !cube)
         offs[0] = "int2(0)"; /* Metal: offset before component */
     for (k = 0; k < noffs; k++) {
-        const char *e = pvk_spv_fmt(ctx, "%s.%s(%s, %s", tex, dref ? "gather_compare" : "gather", smp, c);
+        const char *e = pvk_spv_fmt(ctx, "%s.%s%s(%s, %s", tex, sparse ? "sparse_" : "", dref ? "gather_compare" : "gather",
+                                    smp, c);
         if (layer)
             e = pvk_spv_fmt(ctx, "%s, %s", e, layer);
         if (d)
@@ -44349,23 +45251,34 @@ static void pvk_spv_image_gather(struct pvk_spv *ctx, const struct pvk_spv_insn 
             e = pvk_spv_fmt(ctx, "%s, %s", e, comp);
         g[k] = pvk_spv_fmt(ctx, "%s)", e);
     }
+    if (sparse) {
+        pvk_spv_sparse_result(ctx, rid, g, noffs, 4, it, NULL);
+        return;
+    }
     if (noffs == 4)
         g[0] = pvk_spv_fmt(ctx, "%s4(%s.w, %s.w, %s.w, %s.w)", pvk_spv_type(ctx, it->elem)->msl, g[0], g[1], g[2], g[3]);
     pvk_spv_texel_result(ctx, rid, g[0], 4, it);
 }
 
-/* OpImageFetch (sampled images) and OpImageRead (storage images). */
+/* OpImageFetch (sampled images) and OpImageRead (storage images), and
+ * OpImageSparseFetch / OpImageSparseRead (SPARSE RESIDENCY): MSL's
+ * sparse_read (texel buffers are never sparse: always resident). */
 static void pvk_spv_image_read(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     uint32_t rid = in->w[2], img = pvk_spv_arg(ctx, in, 3), coord = pvk_spv_arg(ctx, in, 4);
-    bool fetch = in->op == PVK_SPV_OpImageFetch;
+    bool sparse = in->op == PVK_SPV_OpImageSparseFetch || in->op == PVK_SPV_OpImageSparseRead;
+    bool fetch = in->op == PVK_SPV_OpImageFetch || in->op == PVK_SPV_OpImageSparseFetch;
     struct pvk_spv_type *it = pvk_spv_image_type(ctx, img, false);
     struct pvk_spv_imgops o;
-    const char *tex = pvk_spv_val(ctx, img), *args, *e, *ok;
+    const char *tex = pvk_spv_val(ctx, img), *args, *e, *ok, *read = sparse ? "sparse_read" : "read";
 
     pvk_spv_image_operands(ctx, in, 5, &o);
     if (o.mask & (PVK_SPV_ImgBias | PVK_SPV_ImgGrad | PVK_SPV_ImgConstOffsets | PVK_SPV_ImgMinLod))
         pvk_spv_fail(ctx, "unsupported image operands for a texel read");
+    if (sparse && it->img.dim == PVK_SPV_DimSubpassData)
+        pvk_spv_fail(ctx, "sparse reads of input attachments");
+    if (sparse && it->img.dim == PVK_SPV_DimBuffer)
+        read = "read"; /* (resident: the code is set below) */
     if (it->img.dim == PVK_SPV_DimSubpassData) {
         /* subpassLoad: the image value is the framebuffer-fetched color. The
          * coordinate is (0, 0) by rule; a Sample operand reads the current
@@ -44387,14 +45300,31 @@ static void pvk_spv_image_read(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         pvk_spv_fail(ctx, "the Sample operand goes with multisampled images (only)");
     args = pvk_spv_texel_args(ctx, it, coord, o.const_offset ? o.const_offset : o.offset);
     if (o.sample)
-        e = pvk_spv_fmt(ctx, "%s.read(%s, uint(%s))", tex, args, pvk_spv_val(ctx, o.sample));
+        e = pvk_spv_fmt(ctx, "%s.%s(%s, uint(%s))", tex, read, args, pvk_spv_val(ctx, o.sample));
     else if (fetch && it->img.dim != PVK_SPV_DimBuffer)
-        e = pvk_spv_fmt(ctx, "%s.read(%s, %s)", tex, args, o.lod ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.lod)) : "0u");
+        e = pvk_spv_fmt(ctx, "%s.%s(%s, %s)", tex, read, args,
+                        o.lod ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.lod)) : "0u");
     else
-        e = pvk_spv_fmt(ctx, "%s.read(%s)", tex, args);
+        e = pvk_spv_fmt(ctx, "%s.%s(%s)", tex, read, args);
     ok = pvk_spv_texel_bounds(ctx, it, tex, coord, o.const_offset ? o.const_offset : o.offset,
                               fetch ? (o.lod ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.lod)) : "0u") : NULL,
                               o.sample ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.sample)) : NULL);
+    if (sparse && it->img.dim != PVK_SPV_DimBuffer) {
+        pvk_spv_sparse_result(ctx, rid, &e, 1, strncmp(it->msl, "depth", 5) == 0 ? 1 : 4, it, ok);
+        return;
+    }
+    if (sparse) { /* a texel buffer: { 0, texel } */
+        struct pvk_spv_type *r = pvk_spv_vtype(ctx, rid);
+        const char *vals[2];
+        if (r->op != PVK_SPV_OpTypeStruct || pvk_spv_type_parts(ctx, r) != 2)
+            pvk_spv_fail(ctx, "a sparse image instruction returns a struct of a residency code and a texel");
+        if (ok)
+            e = pvk_spv_fmt(ctx, "(%s ? %s : %s4(0))", ok, e, pvk_spv_type(ctx, it->elem)->msl);
+        vals[0] = pvk_spv_zero(ctx, pvk_spv_part_type(ctx, r, 0));
+        vals[1] = pvk_spv_texel_as(ctx, rid, pvk_spv_type(ctx, pvk_spv_part_type(ctx, r, 1)), e, 4, it);
+        pvk_spv_set(ctx, rid, pvk_spv_struct_init(ctx, r, vals));
+        return;
+    }
     if (ok) /* robust access: zero outside the image */
         e = pvk_spv_fmt(ctx, "(%s ? %s : %s)", ok, e,
                         strncmp(it->msl, "depth", 5) == 0 ? "0.0f"
@@ -44551,7 +45481,14 @@ static void pvk_spv_image_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     case PVK_SPV_OpImageSampleProjExplicitLod: case PVK_SPV_OpImageSampleProjDrefExplicitLod:
     case PVK_SPV_OpImageSampleImplicitLod: case PVK_SPV_OpImageSampleDrefImplicitLod:
     case PVK_SPV_OpImageSampleProjImplicitLod: case PVK_SPV_OpImageSampleProjDrefImplicitLod:
+    case PVK_SPV_OpImageSparseSampleImplicitLod: case PVK_SPV_OpImageSparseSampleExplicitLod:
+    case PVK_SPV_OpImageSparseSampleDrefImplicitLod: case PVK_SPV_OpImageSparseSampleDrefExplicitLod:
         pvk_spv_image_sample(ctx, in);
+        return;
+    case PVK_SPV_OpImageSparseTexelsResident: /* the code of pvk_spv_sparse_result */
+        if (pvk_spv_vtype(ctx, rid)->op != PVK_SPV_OpTypeBool)
+            pvk_spv_fail(ctx, "OpImageSparseTexelsResident returns a bool");
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "(%s == 0)", pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3))));
         return;
     case PVK_SPV_OpImageQueryLod: {
         /* (mip level the sampler would access, LOD relative to the base level) */
@@ -44573,9 +45510,11 @@ static void pvk_spv_image_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         return;
     }
     case PVK_SPV_OpImageGather: case PVK_SPV_OpImageDrefGather:
+    case PVK_SPV_OpImageSparseGather: case PVK_SPV_OpImageSparseDrefGather:
         pvk_spv_image_gather(ctx, in);
         return;
     case PVK_SPV_OpImageFetch: case PVK_SPV_OpImageRead:
+    case PVK_SPV_OpImageSparseFetch: case PVK_SPV_OpImageSparseRead:
         pvk_spv_image_read(ctx, in);
         return;
     case PVK_SPV_OpImageWrite:
@@ -45452,7 +46391,10 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
             return;
         }
         if ((op >= PVK_SPV_OpSampledImage && op <= PVK_SPV_OpImage) ||
-            (op >= PVK_SPV_OpImageQuerySizeLod && op <= PVK_SPV_OpImageQuerySamples)) {
+            (op >= PVK_SPV_OpImageQuerySizeLod && op <= PVK_SPV_OpImageQuerySamples) ||
+            (op >= PVK_SPV_OpImageSparseSampleImplicitLod && op <= PVK_SPV_OpImageSparseSampleDrefExplicitLod) ||
+            (op >= PVK_SPV_OpImageSparseFetch && op <= PVK_SPV_OpImageSparseTexelsResident) ||
+            op == PVK_SPV_OpImageSparseRead) {
             pvk_spv_image_insn(ctx, in);
             return;
         }
@@ -51281,7 +52223,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   semaphores; finally the queue's timeline event is signalled with the
  *   submission's serial. A fence is (timeline, serial). Semaphore waits are
  *   resolved when submitting or by the queue's thread, not by the queue's
- *   -waitForEvent:value: (see "Semaphore waits" below for why).
+ *   -waitForEvent:value: (see "Semaphore waits" below for why). The batches
+ *   of vkQueueBindSparse take the same path, their work being mapping
+ *   updates instead of a command buffer (SPARSE BINDING).
  *
  * TIMELINE
  *   Each queue has an MTLSharedEvent that reaches N once submission N and
@@ -51318,6 +52262,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   producer barrier at the end of an encoder would not when no command of
  *   that encoder follows the barrier. Stages are conservative
  *   (pvk_barrier_stages): any device stage is all the work an encoder runs.
+ *   Barriers flush to the device coherence point, and with sparseBinding
+ *   also for aliased virtual addresses (device->visibility, section 7's
+ *   SPARSE RESOURCES).
  *
  * SNORM ATTACHMENTS (pvk_render_rebind)
  *   Metal converts SNORM attachments through floats when it loads, stores
@@ -51370,6 +52317,29 @@ struct pvk_event_value {
     uint64_t value;
 };
 
+/* The mapping updates of a vkQueueBindSparse (SPARSE BINDING), made when it
+ * is called: per batch, a run of operations. One allocation. */
+struct pvk_sparse_op {
+    id resource; /* placement sparse MTLBuffer or MTLTexture */
+    id heap;     /* the bound memory's MTLHeap; NULL: unmap */
+    struct pvk_buffer *mirror; /* a buffer with texel buffer views to update (section 11), else NULL */
+    bool texture;
+    union {
+        pvk_MTL4UpdateSparseBufferMappingOperation buffer;
+        pvk_MTL4UpdateSparseTextureMappingOperation texture;
+    } u;
+};
+
+struct pvk_sparse_batch {
+    uint32_t first, count; /* in ops */
+    bool unmaps;           /* some unmap: flush after them */
+};
+
+struct pvk_sparse_binds {
+    struct pvk_sparse_batch *batches; /* one per VkBindSparseInfo */
+    struct pvk_sparse_op *ops;
+};
+
 /* The batches of one vkQueueSubmit from the first that must wait on the
  * host: the queue's thread waits for each batch's values, commits it and
  * signals its semaphores, then signals the timeline. One allocation. */
@@ -51378,6 +52348,7 @@ struct pvk_deferred_batch {
     uint32_t first;   /* in ops: nwaits waits, then nsignals signals */
     uint32_t nwaits, nsignals;
     id drawable;      /* presentation (section 18): cb copies into it, then it is presented; owned */
+    const struct pvk_sparse_batch *sparse; /* vkQueueBindSparse: its mapping updates (in the binds) */
 };
 
 struct pvk_deferred {
@@ -51386,6 +52357,7 @@ struct pvk_deferred {
     uint32_t nbatches;
     struct pvk_deferred_batch *batches;
     struct pvk_event_value *ops;
+    struct pvk_sparse_binds *binds; /* vkQueueBindSparse: owned */
 };
 
 /* ---- Queues ---- */
@@ -51426,6 +52398,7 @@ static void pvk_deferred_free(struct pvk_device *device, struct pvk_deferred *d)
         next = d->next;
         for (b = 0; b < d->nbatches; b++) /* presentations dropped when the device went away */
             pvk_release(d->batches[b].drawable);
+        pvk_free(pvk_device_alloc(device), d->binds);
         pvk_free(pvk_device_alloc(device), d);
     }
 }
@@ -51824,7 +52797,7 @@ static id pvk_encoder_get(struct pvk_encoder *e)
             /* After a barrier, and for semaphores signalled earlier on this
              * queue (pvk_queue_submit): wait for all earlier work. */
             pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-                e->enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, PVK_MTL4VisibilityOptionDevice);
+                e->enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, e->queue->device->visibility);
             e->consumer_barrier = true;
         }
     }
@@ -51872,11 +52845,11 @@ static void pvk_encode_barrier(struct pvk_encoder *e, const struct pvk_cmd_barri
         return;
     if (!e->consumer_barrier) {
         pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-            e->enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, PVK_MTL4VisibilityOptionDevice);
+            e->enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, e->queue->device->visibility);
         e->consumer_barrier = true;
     }
     pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
-        e->enc, PVK_STAGES_COMPUTE, PVK_STAGES_COMPUTE, PVK_MTL4VisibilityOptionDevice);
+        e->enc, PVK_STAGES_COMPUTE, PVK_STAGES_COMPUTE, e->queue->device->visibility);
 }
 
 static id pvk_device_fill_pipeline(struct pvk_device *device);
@@ -52257,7 +53230,7 @@ static id pvk_encoder_render(struct pvk_encoder *e, id pass)
     }
     if (e->waits || e->queue->ordered)
         pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-            enc, PVK_STAGES_ALL, PVK_STAGES_RENDER, PVK_MTL4VisibilityOptionDevice);
+            enc, PVK_STAGES_ALL, PVK_STAGES_RENDER, e->queue->device->visibility);
     return enc;
 }
 
@@ -52342,7 +53315,7 @@ static void pvk_encode_copy_staged(struct pvk_encoder *e, id enc, const struct p
         pvk_MTL4ComputeCommandEncoder_copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
             enc, c->src, ss, c->src_level, o1, s1, buffer, offset, row_bytes, 0, c->src_options);
         pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
-            enc, PVK_MTLStageBlit, PVK_MTLStageBlit, PVK_MTL4VisibilityOptionDevice);
+            enc, PVK_MTLStageBlit, PVK_MTLStageBlit, e->queue->device->visibility);
         pvk_MTL4ComputeCommandEncoder_copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin_options(
             enc, buffer, offset, row_bytes, 0, s2, c->dst, ds, c->dst_level, o2, c->dst_options);
     }
@@ -54040,7 +55013,7 @@ static void pvk_render_resolve_ds(struct pvk_encoder *e)
     }
     if (enc) { /* after the pass's stores */
         pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-            enc, PVK_STAGES_RENDER, PVK_STAGES_RENDER, PVK_MTL4VisibilityOptionDevice);
+            enc, PVK_STAGES_RENDER, PVK_STAGES_RENDER, e->queue->device->visibility);
         pvk_MTL4CommandEncoder_endEncoding(enc);
     } else if (e->result == VK_SUCCESS) {
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -54255,7 +55228,7 @@ static void pvk_render_rebind(struct pvk_encoder *e, uint32_t int_slots)
         return;
     /* the loads after the previous part's stores */
     pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-        enc, PVK_STAGES_RENDER, PVK_STAGES_RENDER, PVK_MTL4VisibilityOptionDevice);
+        enc, PVK_STAGES_RENDER, PVK_STAGES_RENDER, e->queue->device->visibility);
     r->int_slots = int_slots;
     pvk_render_takeover(e, enc);
     /* The copies of the depth and stencil are memoryless: the depth copy
@@ -54280,7 +55253,7 @@ static void pvk_render_split_resolve(struct pvk_encoder *e)
     if (!enc)
         return;
     pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-        enc, PVK_STAGES_RENDER, PVK_STAGES_RENDER, PVK_MTL4VisibilityOptionDevice);
+        enc, PVK_STAGES_RENDER, PVK_STAGES_RENDER, e->queue->device->visibility);
     pvk_MTL4CommandEncoder_endEncoding(enc);
     pvk_release(enc);
 }
@@ -54364,7 +55337,7 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
         return;
     if (e->waits || e->queue->ordered || e->prepassed)
         pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-            enc, PVK_STAGES_ALL, PVK_STAGES_RENDER, PVK_MTL4VisibilityOptionDevice);
+            enc, PVK_STAGES_ALL, PVK_STAGES_RENDER, e->queue->device->visibility);
     e->prepassed = false;
     r->suspended = false;
     r->resolve_depth = resolve_depth;
@@ -55068,7 +56041,7 @@ static id pvk_encoder_alone(struct pvk_encoder *e)
         return NULL;
     }
     pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-        enc, PVK_STAGES_ALL, PVK_MTLStageBlit, PVK_MTL4VisibilityOptionDevice);
+        enc, PVK_STAGES_ALL, PVK_MTLStageBlit, e->queue->device->visibility);
     return enc;
 }
 
@@ -55172,7 +56145,7 @@ static void pvk_encode_query_copy(struct pvk_encoder *e, const struct pvk_cmd_qu
         return;
     if (!e->consumer_barrier) { /* earlier encoders wrote the results and availability */
         pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-            enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, PVK_MTL4VisibilityOptionDevice);
+            enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, e->queue->device->visibility);
         e->consumer_barrier = true;
     }
     if (!(args = pvk_upload(e, sizeof(*args), 16, NULL, NULL, &address)))
@@ -55496,6 +56469,56 @@ static bool pvk_wait_covered(const VkSubmitInfo2 *submits, uint32_t batch, const
     return false;
 }
 
+/* Issues a vkQueueBindSparse batch's mapping updates (SPARSE BINDING):
+ * runs of operations on the same resource and heap go in one call. */
+static void pvk_sparse_execute(struct pvk_queue *queue, const struct pvk_sparse_binds *binds,
+                               const struct pvk_sparse_batch *batch)
+{
+    struct pvk_device *device = queue->device;
+    pvk_MTL4UpdateSparseBufferMappingOperation bops[64];
+    pvk_MTL4UpdateSparseTextureMappingOperation tops[64];
+    uint32_t i = batch->first, end = batch->first + batch->count, n;
+
+    while (i < end) {
+        const struct pvk_sparse_op *op = &binds->ops[i];
+        for (n = 0; i < end && n < 64 && binds->ops[i].resource == op->resource && binds->ops[i].heap == op->heap;
+             i++, n++) {
+            if (op->texture)
+                tops[n] = binds->ops[i].u.texture;
+            else
+                bops[n] = binds->ops[i].u.buffer;
+        }
+        if (op->texture)
+            pvk_MTL4CommandQueue_updateTextureMappings_heap_operations_count(queue->mtl_queue, op->resource, op->heap,
+                                                                            tops, n);
+        else
+            pvk_MTL4CommandQueue_updateBufferMappings_heap_operations_count(queue->mtl_queue, op->resource, op->heap,
+                                                                           bops, n);
+        if (op->mirror) { /* the buffer's texel buffer views follow (section 11, BUFFER VIEWS) */
+            uint32_t k;
+            pthread_mutex_lock(&device->sparse_lock);
+            for (k = 0; k < n; k++)
+                pvk_sparse_mirror(queue->mtl_queue, op->mirror, op->heap, &bops[k]);
+            pthread_mutex_unlock(&device->sparse_lock);
+        }
+    }
+    if (batch->unmaps) {
+        /* An unmap takes effect at the next map of its kind (SPARSE RESOURCES). */
+        pvk_MTL4UpdateSparseBufferMappingOperation b;
+        pvk_MTL4UpdateSparseTextureMappingOperation t;
+        memset(&b, 0, sizeof(b));
+        b.mode = PVK_MTLSparseTextureMappingModeMap;
+        b.bufferRange.length = 1;
+        pvk_MTL4CommandQueue_updateBufferMappings_heap_operations_count(queue->mtl_queue, device->sparse_flush_buffer,
+                                                                       device->sparse_heap, &b, 1);
+        memset(&t, 0, sizeof(t));
+        t.mode = PVK_MTLSparseTextureMappingModeMap;
+        t.textureRegion.size.width = t.textureRegion.size.height = t.textureRegion.size.depth = 1;
+        pvk_MTL4CommandQueue_updateTextureMappings_heap_operations_count(queue->mtl_queue, device->sparse_flush_texture,
+                                                                        device->sparse_heap, &t, 1);
+    }
+}
+
 static void *pvk_queue_thread(void *arg)
 {
     struct pvk_queue *queue = arg;
@@ -55519,6 +56542,8 @@ static void *pvk_queue_thread(void *arg)
                     stop = __atomic_load_n(&queue->stop, __ATOMIC_ACQUIRE);
             }
             if (!stop) {
+                if (db->sparse)
+                    pvk_sparse_execute(queue, d->binds, db->sparse);
                 if (db->drawable) {
                     pvk_present_commit(queue, db->cb, db->drawable);
                     pvk_release(db->drawable);
@@ -55549,9 +56574,11 @@ static void *pvk_queue_thread(void *arg)
 }
 
 /* The deferred part of a submission: batches first.. with the waits that
- * are not covered. NULL when out of memory. */
+ * are not covered (and their mapping updates: binds, NULL for
+ * vkQueueSubmit). NULL when out of memory. */
 static struct pvk_deferred *pvk_deferred_make(struct pvk_queue *queue, uint32_t count, const VkSubmitInfo2 *submits,
-                                              uint32_t first, const struct pvk_submission *list, uint64_t serial)
+                                              uint32_t first, const struct pvk_submission *list, uint64_t serial,
+                                              const struct pvk_sparse_binds *binds)
 {
     struct pvk_deferred *d;
     uint32_t i, k, nops = 0, n;
@@ -55572,6 +56599,7 @@ static struct pvk_deferred *pvk_deferred_make(struct pvk_queue *queue, uint32_t 
         while (list && list->batch < i)
             list = list->next;
         db->cb = list && list->batch == i ? list->cb : NULL;
+        db->sparse = binds ? &binds->batches[i] : NULL;
         db->first = n;
         for (k = 0; k < submits[i].waitSemaphoreInfoCount; k++) {
             const VkSemaphoreSubmitInfo *w = &submits[i].pWaitSemaphoreInfos[k];
@@ -55590,7 +56618,10 @@ static struct pvk_deferred *pvk_deferred_make(struct pvk_queue *queue, uint32_t 
     return d;
 }
 
-static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const VkSubmitInfo2 *submits, VkFence _fence)
+/* binds: vkQueueBindSparse's mapping updates, per batch (NULL for
+ * vkQueueSubmit); taken over, also on failure. */
+static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const VkSubmitInfo2 *submits, VkFence _fence,
+                                 struct pvk_sparse_binds *binds)
 {
     struct pvk_device *device = queue->device;
     struct pvk_fence *fence = (struct pvk_fence *)_fence;
@@ -55602,8 +56633,10 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
     bool backlog;
     void *pool;
 
-    if (pvk_device_lost(device))
+    if (pvk_device_lost(device)) {
+        pvk_free(pvk_device_alloc(device), binds);
         return VK_ERROR_DEVICE_LOST;
+    }
     pool = objc_autoreleasePoolPush();
     pthread_mutex_lock(&queue->lock);
     done = queue->done;
@@ -55645,7 +56678,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
             first = i;
     }
     if (result == VK_SUCCESS && (first < count || backlog)) {
-        deferred = pvk_deferred_make(queue, count, submits, first, list, serial);
+        deferred = pvk_deferred_make(queue, count, submits, first, list, serial, binds);
         if (!deferred)
             result = VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -55657,6 +56690,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
     }
     if (result != VK_SUCCESS) {
         pvk_deferred_free(device, deferred);
+        pvk_free(pvk_device_alloc(device), binds);
         pvk_queue_put_submissions(queue, list);
         objc_autoreleasePoolPop(pool);
         return result;
@@ -55664,6 +56698,8 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
 
     /* Batches before `first`: their waits are resolved. */
     for (s = list, i = 0; i < first; i++) {
+        if (binds)
+            pvk_sparse_execute(queue, binds, &binds->batches[i]);
         if (s && s->batch == i) {
             pvk_queue_commit(queue, s->cb);
             s = s->next;
@@ -55678,6 +56714,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
             if (!((struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[j].semaphore)->timeline)
                 ((struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[j].semaphore)->value++;
     if (deferred) {
+        deferred->binds = binds; /* (batches before `first` are done with them) */
         pthread_mutex_lock(&queue->lock);
         if (queue->deferred_tail)
             queue->deferred_tail->next = deferred;
@@ -55688,6 +56725,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
         pthread_mutex_unlock(&queue->lock);
     } else {
         pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, queue->timeline, serial);
+        pvk_free(pvk_device_alloc(device), binds);
     }
     queue->serial = serial;
     if (list) {
@@ -55711,7 +56749,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
 VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit2(VkQueue queue, uint32_t submitCount, const VkSubmitInfo2 *pSubmits,
                                               VkFence fence)
 {
-    return pvk_queue_submit((struct pvk_queue *)queue, submitCount, pSubmits, fence);
+    return pvk_queue_submit((struct pvk_queue *)queue, submitCount, pSubmits, fence, NULL);
 }
 
 /* vkQueueSubmit: the batches as VkSubmitInfo2. */
@@ -55732,7 +56770,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue _queue, uint32_t submitCoun
         ncb += pSubmits[i].commandBufferCount;
     }
     if (!submitCount)
-        return pvk_queue_submit(queue, 0, NULL, fence);
+        return pvk_queue_submit(queue, 0, NULL, fence, NULL);
     size = sizeof(*submits) * submitCount + sizeof(*sems) * nsem + sizeof(*cbs) * ncb;
     submits = pvk_alloc(alloc, size, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
     if (!submits)
@@ -55773,43 +56811,240 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue _queue, uint32_t submitCoun
                 sems->value = values->pSignalSemaphoreValues[j];
         }
     }
-    result = pvk_queue_submit(queue, submitCount, submits, fence);
+    result = pvk_queue_submit(queue, submitCount, submits, fence, NULL);
     pvk_free(alloc, submits);
     return result;
 }
 
-/* No queue family has VK_QUEUE_SPARSE_BINDING_BIT (section 7), so valid
- * usage allows no call (VUID-vkQueueBindSparse-queuetype). Should one come
- * anyway, its batches still wait for and signal their semaphores, as
- * batches without command buffers, and the fence is signaled. */
+/* ---- Sparse binding ----
+ *
+ * SPARSE BINDING (SPARSE RESOURCES, section 7)
+ *   vkQueueBindSparse turns its binds into Metal mapping operations when it
+ *   is called (struct pvk_sparse_binds): a buffer bind maps (or unmaps, with
+ *   no memory) the buffer's pages resourceOffset / 64 KB ... onto the
+ *   memory's heap tiles from memoryOffset / 64 KB; an image bind maps the
+ *   region's tiles of a level and layer, x, then y, then z, onto consecutive
+ *   heap tiles; an opaque image bind maps the blocks of a range of the
+ *   image's opaque layout (section 11, SPARSE IMAGES): runs of whole rows and
+ *   slices of a level's tiles, and of Metal's tail. Each VkBindSparseInfo is
+ *   then a batch of pvk_queue_submit without command buffers, whose work is
+ *   issuing its operations: at once if its semaphore waits are resolved,
+ *   else on the queue's thread (Semaphore waits). Mapping updates are queue
+ *   operations, done when a later -signalEvent: of the queue signals
+ *   (SPARSE RESOURCES); the batch's semaphores, the fence and the timeline are
+ *   signalled that way, after every earlier operation of the queue, as
+ *   Vulkan's signal operations require. Work that depends on a bind waits on
+ *   one of those semaphores, which PlasmaVK resolves on the host before
+ *   committing the work, so it starts after the updates are done (Metal asks
+ *   for a barrier on MTLStageResourceState only for work committed earlier).
+ *   A batch that unmaps also maps the device's flush buffer and texture
+ *   (pvk_device_init_sparse) after its operations: an unmap takes effect at
+ *   the next map of its kind. Binds to the metadata aspect do nothing: images
+ *   have none. */
+
+/* The tiles of level lv of a sparse image, per dimension. */
+static void pvk_sparse_level_tiles(const struct pvk_image *image, uint32_t lv, uint32_t *w, uint32_t *h, uint32_t *d)
+{
+    const struct pvk_sparse_layout *l = image->sparse;
+    uint32_t x = image->extent.width >> lv, y = image->type == VK_IMAGE_TYPE_1D ? 1 : image->extent.height >> lv;
+    uint32_t z = image->type == VK_IMAGE_TYPE_3D ? image->extent.depth >> lv : 1;
+    *w = ((x ? x : 1) + l->block.width - 1) / l->block.width;
+    *h = ((y ? y : 1) + l->block.height - 1) / l->block.height;
+    *d = ((z ? z : 1) + l->block.depth - 1) / l->block.depth;
+}
+
+/* A texture mapping operation of tiles (x, y, z) + (w, h, d) of a level and
+ * slice onto heap tiles from `tile` (no heap: unmap). */
+static void pvk_sparse_texture_op(struct pvk_sparse_op *op, id texture, id heap, uint32_t level, uint32_t slice,
+                                  uint32_t x, uint32_t y, uint32_t z, uint32_t w, uint32_t h, uint32_t d,
+                                  VkDeviceSize tile)
+{
+    pvk_MTL4UpdateSparseTextureMappingOperation *t = &op->u.texture;
+    op->resource = texture;
+    op->heap = heap;
+    op->mirror = NULL;
+    op->texture = true;
+    t->mode = heap ? PVK_MTLSparseTextureMappingModeMap : PVK_MTLSparseTextureMappingModeUnmap;
+    t->textureRegion.origin.x = x;
+    t->textureRegion.origin.y = y;
+    t->textureRegion.origin.z = z;
+    t->textureRegion.size.width = w;
+    t->textureRegion.size.height = h;
+    t->textureRegion.size.depth = d;
+    t->textureLevel = level;
+    t->textureSlice = slice;
+    t->heapOffset = heap ? (unsigned long)tile : 0;
+}
+
+/* The heap of a bind's memory: NULL (unmap) for VK_NULL_HANDLE. */
+static id pvk_sparse_heap(VkDeviceMemory memory)
+{
+    return memory ? ((struct pvk_device_memory *)memory)->mtl_heap : NULL;
+}
+
+/* The operations of an opaque image bind (ops NULL: only counts them). */
+static uint32_t pvk_sparse_opaque_ops(const struct pvk_image *image, const VkSparseMemoryBind *b,
+                                      struct pvk_sparse_op *ops)
+{
+    const struct pvk_sparse_layout *l = image->sparse;
+    id heap = pvk_sparse_heap(b->memory);
+    VkDeviceSize per_layer, blk, left, tile, run;
+    uint32_t n = 0;
+
+    if (!l || (b->flags & VK_SPARSE_MEMORY_BIND_METADATA_BIT))
+        return 0;
+    per_layer = l->layer_size / PVK_SPARSE_BLOCK;
+    blk = b->resourceOffset / PVK_SPARSE_BLOCK;
+    left = (b->size + PVK_SPARSE_BLOCK - 1) / PVK_SPARSE_BLOCK;
+    tile = b->memoryOffset / PVK_SPARSE_BLOCK;
+    for (; left && blk < per_layer * l->layers; blk += run, tile += run, left -= run) {
+        uint32_t layer = (uint32_t)(blk / per_layer), lv = 0, w, h, d;
+        VkDeviceSize local = blk % per_layer, i, k, t;
+        while (lv < l->metal_tail && local >= l->level_offset[lv + 1] / PVK_SPARSE_BLOCK)
+            lv++;
+        if (lv == l->metal_tail) { /* Metal's tail: tiles by x */
+            run = per_layer - local < left ? per_layer - local : left;
+            if (ops)
+                pvk_sparse_texture_op(&ops[n], image->mtl_texture, heap, lv, layer,
+                                      (uint32_t)(local - l->level_offset[lv] / PVK_SPARSE_BLOCK), 0, 0, (uint32_t)run, 1,
+                                      1, tile);
+            n++;
+            continue;
+        }
+        /* A run of level lv's tiles in row-major order: boxes of a partial
+         * row, whole rows, whole slices. */
+        pvk_sparse_level_tiles(image, lv, &w, &h, &d);
+        run = l->level_offset[lv + 1] / PVK_SPARSE_BLOCK - local;
+        if (run > left)
+            run = left;
+        for (i = local - l->level_offset[lv] / PVK_SPARSE_BLOCK, k = run, t = tile; k;) {
+            uint32_t x = (uint32_t)(i % w), y = (uint32_t)(i / w % h), z = (uint32_t)(i / ((VkDeviceSize)w * h));
+            uint32_t bw = w, bh = 1, bd = 1;
+            VkDeviceSize m;
+            if (x || k < w)
+                bw = (uint32_t)(w - x < k ? w - x : k);
+            else if (y || k < (VkDeviceSize)w * h)
+                bh = (uint32_t)(h - y < k / w ? h - y : k / w);
+            else
+                bh = h, bd = (uint32_t)(k / ((VkDeviceSize)w * h));
+            if (ops)
+                pvk_sparse_texture_op(&ops[n], image->mtl_texture, heap, lv, layer, x, y, z, bw, bh, bd, t);
+            n++;
+            m = (VkDeviceSize)bw * bh * bd;
+            i += m;
+            t += m;
+            k -= m;
+        }
+    }
+    return n;
+}
+
+/* The operation of a (partially resident) image bind. */
+static uint32_t pvk_sparse_image_op(const struct pvk_image *image, const VkSparseImageMemoryBind *b,
+                                    struct pvk_sparse_op *op)
+{
+    const struct pvk_sparse_layout *l = image->sparse;
+    uint32_t x, y, z;
+    if (!l || b->subresource.mipLevel >= l->metal_tail) /* (tail levels: opaque binds only) */
+        return 0;
+    if (op) {
+        x = (uint32_t)b->offset.x / l->block.width;
+        y = (uint32_t)b->offset.y / l->block.height;
+        z = (uint32_t)b->offset.z / l->block.depth;
+        pvk_sparse_texture_op(op, image->mtl_texture, pvk_sparse_heap(b->memory), b->subresource.mipLevel,
+                              image->type == VK_IMAGE_TYPE_3D ? 0 : b->subresource.arrayLayer, x, y, z,
+                              ((uint32_t)b->offset.x + b->extent.width + l->block.width - 1) / l->block.width - x,
+                              ((uint32_t)b->offset.y + b->extent.height + l->block.height - 1) / l->block.height - y,
+                              ((uint32_t)b->offset.z + b->extent.depth + l->block.depth - 1) / l->block.depth - z,
+                              b->memoryOffset / PVK_SPARSE_BLOCK);
+    }
+    return 1;
+}
+
+/* The operation of a buffer bind. */
+static uint32_t pvk_sparse_buffer_op(const struct pvk_buffer *buffer, const VkSparseMemoryBind *b,
+                                     struct pvk_sparse_op *op)
+{
+    if (!buffer->sparse.mtl_buffer)
+        return 0;
+    if (op) {
+        op->resource = buffer->sparse.mtl_buffer;
+        op->heap = pvk_sparse_heap(b->memory);
+        op->mirror = buffer->pages ? (struct pvk_buffer *)buffer : NULL;
+        op->texture = false;
+        op->u.buffer.mode = op->heap ? PVK_MTLSparseTextureMappingModeMap : PVK_MTLSparseTextureMappingModeUnmap;
+        op->u.buffer.bufferRange.location = b->resourceOffset / PVK_SPARSE_BLOCK;
+        op->u.buffer.bufferRange.length = (b->size + PVK_SPARSE_BLOCK - 1) / PVK_SPARSE_BLOCK;
+        op->u.buffer.heapOffset = op->heap ? b->memoryOffset / PVK_SPARSE_BLOCK : 0;
+    }
+    return 1;
+}
+
+/* The operations of a VkBindSparseInfo, from ops[n] (ops NULL: counts them). */
+static uint32_t pvk_sparse_batch_ops(const VkBindSparseInfo *in, struct pvk_sparse_op *ops, uint32_t n)
+{
+    uint32_t i, j, first = n;
+    for (i = 0; i < in->bufferBindCount; i++) {
+        const VkSparseBufferMemoryBindInfo *bi = &in->pBufferBinds[i];
+        for (j = 0; j < bi->bindCount; j++)
+            n += pvk_sparse_buffer_op((const struct pvk_buffer *)bi->buffer, &bi->pBinds[j], ops ? &ops[n] : NULL);
+    }
+    for (i = 0; i < in->imageOpaqueBindCount; i++) {
+        const VkSparseImageOpaqueMemoryBindInfo *bi = &in->pImageOpaqueBinds[i];
+        for (j = 0; j < bi->bindCount; j++)
+            n += pvk_sparse_opaque_ops((const struct pvk_image *)bi->image, &bi->pBinds[j], ops ? &ops[n] : NULL);
+    }
+    for (i = 0; i < in->imageBindCount; i++) {
+        const VkSparseImageMemoryBindInfo *bi = &in->pImageBinds[i];
+        for (j = 0; j < bi->bindCount; j++)
+            n += pvk_sparse_image_op((const struct pvk_image *)bi->image, &bi->pBinds[j], ops ? &ops[n] : NULL);
+    }
+    return n - first;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL vkQueueBindSparse(VkQueue _queue, uint32_t bindInfoCount, const VkBindSparseInfo *pBindInfo,
                                                  VkFence fence)
 {
     struct pvk_queue *queue = (struct pvk_queue *)_queue;
     const VkAllocationCallbacks *alloc = pvk_device_alloc(queue->device);
+    struct pvk_sparse_binds *binds;
     VkSemaphoreSubmitInfo *sems;
     VkSubmitInfo2 *submits;
     VkResult result;
-    size_t nsem = 0;
-    uint32_t i, j;
+    size_t nsem = 0, nops = 0;
+    uint32_t i, j, n;
 
     if (!bindInfoCount)
-        return pvk_queue_submit(queue, 0, NULL, fence);
+        return pvk_queue_submit(queue, 0, NULL, fence, NULL);
     for (i = 0; i < bindInfoCount; i++) {
         nsem += (size_t)pBindInfo[i].waitSemaphoreCount + pBindInfo[i].signalSemaphoreCount;
-        if (pBindInfo[i].bufferBindCount || pBindInfo[i].imageOpaqueBindCount || pBindInfo[i].imageBindCount)
-            pvk_log(PVK_LOG_WARN, "vkQueueBindSparse: sparse resources are not supported, binds ignored");
+        nops += pvk_sparse_batch_ops(&pBindInfo[i], NULL, 0);
     }
     submits = pvk_alloc(alloc, sizeof(*submits) * bindInfoCount + sizeof(*sems) * nsem, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-    if (!submits)
+    binds = pvk_alloc(alloc, sizeof(*binds) + sizeof(*binds->batches) * bindInfoCount + sizeof(*binds->ops) * nops,
+                      VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+    if (!submits || !binds) {
+        pvk_free(alloc, submits);
+        pvk_free(alloc, binds);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    binds->ops = (struct pvk_sparse_op *)(binds + 1);
+    binds->batches = (struct pvk_sparse_batch *)(binds->ops + nops);
     sems = (VkSemaphoreSubmitInfo *)(submits + bindInfoCount);
-    for (i = 0; i < bindInfoCount; i++) {
+    for (n = 0, i = 0; i < bindInfoCount; i++) {
         const VkBindSparseInfo *in = &pBindInfo[i];
         const VkTimelineSemaphoreSubmitInfo *values = NULL;
         const VkBaseInStructure *ext;
+        struct pvk_sparse_batch *batch = &binds->batches[i];
         VkSubmitInfo2 *out = &submits[i];
 
+        batch->first = n;
+        batch->count = pvk_sparse_batch_ops(in, binds->ops, n);
+        for (j = 0; j < batch->count; j++)
+            batch->unmaps |= !binds->ops[n + j].heap;
+        if (!queue->device->sparse_heap)
+            batch->unmaps = false; /* (invalid usage: sparseBinding is not enabled) */
+        n += batch->count;
         for (ext = in->pNext; ext; ext = ext->pNext)
             if (ext->sType == VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO)
                 values = (const VkTimelineSemaphoreSubmitInfo *)ext;
@@ -55833,7 +57068,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueBindSparse(VkQueue _queue, uint32_t bindIn
                 sems->value = values->pSignalSemaphoreValues[j];
         }
     }
-    result = pvk_queue_submit(queue, bindInfoCount, submits, fence);
+    result = pvk_queue_submit(queue, bindInfoCount, submits, fence, binds);
     pvk_free(alloc, submits);
     return result;
 }
@@ -59362,7 +60597,7 @@ static VkResult pvk_present_encode(struct pvk_queue *queue, const struct pvk_swa
         /* After all earlier work on the queue, as encoders after semaphore
          * waits begin (section 16). */
         pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-            enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, PVK_MTL4VisibilityOptionDevice);
+            enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, queue->device->visibility);
         pvk_MTL4ComputeCommandEncoder_copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
             enc, image->mtl_texture, 0, 0, origin, size, texture, 0, 0, origin);
         pvk_MTL4CommandEncoder_endEncoding(enc);

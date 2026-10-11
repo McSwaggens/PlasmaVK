@@ -17,9 +17,12 @@ linker flags: the header links Metal itself.
 along with the extensions PlasmaVK advertises: surfaces and swapchains on
 CAMetalLayer, maintenance5, descriptor indexing, draw parameters, indirect
 count, viewport index / layer output and, on Apple10 GPUs, sampler min/max
-filtering. SPIR-V compute, vertex and fragment shaders are translated to MSL
-inside the header, including subgroups, robustness, Y'CbCr sampling and
-buffer device addresses. PlasmaVK passes its own black-box conformance suite
+filtering. Sparse resources (sparse binding; partially resident buffers and
+2D, 3D and multisampled images; aliasing) map onto Metal 4's placement sparse
+buffers and textures (macOS/iOS 26.4). SPIR-V compute, vertex and fragment
+shaders are translated to MSL inside the header, including subgroups,
+robustness, Y'CbCr sampling, sparse residency codes and buffer device
+addresses. PlasmaVK passes its own black-box conformance suite
 (`tests/conformance/`, every Vulkan 1.4 command covered) with no failures;
 the only skipped tests need hardware Apple GPUs lack, like protected memory,
 multi-GPU device groups or 64-bit shader atomics. It is not Khronos-conformant
