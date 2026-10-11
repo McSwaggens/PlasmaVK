@@ -32573,10 +32573,20 @@ static void pvk_physical_device_init_descriptor_features(struct pvk_physical_dev
  *   drawIndirectCount      draw preprocessing (section 16)
  *   shaderOutputLayer, shaderOutputViewportIndex   vertex shaders write
  *                          [[render_target_array_index]] / [[viewport_array_index]]
+ *   logicOp                Metal blending has none: the fragment function
+ *                          reads the attachment (framebuffer fetch, [[color(n)]])
+ *                          and writes the operation's result (section 13,
+ *                          FRAGMENT OPERATIONS); UNORM, SNORM, UINT and SINT
+ *                          attachments, blending off. One deviation: an SNORM
+ *                          component holding -2^(b-1) (only copies or the
+ *                          operation itself put it there) reads as -1.0 like
+ *                          -(2^(b-1) - 1), and a result of -2^(b-1) is stored
+ *                          as -(2^(b-1) - 1): Metal converts SNORM through
+ *                          floats, both ways. Both are -1.0 when read.
  * multiDrawIndirect is not reported: Metal draws indirect records one by one,
  * which works, but DrawIndex would need the translator to read it per draw.
  * fillModeNonSolid needs points too (Metal fills triangles or lines only),
- * wideLines and logicOp have no Metal equivalent. depthBounds is not
+ * wideLines has no Metal equivalent. depthBounds is not
  * reported: Metal 4 encoders have setDepthTestMinBound:maxBound:, but on
  * Apple9 (M4 Max, macOS 27.2) the driver traps in it; draws only use it on
  * devices that enable the feature. */
@@ -32588,6 +32598,7 @@ static void pvk_physical_device_init_graphics_features(struct pvk_physical_devic
     c->occlusionQueryPrecise = VK_TRUE; /* visibility results count samples exactly */
     c->inheritedQueries = VK_TRUE;      /* secondaries run in the primary's render encoder */
     c->dualSrcBlend = VK_TRUE;
+    c->logicOp = VK_TRUE; /* by framebuffer fetch */
     pd->features.v11.shaderDrawParameters = VK_TRUE;
     pd->features.v12.drawIndirectCount = VK_TRUE;
     pd->features.v12.shaderOutputViewportIndex = VK_TRUE;
@@ -37476,7 +37487,8 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *     FragCoord [[position]] (origin top left, centers at .5, w = 1/w; at
  *     the sample with sample shading), FrontFacing, SampleId, SamplePosition
  *     (get_sample_position), SampleMask in (only the invocation's sample
- *     with sample shading) and out [[sample_mask]], FragDepth
+ *     with sample shading) and out [[sample_mask]] (both with the pipeline's
+ *     sample mask: FRAGMENT OPERATIONS), FragDepth
  *     [[depth(any|greater|less)]], HelperInvocation (simd_is_helper_thread(),
  *     read at each load), PointCoord (origin top left), Layer, ViewportIndex,
  *     ViewIndex, PrimitiveId, SubgroupSize and SubgroupLocalInvocationId
@@ -37511,6 +37523,39 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   pass must keep that image bound as color attachment c. subpassInputMS
  *   reads the current sample (the shader should run per sample).
  *   result->input_attachments / color_fetches.
+ *
+ * FRAGMENT OPERATIONS (pvk_spv_fragment_ops)
+ *   Pipeline state Metal has no fixed function for, done by the fragment
+ *   function after the entry point returns, in Vulkan's order:
+ *   Sample mask (options->sample_mask_enable: pSampleMask): [[sample_mask]]
+ *     is the shader's SampleMask output (or all ones) & sample_mask; Metal
+ *     ANDs it into the rasterized coverage, for color, depth and stencil.
+ *     The test comes before shading in Vulkan, so a SampleMask input reads
+ *     the coverage & sample_mask, and a shader with stores or atomics (a
+ *     writable resource or physical pointers) runs per sample ([[sample_id]])
+ *     and calls the entry point only for samples the mask keeps (Metal runs
+ *     such functions per sample with multisampling, and a discarded
+ *     invocation's atomics still happen). Not covered: with
+ *     EarlyFragmentTests, Metal tests and writes depth and stencil before
+ *     the function runs, for every rasterized sample.
+ *   Logical operations (options->logic_op on the color attachments with a
+ *     logic_targets[n] kind: UNORM, SNORM, UINT, SINT and the bits of each
+ *     component): the attachment's current value is read by framebuffer
+ *     fetch ([[color(n)]], an extra parameter unless an input attachment
+ *     already reads it), source and destination become the format's bits
+ *     (normalized: clamped, scaled, rounded to nearest even), the operation
+ *     combines them and the result, masked to the bits (sign-extended for
+ *     SINT), is converted back and written. The pipeline keeps the color
+ *     write mask and turns blending off. Metal fetches and writes each
+ *     sample's value with multisampling. A location the shader does not
+ *     write gets the operation with a source of 0 (undefined in Vulkan).
+ *     SNORM goes through floats both ways: -2^(b-1) reads as -1.0, as
+ *     -(2^(b-1) - 1) does, and a result of -2^(b-1) is written as -1.0.
+ *   Alpha to coverage and to one (options->alpha_to_coverage/alpha_to_one,
+ *     with logical operations, which would change the alpha Metal's fixed
+ *     functions read): location 0's alpha covers round(alpha x samples)
+ *     samples (ANDed into [[sample_mask]]), then float outputs get alpha 1,
+ *     both before the logical operations.
  *
  * VERTEX INPUT (pvk_spv_vertex_fetch)
  *   Attributes are pulled by the vertex function, not fetched by a Metal
@@ -37595,7 +37640,11 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   OpExpectKHR and OpAssumeTrueKHR, variable pointers (VARIABLE POINTERS:
  *   OpSelect, OpPhi, OpPtrEqual, OpPtrNotEqual, OpPtrDiff on pointers),
  *   FPRoundingMode RTZ conversions to half, function calls, OpArrayLength,
- *   specialization constants (including OpSpecConstantOp on integers),
+ *   specialization constants (OpSpecConstantOp: every opcode shaders may
+ *   use, folded while translating: integer, boolean and comparison ops on
+ *   scalars and vectors, Select of any type, composite ops, SConvert,
+ *   UConvert, and FConvert and QuantizeToF16 between half and float,
+ *   rounding to nearest even or with FPRoundingMode RTZ),
  *   structured control flow (if, switch with fallthrough, loops with
  *   break/continue, early returns, phis). NonSemantic debug info is ignored.
  *   Physical storage buffer pointers (PhysicalStorageBuffer64 addressing,
@@ -37787,6 +37836,19 @@ enum pvk_msl_scalar_type {
 #define PVK_MSL_INTERP_CENTROID 0x4u
 #define PVK_MSL_INTERP_SAMPLE 0x8u
 
+/* pvk_msl_logic_target.kind: a color attachment's numeric format, for logical
+ * operations (FRAGMENT OPERATIONS) */
+#define PVK_MSL_LOGIC_NONE 0u /* float or sRGB: no logical operation */
+#define PVK_MSL_LOGIC_UNORM 1u
+#define PVK_MSL_LOGIC_SNORM 2u
+#define PVK_MSL_LOGIC_UINT 3u
+#define PVK_MSL_LOGIC_SINT 4u
+
+struct pvk_msl_logic_target {
+    uint8_t kind;    /* PVK_MSL_LOGIC_* */
+    uint8_t bits[4]; /* bits of R, G, B, A (1-32; components the format lacks: any) */
+};
+
 /* A stage input or output location (STAGE INTERFACE). */
 struct pvk_msl_varying {
     uint32_t location;
@@ -37857,6 +37919,15 @@ struct pvk_msl_options {
     uint32_t color_attachments;
     enum pvk_msl_scalar_type color_attachment_types[8];
     bool sample_shading; /* sampleShadingEnable: run once per sample */
+    /* Fragment operations of the pipeline that the fragment function does
+     * (FRAGMENT OPERATIONS). */
+    bool sample_mask_enable; /* pSampleMask: coverage &= sample_mask */
+    uint32_t sample_mask;
+    VkLogicOp logic_op;      /* for the attachments with a logic_targets[] kind */
+    struct pvk_msl_logic_target logic_targets[8]; /* by location (color attachment) */
+    bool alpha_to_coverage;  /* coverage &= a mask from location 0's alpha */
+    bool alpha_to_one;       /* float outputs' alpha = 1 (before the logic op) */
+    uint32_t samples;        /* rasterization samples, for alpha_to_coverage */
 
     /* Combined image sampler bindings of set_layouts with Y'CbCr
      * conversions; the others have none. */
@@ -39266,9 +39337,52 @@ static bool pvk_spv_slt(uint64_t a, uint32_t aw, uint64_t b, uint32_t bw)
     return (pvk_spv_sext(a, aw) ^ sign) < (pvk_spv_sext(b, bw) ^ sign);
 }
 
-/* Folds one scalar component of an OpSpecConstantOp. */
+/* IEEE 754 binary16 <-> binary32 bit patterns, for folding OpFConvert and
+ * OpQuantizeToF16 the way the GPU computes them: rounding to nearest even
+ * (or toward zero), keeping denormals, infinities and NaNs (quieted). */
+static uint32_t pvk_spv_f16_to_f32(uint32_t h)
+{
+    uint32_t sign = (h & 0x8000u) << 16, e = (h >> 10) & 0x1fu, m = h & 0x3ffu;
+    if (e == 0x1fu)
+        return sign | 0x7f800000u | (m ? 0x400000u | (m << 13) : 0);
+    if (e == 0) {
+        if (!m)
+            return sign;
+        for (e = 113; !(m & 0x400u); e--) /* a denormal: normalize */
+            m <<= 1;
+        return sign | (e << 23) | ((m & 0x3ffu) << 13);
+    }
+    return sign | ((e + 112) << 23) | (m << 13);
+}
+
+static uint32_t pvk_spv_f32_to_f16(uint32_t f, bool rtz)
+{
+    uint32_t sign = (f >> 16) & 0x8000u, exp = (f >> 23) & 0xffu, m = f & 0x7fffffu, h, rem, shift;
+    int32_t e = (int32_t)exp - 112; /* the binary16 exponent field */
+    if (exp == 0xffu)
+        return sign | 0x7c00u | (m ? 0x200u | (m >> 13) : 0);
+    if (e >= 31) /* too large: infinity, or the largest finite value toward zero */
+        return sign | (rtz ? 0x7bffu : 0x7c00u);
+    if (e <= 0) { /* a binary16 denormal or zero */
+        if (e < -10)
+            return sign;
+        m |= 0x800000u;
+        shift = (uint32_t)(14 - e);
+    } else {
+        m = ((uint32_t)e << 23) | m; /* the exponent carries on rounding up */
+        shift = 13;
+    }
+    h = m >> shift;
+    rem = m & ((1u << shift) - 1);
+    if (!rtz && (rem > (1u << (shift - 1)) || (rem == (1u << (shift - 1)) && (h & 1))))
+        h++;
+    return sign | h;
+}
+
+/* Folds one scalar component of an OpSpecConstantOp (raw bits; FPRoundingMode
+ * RTZ for a conversion to binary16 when rtz). */
 static uint64_t pvk_spv_fold(struct pvk_spv *ctx, uint32_t op, const struct pvk_spv_type *r, const struct pvk_spv_type **ts,
-                             const uint64_t *v, uint32_t n)
+                             const uint64_t *v, uint32_t n, bool rtz)
 {
     uint64_t a = n > 0 ? v[0] : 0, b = n > 1 ? v[1] : 0, m = pvk_spv_mask(r->op == PVK_SPV_OpTypeBool ? 1 : r->width);
     uint32_t aw = n > 0 ? (ts[0]->op == PVK_SPV_OpTypeBool ? 1 : ts[0]->width) : 32;
@@ -39277,7 +39391,7 @@ static uint64_t pvk_spv_fold(struct pvk_spv *ctx, uint32_t op, const struct pvk_
 
     switch (op) {
     case PVK_SPV_OpSConvert: case PVK_SPV_OpUConvert: case PVK_SPV_OpSNegate: case PVK_SPV_OpNot:
-    case PVK_SPV_OpLogicalNot:
+    case PVK_SPV_OpLogicalNot: case PVK_SPV_OpFConvert: case PVK_SPV_OpQuantizeToF16:
         need = 1;
         break;
     case PVK_SPV_OpSelect:
@@ -39328,6 +39442,18 @@ static uint64_t pvk_spv_fold(struct pvk_spv *ctx, uint32_t op, const struct pvk_
     case PVK_SPV_OpSLessThanEqual: return !pvk_spv_slt(b, bw, a, aw);
     case PVK_SPV_OpSGreaterThanEqual: return !pvk_spv_slt(a, aw, b, bw);
     case PVK_SPV_OpSelect: return a ? b : v[2];
+    case PVK_SPV_OpFConvert:
+        if (aw == r->width)
+            return a & m;
+        if (aw == 16 && r->width == 32)
+            return pvk_spv_f16_to_f32((uint32_t)a);
+        if (aw == 32 && r->width == 16)
+            return pvk_spv_f32_to_f16((uint32_t)a, rtz);
+        pvk_spv_fail(ctx, "OpSpecConstantOp FConvert from %u to %u bits is not supported", aw, r->width);
+    case PVK_SPV_OpQuantizeToF16:
+        if (aw != 32 || r->width != 32)
+            pvk_spv_fail(ctx, "QuantizeToF16 takes and gives 32-bit floats");
+        return pvk_spv_f16_to_f32(pvk_spv_f32_to_f16((uint32_t)a, false));
     default:
         pvk_spv_fail(ctx, "unsupported OpSpecConstantOp operation (opcode %u)", op);
     }
@@ -39399,19 +39525,34 @@ static void pvk_spv_spec_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in, 
         c->nparts = r->count;
         return;
     }
+    if (op == PVK_SPV_OpSelect && in->wc == 7 &&
+        pvk_spv_type(ctx, pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 4))->type)->op == PVK_SPV_OpTypeBool) {
+        /* a scalar condition selects one whole object, of any type */
+        uint32_t a = pvk_spv_arg(ctx, in, 5), b = pvk_spv_arg(ctx, in, 6);
+        pvk_spv_const(ctx, a);
+        pvk_spv_const(ctx, b);
+        if (pvk_spv_get(ctx, a)->type != rtype || pvk_spv_get(ctx, b)->type != rtype)
+            pvk_spv_fail(ctx, "OpSpecConstantOp Select type mismatch");
+        *c = *pvk_spv_const(ctx, pvk_spv_const_value(ctx, pvk_spv_arg(ctx, in, 4)) ? a : b);
+        return;
+    }
 
-    /* Component-wise scalar operations. */
+    /* Component-wise scalar operations. Floating-point values are only
+     * converted (FConvert, QuantizeToF16) or selected: shaders (without the
+     * Kernel capability) have no other floating-point OpSpecConstantOp. */
     {
         const struct pvk_spv_type *ts[3];
         uint64_t vals[3];
         uint32_t ops[3], nops = in->wc - 4;
         struct pvk_spv_type *rs = pvk_spv_scalar_of(ctx, r);
         uint32_t *parts = NULL;
+        bool fconv = op == PVK_SPV_OpFConvert || op == PVK_SPV_OpQuantizeToF16;
+        bool rtz = pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 2))->fp_round == 2; /* FPRoundingMode RTZ */
 
         if (!rs || nops == 0 || nops > 3)
             pvk_spv_fail(ctx, "unsupported OpSpecConstantOp (opcode %u)", op);
-        if (rs->op == PVK_SPV_OpTypeFloat)
-            pvk_spv_fail(ctx, "floating-point OpSpecConstantOp is not supported");
+        if (rs->op == PVK_SPV_OpTypeFloat ? !fconv && op != PVK_SPV_OpSelect : fconv)
+            pvk_spv_fail(ctx, "unsupported floating-point OpSpecConstantOp (opcode %u)", op);
         n = pvk_spv_components(r);
         for (i = 0; i < nops; i++) {
             ops[i] = in->w[4 + i];
@@ -39429,15 +39570,17 @@ static void pvk_spv_spec_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in, 
                     part = pvk_spv_const_part(ctx, ops[i], k);
                     t = pvk_spv_type(ctx, t->elem);
                 }
-                if (!pvk_spv_is_scalar(t) || t->op == PVK_SPV_OpTypeFloat)
+                if (!pvk_spv_is_scalar(t) ||
+                    (t->op == PVK_SPV_OpTypeFloat) != (fconv || (op == PVK_SPV_OpSelect && i > 0 && rs->op == PVK_SPV_OpTypeFloat)))
                     pvk_spv_fail(ctx, "unsupported OpSpecConstantOp operand");
                 ts[i] = t;
                 vals[i] = pvk_spv_const_value(ctx, part);
             }
             if (n == 1)
-                c->value = pvk_spv_fold(ctx, op, rs, ts, vals, nops);
+                c->value = pvk_spv_fold(ctx, op, rs, ts, vals, nops, rtz);
             else
-                parts[k] = pvk_spv_synthetic(ctx, r->elem, pvk_spv_fold(ctx, op, rs, ts, vals, nops), NULL, 0, false);
+                parts[k] = pvk_spv_synthetic(ctx, r->elem, pvk_spv_fold(ctx, op, rs, ts, vals, nops, rtz), NULL, 0,
+                                             false);
         }
         if (n > 1) {
             c->parts = parts;
@@ -46685,8 +46828,11 @@ static void pvk_spv_stage_builtin(struct pvk_spv *ctx, uint32_t builtin, uint32_
         *need |= PVK_SPV_NEED_SAMPLE_MASK;
         if (per_sample) /* Vulkan: only the invocation's own sample (Metal gives the fragment's coverage) */
             *need |= PVK_SPV_NEED_SAMPLE_ID;
-        pvk_spv_line(ctx, "%s[0] = %s(pvk_sample_mask_in%s);", lv, pvk_spv_type(ctx, t->elem)->msl,
-                     per_sample ? " & (1u << pvk_sample_id)" : "");
+        /* the coverage after the sample mask test, which comes before shading */
+        pvk_spv_line(ctx, "%s[0] = %s(pvk_sample_mask_in%s%s);", lv, pvk_spv_type(ctx, t->elem)->msl,
+                     per_sample ? " & (1u << pvk_sample_id)" : "",
+                     ctx->options && ctx->options->sample_mask_enable
+                         ? pvk_spv_fmt(ctx, " & 0x%xu", ctx->options->sample_mask) : "");
         return;
     case PVK_SPV_BuiltInHelperInvocation:
         res->builtins |= PVK_MSL_BUILTIN_HELPER_INVOCATION;
@@ -46721,6 +46867,131 @@ static void pvk_spv_stage_builtin(struct pvk_spv *ctx, uint32_t builtin, uint32_
     pvk_spv_line(ctx, "%s = %s(%s);", lv, t->msl, e);
 }
 
+/* VkLogicOp on the bits of the source (pvk_s) and the stored value (pvk_d). */
+static const char *const pvk_spv_logic_ops[16] = {
+    "uint4(0u)",        /* CLEAR */
+    "pvk_s & pvk_d",    /* AND */
+    "pvk_s & ~pvk_d",   /* AND_REVERSE */
+    "pvk_s",            /* COPY */
+    "~pvk_s & pvk_d",   /* AND_INVERTED */
+    "pvk_d",            /* NO_OP */
+    "pvk_s ^ pvk_d",    /* XOR */
+    "pvk_s | pvk_d",    /* OR */
+    "~(pvk_s | pvk_d)", /* NOR */
+    "~(pvk_s ^ pvk_d)", /* EQUIVALENT */
+    "~pvk_d",           /* INVERT */
+    "pvk_s | ~pvk_d",   /* OR_REVERSE */
+    "~pvk_s",           /* COPY_INVERTED */
+    "~pvk_s | pvk_d",   /* OR_INVERTED */
+    "~(pvk_s & pvk_d)", /* NAND */
+    "uint4(~0u)",       /* SET */
+};
+
+/* The pipeline's fragment operations the fragment function does after the
+ * entry point returns (FRAGMENT OPERATIONS), in Vulkan's order: alpha to
+ * coverage, alpha to one, logical operations, then the coverage they and
+ * the sample mask leave as [[sample_mask]]. colors: the color outputs
+ * written (bit n: pvk_out.pvk_color<n>, of type types[n]); fetched: colors
+ * already read as parameters pvk_color<n>. Writes the parameters to add to
+ * params (up to 8) and returns their number. */
+static uint32_t pvk_spv_fragment_ops(struct pvk_spv *ctx, uint32_t colors, const enum pvk_msl_scalar_type *types,
+                                     uint32_t fetched, struct pvk_sb *outs, const char **params)
+{
+    const struct pvk_msl_options *o = ctx->options;
+    const char *coverage = NULL;
+    uint32_t n, c, nparams = 0;
+
+    if (o->alpha_to_coverage && (colors & 1u) && types[0] == PVK_MSL_SCALAR_FLOAT) {
+        /* location 0's alpha covers that fraction of the samples (monotonic, as Vulkan asks) */
+        uint32_t samples = o->samples ? o->samples : 1;
+        pvk_spv_line(ctx, "uint pvk_a2c = (1u << uint(rint(saturate(pvk_out.pvk_color0.a) * %u.0f))) - 1u;", samples);
+        coverage = "pvk_a2c";
+    }
+    for (n = 0; o->alpha_to_one && n < 8; n++)
+        if ((colors & (1u << n)) && types[n] == PVK_MSL_SCALAR_FLOAT)
+            pvk_spv_line(ctx, "pvk_out.pvk_color%u.a = 1.0f;", n);
+
+    /* Logical operations: the source and the stored value (framebuffer
+     * fetch) as the attachment format's bits, combined, and back */
+    for (n = 0; n < 8; n++) {
+        const struct pvk_msl_logic_target *lt = &o->logic_targets[n];
+        enum pvk_msl_scalar_type k = lt->kind == PVK_MSL_LOGIC_UINT   ? PVK_MSL_SCALAR_UINT
+                                     : lt->kind == PVK_MSL_LOGIC_SINT ? PVK_MSL_SCALAR_INT
+                                                                      : PVK_MSL_SCALAR_FLOAT;
+        const char *op, *v4 = pvk_spv_kind_msl(ctx, k, 4), *mask, *scale, *shift, *src, *dst, *result;
+        uint32_t m[4], sh[4], sc[4];
+        if (lt->kind == PVK_MSL_LOGIC_NONE || lt->kind > PVK_MSL_LOGIC_SINT || (unsigned)o->logic_op > 15)
+            continue;
+        if (!o->color_attachments_valid || !(o->color_attachments & (1u << n)) || o->color_attachment_types[n] != k)
+            continue; /* no attachment of the format's type */
+        for (c = 0; c < 4; c++) {
+            uint32_t b = lt->bits[c] < 1 ? 1 : lt->bits[c] > 32 ? 32 : lt->bits[c];
+            m[c] = b >= 32 ? 0xffffffffu : (1u << b) - 1;
+            sh[c] = 32 - b;
+            sc[c] = lt->kind == PVK_MSL_LOGIC_SNORM ? (b > 1 ? (1u << (b - 1)) - 1 : 1) : m[c];
+        }
+        mask = pvk_spv_fmt(ctx, "uint4(0x%xu, 0x%xu, 0x%xu, 0x%xu)", m[0], m[1], m[2], m[3]);
+        scale = pvk_spv_fmt(ctx, "float4(%u.0f, %u.0f, %u.0f, %u.0f)", sc[0], sc[1], sc[2], sc[3]);
+        shift = pvk_spv_fmt(ctx, "%uu, %uu, %uu, %uu", sh[0], sh[1], sh[2], sh[3]);
+        if (!(colors & (1u << n))) { /* not written: the source is 0 (undefined in Vulkan) */
+            pvk_sb_printf(ctx, outs, "    %s pvk_color%u [[color(%u)]];\n", v4, n, n);
+            colors |= 1u << n;
+        }
+        if (!(fetched & (1u << n))) {
+            params[nparams++] = pvk_spv_fmt(ctx, "%s pvk_color%u [[color(%u)]]", v4, n, n);
+            fetched |= 1u << n;
+        }
+        src = pvk_spv_fmt(ctx, "pvk_out.pvk_color%u", n);
+        dst = pvk_spv_fmt(ctx, "%s(pvk_color%u)", v4, n); /* (an input attachment's parameter may be another type) */
+        switch (lt->kind) {
+        case PVK_MSL_LOGIC_UNORM:
+            src = pvk_spv_fmt(ctx, "uint4(rint(clamp(%s, 0.0f, 1.0f) * %s))", src, scale);
+            dst = pvk_spv_fmt(ctx, "uint4(rint(%s * %s))", dst, scale);
+            result = pvk_spv_fmt(ctx, "float4(pvk_r) / %s", scale);
+            break;
+        case PVK_MSL_LOGIC_SNORM:
+            /* (-2^(b-1) reads as -1.0, which converts back to -(2^(b-1) - 1)) */
+            src = pvk_spv_fmt(ctx, "as_type<uint4>(int4(rint(clamp(%s, -1.0f, 1.0f) * %s)))", src, scale);
+            dst = pvk_spv_fmt(ctx, "as_type<uint4>(int4(rint(%s * %s)))", dst, scale);
+            result = pvk_spv_fmt(ctx, "max(float4(as_type<int4>(pvk_r << uint4(%s)) >> int4(%s)) / %s, float4(-1.0f))",
+                                 shift, shift, scale);
+            break;
+        case PVK_MSL_LOGIC_UINT:
+            result = "pvk_r";
+            break;
+        default: /* SINT: sign-extended */
+            src = pvk_spv_fmt(ctx, "as_type<uint4>(%s)", src);
+            dst = pvk_spv_fmt(ctx, "as_type<uint4>(%s)", dst);
+            result = pvk_spv_fmt(ctx, "as_type<int4>(pvk_r << uint4(%s)) >> int4(%s)", shift, shift);
+            break;
+        }
+        op = pvk_spv_logic_ops[o->logic_op];
+        pvk_spv_line(ctx, "{ /* logical operation %u on color attachment %u */", (unsigned)o->logic_op, n);
+        ctx->indent++;
+        if (strstr(op, "pvk_s"))
+            pvk_spv_line(ctx, "uint4 pvk_s = %s;", src);
+        if (strstr(op, "pvk_d"))
+            pvk_spv_line(ctx, "uint4 pvk_d = %s;", dst);
+        pvk_spv_line(ctx, "uint4 pvk_r = (%s) & %s;", op, mask);
+        pvk_spv_line(ctx, "pvk_out.pvk_color%u = %s;", n, result);
+        ctx->indent--;
+        pvk_spv_line(ctx, "}");
+    }
+
+    if (o->sample_mask_enable)
+        coverage = coverage ? pvk_spv_fmt(ctx, "%s & 0x%xu", coverage, o->sample_mask)
+                            : pvk_spv_fmt(ctx, "0x%xu", o->sample_mask);
+    if (coverage) { /* Metal ANDs [[sample_mask]] into the rasterized coverage */
+        if (ctx->result->builtins & PVK_MSL_BUILTIN_SAMPLE_MASK) {
+            pvk_spv_line(ctx, "pvk_out.pvk_sample_mask &= %s;", coverage);
+        } else {
+            pvk_sb_printf(ctx, outs, "    uint pvk_sample_mask [[sample_mask]];\n");
+            pvk_spv_line(ctx, "pvk_out.pvk_sample_mask = %s;", coverage);
+        }
+    }
+    return nparams;
+}
+
 /* The vertex or fragment function: it declares the SPIR-V entry point's
  * globals, fills the inputs from the stage's built-ins, varyings or vertex
  * buffers, calls the entry point and returns the outputs. */
@@ -46732,9 +47003,9 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     bool vertex = ctx->model == PVK_SPV_ExecutionModelVertex, per_sample = false, early = false;
     struct pvk_spv_iface in, out;
     struct pvk_sb outs, ins;
-    const char **params = NULL, **args = NULL, *depth_mode = "any";
+    const char **params = NULL, **args = NULL, *depth_mode = "any", *call_guard = NULL;
     uint32_t nparams = 0, cap = 0, nargs = 0, cap_args = 0, g, i, loc, idx, set, need = 0;
-    uint32_t fetch_colors = 0, sample_inputs = 0, nin = 0, nout = 0;
+    uint32_t fetch_colors = 0, sample_inputs = 0, nin = 0, nout = 0, colors = 0;
     enum pvk_msl_scalar_type in_type[PVK_MSL_MAX_LOCATIONS], out_type[2][PVK_MSL_MAX_LOCATIONS];
     uint32_t loc_interp[PVK_MSL_MAX_LOCATIONS];
     struct pvk_msl_varying vin[PVK_MSL_MAX_LOCATIONS], vout[PVK_MSL_MAX_LOCATIONS + 1];
@@ -46937,6 +47208,22 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
             nin++;
         }
     }
+    if (!vertex && o && o->sample_mask_enable) {
+        /* The sample mask test comes before shading: a sample it clears is
+         * not shaded, which matters for stores and atomics. Metal runs such
+         * functions per sample with multisampling (and a discarded
+         * invocation's atomics still happen there): with stores or atomics,
+         * the function runs per sample and calls the entry point only for
+         * the samples the mask keeps (whole quads: the same sample of each
+         * pixel, so derivatives still work). */
+        bool effects = ctx->use_psb;
+        for (i = 0; i < res->resource_count; i++)
+            effects |= res->resources[i].writable;
+        if (effects) {
+            need |= PVK_SPV_NEED_SAMPLE_ID;
+            call_guard = pvk_spv_fmt(ctx, "if ((0x%xu & (1u << pvk_sample_id)) != 0u)", o->sample_mask);
+        }
+    }
 
     /* The call */
     for (g = 0; g < ctx->nglobals; g++)
@@ -46955,7 +47242,9 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         pvk_spv_line(ctx, "bool pvk_killed = false;");
     if (entry->implicit & PVK_SPV_I_LANE)
         need |= PVK_SPV_NEED_LANE;
-    pvk_spv_line(ctx, "%s(%s);", entry->msl, pvk_spv_join(ctx, "", args, nargs, ", ", ""));
+    if (call_guard)
+        pvk_spv_line(ctx, "%s", call_guard);
+    pvk_spv_line(ctx, "%s%s(%s);", call_guard ? "    " : "", entry->msl, pvk_spv_join(ctx, "", args, nargs, ", ", ""));
 
     /* Outputs: built-ins, then locations */
     if (vertex) { /* Invariant Position (variable or gl_PerVertex member): [[invariant]] */
@@ -47030,8 +47319,16 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
                              pvk_spv_swizzle(ctx, pvk_spv_fmt(ctx, "pvk_out.%s", member), l->component, l->ncomp),
                              pvk_spv_to_slot(ctx, l->lvalue, k, l));
             }
+            if (!vertex && !idx)
+                colors |= 1u << loc;
             nout++;
         }
+    }
+    if (!vertex && o) { /* the pipeline's fragment operations */
+        const char *extra[8];
+        uint32_t nextra = pvk_spv_fragment_ops(ctx, colors, out_type[0], fetch_colors, &outs, extra), e;
+        for (e = 0; e < nextra; e++)
+            PVK_SPV_PUSH(ctx, params, nparams, cap, extra[e]);
     }
     if (outs.len)
         pvk_spv_line(ctx, "return pvk_out;");
@@ -54869,7 +55166,12 @@ VKAPI_ATTR VkResult VKAPI_CALL vkResetEvent(VkDevice device, VkEvent event)
  * device's MTL4Compiler: color formats, blending and write masks by logical
  * color index (section 15's "Graphics": the pipeline inherits the encoder's
  * color attachment map), sample count, alpha to coverage and to one,
- * vertex amplification for multiview. Everything else Vulkan calls pipeline
+ * vertex amplification for multiview. The sample mask and logical
+ * operations, which Metal has no fixed function for, are compiled into the
+ * fragment function (section 13, FRAGMENT OPERATIONS; with logical
+ * operations, alpha to coverage and to one too); a pipeline with a sample
+ * mask and no fragment shader gets a fragment function that only applies
+ * it. Everything else Vulkan calls pipeline
  * state is kept as struct pvk_gfx_pipeline and applied by the encoder
  * (section 16), so the same Metal pipeline serves any value of it.
  *
@@ -56158,7 +56460,77 @@ struct pvk_gfx_desc {
     uint32_t outputs;                                 /* fragment output locations with an attachment */
     uint32_t output_types[PVK_MAX_COLOR_ATTACHMENTS]; /* enum pvk_msl_scalar_type */
     uint32_t sample_shading, view_mask, point_size, dynamic_strides, robust, has_fragment;
+    /* fragment operations the fragment function does (section 13, FRAGMENT OPERATIONS) */
+    uint32_t sample_mask_enable, sample_mask;     /* pSampleMask, when it clears samples */
+    uint32_t logic_op_enable, logic_op;
+    uint32_t logic_targets[PVK_MAX_COLOR_ATTACHMENTS]; /* struct pvk_msl_logic_target: kind | bits << 8.. */
+    uint32_t shader_alpha_to_coverage, shader_alpha_to_one; /* (with logical operations) */
 };
+
+/* A color attachment format's numeric format for logical operations
+ * (section 13, FRAGMENT OPERATIONS): UNORM, SNORM, UINT or SINT and the bits
+ * of each component. Float and sRGB formats have none: Vulkan applies no
+ * logical operation to them. (Formats only: these are the color attachment
+ * formats section 7 reports.) */
+static struct pvk_msl_logic_target pvk_logic_target(VkFormat format)
+{
+    struct pvk_msl_logic_target t;
+    const struct pvk_format *f = pvk_format(format);
+    uint32_t r = 0, g = 0, b = 0, a = 0;
+    memset(&t, 0, sizeof(t));
+    if (f && (f->kind == PVK_FK_UINT || f->kind == PVK_FK_SINT)) {
+        t.kind = f->kind == PVK_FK_UINT ? PVK_MSL_LOGIC_UINT : PVK_MSL_LOGIC_SINT;
+        r = g = b = a = f->int_bits;
+        if (f->int_bits == 10) /* 10/10/10/2 */
+            a = 2;
+    } else {
+        switch (format) {
+        case VK_FORMAT_R8_SNORM: case VK_FORMAT_R8G8_SNORM: case VK_FORMAT_R8G8B8A8_SNORM:
+        case VK_FORMAT_A8B8G8R8_SNORM_PACK32:
+            t.kind = PVK_MSL_LOGIC_SNORM;
+            r = g = b = a = 8;
+            break;
+        case VK_FORMAT_R16_SNORM: case VK_FORMAT_R16G16_SNORM: case VK_FORMAT_R16G16B16A16_SNORM:
+            t.kind = PVK_MSL_LOGIC_SNORM;
+            r = g = b = a = 16;
+            break;
+        case VK_FORMAT_R8_UNORM: case VK_FORMAT_R8G8_UNORM: case VK_FORMAT_R8G8B8A8_UNORM: case VK_FORMAT_B8G8R8A8_UNORM:
+        case VK_FORMAT_A8B8G8R8_UNORM_PACK32: case VK_FORMAT_A8_UNORM:
+            r = g = b = a = 8;
+            break;
+        case VK_FORMAT_R16_UNORM: case VK_FORMAT_R16G16_UNORM: case VK_FORMAT_R16G16B16A16_UNORM:
+            r = g = b = a = 16;
+            break;
+        case VK_FORMAT_A2R10G10B10_UNORM_PACK32: case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+            r = g = b = 10;
+            a = 2;
+            break;
+        case VK_FORMAT_R4G4B4A4_UNORM_PACK16: case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
+        case VK_FORMAT_A4R4G4B4_UNORM_PACK16: case VK_FORMAT_A4B4G4R4_UNORM_PACK16:
+            r = g = b = a = 4;
+            break;
+        case VK_FORMAT_R5G6B5_UNORM_PACK16: case VK_FORMAT_B5G6R5_UNORM_PACK16:
+            r = b = 5;
+            g = 6;
+            a = 1;
+            break;
+        case VK_FORMAT_R5G5B5A1_UNORM_PACK16: case VK_FORMAT_B5G5R5A1_UNORM_PACK16:
+        case VK_FORMAT_A1R5G5B5_UNORM_PACK16: case VK_FORMAT_A1B5G5R5_UNORM_PACK16:
+            r = g = b = 5;
+            a = 1;
+            break;
+        default:
+            return t; /* float, sRGB */
+        }
+        if (!t.kind)
+            t.kind = PVK_MSL_LOGIC_UNORM;
+    }
+    t.bits[0] = (uint8_t)r;
+    t.bits[1] = (uint8_t)g;
+    t.bits[2] = (uint8_t)b;
+    t.bits[3] = (uint8_t)a;
+    return t;
+}
 
 static pvk_MTLBlendFactor pvk_blend_factor(VkBlendFactor f)
 {
@@ -56283,6 +56655,15 @@ static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *
     id vs_lib = pvk_msl_library(device, vs_msl, invariant, error, error_size), fs_lib = NULL, desc = NULL, vf = NULL;
     id ff = NULL, pso = NULL;
     uint32_t l;
+    char mask_msl[256];
+    if (!fs_msl && d->sample_mask_enable) { /* no fragment shader: a fragment function applying the sample mask */
+        snprintf(mask_msl, sizeof(mask_msl),
+                 "#include <metal_stdlib>\nusing namespace metal;\n\nstruct pvk_mask_out\n{\n"
+                 "    uint mask [[sample_mask]];\n};\n\nfragment pvk_mask_out pvk_sample_mask()\n{\n"
+                 "    pvk_mask_out out = { 0x%xu };\n    return out;\n}\n", d->sample_mask);
+        fs_msl = mask_msl;
+        fs_entry = "pvk_sample_mask";
+    }
     if (vs_lib && fs_msl)
         fs_lib = pvk_msl_library(device, fs_msl, false, error, error_size);
     if (vs_lib && (fs_lib || !fs_msl))
@@ -56488,6 +56869,11 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         view_mask = rendering ? rendering->viewMask : 0;
     }
     pvk_color_logical(loc_ids, input_ids, ids, input_logical);
+    /* Logical operations (logicOp): by framebuffer fetch in the fragment
+     * shader (section 13, FRAGMENT OPERATIONS); blending is off for every
+     * attachment, and float and sRGB attachments take the color as is. */
+    d.logic_op_enable = cb && !discard && fs && cb->logicOpEnable;
+    d.logic_op = d.logic_op_enable ? (uint32_t)cb->logicOp : 0;
     for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS && !discard; i++) {
         VkFormat format = VK_FORMAT_UNDEFINED;
         const struct pvk_format *f;
@@ -56506,7 +56892,12 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
             const VkPipelineColorBlendAttachmentState *a = cb && b < cb->attachmentCount ? &cb->pAttachments[b] : NULL;
             d.outputs |= 1u << i;
             d.write_masks[i] = a ? pvk_write_mask(a->colorWriteMask) : PVK_MTLColorWriteMaskAll;
-            if (a && a->blendEnable && (f->caps & PVK_FC_BLEND)) {
+            if (d.logic_op_enable) {
+                struct pvk_msl_logic_target lt = pvk_logic_target(format);
+                if (lt.kind && d.write_masks[i])
+                    d.logic_targets[i] = (uint32_t)lt.kind | (uint32_t)lt.bits[0] << 8 | (uint32_t)lt.bits[1] << 14 |
+                                         (uint32_t)lt.bits[2] << 20 | (uint32_t)lt.bits[3] << 26;
+            } else if (a && a->blendEnable && (f->caps & PVK_FC_BLEND)) {
                 d.blend[i][0] = 1;
                 d.blend[i][1] = pvk_blend_factor(a->srcColorBlendFactor);
                 d.blend[i][2] = pvk_blend_factor(a->dstColorBlendFactor);
@@ -56527,11 +56918,18 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         d.alpha_to_one = ms->alphaToOneEnable != VK_FALSE;
         d.sample_shading = ms->sampleShadingEnable && ms->minSampleShading * (float)d.samples > 1.0f;
         if (ms->pSampleMask && (ms->pSampleMask[0] & ((1u << d.samples) - 1)) != (1u << d.samples) - 1) {
-            static int warned;
-            if (!warned++)
-                pvk_log(PVK_LOG_WARN, "vkCreateGraphicsPipelines: sample masks are not supported (all samples are written)");
+            /* Metal applies a sample mask only as the fragment function's [[sample_mask]] */
+            d.sample_mask_enable = 1;
+            d.sample_mask = ms->pSampleMask[0] & ((1u << d.samples) - 1);
         }
     }
+    for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
+        if (d.logic_targets[i]) { /* the logical operation changes the colors: alpha to coverage and one come first */
+            d.shader_alpha_to_coverage = d.alpha_to_coverage;
+            d.shader_alpha_to_one = d.alpha_to_one;
+            d.alpha_to_coverage = d.alpha_to_one = 0;
+            break;
+        }
     /* Rasterizer discard skips the draws (pvk_render_discards): a Metal
      * pipeline without rasterization needs a vertex function returning void */
     d.rasterization = 1;
@@ -56593,6 +56991,19 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
         fo.color_attachment_types[i] = (enum pvk_msl_scalar_type)d.output_types[i];
     fo.sample_shading = d.sample_shading != 0;
+    fo.sample_mask_enable = d.sample_mask_enable != 0;
+    fo.sample_mask = d.sample_mask;
+    fo.logic_op = (VkLogicOp)d.logic_op;
+    for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++) {
+        fo.logic_targets[i].kind = (uint8_t)(d.logic_targets[i] & 0xffu);
+        fo.logic_targets[i].bits[0] = (uint8_t)((d.logic_targets[i] >> 8) & 63u);
+        fo.logic_targets[i].bits[1] = (uint8_t)((d.logic_targets[i] >> 14) & 63u);
+        fo.logic_targets[i].bits[2] = (uint8_t)((d.logic_targets[i] >> 20) & 63u);
+        fo.logic_targets[i].bits[3] = (uint8_t)((d.logic_targets[i] >> 26) & 63u);
+    }
+    fo.alpha_to_coverage = d.shader_alpha_to_coverage != 0;
+    fo.alpha_to_one = d.shader_alpha_to_one != 0;
+    fo.samples = d.samples;
 
     /* The cache key: everything above that the MSL and the Metal pipeline depend on */
     pvk_key_init(&key, 'G');

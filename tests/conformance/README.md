@@ -35,11 +35,11 @@ One file per chapter of the Vulkan specification:
 | `synchronization.c` | Synchronization and Cache Control. Events: host and device state, the host seeing a device signal, device waits on host and device signals (same command buffer, batch, earlier submission, several events, synchronization2, device-only events); timeline semaphore values and host waits; `vkDeviceWaitIdle` | 10 |
 | `privatedata.c` | Private Data: slots, data on objects of many types, data of new objects and slots, many objects, reserved slots, allocation callbacks | 7 |
 | `renderpass.c` | Render Pass: load and store operations, render areas, subpasses with an input attachment and a dependency (`vkCreateRenderPass2`, `vkCmdNextSubpass2`), color and depth resolves (multisampled attachments stored or not), multiview, imageless framebuffers, render area granularity (also `vkGetRenderingAreaGranularityKHR` on a 1.3 device), `vkCmdNextSubpass` (inline and secondary contents, preserved attachments); dynamic rendering: color and depth, resolves, suspending and resuming across command buffers, multiview, local read (attachment locations, input attachment indices) | 15 |
-| `pipelines.c` | Pipelines: no fragment shader, specialization constants, a uniform buffer through a descriptor set; dynamic state (viewports and scissors with and without counts, cull mode, front face, topology, depth and stencil state, rasterizer discard, depth bias); pipeline caches (header, `VK_INCOMPLETE`, partial data, round trip, merging), `FAIL_ON_PIPELINE_COMPILE_REQUIRED` with `EARLY_RETURN_ON_FAILURE`, creation feedback | 12 |
+| `pipelines.c` | Pipelines: no fragment shader, specialization constants (and operations on them), a uniform buffer through a descriptor set; dynamic state (viewports and scissors with and without counts, cull mode, front face, topology, depth and stencil state, rasterizer discard, depth bias); pipeline caches (header, `VK_INCOMPLETE`, partial data, round trip, merging), `FAIL_ON_PIPELINE_COMPILE_REQUIRED` with `EARLY_RETURN_ON_FAILURE`, creation feedback | 13 |
 | `drawing.c` | Drawing Commands and Fixed-Function Vertex Processing: vertex and instance numbering of direct, indexed (UINT16, UINT32, UINT8) and indirect draws, draw counts, primitive restart (static and dynamic), every primitive topology, draw parameters (BaseVertex, BaseInstance, DrawIndex), vertex attribute formats, offsets and instance rates, divisors, dynamic binding strides; `vkCmdBindIndexBuffer2` ranges; the KHR aliases of VK_KHR_maintenance5 and VK_KHR_draw_indirect_count on a 1.3 device | 15 |
 | `rasterization.c` | Fixed-Function Vertex Post-Processing and Rasterization: viewport transform (offsets, negative heights, depth ranges), clipping and depth clamping, ViewportIndex and Layer from the vertex shader, culling, rasterizer discard, coverage at the standard sample locations, sample shading, wide points, flat and smooth interpolation, dynamic line width and line stipple | 13 |
-| `fragops.c` | Fragment Operations: scissor test, every depth compare op, every stencil op (clamping, wrapping, fail and depth-fail ops, write and compare masks), depth bounds (static and dynamic), sample mask, alpha to one | 7 |
-| `framebuffer.c` | The Framebuffer: blend factors and operations (constants static and dynamic), color write masks, independent blending, dual-source blending, sRGB blending in linear space, logic operations | 6 |
+| `fragops.c` | Fragment Operations: scissor test, every depth compare op, every stencil op (clamping, wrapping, fail and depth-fail ops, write and compare masks), depth bounds (static and dynamic), sample mask (alone, and with the SampleMask built-ins), alpha to one | 8 |
+| `framebuffer.c` | The Framebuffer: blend factors and operations (constants static and dynamic), color write masks, independent blending, dual-source blending, sRGB blending in linear space, logic operations (XOR on UNORM, every operation on UINT with a write mask) | 7 |
 | `dispatch.c` | Dispatching Commands: `vkCmdDispatchIndirect` (parameters read at execution, zero counts), `vkCmdDispatchBase` (WorkgroupId, NumWorkgroups, GlobalInvocationId), no base carried over | 3 |
 | `sparsemem.c` | Sparse Resources: sparse image memory requirements (none without sparse residency), `vkQueueBindSparse` on a sparse binding queue | 3 |
 | `wsi.c` | Window System Integration: Metal surfaces, surface queries (support, capabilities, formats, present modes, present rectangles, device group modes), swapchains (images, allocation callbacks, `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`, recreation with `oldSwapchain`, aliasing a swapchain image), acquire and present (semaphores, fences, timeouts, two swapchains in one present), swapchain images as transfer source and destination | 20 |
@@ -238,7 +238,7 @@ against the specification; the tests are right:
   equivalent to vkCmdDispatchBase(0,0,0,groupCountX,groupCountY,groupCountZ)".
 
 The graphics chapters' tests also skip on MoltenVK where it lacks a feature
-(`drawIndirectCount`, `depthBounds`, `logicOp`), and draw no triangle fans on
+(`drawIndirectCount`, `depthBounds`, `logicOp`: both logic operation tests), and draw no triangle fans on
 it (`VK_KHR_portability_subset`, whose `triangleFans` may be off); and
 without `VK_KHR_draw_indirect_count`, `drawing.draw_indirect_count_khr`.
 Sparse resources, wide lines, stippled lines, depth bounds and external
@@ -271,16 +271,11 @@ a required behaviour.
 | `features.shaderInt64` | Required only with 64-bit shader atomics, which Apple7/Apple8 GPUs lack. |
 | `drawing.draw_index_multi_draw` | `multiDrawIndirect` is not supported (Metal draws indirect records one at a time and the translator has no per-draw DrawIndex), so `maxDrawIndirectCount` is 1 and no multi-draw has a DrawIndex other than 0. |
 | `fragops.depth_bounds_test` | `depthBounds` is not reported: Metal 4's `setDepthTestMinBound:maxBound:` traps in the Apple9 (M4) driver. |
-| `framebuffer.logic_op` | Metal has no logic operations. |
 | `features.samplerFilterMinmax`, `formats.filter_minmax_formats`, `samplers.create_sampler_reduction` | Required only with VK_EXT_sampler_filter_minmax, which PlasmaVK offers from Apple10 (M5, A19): Metal's `MTLSamplerDescriptor.reductionMode` is an Apple10 feature (FST "Sampler minimum and maximum reduction"), and on Apple9 (M4 Max) it is accepted and ignored, minimum and maximum sampling as the weighted average. A shader cannot emulate it: a sampler descriptor is only its MTLResourceID. |
 
 ## Tests PlasmaVK fails
 
-Not in `baseline.txt` until fixed:
-
-| Test | Why |
-|---|---|
-| `fragops.sample_mask_test` | `VkPipelineMultisampleStateCreateInfo::pSampleMask` is ignored (with a warning): Metal applies a sample mask only as a fragment function's `[[sample_mask]]` output, which the SPIR-V translator does not emit yet. |
+None: every test that does not skip is in `baseline.txt`.
 
 Running under the validation layer on MoltenVK reports no valid usage errors
 from the tests. Image view and sampler tests avoid component swizzles, format

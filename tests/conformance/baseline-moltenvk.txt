@@ -570,6 +570,7 @@ renderpass.rendering_area_granularity_khr
 
 pipelines.pipeline_without_fragment_shader
 pipelines.pipeline_specialization
+pipelines.pipeline_specialization_ops
 pipelines.pipeline_uniform_buffer
 pipelines.dynamic_viewport_scissor
 pipelines.dynamic_cull_front_face_topology
@@ -612,6 +613,7 @@ fragops.scissor_test
 fragops.depth_compare_ops
 fragops.stencil_ops
 fragops.sample_mask_test
+fragops.sample_mask_shader_coverage
 fragops.alpha_to_one
 fragops.depth_bounds_dynamic
 

@@ -567,6 +567,7 @@ renderpass.rendering_area_granularity_khr
 
 pipelines.pipeline_without_fragment_shader
 pipelines.pipeline_specialization
+pipelines.pipeline_specialization_ops
 pipelines.pipeline_uniform_buffer
 pipelines.dynamic_viewport_scissor
 pipelines.dynamic_cull_front_face_topology
@@ -610,6 +611,8 @@ rasterization.line_stipple_dynamic
 fragops.scissor_test
 fragops.depth_compare_ops
 fragops.stencil_ops
+fragops.sample_mask_test
+fragops.sample_mask_shader_coverage
 fragops.alpha_to_one
 fragops.depth_bounds_dynamic
 
@@ -618,6 +621,8 @@ framebuffer.color_write_mask
 framebuffer.independent_blend
 framebuffer.dual_source_blend
 framebuffer.srgb_blending
+framebuffer.logic_op
+framebuffer.logic_op_uint_ops
 
 dispatch.dispatch_indirect
 dispatch.dispatch_base
