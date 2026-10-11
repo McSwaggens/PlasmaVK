@@ -438,6 +438,7 @@ formats.ycbcr_disjoint_multiplanar
 capabilities.image_format_extents
 capabilities.image_format_sample_counts
 capabilities.image_format_monotonic
+capabilities.sparse_image_format_properties
 capabilities.image_format_host_transfer
 capabilities.image_format_properties2
 capabilities.ycbcr_descriptor_count

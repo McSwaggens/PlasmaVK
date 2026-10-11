@@ -320,19 +320,21 @@ CT_TEST(image_format_properties2,
 
 CT_TEST(sparse_image_format_properties,
         "Sparse Resources > vkGetPhysicalDeviceSparseImageFormatProperties: if VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT "
-        "is not supported for the arguments, pPropertyCount is zero (here: sparseResidencyImage2D not supported)",
+        "is not supported for the arguments, pPropertyCount is zero (here: optimal tiling without "
+        "sparseResidencyImage2D, or linear tiling, which never allows sparse residency: "
+        "VUID-VkImageCreateInfo-tiling-04121)",
         "vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceSparseImageFormatProperties "
         "vkGetPhysicalDeviceSparseImageFormatProperties2")
 {
     struct ct_env e;
     struct ct_features f;
     uint32_t count = 77;
+    VkImageTiling tiling;
     ct_env_init(t, &e);
     ct_get_features(&e, &f, 0);
-    if (f.f2.features.sparseResidencyImage2D)
-        ct_skip(t, "sparseResidencyImage2D is supported");
+    tiling = f.f2.features.sparseResidencyImage2D ? VK_IMAGE_TILING_LINEAR : VK_IMAGE_TILING_OPTIMAL;
     vkGetPhysicalDeviceSparseImageFormatProperties(e.pd, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D, VK_SAMPLE_COUNT_1_BIT,
-                                                   VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_TILING_OPTIMAL, &count, NULL);
+                                                   VK_IMAGE_USAGE_SAMPLED_BIT, tiling, &count, NULL);
     CT_CHECK(t, count == 0);
     if (e.version >= VK_API_VERSION_1_1) {
         VkPhysicalDeviceSparseImageFormatInfo2 info;
@@ -342,7 +344,7 @@ CT_TEST(sparse_image_format_properties,
         info.type = VK_IMAGE_TYPE_2D;
         info.samples = VK_SAMPLE_COUNT_1_BIT;
         info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
-        info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        info.tiling = tiling;
         count = 77;
         vkGetPhysicalDeviceSparseImageFormatProperties2(e.pd, &info, &count, NULL);
         CT_CHECK(t, count == 0);

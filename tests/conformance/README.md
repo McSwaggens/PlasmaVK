@@ -265,7 +265,6 @@ behaviour.
 | Tests | Why |
 |---|---|
 | `devsandqueues.get_device_queue2_protected`, `features.pipelineProtectedAccess` | Apple GPUs have no protected memory. |
-| `capabilities.sparse_image_format_properties` | It checks the zero count of a format without sparse residency where `sparseResidencyImage2D` is not supported; PlasmaVK supports it (`sparsemem.sparse_image_format_queries` covers the query). |
 | `memory.peer_memory_features` | Every device group has one physical device: `vkGetDeviceGroupPeerMemoryFeatures` has no valid call (its local and remote device indices must differ). |
 | `resources.buffer_capture_replay` | Metal cannot place a resource at a requested GPU address, so `bufferDeviceAddressCaptureReplay` is unsupported. |
 | `extensions.instance_layer_extensions` | No layers: PlasmaVK is linked directly, without a loader. |
