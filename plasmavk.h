@@ -31482,6 +31482,80 @@ static inline void pvk_MTLRenderPipelineDescriptor_setFragmentFunction(id self, 
 static inline id pvk_MTLRenderPipelineDescriptor_colorAttachments(id self) { PVK_SEL_CACHE("colorAttachments"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline id pvk_MTLRenderPipelineColorAttachmentDescriptorArray_objectAtIndexedSubscript(id self, unsigned long attachmentIndex) { PVK_SEL_CACHE("objectAtIndexedSubscript:"); return PVK_MSG(id, (id, SEL, unsigned long))(self, pvk_sel_, attachmentIndex); }
 static inline void pvk_MTLRenderPipelineColorAttachmentDescriptor_setPixelFormat(id self, pvk_MTLPixelFormat pixelFormat) { PVK_SEL_CACHE("setPixelFormat:"); PVK_MSG(void, (id, SEL, pvk_MTLPixelFormat))(self, pvk_sel_, pixelFormat); }
+/* Graphics: render passes, render pipelines, draws (sections 15-17) */
+static inline void pvk_MTL4RenderPassDescriptor_setRenderTargetWidth(id self, unsigned long renderTargetWidth) { PVK_SEL_CACHE("setRenderTargetWidth:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, renderTargetWidth); }
+static inline void pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(id self, unsigned long renderTargetHeight) { PVK_SEL_CACHE("setRenderTargetHeight:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, renderTargetHeight); }
+static inline void pvk_MTL4RenderPassDescriptor_setDefaultRasterSampleCount(id self, unsigned long defaultRasterSampleCount) { PVK_SEL_CACHE("setDefaultRasterSampleCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, defaultRasterSampleCount); }
+static inline void pvk_MTL4RenderPassDescriptor_setVisibilityResultBuffer(id self, id visibilityResultBuffer) { PVK_SEL_CACHE("setVisibilityResultBuffer:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, visibilityResultBuffer); }
+static inline void pvk_MTL4RenderPassDescriptor_setVisibilityResultType(id self, pvk_MTLVisibilityResultType visibilityResultType) { PVK_SEL_CACHE("setVisibilityResultType:"); PVK_MSG(void, (id, SEL, pvk_MTLVisibilityResultType))(self, pvk_sel_, visibilityResultType); }
+static inline void pvk_MTL4RenderPassDescriptor_setSupportColorAttachmentMapping(id self, bool supportColorAttachmentMapping) { PVK_SEL_CACHE("setSupportColorAttachmentMapping:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, supportColorAttachmentMapping); }
+static inline void pvk_MTLRenderPassAttachmentDescriptor_setResolveTexture(id self, id resolveTexture) { PVK_SEL_CACHE("setResolveTexture:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, resolveTexture); }
+static inline void pvk_MTLRenderPassAttachmentDescriptor_setResolveLevel(id self, unsigned long resolveLevel) { PVK_SEL_CACHE("setResolveLevel:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, resolveLevel); }
+static inline void pvk_MTLRenderPassAttachmentDescriptor_setResolveSlice(id self, unsigned long resolveSlice) { PVK_SEL_CACHE("setResolveSlice:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, resolveSlice); }
+static inline void pvk_MTLRenderPassAttachmentDescriptor_setResolveDepthPlane(id self, unsigned long resolveDepthPlane) { PVK_SEL_CACHE("setResolveDepthPlane:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, resolveDepthPlane); }
+static inline void pvk_MTLRenderPassDepthAttachmentDescriptor_setDepthResolveFilter(id self, pvk_MTLMultisampleDepthResolveFilter depthResolveFilter) { PVK_SEL_CACHE("setDepthResolveFilter:"); PVK_MSG(void, (id, SEL, pvk_MTLMultisampleDepthResolveFilter))(self, pvk_sel_, depthResolveFilter); }
+static inline void pvk_MTLRenderPassStencilAttachmentDescriptor_setStencilResolveFilter(id self, pvk_MTLMultisampleStencilResolveFilter stencilResolveFilter) { PVK_SEL_CACHE("setStencilResolveFilter:"); PVK_MSG(void, (id, SEL, pvk_MTLMultisampleStencilResolveFilter))(self, pvk_sel_, stencilResolveFilter); }
+static inline void pvk_MTL4RenderCommandEncoder_setColorAttachmentMap(id self, id mapping) { PVK_SEL_CACHE("setColorAttachmentMap:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, mapping); }
+static inline void pvk_MTL4RenderCommandEncoder_setViewports_count(id self, const pvk_MTLViewport * viewports, unsigned long count) { PVK_SEL_CACHE("setViewports:count:"); PVK_MSG(void, (id, SEL, const pvk_MTLViewport *, unsigned long))(self, pvk_sel_, viewports, count); }
+static inline void pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(id self, unsigned long count, const pvk_MTLVertexAmplificationViewMapping * viewMappings) { PVK_SEL_CACHE("setVertexAmplificationCount:viewMappings:"); PVK_MSG(void, (id, SEL, unsigned long, const pvk_MTLVertexAmplificationViewMapping *))(self, pvk_sel_, count, viewMappings); }
+static inline void pvk_MTL4RenderCommandEncoder_setCullMode(id self, pvk_MTLCullMode cullMode) { PVK_SEL_CACHE("setCullMode:"); PVK_MSG(void, (id, SEL, pvk_MTLCullMode))(self, pvk_sel_, cullMode); }
+static inline void pvk_MTL4RenderCommandEncoder_setDepthClipMode(id self, pvk_MTLDepthClipMode depthClipMode) { PVK_SEL_CACHE("setDepthClipMode:"); PVK_MSG(void, (id, SEL, pvk_MTLDepthClipMode))(self, pvk_sel_, depthClipMode); }
+static inline void pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(id self, float depthBias, float slopeScale, float clamp) { PVK_SEL_CACHE("setDepthBias:slopeScale:clamp:"); PVK_MSG(void, (id, SEL, float, float, float))(self, pvk_sel_, depthBias, slopeScale, clamp); }
+static inline void pvk_MTL4RenderCommandEncoder_setDepthTestMinBound_maxBound(id self, float minBound, float maxBound) { PVK_SEL_CACHE("setDepthTestMinBound:maxBound:"); PVK_MSG(void, (id, SEL, float, float))(self, pvk_sel_, minBound, maxBound); }
+static inline void pvk_MTL4RenderCommandEncoder_setScissorRects_count(id self, const pvk_MTLScissorRect * scissorRects, unsigned long count) { PVK_SEL_CACHE("setScissorRects:count:"); PVK_MSG(void, (id, SEL, const pvk_MTLScissorRect *, unsigned long))(self, pvk_sel_, scissorRects, count); }
+static inline void pvk_MTL4RenderCommandEncoder_setTriangleFillMode(id self, pvk_MTLTriangleFillMode fillMode) { PVK_SEL_CACHE("setTriangleFillMode:"); PVK_MSG(void, (id, SEL, pvk_MTLTriangleFillMode))(self, pvk_sel_, fillMode); }
+static inline void pvk_MTL4RenderCommandEncoder_setBlendColorRed_green_blue_alpha(id self, float red, float green, float blue, float alpha) { PVK_SEL_CACHE("setBlendColorRed:green:blue:alpha:"); PVK_MSG(void, (id, SEL, float, float, float, float))(self, pvk_sel_, red, green, blue, alpha); }
+static inline void pvk_MTL4RenderCommandEncoder_setDepthStencilState(id self, id depthStencilState) { PVK_SEL_CACHE("setDepthStencilState:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, depthStencilState); }
+static inline void pvk_MTL4RenderCommandEncoder_setStencilFrontReferenceValue_backReferenceValue(id self, uint32_t frontReferenceValue, uint32_t backReferenceValue) { PVK_SEL_CACHE("setStencilFrontReferenceValue:backReferenceValue:"); PVK_MSG(void, (id, SEL, uint32_t, uint32_t))(self, pvk_sel_, frontReferenceValue, backReferenceValue); }
+static inline void pvk_MTL4RenderCommandEncoder_setVisibilityResultMode_offset(id self, pvk_MTLVisibilityResultMode mode, unsigned long offset) { PVK_SEL_CACHE("setVisibilityResultMode:offset:"); PVK_MSG(void, (id, SEL, pvk_MTLVisibilityResultMode, unsigned long))(self, pvk_sel_, mode, offset); }
+static inline void pvk_MTL4RenderCommandEncoder_setFrontFacingWinding(id self, pvk_MTLWinding frontFacingWinding) { PVK_SEL_CACHE("setFrontFacingWinding:"); PVK_MSG(void, (id, SEL, pvk_MTLWinding))(self, pvk_sel_, frontFacingWinding); }
+static inline void pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(id self, pvk_MTLPrimitiveType primitiveType, unsigned long vertexStart, unsigned long vertexCount, unsigned long instanceCount, unsigned long baseInstance) { PVK_SEL_CACHE("drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:"); PVK_MSG(void, (id, SEL, pvk_MTLPrimitiveType, unsigned long, unsigned long, unsigned long, unsigned long))(self, pvk_sel_, primitiveType, vertexStart, vertexCount, instanceCount, baseInstance); }
+static inline void pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferLength_instanceCount_baseVertex_baseInstance(id self, pvk_MTLPrimitiveType primitiveType, unsigned long indexCount, pvk_MTLIndexType indexType, pvk_MTLGPUAddress indexBuffer, unsigned long indexBufferLength, unsigned long instanceCount, long baseVertex, unsigned long baseInstance) { PVK_SEL_CACHE("drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferLength:instanceCount:baseVertex:baseInstance:"); PVK_MSG(void, (id, SEL, pvk_MTLPrimitiveType, unsigned long, pvk_MTLIndexType, pvk_MTLGPUAddress, unsigned long, unsigned long, long, unsigned long))(self, pvk_sel_, primitiveType, indexCount, indexType, indexBuffer, indexBufferLength, instanceCount, baseVertex, baseInstance); }
+static inline void pvk_MTL4RenderCommandEncoder_drawPrimitives_indirectBuffer(id self, pvk_MTLPrimitiveType primitiveType, pvk_MTLGPUAddress indirectBuffer) { PVK_SEL_CACHE("drawPrimitives:indirectBuffer:"); PVK_MSG(void, (id, SEL, pvk_MTLPrimitiveType, pvk_MTLGPUAddress))(self, pvk_sel_, primitiveType, indirectBuffer); }
+static inline void pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexType_indexBuffer_indexBufferLength_indirectBuffer(id self, pvk_MTLPrimitiveType primitiveType, pvk_MTLIndexType indexType, pvk_MTLGPUAddress indexBuffer, unsigned long indexBufferLength, pvk_MTLGPUAddress indirectBuffer) { PVK_SEL_CACHE("drawIndexedPrimitives:indexType:indexBuffer:indexBufferLength:indirectBuffer:"); PVK_MSG(void, (id, SEL, pvk_MTLPrimitiveType, pvk_MTLIndexType, pvk_MTLGPUAddress, unsigned long, pvk_MTLGPUAddress))(self, pvk_sel_, primitiveType, indexType, indexBuffer, indexBufferLength, indirectBuffer); }
+static inline id pvk_MTLDevice_newCompilerWithDescriptor_error(id self, id descriptor, id * error) { PVK_SEL_CACHE("newCompilerWithDescriptor:error:"); return PVK_MSG(id, (id, SEL, id, id *))(self, pvk_sel_, descriptor, error); }
+static inline id pvk_MTLDevice_newDepthStencilStateWithDescriptor(id self, id descriptor) { PVK_SEL_CACHE("newDepthStencilStateWithDescriptor:"); return PVK_MSG(id, (id, SEL, id))(self, pvk_sel_, descriptor); }
+static inline bool pvk_MTLDevice_supportsVertexAmplificationCount(id self, unsigned long count) { PVK_SEL_CACHE("supportsVertexAmplificationCount:"); return PVK_MSG(bool, (id, SEL, unsigned long))(self, pvk_sel_, count); }
+static inline id pvk_MTL4CompilerDescriptor_new(void) { PVK_CLASS_CACHE("MTL4CompilerDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline id pvk_MTL4Compiler_newRenderPipelineStateWithDescriptor_compilerTaskOptions_error(id self, id descriptor, id compilerTaskOptions, id * error) { PVK_SEL_CACHE("newRenderPipelineStateWithDescriptor:compilerTaskOptions:error:"); return PVK_MSG(id, (id, SEL, id, id, id *))(self, pvk_sel_, descriptor, compilerTaskOptions, error); }
+static inline id pvk_MTL4LibraryFunctionDescriptor_new(void) { PVK_CLASS_CACHE("MTL4LibraryFunctionDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTL4LibraryFunctionDescriptor_setName(id self, id name) { PVK_SEL_CACHE("setName:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, name); }
+static inline void pvk_MTL4LibraryFunctionDescriptor_setLibrary(id self, id library) { PVK_SEL_CACHE("setLibrary:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, library); }
+static inline id pvk_MTL4RenderPipelineDescriptor_new(void) { PVK_CLASS_CACHE("MTL4RenderPipelineDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTL4RenderPipelineDescriptor_setVertexFunctionDescriptor(id self, id vertexFunctionDescriptor) { PVK_SEL_CACHE("setVertexFunctionDescriptor:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, vertexFunctionDescriptor); }
+static inline void pvk_MTL4RenderPipelineDescriptor_setFragmentFunctionDescriptor(id self, id fragmentFunctionDescriptor) { PVK_SEL_CACHE("setFragmentFunctionDescriptor:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, fragmentFunctionDescriptor); }
+static inline void pvk_MTL4RenderPipelineDescriptor_setRasterSampleCount(id self, unsigned long rasterSampleCount) { PVK_SEL_CACHE("setRasterSampleCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, rasterSampleCount); }
+static inline void pvk_MTL4RenderPipelineDescriptor_setAlphaToCoverageState(id self, pvk_MTL4AlphaToCoverageState alphaToCoverageState) { PVK_SEL_CACHE("setAlphaToCoverageState:"); PVK_MSG(void, (id, SEL, pvk_MTL4AlphaToCoverageState))(self, pvk_sel_, alphaToCoverageState); }
+static inline void pvk_MTL4RenderPipelineDescriptor_setAlphaToOneState(id self, pvk_MTL4AlphaToOneState alphaToOneState) { PVK_SEL_CACHE("setAlphaToOneState:"); PVK_MSG(void, (id, SEL, pvk_MTL4AlphaToOneState))(self, pvk_sel_, alphaToOneState); }
+static inline void pvk_MTL4RenderPipelineDescriptor_setRasterizationEnabled(id self, bool rasterizationEnabled) { PVK_SEL_CACHE("setRasterizationEnabled:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, rasterizationEnabled); }
+static inline void pvk_MTL4RenderPipelineDescriptor_setMaxVertexAmplificationCount(id self, unsigned long maxVertexAmplificationCount) { PVK_SEL_CACHE("setMaxVertexAmplificationCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, maxVertexAmplificationCount); }
+static inline id pvk_MTL4RenderPipelineDescriptor_colorAttachments(id self) { PVK_SEL_CACHE("colorAttachments"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTL4RenderPipelineDescriptor_setInputPrimitiveTopology(id self, pvk_MTLPrimitiveTopologyClass inputPrimitiveTopology) { PVK_SEL_CACHE("setInputPrimitiveTopology:"); PVK_MSG(void, (id, SEL, pvk_MTLPrimitiveTopologyClass))(self, pvk_sel_, inputPrimitiveTopology); }
+static inline void pvk_MTL4RenderPipelineDescriptor_setColorAttachmentMappingState(id self, pvk_MTL4LogicalToPhysicalColorAttachmentMappingState colorAttachmentMappingState) { PVK_SEL_CACHE("setColorAttachmentMappingState:"); PVK_MSG(void, (id, SEL, pvk_MTL4LogicalToPhysicalColorAttachmentMappingState))(self, pvk_sel_, colorAttachmentMappingState); }
+static inline id pvk_MTL4RenderPipelineColorAttachmentDescriptorArray_objectAtIndexedSubscript(id self, unsigned long attachmentIndex) { PVK_SEL_CACHE("objectAtIndexedSubscript:"); return PVK_MSG(id, (id, SEL, unsigned long))(self, pvk_sel_, attachmentIndex); }
+static inline void pvk_MTL4RenderPipelineColorAttachmentDescriptor_setPixelFormat(id self, pvk_MTLPixelFormat pixelFormat) { PVK_SEL_CACHE("setPixelFormat:"); PVK_MSG(void, (id, SEL, pvk_MTLPixelFormat))(self, pvk_sel_, pixelFormat); }
+static inline void pvk_MTL4RenderPipelineColorAttachmentDescriptor_setBlendingState(id self, pvk_MTL4BlendState blendingState) { PVK_SEL_CACHE("setBlendingState:"); PVK_MSG(void, (id, SEL, pvk_MTL4BlendState))(self, pvk_sel_, blendingState); }
+static inline void pvk_MTL4RenderPipelineColorAttachmentDescriptor_setSourceRGBBlendFactor(id self, pvk_MTLBlendFactor sourceRGBBlendFactor) { PVK_SEL_CACHE("setSourceRGBBlendFactor:"); PVK_MSG(void, (id, SEL, pvk_MTLBlendFactor))(self, pvk_sel_, sourceRGBBlendFactor); }
+static inline void pvk_MTL4RenderPipelineColorAttachmentDescriptor_setDestinationRGBBlendFactor(id self, pvk_MTLBlendFactor destinationRGBBlendFactor) { PVK_SEL_CACHE("setDestinationRGBBlendFactor:"); PVK_MSG(void, (id, SEL, pvk_MTLBlendFactor))(self, pvk_sel_, destinationRGBBlendFactor); }
+static inline void pvk_MTL4RenderPipelineColorAttachmentDescriptor_setRgbBlendOperation(id self, pvk_MTLBlendOperation rgbBlendOperation) { PVK_SEL_CACHE("setRgbBlendOperation:"); PVK_MSG(void, (id, SEL, pvk_MTLBlendOperation))(self, pvk_sel_, rgbBlendOperation); }
+static inline void pvk_MTL4RenderPipelineColorAttachmentDescriptor_setSourceAlphaBlendFactor(id self, pvk_MTLBlendFactor sourceAlphaBlendFactor) { PVK_SEL_CACHE("setSourceAlphaBlendFactor:"); PVK_MSG(void, (id, SEL, pvk_MTLBlendFactor))(self, pvk_sel_, sourceAlphaBlendFactor); }
+static inline void pvk_MTL4RenderPipelineColorAttachmentDescriptor_setDestinationAlphaBlendFactor(id self, pvk_MTLBlendFactor destinationAlphaBlendFactor) { PVK_SEL_CACHE("setDestinationAlphaBlendFactor:"); PVK_MSG(void, (id, SEL, pvk_MTLBlendFactor))(self, pvk_sel_, destinationAlphaBlendFactor); }
+static inline void pvk_MTL4RenderPipelineColorAttachmentDescriptor_setAlphaBlendOperation(id self, pvk_MTLBlendOperation alphaBlendOperation) { PVK_SEL_CACHE("setAlphaBlendOperation:"); PVK_MSG(void, (id, SEL, pvk_MTLBlendOperation))(self, pvk_sel_, alphaBlendOperation); }
+static inline void pvk_MTL4RenderPipelineColorAttachmentDescriptor_setWriteMask(id self, pvk_MTLColorWriteMask writeMask) { PVK_SEL_CACHE("setWriteMask:"); PVK_MSG(void, (id, SEL, pvk_MTLColorWriteMask))(self, pvk_sel_, writeMask); }
+static inline id pvk_MTLLogicalToPhysicalColorAttachmentMap_new(void) { PVK_CLASS_CACHE("MTLLogicalToPhysicalColorAttachmentMap"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTLLogicalToPhysicalColorAttachmentMap_setPhysicalIndex_forLogicalIndex(id self, unsigned long physicalIndex, unsigned long logicalIndex) { PVK_SEL_CACHE("setPhysicalIndex:forLogicalIndex:"); PVK_MSG(void, (id, SEL, unsigned long, unsigned long))(self, pvk_sel_, physicalIndex, logicalIndex); }
+static inline id pvk_MTLDepthStencilDescriptor_new(void) { PVK_CLASS_CACHE("MTLDepthStencilDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTLDepthStencilDescriptor_setDepthCompareFunction(id self, pvk_MTLCompareFunction depthCompareFunction) { PVK_SEL_CACHE("setDepthCompareFunction:"); PVK_MSG(void, (id, SEL, pvk_MTLCompareFunction))(self, pvk_sel_, depthCompareFunction); }
+static inline void pvk_MTLDepthStencilDescriptor_setDepthWriteEnabled(id self, bool depthWriteEnabled) { PVK_SEL_CACHE("setDepthWriteEnabled:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, depthWriteEnabled); }
+static inline void pvk_MTLDepthStencilDescriptor_setFrontFaceStencil(id self, id frontFaceStencil) { PVK_SEL_CACHE("setFrontFaceStencil:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, frontFaceStencil); }
+static inline void pvk_MTLDepthStencilDescriptor_setBackFaceStencil(id self, id backFaceStencil) { PVK_SEL_CACHE("setBackFaceStencil:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, backFaceStencil); }
+static inline id pvk_MTLStencilDescriptor_new(void) { PVK_CLASS_CACHE("MTLStencilDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTLStencilDescriptor_setStencilCompareFunction(id self, pvk_MTLCompareFunction stencilCompareFunction) { PVK_SEL_CACHE("setStencilCompareFunction:"); PVK_MSG(void, (id, SEL, pvk_MTLCompareFunction))(self, pvk_sel_, stencilCompareFunction); }
+static inline void pvk_MTLStencilDescriptor_setStencilFailureOperation(id self, pvk_MTLStencilOperation stencilFailureOperation) { PVK_SEL_CACHE("setStencilFailureOperation:"); PVK_MSG(void, (id, SEL, pvk_MTLStencilOperation))(self, pvk_sel_, stencilFailureOperation); }
+static inline void pvk_MTLStencilDescriptor_setDepthFailureOperation(id self, pvk_MTLStencilOperation depthFailureOperation) { PVK_SEL_CACHE("setDepthFailureOperation:"); PVK_MSG(void, (id, SEL, pvk_MTLStencilOperation))(self, pvk_sel_, depthFailureOperation); }
+static inline void pvk_MTLStencilDescriptor_setDepthStencilPassOperation(id self, pvk_MTLStencilOperation depthStencilPassOperation) { PVK_SEL_CACHE("setDepthStencilPassOperation:"); PVK_MSG(void, (id, SEL, pvk_MTLStencilOperation))(self, pvk_sel_, depthStencilPassOperation); }
+static inline void pvk_MTLStencilDescriptor_setReadMask(id self, uint32_t readMask) { PVK_SEL_CACHE("setReadMask:"); PVK_MSG(void, (id, SEL, uint32_t))(self, pvk_sel_, readMask); }
+static inline void pvk_MTLStencilDescriptor_setWriteMask(id self, uint32_t writeMask) { PVK_SEL_CACHE("setWriteMask:"); PVK_MSG(void, (id, SEL, uint32_t))(self, pvk_sel_, writeMask); }
 
 /* ==========================================================================
  * 5. Internals
@@ -31636,6 +31710,12 @@ enum pvk_device_extension {
     PVK_DEVICE_EXT_EXT_sampler_filter_minmax,
     /* Core in 1.2 but optional: offered with descriptorIndexing (section 7). */
     PVK_DEVICE_EXT_EXT_descriptor_indexing,
+    /* Graphics features that are core but optional (section 7): offered
+     * with shaderDrawParameters, drawIndirectCount, and shaderOutputLayer
+     * with shaderOutputViewportIndex. */
+    PVK_DEVICE_EXT_KHR_shader_draw_parameters,
+    PVK_DEVICE_EXT_KHR_draw_indirect_count,
+    PVK_DEVICE_EXT_EXT_shader_viewport_index_layer,
     PVK_DEVICE_EXTENSION_COUNT
 };
 
@@ -31644,6 +31724,9 @@ static const VkExtensionProperties pvk_device_extensions[] = {
     { VK_KHR_MAINTENANCE_5_EXTENSION_NAME, VK_KHR_MAINTENANCE_5_SPEC_VERSION },
     { VK_EXT_SAMPLER_FILTER_MINMAX_EXTENSION_NAME, VK_EXT_SAMPLER_FILTER_MINMAX_SPEC_VERSION },
     { VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME, VK_EXT_DESCRIPTOR_INDEXING_SPEC_VERSION },
+    { VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME, VK_KHR_SHADER_DRAW_PARAMETERS_SPEC_VERSION },
+    { VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME, VK_KHR_DRAW_INDIRECT_COUNT_SPEC_VERSION },
+    { VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME, VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_SPEC_VERSION },
 };
 
 /* The instance extension each device extension depends on (-1: none), from
@@ -31657,6 +31740,9 @@ static const int pvk_device_extension_needs[PVK_DEVICE_EXTENSION_COUNT] = {
     -1,                           /* VK_KHR_maintenance5 */
     -1,                           /* VK_EXT_sampler_filter_minmax */
     -1,                           /* VK_EXT_descriptor_indexing (VK_KHR_maintenance3: core in 1.1) */
+    -1,                           /* VK_KHR_shader_draw_parameters */
+    -1,                           /* VK_KHR_draw_indirect_count */
+    -1,                           /* VK_EXT_shader_viewport_index_layer */
 };
 
 /* ==========================================================================
@@ -31760,6 +31846,12 @@ struct pvk_device {
     struct pvk_blit_pipeline *blit_pipelines; /* render pipelines made from it, by function and format */
     id host_queue, host_event;                /* MTL4CommandQueue, MTLSharedEvent: host copies' blits */
     uint64_t host_serial;
+    /* Graphics (sections 15-17), made on first use */
+    id compiler;                              /* MTL4Compiler of render pipelines */
+    struct pvk_ds_state *ds_states[64];       /* MTLDepthStencilStates by state (hash buckets) */
+    struct pvk_clear_pipeline *clear_pipelines; /* vkCmdClearAttachments draws, by formats */
+    id prepass_pipelines[3];                  /* draw preprocessing kernels (section 16) */
+    struct pvk_fan_buffer *fan_buffers;       /* triangle fan index patterns, newest first */
 };
 
 /* Section 13: a queue's submission state, and waiting for the GPU before
@@ -31933,7 +32025,9 @@ static void pvk_physical_device_init_limits(struct pvk_physical_device *pd)
     l->maxPerStageDescriptorStorageBuffers = PVK_MAX_DESCRIPTORS;
     l->maxPerStageDescriptorSampledImages = PVK_MAX_DESCRIPTORS;
     l->maxPerStageDescriptorStorageImages = PVK_MAX_DESCRIPTORS;
-    l->maxPerStageDescriptorInputAttachments = PVK_MAX_DESCRIPTORS;
+    /* Input attachments are color attachments read by framebuffer fetch
+     * (section 15): at most 8. */
+    l->maxPerStageDescriptorInputAttachments = 8;
     l->maxPerStageResources = PVK_MAX_DESCRIPTORS;
     l->maxDescriptorSetSamplers = samplers;
     l->maxDescriptorSetUniformBuffers = PVK_MAX_DESCRIPTORS;
@@ -31942,7 +32036,7 @@ static void pvk_physical_device_init_limits(struct pvk_physical_device *pd)
     l->maxDescriptorSetStorageBuffersDynamic = PVK_MAX_DYNAMIC_BUFFERS;
     l->maxDescriptorSetSampledImages = PVK_MAX_DESCRIPTORS;
     l->maxDescriptorSetStorageImages = PVK_MAX_DESCRIPTORS;
-    l->maxDescriptorSetInputAttachments = PVK_MAX_DESCRIPTORS;
+    l->maxDescriptorSetInputAttachments = 8;
 
     /* Vertex input: FST "Function arguments", 31 attributes. FST sets no
      * limit on strides and none on offsets; Vulkan's minimums are reported
@@ -31957,7 +32051,7 @@ static void pvk_physical_device_init_limits(struct pvk_physical_device *pd)
     /* Tessellation and geometry limits stay 0: neither stage is supported. */
     l->maxFragmentInputComponents = 124;
     l->maxFragmentOutputAttachments = 8;  /* FST: 8 color render targets */
-    l->maxFragmentDualSrcAttachments = 0; /* dualSrcBlend is not supported */
+    l->maxFragmentDualSrcAttachments = 1; /* dualSrcBlend: MSL [[color(0), index(1)]] */
     l->maxFragmentCombinedOutputResources = PVK_MAX_DESCRIPTORS;
 
     /* Compute: FST 32 KB threadgroup memory, 1024 threads per threadgroup.
@@ -31985,7 +32079,7 @@ static void pvk_physical_device_init_limits(struct pvk_physical_device *pd)
     l->maxDrawIndirectCount = 1;              /* multiDrawIndirect is not supported */
     l->maxSamplerLodBias = 15.984375f;        /* MTLSamplerDescriptor.lodBias: S4.6 in [-16, 15.999] */
     l->maxSamplerAnisotropy = 16.0f;          /* MTLSamplerDescriptor.maxAnisotropy: 1 to 16 */
-    l->maxViewports = 1;                      /* multiViewport is not supported (FST: 16) */
+    l->maxViewports = 16;                     /* multiViewport (FST: 16 viewports and scissors) */
     /* Viewports cover the largest render target (FST: 16384 px), within the
      * [-2 x size, 2 x size - 1] bounds Vulkan asks for. Metal viewports are
      * floats. */
@@ -32371,6 +32465,34 @@ static void pvk_physical_device_init_descriptor_features(struct pvk_physical_dev
     pd->features.v13.descriptorBindingInlineUniformBlockUpdateAfterBind = VK_TRUE;
 }
 
+/* Graphics features beyond what Vulkan 1.4 requires (sections 15-17):
+ *   multiViewport          FST: 16 viewports and scissor rectangles
+ *   depthBounds            -[MTL4RenderCommandEncoder setDepthTestMinBound:maxBound:]
+ *   alphaToOne             MTL4AlphaToOneState
+ *   dualSrcBlend           MSL [[color(0), index(1)]] and the Source1 blend factors
+ *   shaderDrawParameters   BaseVertex, BaseInstance and DrawIndex (section 13);
+ *                          DrawIndex is 0, right as long as multiDrawIndirect is
+ *                          not reported (one draw per command)
+ *   drawIndirectCount      draw preprocessing (section 16)
+ *   shaderOutputLayer, shaderOutputViewportIndex   vertex shaders write
+ *                          [[render_target_array_index]] / [[viewport_array_index]]
+ * multiDrawIndirect is not reported: Metal draws indirect records one by one,
+ * which works, but DrawIndex would need the translator to read it per draw.
+ * fillModeNonSolid needs points too (Metal fills triangles or lines only),
+ * wideLines and logicOp have no Metal equivalent. */
+static void pvk_physical_device_init_graphics_features(struct pvk_physical_device *pd)
+{
+    VkPhysicalDeviceFeatures *c = &pd->features.core;
+    c->multiViewport = VK_TRUE;
+    c->depthBounds = VK_TRUE;
+    c->alphaToOne = VK_TRUE;
+    c->dualSrcBlend = VK_TRUE;
+    pd->features.v11.shaderDrawParameters = VK_TRUE;
+    pd->features.v12.drawIndirectCount = VK_TRUE;
+    pd->features.v12.shaderOutputViewportIndex = VK_TRUE;
+    pd->features.v12.shaderOutputLayer = VK_TRUE;
+}
+
 static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
 {
     VkPhysicalDeviceProperties *p = &pd->properties;
@@ -32382,7 +32504,14 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     p->deviceID = 0; /* TODO: derive from the GPU family */
     p->deviceType = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
     snprintf(p->deviceName, sizeof(p->deviceName), "%s", pvk_ns_utf8(pvk_MTLDevice_name(pd->mtl_device)));
-    memcpy(p->pipelineCacheUUID, "PlasmaVK", 8); /* TODO: include version and GPU family */
+    {
+        /* Pipeline cache data (section 17) holds MSL of this PlasmaVK
+         * version's translator, compiled for this GPU. */
+        char name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE + 32];
+        snprintf(name, sizeof(name), "%s %d.%d.%d", p->deviceName, PLASMAVK_VERSION_MAJOR, PLASMAVK_VERSION_MINOR,
+                 PLASMAVK_VERSION_PATCH);
+        pvk_make_uuid(p->pipelineCacheUUID, "PlasmaVK pipeline cache", name);
+    }
     /* sparseProperties stay VK_FALSE: no sparse residency. */
     pvk_physical_device_init_limits(pd);
     pvk_physical_device_init_memory_limits(pd);
@@ -32390,6 +32519,7 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     pvk_physical_device_init_features(&pd->features);
     pvk_physical_device_init_texture_features(pd);
     pvk_physical_device_init_descriptor_features(pd);
+    pvk_physical_device_init_graphics_features(pd);
 
     /* Apple GPUs have unified memory: one heap; private, shared (twice) and
      * lazily allocated (memoryless tile memory) types. The order follows the
@@ -33461,6 +33591,13 @@ static bool pvk_device_extension_available(const struct pvk_physical_device *pd,
     if (ext == PVK_DEVICE_EXT_EXT_sampler_filter_minmax && !pd->filter_minmax)
         return false;
     if (ext == PVK_DEVICE_EXT_EXT_descriptor_indexing && !pd->features.v12.descriptorIndexing)
+        return false;
+    if (ext == PVK_DEVICE_EXT_KHR_shader_draw_parameters && !pd->features.v11.shaderDrawParameters)
+        return false;
+    if (ext == PVK_DEVICE_EXT_KHR_draw_indirect_count && !pd->features.v12.drawIndirectCount)
+        return false;
+    if (ext == PVK_DEVICE_EXT_EXT_shader_viewport_index_layer &&
+        !(pd->features.v12.shaderOutputViewportIndex && pd->features.v12.shaderOutputLayer))
         return false;
     return pvk_device_extension_supported(pd->instance, ext);
 }
@@ -44560,14 +44697,17 @@ struct pvk_pipeline_layout {
     struct pvk_descriptor_set_layout *sets[PVK_MAX_BOUND_SETS]; /* referenced; NULL: none */
 };
 
+struct pvk_gfx_pipeline;
+
 struct pvk_pipeline {
     VkPipelineBindPoint bind_point;
-    id mtl_pipeline;               /* MTLComputePipelineState */
+    id mtl_pipeline;               /* MTLComputePipelineState or MTLRenderPipelineState */
     pvk_MTLSize threads;           /* threads per threadgroup: the workgroup size */
     uint32_t push_size;            /* push-constant bytes to bind from offset 0 (0: none) */
     bool dispatch_base;            /* reads the base workgroup at dispatch_base_offset */
     uint32_t dispatch_base_offset; /* in the push-constant buffer */
     uint32_t set_mask;             /* bit N: the shader reads descriptor set N */
+    struct pvk_gfx_pipeline *gfx;  /* graphics pipelines: their state (Graphics, below) */
 };
 
 /* The encoder tracks PVK_MAX_PUSH_CONSTANTS_SIZE (section 7) bytes of push
@@ -44607,6 +44747,8 @@ struct pvk_push_descriptors {
     unsigned char table[2][PVK_PUSH_SET_SIZE];
 };
 
+struct pvk_cb_render;
+
 struct pvk_command_buffer {
     struct pvk_command_pool *pool;
     struct pvk_command_buffer *prev, *next; /* pool->buffers */
@@ -44616,6 +44758,7 @@ struct pvk_command_buffer {
     VkResult result; /* first recording error, returned by vkEndCommandBuffer */
     struct pvk_cmd_block *first, *last;
     struct pvk_push_descriptors *push; /* made by the first push, kept across resets */
+    struct pvk_cb_render *render;      /* render pass instance being recorded (Graphics, below) */
 };
 
 static const VkAllocationCallbacks *pvk_pool_alloc(const struct pvk_command_pool *pool)
@@ -44640,6 +44783,8 @@ static struct pvk_cmd_block *pvk_cmd_block_get(struct pvk_command_pool *pool, si
     return b;
 }
 
+static void pvk_cb_render_free(struct pvk_command_buffer *cb);
+
 /* Back to the initial state; blocks go to the pool unless released. */
 static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release)
 {
@@ -44657,6 +44802,7 @@ static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release
     cb->first = cb->last = NULL;
     cb->state = PVK_CB_INITIAL;
     cb->result = VK_SUCCESS;
+    pvk_cb_render_free(cb);
     if (cb->push && release) {
         pvk_free(pvk_pool_alloc(pool), cb->push);
         cb->push = NULL;
@@ -44783,6 +44929,8 @@ VKAPI_ATTR void VKAPI_CALL vkFreeCommandBuffers(VkDevice device, VkCommandPool c
             pvk_command_buffer_free((struct pvk_command_buffer *)pCommandBuffers[i]);
 }
 
+static void pvk_cb_inherit_render(struct pvk_command_buffer *cb, const VkCommandBufferInheritanceInfo *info);
+
 VKAPI_ATTR VkResult VKAPI_CALL vkBeginCommandBuffer(VkCommandBuffer commandBuffer,
                                                     const VkCommandBufferBeginInfo *pBeginInfo)
 {
@@ -44790,7 +44938,12 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBeginCommandBuffer(VkCommandBuffer commandBuffe
     if (cb->state != PVK_CB_INITIAL) /* implicit reset */
         pvk_command_buffer_reset(cb, false);
     cb->state = PVK_CB_RECORDING;
-    cb->usage = pBeginInfo->flags; /* inheritance info: nothing to inherit yet */
+    cb->usage = pBeginInfo->flags;
+    /* A secondary continuing a render pass inherits what local-read
+     * attachment mappings it may change (Graphics, below). */
+    if (cb->level == VK_COMMAND_BUFFER_LEVEL_SECONDARY && (pBeginInfo->flags & VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT) &&
+        pBeginInfo->pInheritanceInfo)
+        pvk_cb_inherit_render(cb, pBeginInfo->pInheritanceInfo);
     return VK_SUCCESS;
 }
 
@@ -44826,7 +44979,18 @@ enum pvk_cmd_op {
     PVK_CMD_COPY_BUFFER_IMAGE, /* struct pvk_cmd_buffer_image */
     PVK_CMD_COPY_IMAGE,        /* struct pvk_cmd_copy_image */
     PVK_CMD_BLIT_IMAGE,        /* struct pvk_cmd_blit (blits and resolves) */
-    PVK_CMD_CLEAR_IMAGE        /* struct pvk_cmd_clear */
+    PVK_CMD_CLEAR_IMAGE,       /* struct pvk_cmd_clear */
+    /* Graphics (end of this section) */
+    PVK_CMD_BEGIN_PASS,        /* struct pvk_cmd_begin_pass */
+    PVK_CMD_SUBPASS,           /* struct pvk_cmd_subpass */
+    PVK_CMD_END_PASS,          /* struct pvk_cmd_end_pass */
+    PVK_CMD_SET_DYNAMIC,       /* struct pvk_cmd_dynamic, then its values */
+    PVK_CMD_BIND_VERTEX,       /* struct pvk_cmd_bind_vertex, then struct pvk_vertex_binding list */
+    PVK_CMD_BIND_INDEX,        /* struct pvk_cmd_bind_index */
+    PVK_CMD_DRAW,              /* struct pvk_cmd_draw */
+    PVK_CMD_DRAW_INDEXED,      /* struct pvk_cmd_draw_indexed */
+    PVK_CMD_DRAW_INDIRECT,     /* struct pvk_cmd_draw_indirect (also indexed, also with a count) */
+    PVK_CMD_CLEAR_ATTACHMENTS  /* struct pvk_cmd_clear_attachments, then clears and rects */
 };
 
 struct pvk_cmd {
@@ -45099,10 +45263,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBindPipeline(VkCommandBuffer commandBuffer, VkPi
                                              VkPipeline pipeline)
 {
     struct pvk_cmd_bind_pipeline *c;
-    if (pipelineBindPoint != VK_PIPELINE_BIND_POINT_COMPUTE) {
-        pvk_log(PVK_LOG_WARN, "vkCmdBindPipeline: only compute pipelines are supported");
-        return;
-    }
+    if (pipelineBindPoint != VK_PIPELINE_BIND_POINT_COMPUTE && pipelineBindPoint != VK_PIPELINE_BIND_POINT_GRAPHICS)
+        return; /* no ray tracing or other bind points */
     c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_BIND_PIPELINE, sizeof(*c));
     if (c)
         c->pipeline = (struct pvk_pipeline *)pipeline;
@@ -45907,6 +46069,1251 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
     }
 }
 
+/* ---- Graphics ----
+ *
+ * Render passes, dynamic rendering, graphics state and draws. Encoding is in
+ * section 16 ("Graphics"), render pass objects and pipelines in section 17.
+ *
+ * RENDER PASSES
+ *   A render pass instance is one Metal render pass (render command encoder)
+ *   per group of consecutive subpasses (struct pvk_rp_pass, chosen when the
+ *   render pass is made, section 17): subpasses share an encoder when their
+ *   attachments fit one Metal render pass (8 color attachments, one
+ *   depth/stencil attachment, one sample count, one view mask) and none
+ *   needs what an earlier one resolved. So input attachments are read from
+ *   tile memory (framebuffer fetch, section 13) and transient attachments
+ *   never leave it. Within an encoder, each subpass maps the fragment
+ *   shader's color locations (logical indices) to the encoder's attachments
+ *   (physical indices) with Metal 4's color attachment map, which every
+ *   pipeline inherits (checked on M4 Max: a pipeline's color attachment
+ *   formats, fragment outputs and framebuffer fetches all use logical
+ *   indices). Logical indices only depend on a subpass's attachment
+ *   references (pvk_color_logical), so a pipeline works in every compatible
+ *   render pass, however its subpasses are grouped.
+ *   vkCmdBeginRendering is one Metal render pass. A suspended instance keeps
+ *   its encoder open until it resumes, which Vulkan requires within the same
+ *   batch (one MTL4CommandBuffer). Local-read attachment locations and input
+ *   attachment indices are the same color attachment map.
+ *
+ *   Load and store ops become the Metal attachments' load and store actions
+ *   (pvk_pass_att_actions), except that a render area smaller than the
+ *   attachment clears by drawing (Metal clears the whole attachment) and
+ *   always stores (DONT_CARE would lose what lies outside), memoryless
+ *   (transient) attachments neither load nor store, and an attachment used
+ *   by subpasses of several encoders is stored and loaded between them.
+ *   Color, depth and stencil resolves are store actions of their encoder.
+ *
+ * STATE
+ *   All graphics state Vulkan can make dynamic is one struct
+ *   pvk_dynamic_state that the encoder keeps: binding a pipeline copies its
+ *   static members in, vkCmdSet* packets change the others. Draws apply what
+ *   changed (section 16): viewports, scissors, depth bias, blend constants,
+ *   depth bounds, stencil references, cull mode, winding and depth clipping
+ *   are encoder state, depth and stencil tests an MTLDepthStencilState made
+ *   per state, topology and primitive restart pick the Metal primitive and
+ *   how indices are read. A render pipeline state only holds shaders,
+ *   formats, blending and multisampling (section 17).
+ *
+ * DRAWS
+ *   Vertex buffers are bound as section 13's vertex buffer table (buffer
+ *   index 29): { address, size, stride } per binding, uploaded when it
+ *   changes. Vulkan's indirect draw records have Metal's layouts. Draws
+ *   Metal cannot do as they are get rewritten by compute work before their
+ *   render pass begins (section 16, "Draw preprocessing"): 8-bit indices,
+ *   triangle fans, strips whose primitive restart is off (Metal always
+ *   restarts strips at 0xFFFF / 0xFFFFFFFF) and draws with a count buffer.
+ */
+
+#define PVK_MAX_COLOR_ATTACHMENTS 8u /* FST: 8 color render targets */
+/* Input attachments are color attachments read by framebuffer fetch, so a
+ * subpass reads at most 8; indices beyond 7 are ignored. */
+#define PVK_MAX_INPUT_ATTACHMENTS 8u
+#define PVK_MAX_VIEWPORTS 16u /* FST: 16 viewports and scissor rectangles */
+#define PVK_NO_SLOT 0xffu     /* in color attachment maps */
+#define PVK_NO_ID 0xffffffffu /* = VK_ATTACHMENT_UNUSED */
+
+/* ---- Render passes and framebuffers (made in section 17) ---- */
+
+struct pvk_rp_attachment {
+    VkFormat format;
+    const struct pvk_format *fmt;
+    uint32_t samples;
+    VkAttachmentLoadOp load_op, stencil_load_op;
+    VkAttachmentStoreOp store_op, stencil_store_op;
+    uint32_t first_use, last_use; /* subpasses; first_use UINT32_MAX: unused */
+};
+
+struct pvk_subpass {
+    uint32_t color_count;
+    uint32_t colors[PVK_MAX_COLOR_ATTACHMENTS];   /* attachment at each location, VK_ATTACHMENT_UNUSED */
+    uint32_t resolves[PVK_MAX_COLOR_ATTACHMENTS]; /* its resolve attachment */
+    uint32_t input_count;
+    uint32_t inputs[PVK_MAX_INPUT_ATTACHMENTS];   /* attachment at each input attachment index */
+    uint32_t depth, depth_resolve;                /* depth/stencil attachment and its resolve */
+    VkResolveModeFlagBits depth_resolve_mode, stencil_resolve_mode;
+    uint32_t view_mask;
+    uint32_t pass;                                /* index of its struct pvk_rp_pass */
+    uint8_t map[PVK_MAX_COLOR_ATTACHMENTS];       /* logical color index -> slot of its pass */
+};
+
+/* Subpasses sharing one Metal render pass. */
+struct pvk_rp_pass {
+    uint32_t first, last; /* subpasses */
+    uint32_t color_count; /* slots */
+    uint32_t colors[PVK_MAX_COLOR_ATTACHMENTS];   /* attachment in each color slot */
+    uint32_t resolves[PVK_MAX_COLOR_ATTACHMENTS]; /* the slot's resolve attachment, VK_ATTACHMENT_UNUSED */
+    uint32_t depth, depth_resolve;
+    VkResolveModeFlagBits depth_resolve_mode, stencil_resolve_mode;
+    uint32_t view_mask, samples;
+};
+
+struct pvk_render_pass {
+    uint32_t attachment_count, subpass_count, pass_count;
+    struct pvk_rp_attachment *attachments;
+    struct pvk_subpass *subpasses;
+    struct pvk_rp_pass *passes;
+};
+
+struct pvk_framebuffer {
+    uint32_t width, height, layers;
+    uint32_t attachment_count;
+    bool imageless;
+    struct pvk_image_view *attachments[]; /* none when imageless */
+};
+
+/* Logical color indices (RENDER PASSES above): location L is logical index
+ * L, and each input attachment that is not also a color attachment takes the
+ * lowest free logical index, in input attachment index order. loc_ids[L]
+ * (PVK_MAX_COLOR_ATTACHMENTS of them) and input_ids[i]
+ * (PVK_MAX_INPUT_ATTACHMENTS) name attachments, PVK_NO_ID for none. Returns
+ * in ids[l] the attachment at logical index l and in input_logical[i] the
+ * logical index input attachment i reads (PVK_NO_SLOT: none). Pipelines and
+ * commands call this with different names for the same attachments. */
+static void pvk_color_logical(const uint32_t *loc_ids, const uint32_t *input_ids,
+                              uint32_t ids[PVK_MAX_COLOR_ATTACHMENTS], uint8_t input_logical[PVK_MAX_INPUT_ATTACHMENTS])
+{
+    uint32_t l, i;
+    for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS; l++)
+        ids[l] = loc_ids[l];
+    for (i = 0; i < PVK_MAX_INPUT_ATTACHMENTS; i++) {
+        input_logical[i] = PVK_NO_SLOT;
+        if (input_ids[i] == PVK_NO_ID)
+            continue;
+        for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS && ids[l] != input_ids[i]; l++)
+            ;
+        if (l == PVK_MAX_COLOR_ATTACHMENTS) /* not a color attachment: the first free index */
+            for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS && ids[l] != PVK_NO_ID; l++)
+                ;
+        if (l < PVK_MAX_COLOR_ATTACHMENTS) {
+            ids[l] = input_ids[i];
+            input_logical[i] = (uint8_t)l;
+        }
+    }
+}
+
+/* Dynamic rendering: locations[i] and input_indices[i] of color attachment
+ * i (VkRenderingAttachmentLocationInfo, VkRenderingInputAttachmentIndexInfo)
+ * as the loc_ids / input_ids of pvk_color_logical, naming attachments by
+ * index. */
+static void pvk_local_read_ids(uint32_t color_count, const uint32_t *locations, const uint32_t *input_indices,
+                               uint32_t loc_ids[PVK_MAX_COLOR_ATTACHMENTS], uint32_t input_ids[PVK_MAX_INPUT_ATTACHMENTS])
+{
+    uint32_t i;
+    for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
+        loc_ids[i] = PVK_NO_ID;
+    for (i = 0; i < PVK_MAX_INPUT_ATTACHMENTS; i++)
+        input_ids[i] = PVK_NO_ID;
+    for (i = 0; i < color_count && i < PVK_MAX_COLOR_ATTACHMENTS; i++) {
+        if (locations[i] < PVK_MAX_COLOR_ATTACHMENTS)
+            loc_ids[locations[i]] = i;
+        if (input_indices[i] < PVK_MAX_INPUT_ATTACHMENTS)
+            input_ids[input_indices[i]] = i;
+    }
+}
+
+/* ---- Graphics state ---- */
+
+/* The members of struct pvk_dynamic_state a pipeline can leave dynamic
+ * (bits of struct pvk_gfx_pipeline.dynamic), and the state of SET_DYNAMIC
+ * packets. */
+enum pvk_dyn {
+    PVK_DYN_VIEWPORT,
+    PVK_DYN_VIEWPORT_COUNT,
+    PVK_DYN_SCISSOR,
+    PVK_DYN_SCISSOR_COUNT,
+    PVK_DYN_LINE_WIDTH,
+    PVK_DYN_DEPTH_BIAS,
+    PVK_DYN_BLEND_CONSTANTS,
+    PVK_DYN_DEPTH_BOUNDS,
+    PVK_DYN_STENCIL_COMPARE_MASK,
+    PVK_DYN_STENCIL_WRITE_MASK,
+    PVK_DYN_STENCIL_REFERENCE,
+    PVK_DYN_CULL_MODE,
+    PVK_DYN_FRONT_FACE,
+    PVK_DYN_PRIMITIVE_TOPOLOGY,
+    PVK_DYN_VERTEX_STRIDE,
+    PVK_DYN_DEPTH_TEST_ENABLE,
+    PVK_DYN_DEPTH_WRITE_ENABLE,
+    PVK_DYN_DEPTH_COMPARE_OP,
+    PVK_DYN_DEPTH_BOUNDS_TEST_ENABLE,
+    PVK_DYN_STENCIL_TEST_ENABLE,
+    PVK_DYN_STENCIL_OP,
+    PVK_DYN_RASTERIZER_DISCARD_ENABLE,
+    PVK_DYN_DEPTH_BIAS_ENABLE,
+    PVK_DYN_PRIMITIVE_RESTART_ENABLE,
+    PVK_DYN_LINE_STIPPLE,
+    PVK_DYN_COUNT
+};
+
+#define PVK_DYN_BIT(d) (1u << PVK_DYN_##d)
+
+struct pvk_stencil_face {
+    uint32_t fail, pass, depth_fail, compare; /* VkStencilOp x 3, VkCompareOp */
+    uint32_t compare_mask, write_mask, reference;
+};
+
+struct pvk_dynamic_state {
+    uint32_t viewport_count, scissor_count;
+    VkViewport viewports[PVK_MAX_VIEWPORTS];
+    VkRect2D scissors[PVK_MAX_VIEWPORTS];
+    float line_width;
+    float depth_bias[3]; /* constant factor, clamp, slope factor */
+    float blend_constants[4];
+    float depth_bounds[2];
+    struct pvk_stencil_face stencil[2]; /* front, back */
+    uint32_t cull_mode, front_face, topology, depth_compare; /* VkCullModeFlags, VkFrontFace, ... */
+    uint32_t strides[PVK_MAX_VERTEX_BINDINGS]; /* VERTEX_INPUT_BINDING_STRIDE */
+    uint8_t depth_test, depth_write, depth_bounds_test, stencil_test;
+    uint8_t rasterizer_discard, depth_bias_enable, primitive_restart, pad;
+    uint32_t line_stipple[2];
+};
+
+/* Copies the members of `bits` from s to d. */
+static void pvk_dynamic_copy(struct pvk_dynamic_state *d, const struct pvk_dynamic_state *s, uint32_t bits)
+{
+    unsigned f;
+    if (bits & PVK_DYN_BIT(VIEWPORT_COUNT))
+        d->viewport_count = s->viewport_count;
+    if (bits & PVK_DYN_BIT(VIEWPORT))
+        memcpy(d->viewports, s->viewports, sizeof(d->viewports));
+    if (bits & PVK_DYN_BIT(SCISSOR_COUNT))
+        d->scissor_count = s->scissor_count;
+    if (bits & PVK_DYN_BIT(SCISSOR))
+        memcpy(d->scissors, s->scissors, sizeof(d->scissors));
+    if (bits & PVK_DYN_BIT(LINE_WIDTH))
+        d->line_width = s->line_width;
+    if (bits & PVK_DYN_BIT(DEPTH_BIAS))
+        memcpy(d->depth_bias, s->depth_bias, sizeof(d->depth_bias));
+    if (bits & PVK_DYN_BIT(BLEND_CONSTANTS))
+        memcpy(d->blend_constants, s->blend_constants, sizeof(d->blend_constants));
+    if (bits & PVK_DYN_BIT(DEPTH_BOUNDS))
+        memcpy(d->depth_bounds, s->depth_bounds, sizeof(d->depth_bounds));
+    for (f = 0; f < 2; f++) {
+        if (bits & PVK_DYN_BIT(STENCIL_COMPARE_MASK))
+            d->stencil[f].compare_mask = s->stencil[f].compare_mask;
+        if (bits & PVK_DYN_BIT(STENCIL_WRITE_MASK))
+            d->stencil[f].write_mask = s->stencil[f].write_mask;
+        if (bits & PVK_DYN_BIT(STENCIL_REFERENCE))
+            d->stencil[f].reference = s->stencil[f].reference;
+        if (bits & PVK_DYN_BIT(STENCIL_OP)) {
+            d->stencil[f].fail = s->stencil[f].fail;
+            d->stencil[f].pass = s->stencil[f].pass;
+            d->stencil[f].depth_fail = s->stencil[f].depth_fail;
+            d->stencil[f].compare = s->stencil[f].compare;
+        }
+    }
+    if (bits & PVK_DYN_BIT(CULL_MODE))
+        d->cull_mode = s->cull_mode;
+    if (bits & PVK_DYN_BIT(FRONT_FACE))
+        d->front_face = s->front_face;
+    if (bits & PVK_DYN_BIT(PRIMITIVE_TOPOLOGY))
+        d->topology = s->topology;
+    if (bits & PVK_DYN_BIT(VERTEX_STRIDE))
+        memcpy(d->strides, s->strides, sizeof(d->strides));
+    if (bits & PVK_DYN_BIT(DEPTH_TEST_ENABLE))
+        d->depth_test = s->depth_test;
+    if (bits & PVK_DYN_BIT(DEPTH_WRITE_ENABLE))
+        d->depth_write = s->depth_write;
+    if (bits & PVK_DYN_BIT(DEPTH_COMPARE_OP))
+        d->depth_compare = s->depth_compare;
+    if (bits & PVK_DYN_BIT(DEPTH_BOUNDS_TEST_ENABLE))
+        d->depth_bounds_test = s->depth_bounds_test;
+    if (bits & PVK_DYN_BIT(STENCIL_TEST_ENABLE))
+        d->stencil_test = s->stencil_test;
+    if (bits & PVK_DYN_BIT(RASTERIZER_DISCARD_ENABLE))
+        d->rasterizer_discard = s->rasterizer_discard;
+    if (bits & PVK_DYN_BIT(DEPTH_BIAS_ENABLE))
+        d->depth_bias_enable = s->depth_bias_enable;
+    if (bits & PVK_DYN_BIT(PRIMITIVE_RESTART_ENABLE))
+        d->primitive_restart = s->primitive_restart;
+    if (bits & PVK_DYN_BIT(LINE_STIPPLE))
+        memcpy(d->line_stipple, s->line_stipple, sizeof(d->line_stipple));
+}
+
+/* A graphics pipeline as the commands see it (made in section 17). */
+struct pvk_gfx_pipeline {
+    uint32_t dynamic;               /* PVK_DYN_BIT()s the pipeline leaves dynamic */
+    struct pvk_dynamic_state state; /* the static values of the others */
+    uint32_t vertex_bindings;       /* bit b: the vertex shader reads binding b */
+    uint32_t strides[PVK_MAX_VERTEX_BINDINGS]; /* static binding strides */
+    uint32_t samples;               /* rasterization samples */
+    uint32_t view_mask;
+    bool depth_clamp;
+    bool lines;                     /* polygon mode LINE */
+    bool has_fragment;
+};
+
+/* ---- Packets ---- */
+
+/* One attachment of a Metal render pass. */
+struct pvk_pass_attachment {
+    id texture;                   /* NULL: none */
+    id resolve;                   /* NULL: no resolve */
+    const struct pvk_format *fmt; /* of the attachment's view */
+    uint32_t level, slice, plane; /* of texture */
+    uint32_t resolve_level, resolve_slice, resolve_plane;
+    uint32_t load, store;         /* pvk_MTLLoadAction, pvk_MTLStoreAction */
+    uint32_t resolve_filter;      /* depth/stencil resolves: pvk_MTLMultisample*ResolveFilter */
+    uint32_t clear_in_area;       /* LOAD_OP_CLEAR by drawing in the render area */
+    uint32_t width, height;       /* of the attachment */
+    uint32_t samples;
+    VkClearValue clear;
+};
+
+struct pvk_cmd_begin_pass {
+    struct pvk_cmd hdr;
+    struct pvk_pass_attachment colors[PVK_MAX_COLOR_ATTACHMENTS], depth, stencil;
+    uint32_t color_count; /* color slots */
+    uint32_t width, height; /* render target, for passes without attachments */
+    VkRect2D area;
+    uint32_t layers;      /* renderTargetArrayLength; 0: one layer */
+    uint32_t flags;       /* VkRenderingFlags of vkCmdBeginRendering */
+};
+
+/* The subpass, or local-read mapping, of the draws that follow. */
+struct pvk_cmd_subpass {
+    struct pvk_cmd hdr;
+    uint8_t map[PVK_MAX_COLOR_ATTACHMENTS]; /* logical color index -> color slot, PVK_NO_SLOT */
+    uint32_t view_mask;
+    uint32_t depth, stencil; /* the subpass has them (else their tests are off) */
+    uint32_t dynamic;        /* vkCmdClearAttachments names color slots (dynamic rendering) */
+    uint32_t pad;
+};
+
+struct pvk_cmd_end_pass {
+    struct pvk_cmd hdr;
+    uint32_t flags; /* VK_RENDERING_SUSPENDING_BIT: the encoder stays open */
+    uint32_t pad;
+};
+
+struct pvk_cmd_dynamic {
+    struct pvk_cmd hdr;
+    uint32_t state; /* enum pvk_dyn */
+    uint32_t first; /* viewports, scissors: the first; stencil state: VkStencilFaceFlags */
+    uint32_t count;
+    uint32_t pad;
+    /* the values: count VkViewport / VkRect2D, floats or uint32_ts */
+};
+
+struct pvk_vertex_binding {
+    uint64_t address, size;
+    uint32_t stride, has_stride; /* vkCmdBindVertexBuffers2 strides */
+};
+
+struct pvk_cmd_bind_vertex {
+    struct pvk_cmd hdr;
+    uint32_t first, count;
+};
+
+struct pvk_cmd_bind_index {
+    struct pvk_cmd hdr;
+    uint64_t address, size; /* address 0: no buffer */
+    uint32_t type;          /* VkIndexType */
+    uint32_t pad;
+};
+
+struct pvk_cmd_draw {
+    struct pvk_cmd hdr;
+    uint32_t vertex_count, instance_count, first_vertex, first_instance;
+};
+
+struct pvk_cmd_draw_indexed {
+    struct pvk_cmd hdr;
+    uint32_t index_count, instance_count, first_index;
+    int32_t vertex_offset;
+    uint32_t first_instance;
+    uint32_t pad;
+};
+
+struct pvk_cmd_draw_indirect {
+    struct pvk_cmd hdr;
+    uint64_t address;       /* the first VkDraw(Indexed)IndirectCommand */
+    uint64_t count_address; /* the count (vkCmdDraw*IndirectCount), 0: none */
+    uint32_t draw_count;    /* or maxDrawCount */
+    uint32_t stride;
+    uint32_t indexed;
+    uint32_t pad;
+};
+
+struct pvk_clear_att {
+    uint32_t aspects;    /* VkImageAspectFlags */
+    uint32_t attachment; /* color attachment */
+    VkClearValue value;
+};
+
+struct pvk_cmd_clear_attachments {
+    struct pvk_cmd hdr;
+    uint32_t count, rect_count; /* struct pvk_clear_att, then VkClearRect */
+};
+
+/* ---- Recording state ---- */
+
+/* The render pass instance being recorded. A secondary that continues a
+ * dynamic render pass instance gets its local-read state from the
+ * inheritance info. */
+struct pvk_cb_render {
+    const struct pvk_render_pass *pass; /* NULL: dynamic rendering */
+    uint32_t subpass;
+    VkRect2D area;
+    uint32_t width, height, layers;
+    uint32_t count, capacity;           /* attachments */
+    struct pvk_image_view **views;      /* capacity of them */
+    VkClearValue *clears;               /* capacity */
+    /* dynamic rendering */
+    uint32_t flags;                     /* VkRenderingFlags */
+    uint32_t color_count, view_mask;
+    bool depth, stencil;
+    uint32_t locations[PVK_MAX_COLOR_ATTACHMENTS];
+    uint32_t input_indices[PVK_MAX_COLOR_ATTACHMENTS];
+};
+
+static void pvk_cb_render_free(struct pvk_command_buffer *cb)
+{
+    const VkAllocationCallbacks *alloc = pvk_pool_alloc(cb->pool);
+    if (!cb->render)
+        return;
+    pvk_free(alloc, cb->render->views);
+    pvk_free(alloc, cb->render->clears);
+    pvk_free(alloc, cb->render);
+    cb->render = NULL;
+}
+
+/* The recording state, with room for `count` attachments; NULL (error kept)
+ * when out of memory. */
+static struct pvk_cb_render *pvk_cb_render_get(struct pvk_command_buffer *cb, uint32_t count)
+{
+    const VkAllocationCallbacks *alloc = pvk_pool_alloc(cb->pool);
+    struct pvk_cb_render *r = cb->render;
+    if (!r && !(r = cb->render = pvk_alloc(alloc, sizeof(*r), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT))) {
+        cb->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        return NULL;
+    }
+    if (count > r->capacity) {
+        struct pvk_image_view **views = pvk_alloc(alloc, sizeof(*views) * count, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+        VkClearValue *clears = pvk_alloc(alloc, sizeof(*clears) * count, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+        if (!views || !clears) {
+            pvk_free(alloc, views);
+            pvk_free(alloc, clears);
+            cb->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+            return NULL;
+        }
+        pvk_free(alloc, r->views);
+        pvk_free(alloc, r->clears);
+        r->views = views;
+        r->clears = clears;
+        r->capacity = count;
+    }
+    r->count = count;
+    return r;
+}
+
+static void pvk_cb_inherit_render(struct pvk_command_buffer *cb, const VkCommandBufferInheritanceInfo *info)
+{
+    const VkBaseInStructure *s;
+    struct pvk_cb_render *r;
+    uint32_t i;
+    for (s = info->pNext; s; s = s->pNext)
+        if (s->sType == VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO)
+            break;
+    if (!s || !(r = pvk_cb_render_get(cb, 0)))
+        return;
+    {
+        const VkCommandBufferInheritanceRenderingInfo *ri = (const VkCommandBufferInheritanceRenderingInfo *)s;
+        r->pass = NULL;
+        r->color_count = ri->colorAttachmentCount < PVK_MAX_COLOR_ATTACHMENTS ? ri->colorAttachmentCount
+                                                                              : PVK_MAX_COLOR_ATTACHMENTS;
+        r->view_mask = ri->viewMask;
+        r->depth = ri->depthAttachmentFormat != VK_FORMAT_UNDEFINED;
+        r->stencil = ri->stencilAttachmentFormat != VK_FORMAT_UNDEFINED;
+    }
+    for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
+        r->locations[i] = r->input_indices[i] = i;
+    for (s = info->pNext; s; s = s->pNext) {
+        if (s->sType == VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_LOCATION_INFO) {
+            const VkRenderingAttachmentLocationInfo *l = (const VkRenderingAttachmentLocationInfo *)s;
+            for (i = 0; l->pColorAttachmentLocations && i < l->colorAttachmentCount && i < PVK_MAX_COLOR_ATTACHMENTS; i++)
+                r->locations[i] = l->pColorAttachmentLocations[i];
+        } else if (s->sType == VK_STRUCTURE_TYPE_RENDERING_INPUT_ATTACHMENT_INDEX_INFO) {
+            const VkRenderingInputAttachmentIndexInfo *x = (const VkRenderingInputAttachmentIndexInfo *)s;
+            for (i = 0; x->pColorAttachmentInputIndices && i < x->colorAttachmentCount && i < PVK_MAX_COLOR_ATTACHMENTS; i++)
+                r->input_indices[i] = x->pColorAttachmentInputIndices[i];
+        }
+    }
+}
+
+/* ---- Render pass instances ---- */
+
+static uint32_t pvk_view_width(const struct pvk_image_view *v)
+{
+    return pvk_mip_extent(v->image->extent.width, v->base_level);
+}
+
+static uint32_t pvk_view_height(const struct pvk_image_view *v)
+{
+    return v->image->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(v->image->extent.height, v->base_level);
+}
+
+/* An attachment's texture: its view (memoryless images have no views, so
+ * their own texture with the view's level and layer). */
+static void pvk_pass_att_view(struct pvk_pass_attachment *pa, const struct pvk_image_view *view)
+{
+    if (!view)
+        return;
+    pa->texture = view->mtl_texture;
+    pa->fmt = pvk_format(view->format);
+    if (view->image->memoryless) {
+        pa->level = view->base_level;
+        pa->slice = view->base_layer;
+    }
+    pa->plane = view->depth_plane;
+    pa->width = pvk_view_width(view);
+    pa->height = pvk_view_height(view);
+    pa->samples = view->image->samples;
+}
+
+static void pvk_pass_att_resolve(struct pvk_pass_attachment *pa, const struct pvk_image_view *view)
+{
+    if (!view || !pa->texture)
+        return;
+    pa->resolve = view->mtl_texture;
+    if (view->image->memoryless) {
+        pa->resolve_level = view->base_level;
+        pa->resolve_slice = view->base_layer;
+    }
+    pa->resolve_plane = view->depth_plane;
+}
+
+/* Whether the render area leaves part of an attachment out. */
+static bool pvk_area_partial(const VkRect2D *area, const struct pvk_pass_attachment *pa)
+{
+    return area->offset.x > 0 || area->offset.y > 0 || (uint32_t)area->offset.x + area->extent.width < pa->width ||
+           (uint32_t)area->offset.y + area->extent.height < pa->height;
+}
+
+/* The Metal load and store actions (RENDER PASSES above). first/last: this
+ * Metal pass has the attachment's first/last use in the instance. */
+static void pvk_pass_att_actions(struct pvk_pass_attachment *pa, VkAttachmentLoadOp load, VkAttachmentStoreOp store,
+                                 bool first, bool last, const VkRect2D *area, bool memoryless)
+{
+    uint32_t l = PVK_MTLLoadActionLoad, s = PVK_MTLStoreActionStore;
+    bool partial = pvk_area_partial(area, pa);
+    if (!pa->texture)
+        return;
+    if (first && load == VK_ATTACHMENT_LOAD_OP_CLEAR) {
+        if (partial)
+            pa->clear_in_area = 1;
+        else
+            l = PVK_MTLLoadActionClear;
+    } else if (first && load == VK_ATTACHMENT_LOAD_OP_DONT_CARE && !partial) {
+        l = PVK_MTLLoadActionDontCare;
+    }
+    if (last && store == VK_ATTACHMENT_STORE_OP_DONT_CARE && !partial)
+        s = PVK_MTLStoreActionDontCare;
+    if (memoryless) { /* tile memory only */
+        if (l == PVK_MTLLoadActionLoad)
+            l = PVK_MTLLoadActionDontCare;
+        s = PVK_MTLStoreActionDontCare;
+    }
+    if (pa->resolve)
+        s = s == PVK_MTLStoreActionStore ? PVK_MTLStoreActionStoreAndMultisampleResolve
+                                         : PVK_MTLStoreActionMultisampleResolve;
+    pa->load = l;
+    pa->store = s;
+}
+
+static uint32_t pvk_depth_resolve_filter(VkResolveModeFlagBits mode)
+{
+    return mode == VK_RESOLVE_MODE_MIN_BIT ? PVK_MTLMultisampleDepthResolveFilterMin
+         : mode == VK_RESOLVE_MODE_MAX_BIT ? PVK_MTLMultisampleDepthResolveFilterMax
+                                           : PVK_MTLMultisampleDepthResolveFilterSample0;
+}
+
+/* renderTargetArrayLength: multiview renders view n to layer n. */
+static uint32_t pvk_pass_layers(uint32_t view_mask, uint32_t layers)
+{
+    uint32_t n = 0;
+    if (view_mask) {
+        while (view_mask >> n)
+            n++;
+        return n;
+    }
+    return layers > 1 ? layers : 0;
+}
+
+/* The BEGIN_PASS packet of Metal pass p of the render pass being recorded. */
+static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pvk_cb_render *r, uint32_t p)
+{
+    const struct pvk_render_pass *pass = r->pass;
+    const struct pvk_rp_pass *mp = &pass->passes[p];
+    struct pvk_cmd_begin_pass *c = pvk_cmd_append(cb, PVK_CMD_BEGIN_PASS, sizeof(*c));
+    uint32_t s;
+
+    if (!c)
+        return;
+    pvk_cmd_zero(c, sizeof(*c));
+    c->area = r->area;
+    c->width = r->width;
+    c->height = r->height;
+    c->layers = pvk_pass_layers(mp->view_mask, r->layers);
+    c->color_count = mp->color_count;
+    for (s = 0; s < mp->color_count; s++) {
+        uint32_t a = mp->colors[s];
+        const struct pvk_rp_attachment *att = &pass->attachments[a];
+        struct pvk_pass_attachment *pa = &c->colors[s];
+        pvk_pass_att_view(pa, r->views[a]);
+        if (mp->resolves[s] != VK_ATTACHMENT_UNUSED)
+            pvk_pass_att_resolve(pa, r->views[mp->resolves[s]]);
+        pvk_pass_att_actions(pa, att->load_op, att->store_op, att->first_use >= mp->first, att->last_use <= mp->last,
+                             &r->area, r->views[a] && r->views[a]->image->memoryless);
+        pa->clear = r->clears[a];
+    }
+    if (mp->depth != VK_ATTACHMENT_UNUSED) {
+        const struct pvk_rp_attachment *att = &pass->attachments[mp->depth];
+        const struct pvk_image_view *view = r->views[mp->depth];
+        bool first = att->first_use >= mp->first, last = att->last_use <= mp->last;
+        bool memoryless = view && view->image->memoryless;
+        if (pvk_format_has_depth(att->fmt)) {
+            pvk_pass_att_view(&c->depth, view);
+            if (mp->depth_resolve != VK_ATTACHMENT_UNUSED && mp->depth_resolve_mode != VK_RESOLVE_MODE_NONE) {
+                pvk_pass_att_resolve(&c->depth, r->views[mp->depth_resolve]);
+                c->depth.resolve_filter = pvk_depth_resolve_filter(mp->depth_resolve_mode);
+            }
+            pvk_pass_att_actions(&c->depth, att->load_op, att->store_op, first, last, &r->area, memoryless);
+            c->depth.clear = r->clears[mp->depth];
+        }
+        if (pvk_format_has_stencil(att->fmt)) {
+            pvk_pass_att_view(&c->stencil, view);
+            if (mp->depth_resolve != VK_ATTACHMENT_UNUSED && mp->stencil_resolve_mode != VK_RESOLVE_MODE_NONE)
+                pvk_pass_att_resolve(&c->stencil, r->views[mp->depth_resolve]);
+            pvk_pass_att_actions(&c->stencil, att->stencil_load_op, att->stencil_store_op, first, last, &r->area,
+                                 memoryless);
+            c->stencil.clear = r->clears[mp->depth];
+        }
+    }
+}
+
+static void pvk_cmd_subpass_rp(struct pvk_command_buffer *cb, const struct pvk_cb_render *r)
+{
+    const struct pvk_subpass *sp = &r->pass->subpasses[r->subpass];
+    struct pvk_cmd_subpass *c = pvk_cmd_append(cb, PVK_CMD_SUBPASS, sizeof(*c));
+    if (!c)
+        return;
+    pvk_cmd_zero(c, sizeof(*c));
+    memcpy(c->map, sp->map, sizeof(c->map));
+    c->view_mask = sp->view_mask;
+    if (sp->depth != VK_ATTACHMENT_UNUSED) {
+        c->depth = pvk_format_has_depth(r->pass->attachments[sp->depth].fmt);
+        c->stencil = pvk_format_has_stencil(r->pass->attachments[sp->depth].fmt);
+    }
+}
+
+static void pvk_cmd_subpass_dynamic(struct pvk_command_buffer *cb, const struct pvk_cb_render *r)
+{
+    struct pvk_cmd_subpass *c = pvk_cmd_append(cb, PVK_CMD_SUBPASS, sizeof(*c));
+    uint32_t loc_ids[PVK_MAX_COLOR_ATTACHMENTS], input_ids[PVK_MAX_INPUT_ATTACHMENTS], ids[PVK_MAX_COLOR_ATTACHMENTS];
+    uint8_t input_logical[PVK_MAX_INPUT_ATTACHMENTS];
+    uint32_t l;
+    if (!c)
+        return;
+    pvk_cmd_zero(c, sizeof(*c));
+    pvk_local_read_ids(r->color_count, r->locations, r->input_indices, loc_ids, input_ids);
+    pvk_color_logical(loc_ids, input_ids, ids, input_logical);
+    for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS; l++)
+        c->map[l] = ids[l] == PVK_NO_ID ? PVK_NO_SLOT : (uint8_t)ids[l];
+    c->view_mask = r->view_mask;
+    c->depth = r->depth;
+    c->stencil = r->stencil;
+    c->dynamic = 1;
+}
+
+static void pvk_cmd_end_pass(struct pvk_command_buffer *cb, uint32_t flags)
+{
+    struct pvk_cmd_end_pass *c = pvk_cmd_append(cb, PVK_CMD_END_PASS, sizeof(*c));
+    if (c) {
+        c->flags = flags;
+        c->pad = 0;
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass2(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo *pRenderPassBegin,
+                                                 const VkSubpassBeginInfo *pSubpassBeginInfo)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    const struct pvk_render_pass *pass = (const struct pvk_render_pass *)pRenderPassBegin->renderPass;
+    const struct pvk_framebuffer *fb = (const struct pvk_framebuffer *)pRenderPassBegin->framebuffer;
+    const VkRenderPassAttachmentBeginInfo *imageless = NULL;
+    const VkBaseInStructure *s;
+    struct pvk_cb_render *r;
+    uint32_t a;
+
+    (void)pSubpassBeginInfo; /* secondaries or inline: the same packets */
+    if (!(r = pvk_cb_render_get(cb, pass->attachment_count)))
+        return;
+    for (s = pRenderPassBegin->pNext; s; s = s->pNext)
+        if (s->sType == VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO)
+            imageless = (const VkRenderPassAttachmentBeginInfo *)s;
+    r->pass = pass;
+    r->subpass = 0;
+    r->area = pRenderPassBegin->renderArea;
+    r->width = fb->width;
+    r->height = fb->height;
+    r->layers = fb->layers;
+    for (a = 0; a < pass->attachment_count; a++) {
+        if (imageless && a < imageless->attachmentCount)
+            r->views[a] = (struct pvk_image_view *)imageless->pAttachments[a];
+        else
+            r->views[a] = !fb->imageless && a < fb->attachment_count ? fb->attachments[a] : NULL;
+        if (a < pRenderPassBegin->clearValueCount && pRenderPassBegin->pClearValues)
+            r->clears[a] = pRenderPassBegin->pClearValues[a];
+        else
+            memset(&r->clears[a], 0, sizeof(r->clears[a]));
+    }
+    if (!pass->subpass_count)
+        return;
+    pvk_cmd_begin_rp_pass(cb, r, pass->subpasses[0].pass);
+    pvk_cmd_subpass_rp(cb, r);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo *pRenderPassBegin,
+                                                VkSubpassContents contents)
+{
+    VkSubpassBeginInfo info;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_SUBPASS_BEGIN_INFO;
+    info.contents = contents;
+    vkCmdBeginRenderPass2(commandBuffer, pRenderPassBegin, &info);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass2(VkCommandBuffer commandBuffer, const VkSubpassBeginInfo *pSubpassBeginInfo,
+                                             const VkSubpassEndInfo *pSubpassEndInfo)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    struct pvk_cb_render *r = cb->render;
+    uint32_t old;
+    (void)pSubpassBeginInfo;
+    (void)pSubpassEndInfo;
+    if (!r || !r->pass || r->subpass + 1 >= r->pass->subpass_count)
+        return;
+    old = r->pass->subpasses[r->subpass].pass;
+    r->subpass++;
+    if (r->pass->subpasses[r->subpass].pass != old) {
+        pvk_cmd_end_pass(cb, 0);
+        pvk_cmd_begin_rp_pass(cb, r, r->pass->subpasses[r->subpass].pass);
+    }
+    pvk_cmd_subpass_rp(cb, r);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass(VkCommandBuffer commandBuffer, VkSubpassContents contents)
+{
+    VkSubpassBeginInfo info;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_SUBPASS_BEGIN_INFO;
+    info.contents = contents;
+    vkCmdNextSubpass2(commandBuffer, &info, NULL);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass2(VkCommandBuffer commandBuffer, const VkSubpassEndInfo *pSubpassEndInfo)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    (void)pSubpassEndInfo;
+    pvk_cmd_end_pass(cb, 0);
+    if (cb->render)
+        cb->render->pass = NULL;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass(VkCommandBuffer commandBuffer)
+{
+    vkCmdEndRenderPass2(commandBuffer, NULL);
+}
+
+/* Dynamic rendering: attachment i is color slot i. */
+VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, const VkRenderingInfo *pRenderingInfo)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    const VkRenderingInfo *info = pRenderingInfo;
+    bool first = !(info->flags & VK_RENDERING_RESUMING_BIT), last = !(info->flags & VK_RENDERING_SUSPENDING_BIT);
+    const VkRenderingAttachmentInfo *ds[2];
+    struct pvk_cmd_begin_pass *c;
+    struct pvk_cb_render *r;
+    uint32_t i, k;
+
+    if (!(r = pvk_cb_render_get(cb, 0)) || !(c = pvk_cmd_append(cb, PVK_CMD_BEGIN_PASS, sizeof(*c))))
+        return;
+    pvk_cmd_zero(c, sizeof(*c));
+    r->pass = NULL;
+    r->area = info->renderArea;
+    r->layers = info->layerCount;
+    r->flags = info->flags;
+    r->view_mask = info->viewMask;
+    r->color_count = info->colorAttachmentCount < PVK_MAX_COLOR_ATTACHMENTS ? info->colorAttachmentCount
+                                                                            : PVK_MAX_COLOR_ATTACHMENTS;
+    for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
+        r->locations[i] = r->input_indices[i] = i;
+    c->area = info->renderArea;
+    c->width = (uint32_t)info->renderArea.offset.x + info->renderArea.extent.width;
+    c->height = (uint32_t)info->renderArea.offset.y + info->renderArea.extent.height;
+    c->layers = pvk_pass_layers(info->viewMask, info->layerCount);
+    c->flags = info->flags;
+    c->color_count = r->color_count;
+    for (i = 0; i < r->color_count; i++) {
+        const VkRenderingAttachmentInfo *a = &info->pColorAttachments[i];
+        const struct pvk_image_view *view = (const struct pvk_image_view *)a->imageView;
+        struct pvk_pass_attachment *pa = &c->colors[i];
+        pvk_pass_att_view(pa, view);
+        if (a->resolveMode != VK_RESOLVE_MODE_NONE)
+            pvk_pass_att_resolve(pa, (const struct pvk_image_view *)a->resolveImageView);
+        pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, view && view->image->memoryless);
+        pa->clear = a->clearValue;
+    }
+    ds[0] = info->pDepthAttachment;
+    ds[1] = info->pStencilAttachment;
+    r->depth = ds[0] && ds[0]->imageView;
+    r->stencil = ds[1] && ds[1]->imageView;
+    for (k = 0; k < 2; k++) {
+        const VkRenderingAttachmentInfo *a = ds[k];
+        const struct pvk_image_view *view = a ? (const struct pvk_image_view *)a->imageView : NULL;
+        struct pvk_pass_attachment *pa = k ? &c->stencil : &c->depth;
+        if (!view)
+            continue;
+        pvk_pass_att_view(pa, view);
+        if (a->resolveMode != VK_RESOLVE_MODE_NONE) {
+            pvk_pass_att_resolve(pa, (const struct pvk_image_view *)a->resolveImageView);
+            if (!k)
+                pa->resolve_filter = pvk_depth_resolve_filter(a->resolveMode);
+        }
+        pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, view->image->memoryless);
+        pa->clear = a->clearValue;
+    }
+    pvk_cmd_subpass_dynamic(cb, r);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdEndRendering(VkCommandBuffer commandBuffer)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    pvk_cmd_end_pass(cb, cb->render ? cb->render->flags & VK_RENDERING_SUSPENDING_BIT : 0);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetRenderingAttachmentLocations(VkCommandBuffer commandBuffer,
+                                                                const VkRenderingAttachmentLocationInfo *pLocationInfo)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    struct pvk_cb_render *r = cb->render;
+    uint32_t i;
+    if (!r)
+        return;
+    for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
+        r->locations[i] = pLocationInfo->pColorAttachmentLocations && i < pLocationInfo->colorAttachmentCount
+                              ? pLocationInfo->pColorAttachmentLocations[i]
+                              : i;
+    pvk_cmd_subpass_dynamic(cb, r);
+}
+
+/* Depth and stencil input attachments are not supported (section 13: no
+ * depth framebuffer fetch), so only the color attachments' indices count. */
+VKAPI_ATTR void VKAPI_CALL vkCmdSetRenderingInputAttachmentIndices(
+    VkCommandBuffer commandBuffer, const VkRenderingInputAttachmentIndexInfo *pInputAttachmentIndexInfo)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    const VkRenderingInputAttachmentIndexInfo *info = pInputAttachmentIndexInfo;
+    struct pvk_cb_render *r = cb->render;
+    uint32_t i;
+    if (!r)
+        return;
+    for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
+        r->input_indices[i] = info->pColorAttachmentInputIndices && i < info->colorAttachmentCount
+                                  ? info->pColorAttachmentInputIndices[i]
+                                  : i;
+    pvk_cmd_subpass_dynamic(cb, r);
+}
+
+/* ---- State commands ---- */
+
+/* A SET_DYNAMIC packet with `size` bytes of values, returned. */
+static void *pvk_cmd_dynamic(VkCommandBuffer commandBuffer, enum pvk_dyn state, uint32_t first, uint32_t count,
+                             size_t size)
+{
+    struct pvk_cmd_dynamic *c =
+        pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_SET_DYNAMIC, sizeof(*c) + size);
+    if (!c)
+        return NULL;
+    c->state = state;
+    c->first = first;
+    c->count = count;
+    c->pad = 0;
+    return c + 1;
+}
+
+static void pvk_cmd_dynamic_u32(VkCommandBuffer commandBuffer, enum pvk_dyn state, uint32_t first, uint32_t value)
+{
+    uint32_t *p = pvk_cmd_dynamic(commandBuffer, state, first, 1, sizeof(value));
+    if (p)
+        *p = value;
+}
+
+static void pvk_cmd_dynamic_floats(VkCommandBuffer commandBuffer, enum pvk_dyn state, const float *values, uint32_t n)
+{
+    float *p = pvk_cmd_dynamic(commandBuffer, state, 0, n, sizeof(float) * n);
+    if (p)
+        memcpy(p, values, sizeof(float) * n);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetViewport(VkCommandBuffer commandBuffer, uint32_t firstViewport, uint32_t viewportCount,
+                                            const VkViewport *pViewports)
+{
+    void *p;
+    if (firstViewport >= PVK_MAX_VIEWPORTS || viewportCount > PVK_MAX_VIEWPORTS - firstViewport)
+        return;
+    p = pvk_cmd_dynamic(commandBuffer, PVK_DYN_VIEWPORT, firstViewport, viewportCount, sizeof(VkViewport) * viewportCount);
+    if (p)
+        memcpy(p, pViewports, sizeof(VkViewport) * viewportCount);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetViewportWithCount(VkCommandBuffer commandBuffer, uint32_t viewportCount,
+                                                     const VkViewport *pViewports)
+{
+    void *p;
+    if (viewportCount > PVK_MAX_VIEWPORTS)
+        return;
+    p = pvk_cmd_dynamic(commandBuffer, PVK_DYN_VIEWPORT_COUNT, 0, viewportCount, sizeof(VkViewport) * viewportCount);
+    if (p)
+        memcpy(p, pViewports, sizeof(VkViewport) * viewportCount);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetScissor(VkCommandBuffer commandBuffer, uint32_t firstScissor, uint32_t scissorCount,
+                                           const VkRect2D *pScissors)
+{
+    void *p;
+    if (firstScissor >= PVK_MAX_VIEWPORTS || scissorCount > PVK_MAX_VIEWPORTS - firstScissor)
+        return;
+    p = pvk_cmd_dynamic(commandBuffer, PVK_DYN_SCISSOR, firstScissor, scissorCount, sizeof(VkRect2D) * scissorCount);
+    if (p)
+        memcpy(p, pScissors, sizeof(VkRect2D) * scissorCount);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetScissorWithCount(VkCommandBuffer commandBuffer, uint32_t scissorCount,
+                                                    const VkRect2D *pScissors)
+{
+    void *p;
+    if (scissorCount > PVK_MAX_VIEWPORTS)
+        return;
+    p = pvk_cmd_dynamic(commandBuffer, PVK_DYN_SCISSOR_COUNT, 0, scissorCount, sizeof(VkRect2D) * scissorCount);
+    if (p)
+        memcpy(p, pScissors, sizeof(VkRect2D) * scissorCount);
+}
+
+/* wideLines is not supported: lines are 1 pixel wide whatever the width. */
+VKAPI_ATTR void VKAPI_CALL vkCmdSetLineWidth(VkCommandBuffer commandBuffer, float lineWidth)
+{
+    pvk_cmd_dynamic_floats(commandBuffer, PVK_DYN_LINE_WIDTH, &lineWidth, 1);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthBias(VkCommandBuffer commandBuffer, float depthBiasConstantFactor,
+                                             float depthBiasClamp, float depthBiasSlopeFactor)
+{
+    float v[3];
+    v[0] = depthBiasConstantFactor;
+    v[1] = depthBiasClamp;
+    v[2] = depthBiasSlopeFactor;
+    pvk_cmd_dynamic_floats(commandBuffer, PVK_DYN_DEPTH_BIAS, v, 3);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetBlendConstants(VkCommandBuffer commandBuffer, const float blendConstants[4])
+{
+    pvk_cmd_dynamic_floats(commandBuffer, PVK_DYN_BLEND_CONSTANTS, blendConstants, 4);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthBounds(VkCommandBuffer commandBuffer, float minDepthBounds, float maxDepthBounds)
+{
+    float v[2];
+    v[0] = minDepthBounds;
+    v[1] = maxDepthBounds;
+    pvk_cmd_dynamic_floats(commandBuffer, PVK_DYN_DEPTH_BOUNDS, v, 2);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetStencilCompareMask(VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMask,
+                                                      uint32_t compareMask)
+{
+    pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_STENCIL_COMPARE_MASK, faceMask, compareMask);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetStencilWriteMask(VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMask,
+                                                    uint32_t writeMask)
+{
+    pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_STENCIL_WRITE_MASK, faceMask, writeMask);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetStencilReference(VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMask,
+                                                    uint32_t reference)
+{
+    pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_STENCIL_REFERENCE, faceMask, reference);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetStencilOp(VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMask, VkStencilOp failOp,
+                                             VkStencilOp passOp, VkStencilOp depthFailOp, VkCompareOp compareOp)
+{
+    uint32_t *p = pvk_cmd_dynamic(commandBuffer, PVK_DYN_STENCIL_OP, faceMask, 4, sizeof(uint32_t) * 4);
+    if (!p)
+        return;
+    p[0] = (uint32_t)failOp;
+    p[1] = (uint32_t)passOp;
+    p[2] = (uint32_t)depthFailOp;
+    p[3] = (uint32_t)compareOp;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetCullMode(VkCommandBuffer commandBuffer, VkCullModeFlags cullMode)
+{
+    pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_CULL_MODE, 0, cullMode);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetFrontFace(VkCommandBuffer commandBuffer, VkFrontFace frontFace)
+{
+    pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_FRONT_FACE, 0, (uint32_t)frontFace);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetPrimitiveTopology(VkCommandBuffer commandBuffer, VkPrimitiveTopology primitiveTopology)
+{
+    pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_PRIMITIVE_TOPOLOGY, 0, (uint32_t)primitiveTopology);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthTestEnable(VkCommandBuffer commandBuffer, VkBool32 depthTestEnable)
+{
+    pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_DEPTH_TEST_ENABLE, 0, depthTestEnable != VK_FALSE);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthWriteEnable(VkCommandBuffer commandBuffer, VkBool32 depthWriteEnable)
+{
+    pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_DEPTH_WRITE_ENABLE, 0, depthWriteEnable != VK_FALSE);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthCompareOp(VkCommandBuffer commandBuffer, VkCompareOp depthCompareOp)
+{
+    pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_DEPTH_COMPARE_OP, 0, (uint32_t)depthCompareOp);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthBoundsTestEnable(VkCommandBuffer commandBuffer, VkBool32 depthBoundsTestEnable)
+{
+    pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_DEPTH_BOUNDS_TEST_ENABLE, 0, depthBoundsTestEnable != VK_FALSE);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetStencilTestEnable(VkCommandBuffer commandBuffer, VkBool32 stencilTestEnable)
+{
+    pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_STENCIL_TEST_ENABLE, 0, stencilTestEnable != VK_FALSE);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetRasterizerDiscardEnable(VkCommandBuffer commandBuffer, VkBool32 rasterizerDiscardEnable)
+{
+    pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_RASTERIZER_DISCARD_ENABLE, 0, rasterizerDiscardEnable != VK_FALSE);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthBiasEnable(VkCommandBuffer commandBuffer, VkBool32 depthBiasEnable)
+{
+    pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_DEPTH_BIAS_ENABLE, 0, depthBiasEnable != VK_FALSE);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetPrimitiveRestartEnable(VkCommandBuffer commandBuffer, VkBool32 primitiveRestartEnable)
+{
+    pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_PRIMITIVE_RESTART_ENABLE, 0, primitiveRestartEnable != VK_FALSE);
+}
+
+/* Stippled lines are not supported (their features are not reported), so
+ * the stipple is kept but changes nothing. */
+VKAPI_ATTR void VKAPI_CALL vkCmdSetLineStipple(VkCommandBuffer commandBuffer, uint32_t lineStippleFactor,
+                                               uint16_t lineStipplePattern)
+{
+    uint32_t *p = pvk_cmd_dynamic(commandBuffer, PVK_DYN_LINE_STIPPLE, 0, 2, sizeof(uint32_t) * 2);
+    if (p) {
+        p[0] = lineStippleFactor;
+        p[1] = lineStipplePattern;
+    }
+}
+
+/* ---- Vertex and index buffers ---- */
+
+VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers2(VkCommandBuffer commandBuffer, uint32_t firstBinding,
+                                                   uint32_t bindingCount, const VkBuffer *pBuffers,
+                                                   const VkDeviceSize *pOffsets, const VkDeviceSize *pSizes,
+                                                   const VkDeviceSize *pStrides)
+{
+    struct pvk_cmd_bind_vertex *c;
+    struct pvk_vertex_binding *v;
+    uint32_t i;
+    if (firstBinding >= PVK_MAX_VERTEX_BINDINGS || bindingCount > PVK_MAX_VERTEX_BINDINGS - firstBinding || !bindingCount)
+        return;
+    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_BIND_VERTEX,
+                       sizeof(*c) + sizeof(*v) * bindingCount);
+    if (!c)
+        return;
+    c->first = firstBinding;
+    c->count = bindingCount;
+    v = (struct pvk_vertex_binding *)(c + 1);
+    for (i = 0; i < bindingCount; i++) {
+        const struct pvk_buffer *b = (const struct pvk_buffer *)pBuffers[i];
+        memset(&v[i], 0, sizeof(v[i]));
+        if (b && b->memory) { /* VK_NULL_HANDLE (nullDescriptor): reads 0 */
+            v[i].address = b->gpu_address + pOffsets[i];
+            v[i].size = pSizes && pSizes[i] != VK_WHOLE_SIZE ? pSizes[i] : b->size - pOffsets[i];
+        }
+        if (pStrides) {
+            v[i].stride = (uint32_t)pStrides[i];
+            v[i].has_stride = 1;
+        }
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers(VkCommandBuffer commandBuffer, uint32_t firstBinding,
+                                                  uint32_t bindingCount, const VkBuffer *pBuffers,
+                                                  const VkDeviceSize *pOffsets)
+{
+    vkCmdBindVertexBuffers2(commandBuffer, firstBinding, bindingCount, pBuffers, pOffsets, NULL, NULL);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer2(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
+                                                 VkDeviceSize size, VkIndexType indexType)
+{
+    const struct pvk_buffer *b = (const struct pvk_buffer *)buffer;
+    struct pvk_cmd_bind_index *c =
+        pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_BIND_INDEX, sizeof(*c));
+    if (!c)
+        return;
+    c->address = c->size = 0;
+    if (b && b->memory) { /* maintenance6: VK_NULL_HANDLE reads index 0 */
+        c->address = b->gpu_address + offset;
+        c->size = size == VK_WHOLE_SIZE ? b->size - offset : size;
+    }
+    c->type = (uint32_t)indexType;
+    c->pad = 0;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
+                                                VkIndexType indexType)
+{
+    vkCmdBindIndexBuffer2(commandBuffer, buffer, offset, VK_WHOLE_SIZE, indexType);
+}
+
+/* ---- Draws ---- */
+
+VKAPI_ATTR void VKAPI_CALL vkCmdDraw(VkCommandBuffer commandBuffer, uint32_t vertexCount, uint32_t instanceCount,
+                                     uint32_t firstVertex, uint32_t firstInstance)
+{
+    struct pvk_cmd_draw *c;
+    if (!vertexCount || !instanceCount)
+        return;
+    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_DRAW, sizeof(*c));
+    if (!c)
+        return;
+    c->vertex_count = vertexCount;
+    c->instance_count = instanceCount;
+    c->first_vertex = firstVertex;
+    c->first_instance = firstInstance;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexed(VkCommandBuffer commandBuffer, uint32_t indexCount, uint32_t instanceCount,
+                                            uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance)
+{
+    struct pvk_cmd_draw_indexed *c;
+    if (!indexCount || !instanceCount)
+        return;
+    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_DRAW_INDEXED, sizeof(*c));
+    if (!c)
+        return;
+    c->index_count = indexCount;
+    c->instance_count = instanceCount;
+    c->first_index = firstIndex;
+    c->vertex_offset = vertexOffset;
+    c->first_instance = firstInstance;
+    c->pad = 0;
+}
+
+static void pvk_cmd_draw_indirect(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
+                                  VkBuffer countBuffer, VkDeviceSize countBufferOffset, uint32_t drawCount,
+                                  uint32_t stride, bool indexed)
+{
+    const struct pvk_buffer *b = (const struct pvk_buffer *)buffer, *cnt = (const struct pvk_buffer *)countBuffer;
+    struct pvk_cmd_draw_indirect *c;
+    if (!drawCount || !b->memory || (cnt && !cnt->memory))
+        return;
+    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_DRAW_INDIRECT, sizeof(*c));
+    if (!c)
+        return;
+    c->address = b->gpu_address + offset;
+    c->count_address = cnt ? cnt->gpu_address + countBufferOffset : 0;
+    c->draw_count = drawCount;
+    c->stride = stride ? stride : (indexed ? 20u : 16u); /* drawCount 1 may pass stride 0 */
+    c->indexed = indexed;
+    c->pad = 0;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndirect(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
+                                             uint32_t drawCount, uint32_t stride)
+{
+    pvk_cmd_draw_indirect(commandBuffer, buffer, offset, VK_NULL_HANDLE, 0, drawCount, stride, false);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexedIndirect(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
+                                                    uint32_t drawCount, uint32_t stride)
+{
+    pvk_cmd_draw_indirect(commandBuffer, buffer, offset, VK_NULL_HANDLE, 0, drawCount, stride, true);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndirectCount(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
+                                                  VkBuffer countBuffer, VkDeviceSize countBufferOffset,
+                                                  uint32_t maxDrawCount, uint32_t stride)
+{
+    pvk_cmd_draw_indirect(commandBuffer, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride, false);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexedIndirectCount(VkCommandBuffer commandBuffer, VkBuffer buffer,
+                                                         VkDeviceSize offset, VkBuffer countBuffer,
+                                                         VkDeviceSize countBufferOffset, uint32_t maxDrawCount,
+                                                         uint32_t stride)
+{
+    pvk_cmd_draw_indirect(commandBuffer, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride, true);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdClearAttachments(VkCommandBuffer commandBuffer, uint32_t attachmentCount,
+                                                 const VkClearAttachment *pAttachments, uint32_t rectCount,
+                                                 const VkClearRect *pRects)
+{
+    struct pvk_cmd_clear_attachments *c;
+    struct pvk_clear_att *a;
+    uint32_t i;
+    if (!attachmentCount || !rectCount)
+        return;
+    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_CLEAR_ATTACHMENTS,
+                       sizeof(*c) + sizeof(*a) * attachmentCount + sizeof(VkClearRect) * rectCount);
+    if (!c)
+        return;
+    c->count = attachmentCount;
+    c->rect_count = rectCount;
+    a = (struct pvk_clear_att *)(c + 1);
+    for (i = 0; i < attachmentCount; i++) {
+        a[i].aspects = pAttachments[i].aspectMask;
+        a[i].attachment = pAttachments[i].colorAttachment;
+        a[i].value = pAttachments[i].clearValue;
+    }
+    memcpy(a + attachmentCount, pRects, sizeof(VkClearRect) * rectCount);
+}
+
 /* ==========================================================================
  * 16. Queue submission and synchronization
  *
@@ -46179,6 +47586,86 @@ static void pvk_queue_put_submissions(struct pvk_queue *queue, struct pvk_submis
 
 /* ---- Encoding ---- */
 
+/* Graphics encoding state (section 15's "Graphics"; "Graphics" below). */
+
+/* Encoder state a draw must (re)apply: struct pvk_render.dirty. */
+#define PVK_RD_PIPELINE (1u << 0)
+#define PVK_RD_MAP (1u << 1)
+#define PVK_RD_VIEWPORT (1u << 2)
+#define PVK_RD_SCISSOR (1u << 3)
+#define PVK_RD_DEPTH_BIAS (1u << 4)
+#define PVK_RD_BLEND (1u << 5)
+#define PVK_RD_DEPTH_BOUNDS (1u << 6)
+#define PVK_RD_DS (1u << 7)
+#define PVK_RD_STENCIL_REF (1u << 8)
+#define PVK_RD_CULL (1u << 9)
+#define PVK_RD_FRONT_FACE (1u << 10)
+#define PVK_RD_DEPTH_CLIP (1u << 11)
+#define PVK_RD_FILL (1u << 12)
+#define PVK_RD_VERTEX (1u << 13)
+#define PVK_RD_AMPLIFICATION (1u << 14)
+#define PVK_RD_ALL 0x7fffu
+
+/* What draw preprocessing produced for one draw (pvk_prepass_draw). */
+struct pvk_pp_result {
+    uint32_t conv;                   /* PVK_CV_* it was made for */
+    pvk_MTLGPUAddress indices;       /* rewritten indices, 0: the bound ones */
+    uint64_t indices_size;
+    uint32_t index_type;             /* pvk_MTLIndexType of `indices` */
+    uint32_t index_count;            /* direct draws: indices to draw */
+    pvk_MTLGPUAddress records;       /* rewritten indirect records, 0: the application's */
+    uint32_t record_stride;
+    uint32_t pad;
+};
+
+/* The state a draw's preprocessing depends on (pvk_draw_conv), tracked by
+ * the encoder and by the scan that preprocesses a render pass's draws. */
+struct pvk_draw_track {
+    uint32_t topology, restart;
+    uint64_t index_address, index_size;
+    uint32_t index_type; /* VkIndexType */
+    uint32_t samples;    /* the first graphics pipeline's (passes without attachments) */
+};
+
+struct pvk_render {
+    id enc;                /* MTL4RenderCommandEncoder; NULL outside render passes */
+    bool suspended;        /* ended by a suspending vkCmdEndRendering, still open */
+    /* The Metal pass */
+    uint32_t width, height; /* its render target (scissors are clamped to it) */
+    uint32_t layers;
+    uint32_t samples_pass;
+    uint32_t color_count;
+    pvk_MTLPixelFormat formats[PVK_MAX_COLOR_ATTACHMENTS]; /* Invalid: no attachment */
+    uint8_t kinds[PVK_MAX_COLOR_ATTACHMENTS];  /* enum pvk_format_kind */
+    const struct pvk_format *fmts[PVK_MAX_COLOR_ATTACHMENTS];
+    const struct pvk_format *depth_fmt, *stencil_fmt;
+    /* The subpass */
+    uint8_t map[PVK_MAX_COLOR_ATTACHMENTS];
+    uint32_t view_mask;
+    bool depth, stencil;   /* it has them */
+    bool dynamic;          /* dynamic rendering: clears name color slots */
+    /* Bound state */
+    struct pvk_pipeline *pipeline;
+    struct pvk_dynamic_state dyn;
+    struct pvk_vertex_binding vertex[PVK_MAX_VERTEX_BINDINGS];
+    struct pvk_draw_track track; /* index buffer binding (topology and restart: dyn) */
+    uint32_t dirty;        /* PVK_RD_* */
+    bool skip_scissor;     /* the scissor is empty */
+    bool skip_bounds;      /* the depth bounds are empty */
+    id ds_state;           /* the MTLDepthStencilState set */
+    uint8_t map_set[PVK_MAX_COLOR_ATTACHMENTS]; /* the color attachment map set */
+    bool map_valid;
+    uint32_t amplification; /* vertex amplification count set (0: never set) */
+};
+
+/* Position in a batch's primary command buffers. */
+struct pvk_cursor {
+    const VkCommandBufferSubmitInfo *cbs;
+    uint32_t count, index;
+    const struct pvk_cmd_block *block;
+    size_t at; /* the next packet in block */
+};
+
 struct pvk_encoder {
     struct pvk_device *device;
     struct pvk_queue *queue;
@@ -46188,6 +47675,11 @@ struct pvk_encoder {
     VkResult result;
     bool waits;            /* the batch waits for semaphores */
     bool consumer_barrier; /* against earlier encoders: issued */
+    struct pvk_render render;   /* graphics */
+    struct pvk_cursor cursor;   /* after the packet being encoded (primaries) */
+    struct pvk_pp_result *pp;   /* draw preprocessing results of the render pass, in draw order */
+    uint32_t pp_count, pp_next, pp_capacity;
+    bool prepassed;             /* compute work the next render encoder must wait for */
     struct pvk_pipeline *pipeline;
     bool pipeline_dirty; /* setComputePipelineState: owed */
     bool push_dirty;     /* push constants changed since they were bound */
@@ -46287,8 +47779,12 @@ static void *pvk_upload(struct pvk_encoder *e, size_t size, size_t align, id *bu
 #define PVK_STAGES_RENDER (PVK_MTLStageVertex | PVK_MTLStageFragment | PVK_MTLStageTile)
 #define PVK_STAGES_ALL (PVK_STAGES_COMPUTE | PVK_STAGES_RENDER)
 
+static void pvk_render_end(struct pvk_encoder *e);
+
 static id pvk_encoder_get(struct pvk_encoder *e)
 {
+    if (e->render.enc) /* not inside a render pass: Vulkan allows no such command there */
+        pvk_render_end(e);
     if (!e->enc && e->result == VK_SUCCESS) {
         e->enc = pvk_MTL4CommandBuffer_computeCommandEncoder(e->cb);
         if (!e->enc) {
@@ -46338,6 +47834,12 @@ static void pvk_encode_barrier(struct pvk_encoder *e, const struct pvk_cmd_barri
     if (!pvk_barrier_stages(c->src_stages, true) || !pvk_barrier_stages(c->dst_stages, false))
         return;
     e->queue->ordered = true;
+    if (e->render.enc) { /* in a render pass (self-dependency, local read): between its draws */
+        pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
+            e->render.enc, PVK_MTLStageVertex | PVK_MTLStageFragment, PVK_MTLStageVertex | PVK_MTLStageFragment,
+            PVK_MTL4VisibilityOptionDevice);
+        return;
+    }
     if (!e->enc) /* the next encoder waits for everything before it */
         return;
     if (!e->consumer_barrier) {
@@ -46717,6 +48219,8 @@ static id pvk_encoder_render(struct pvk_encoder *e, id pass)
     id enc;
     if (e->result != VK_SUCCESS)
         return NULL;
+    if (e->render.enc) /* not inside a render pass: Vulkan allows no transfer there */
+        pvk_render_end(e);
     pvk_encoder_end(e);
     enc = pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass);
     if (!enc) {
@@ -46991,6 +48495,1618 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
     }
 }
 
+/* ---- Graphics ----
+ *
+ * The packets of section 15's "Graphics". A render pass instance's Metal
+ * passes are render command encoders on the batch's command buffer, between
+ * compute encoders; each begins with a barrier against earlier work when the
+ * queue has seen a barrier, waits for semaphores, or preprocessed draws for
+ * it. The argument table is the queue's, at the vertex and fragment stages:
+ * descriptor sets at indices 0.., the vertex buffer table at 29, push
+ * constants at 30, the same for both stages.
+ *
+ * Draw preprocessing: when a render pass instance begins, its packets are
+ * scanned up to its end (through suspensions, into the batch's later command
+ * buffers, and into secondaries) for draws Metal cannot do as recorded
+ * (pvk_draw_conv), tracking the state that decides it (struct
+ * pvk_draw_track). Each gets compute work, encoded before the render
+ * encoder, that writes what the draw then uses (struct pvk_pp_result, in
+ * draw order):
+ *   8-bit indices          widened to 16 bits (restart index 0xFF -> 0xFFFF)
+ *   strips without restart 16-bit indices widened to 32 bits, as Metal
+ *                          restarts strips at 0xFFFF (32-bit indices restart
+ *                          at 0xFFFFFFFF in Metal whatever the state: such an
+ *                          index can only name vertex 2^32 - 1, which
+ *                          maxDrawIndexedIndexValue allows but no
+ *                          vertex buffer of fewer than 4 G vertices holds)
+ *   indexed triangle fans  rewritten as triangle lists (a restart begins a
+ *                          new fan), padded with degenerate triangles to
+ *                          3 * (count - 2) indices
+ *   count buffers          the records copied, those past the count zeroed
+ *   indirect fans          records turned into indexed draws of the
+ *                          device's fan pattern (non-indexed, up to 65536
+ *                          vertices per draw) or of indices rewritten per
+ *                          draw (indexed)
+ * Direct non-indexed fans draw the fan pattern (triangle t: t+1, t+2, 0)
+ * with firstVertex as the base vertex, no preprocessing needed. Indirect
+ * draws whose indices are widened read the whole bound index range,
+ * widened. Metal draws records one by one: at most maxDrawIndirectCount
+ * per command, which Vulkan also requires of the count. */
+
+static pthread_mutex_t pvk_graphics_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* The device's MTL4Compiler of render pipelines (made on first use; NULL on
+ * failure). MTL4Compiler is thread-safe. */
+static id pvk_device_compiler(struct pvk_device *device)
+{
+    id compiler;
+    pthread_mutex_lock(&pvk_graphics_lock);
+    if (!device->compiler) {
+        void *pool = objc_autoreleasePoolPush();
+        id desc = pvk_MTL4CompilerDescriptor_new();
+        if (desc)
+            device->compiler = pvk_MTLDevice_newCompilerWithDescriptor_error(device->physical_device->mtl_device, desc, NULL);
+        pvk_release(desc);
+        objc_autoreleasePoolPop(pool);
+    }
+    compiler = device->compiler;
+    pthread_mutex_unlock(&pvk_graphics_lock);
+    return compiler;
+}
+
+/* MSL compiled as section 13 asks (MSL 3.2, safe math) into a library
+ * (retained), NULL with a message in error[]. */
+static id pvk_msl_library(struct pvk_device *device, const char *msl, char *error, size_t error_size)
+{
+    void *pool = objc_autoreleasePoolPush();
+    id options = pvk_MTLCompileOptions_new(), library = NULL, err = NULL;
+    if (options) {
+        pvk_MTLCompileOptions_setMathMode(options, PVK_MTLMathModeSafe);
+        pvk_MTLCompileOptions_setLanguageVersion(options, PVK_MTLLanguageVersion3_2);
+        library = pvk_MTLDevice_newLibraryWithSource_options_error(device->physical_device->mtl_device,
+                                                                 pvk_NSString_stringWithUTF8String(msl), options, &err);
+    }
+    if (!library)
+        snprintf(error, error_size, "%s", err ? pvk_ns_utf8(pvk_NSError_localizedDescription(err)) : "Metal could not compile it");
+    pvk_release(options);
+    objc_autoreleasePoolPop(pool);
+    return library;
+}
+
+/* A function descriptor of a library's function (retained). */
+static id pvk_function_descriptor(id library, const char *name)
+{
+    id f = pvk_MTL4LibraryFunctionDescriptor_new();
+    if (f) {
+        pvk_MTL4LibraryFunctionDescriptor_setLibrary(f, library);
+        pvk_MTL4LibraryFunctionDescriptor_setName(f, pvk_NSString_stringWithUTF8String(name));
+    }
+    return f;
+}
+
+/* A render pipeline state (retained) from an MTL4RenderPipelineDescriptor,
+ * NULL with a message in error[]. Call inside an autorelease pool. */
+static id pvk_render_pipeline_compile(struct pvk_device *device, id desc, char *error, size_t error_size)
+{
+    id compiler = pvk_device_compiler(device), pso = NULL, err = NULL;
+    if (compiler)
+        pso = pvk_MTL4Compiler_newRenderPipelineStateWithDescriptor_compilerTaskOptions_error(compiler, desc, NULL, &err);
+    if (!pso)
+        snprintf(error, error_size, "%s",
+                 err ? pvk_ns_utf8(pvk_NSError_localizedDescription(err)) : "Metal could not make the render pipeline");
+    return pso;
+}
+
+/* ---- Depth/stencil states ---- */
+
+struct pvk_ds_key {
+    uint32_t depth_compare; /* pvk_MTLCompareFunction */
+    uint32_t depth_write;
+    uint32_t stencil;       /* the stencil test is on */
+    uint32_t face[2][6];    /* front, back: compare, fail, depth fail, pass, read mask, write mask */
+};
+
+struct pvk_ds_state {
+    struct pvk_ds_state *next;
+    struct pvk_ds_key key;
+    id state; /* MTLDepthStencilState */
+};
+
+static id pvk_stencil_descriptor(const uint32_t *f)
+{
+    id s = pvk_MTLStencilDescriptor_new();
+    if (!s)
+        return NULL;
+    pvk_MTLStencilDescriptor_setStencilCompareFunction(s, f[0]);
+    pvk_MTLStencilDescriptor_setStencilFailureOperation(s, f[1]);
+    pvk_MTLStencilDescriptor_setDepthFailureOperation(s, f[2]);
+    pvk_MTLStencilDescriptor_setDepthStencilPassOperation(s, f[3]);
+    pvk_MTLStencilDescriptor_setReadMask(s, f[4]);
+    pvk_MTLStencilDescriptor_setWriteMask(s, f[5]);
+    return s;
+}
+
+/* The MTLDepthStencilState of a state (made once per device; NULL when out
+ * of memory). k must be fully initialized: it is hashed. */
+static id pvk_ds_state(struct pvk_device *device, const struct pvk_ds_key *k)
+{
+    unsigned bucket = (unsigned)(pvk_hash64(0xcbf29ce484222325ull, k, sizeof(*k)) & 63u);
+    struct pvk_ds_state *s;
+    id state = NULL;
+    pthread_mutex_lock(&pvk_graphics_lock);
+    for (s = device->ds_states[bucket]; s; s = s->next)
+        if (memcmp(&s->key, k, sizeof(*k)) == 0)
+            break;
+    if (s) {
+        state = s->state;
+    } else if ((s = pvk_alloc(pvk_device_alloc(device), sizeof(*s), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE))) {
+        void *pool = objc_autoreleasePoolPush();
+        id desc = pvk_MTLDepthStencilDescriptor_new();
+        if (desc) {
+            pvk_MTLDepthStencilDescriptor_setDepthCompareFunction(desc, k->depth_compare);
+            pvk_MTLDepthStencilDescriptor_setDepthWriteEnabled(desc, k->depth_write != 0);
+            if (k->stencil) {
+                id front = pvk_stencil_descriptor(k->face[0]), back = pvk_stencil_descriptor(k->face[1]);
+                pvk_MTLDepthStencilDescriptor_setFrontFaceStencil(desc, front);
+                pvk_MTLDepthStencilDescriptor_setBackFaceStencil(desc, back);
+                pvk_release(front);
+                pvk_release(back);
+            }
+            state = pvk_MTLDevice_newDepthStencilStateWithDescriptor(device->physical_device->mtl_device, desc);
+            pvk_release(desc);
+        }
+        objc_autoreleasePoolPop(pool);
+        if (state) {
+            s->key = *k;
+            s->state = state;
+            s->next = device->ds_states[bucket];
+            device->ds_states[bucket] = s;
+        } else {
+            pvk_free(pvk_device_alloc(device), s);
+        }
+    }
+    pthread_mutex_unlock(&pvk_graphics_lock);
+    return state;
+}
+
+/* ---- Triangle fan pattern ---- */
+
+/* Triangle-list indices of a triangle fan of up to `vertices` vertices:
+ * triangle t is (t + 1, t + 2, 0), drawn with firstVertex as the base
+ * vertex. Buffers only grow (a new one, older ones kept for work in flight
+ * until the device goes). */
+struct pvk_fan_buffer {
+    struct pvk_fan_buffer *next;
+    id buffer; /* MTLBuffer, shared, resident */
+    pvk_MTLGPUAddress address;
+    uint32_t vertices;
+};
+
+#define PVK_FAN_MIN_VERTICES 65536u /* also the most an indirect fan draw draws */
+
+static const struct pvk_fan_buffer *pvk_fan_buffer(struct pvk_device *device, uint32_t vertices)
+{
+    struct pvk_fan_buffer *f;
+    pthread_mutex_lock(&pvk_graphics_lock);
+    f = device->fan_buffers;
+    if (!f || f->vertices < vertices) {
+        uint32_t n = vertices > PVK_FAN_MIN_VERTICES ? vertices : PVK_FAN_MIN_VERTICES, t;
+        f = pvk_alloc(pvk_device_alloc(device), sizeof(*f), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+        if (f)
+            f->buffer = pvk_MTLDevice_newBufferWithLength_options(
+                device->physical_device->mtl_device, (unsigned long)(n - 2) * 12,
+                PVK_MTLResourceStorageModeShared | PVK_MTLResourceHazardTrackingModeUntracked);
+        if (f && f->buffer) {
+            uint32_t *p = pvk_MTLBuffer_contents(f->buffer);
+            for (t = 0; t < n - 2; t++) {
+                p[3 * t] = t + 1;
+                p[3 * t + 1] = t + 2;
+                p[3 * t + 2] = 0;
+            }
+            f->address = pvk_MTLBuffer_gpuAddress(f->buffer);
+            f->vertices = n;
+            pvk_device_make_resident(device, f->buffer);
+            f->next = device->fan_buffers;
+            device->fan_buffers = f;
+        } else if (f) {
+            pvk_free(pvk_device_alloc(device), f);
+            f = NULL;
+        }
+    }
+    pthread_mutex_unlock(&pvk_graphics_lock);
+    return f;
+}
+
+/* ---- Draw preprocessing ---- */
+
+/* struct pvk_pp_args in MSL; kernels take it at the push-constant index. */
+static const char pvk_prepass_msl[] =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct pvk_pp {\n"
+    "    device const uchar *indices; device uint *out; device const uchar *records; device uint *out_records;\n"
+    "    device const uint *count;\n"
+    "    uint n, first, index_size, restart, stride, region, mode, fan_max, has_count, pad0, pad1, pad2;\n"
+    "};\n"
+    "static uint pvk_index(constant pvk_pp &a, uint i)\n"
+    "{\n"
+    "    if (a.index_size == 1u) return a.indices[i];\n"
+    "    if (a.index_size == 2u) return ((device const ushort *)a.indices)[i];\n"
+    "    return ((device const uint *)a.indices)[i];\n"
+    "}\n"
+    "static uint pvk_fan(constant pvk_pp &a, uint first, uint n, device uint *out)\n"
+    "{\n"
+    "    uint rv = a.index_size == 1u ? 0xffu : a.index_size == 2u ? 0xffffu : 0xffffffffu;\n"
+    "    uint o = 0u, center = 0u, prev = 0u, have = 0u, total = n >= 3u ? 3u * (n - 2u) : 0u;\n"
+    "    for (uint i = 0u; i < n; i++) {\n"
+    "        uint v = pvk_index(a, first + i);\n"
+    "        if (a.restart != 0u && v == rv) { have = 0u; continue; }\n"
+    "        if (have == 0u) center = v;\n"
+    "        else if (have >= 2u) { out[o] = prev; out[o + 1u] = v; out[o + 2u] = center; o += 3u; }\n"
+    "        prev = v;\n"
+    "        have++;\n"
+    "    }\n"
+    "    uint pad = o != 0u ? out[0] : center;\n"
+    "    for (; o < total; o++) out[o] = pad;\n"
+    "    return total;\n"
+    "}\n"
+    "kernel void pvk_pp_widen(constant pvk_pp &a [[buffer(30)]], uint i [[thread_position_in_grid]])\n"
+    "{\n"
+    "    if (i >= a.n) return;\n"
+    "    if (a.index_size == 1u) {\n"
+    "        uint v = a.indices[i];\n"
+    "        ((device ushort *)a.out)[i] = a.restart != 0u && v == 0xffu ? ushort(0xffffu) : ushort(v);\n"
+    "    } else {\n"
+    "        a.out[i] = ((device const ushort *)a.indices)[i];\n"
+    "    }\n"
+    "}\n"
+    "kernel void pvk_pp_fan(constant pvk_pp &a [[buffer(30)]], uint i [[thread_position_in_grid]])\n"
+    "{\n"
+    "    if (i == 0u) pvk_fan(a, a.first, a.n, a.out);\n"
+    "}\n"
+    "kernel void pvk_pp_records(constant pvk_pp &a [[buffer(30)]], uint d [[thread_position_in_grid]])\n"
+    "{\n"
+    "    if (d >= a.n) return;\n"
+    "    uint count = a.has_count != 0u ? min(a.count[0], a.n) : a.n;\n"
+    "    device const uint *src = (device const uint *)(a.records + d * a.stride);\n"
+    "    if (a.mode == 0u) {\n"
+    "        uint words = a.index_size != 0u ? 5u : 4u;\n"
+    "        for (uint k = 0u; k < words; k++) a.out_records[d * words + k] = d < count ? src[k] : 0u;\n"
+    "        return;\n"
+    "    }\n"
+    "    device uint *dst = a.out_records + d * 5u;\n"
+    "    if (d >= count) { for (uint k = 0u; k < 5u; k++) dst[k] = 0u; return; }\n"
+    "    if (a.mode == 1u) {\n"
+    "        uint vc = min(src[0], a.fan_max);\n"
+    "        dst[0] = vc >= 3u ? 3u * (vc - 2u) : 0u; dst[1] = src[1]; dst[2] = 0u; dst[3] = src[2]; dst[4] = src[3];\n"
+    "    } else {\n"
+    "        uint ic = min(src[0], a.region / 3u + 2u);\n"
+    "        dst[0] = pvk_fan(a, src[2], ic, a.out + d * a.region);\n"
+    "        dst[1] = src[1]; dst[2] = d * a.region; dst[3] = src[3]; dst[4] = src[4];\n"
+    "    }\n"
+    "}\n";
+
+struct pvk_pp_args {
+    uint64_t indices, out, records, out_records, count;
+    uint32_t n, first, index_size, restart, stride, region, mode, fan_max, has_count, pad[3];
+};
+
+enum { PVK_PP_WIDEN, PVK_PP_FAN, PVK_PP_RECORDS, PVK_PP_KERNEL_COUNT };
+
+static id pvk_compile_compute(struct pvk_device *device, const char *msl, const char *entry, unsigned long max_threads,
+                              char *error, size_t error_size);
+
+/* What a draw needs preprocessed (struct pvk_pp_result.conv). */
+#define PVK_CV_WIDEN 1u   /* indices widened */
+#define PVK_CV_FAN 2u     /* a triangle fan rewritten */
+#define PVK_CV_RECORDS 4u /* indirect records rewritten */
+
+static uint32_t pvk_draw_conv(const struct pvk_draw_track *t, const struct pvk_cmd *c)
+{
+    bool fan = t->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+    bool strip = t->topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP || t->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+    bool widen = t->index_address &&
+                 (t->index_type == VK_INDEX_TYPE_UINT8 || (t->index_type == VK_INDEX_TYPE_UINT16 && strip && !t->restart));
+    if (c->op == PVK_CMD_DRAW_INDEXED)
+        return fan && t->index_address ? PVK_CV_FAN : widen ? PVK_CV_WIDEN : 0;
+    if (c->op == PVK_CMD_DRAW_INDIRECT) {
+        const struct pvk_cmd_draw_indirect *d = (const struct pvk_cmd_draw_indirect *)c;
+        if (d->indexed && !t->index_address)
+            return 0;
+        if (fan)
+            return PVK_CV_RECORDS | PVK_CV_FAN;
+        return (d->count_address ? PVK_CV_RECORDS : 0) | (d->indexed && widen ? PVK_CV_WIDEN : 0);
+    }
+    return 0;
+}
+
+static uint32_t pvk_index_size(uint32_t type)
+{
+    return type == VK_INDEX_TYPE_UINT8 ? 1u : type == VK_INDEX_TYPE_UINT16 ? 2u : 4u;
+}
+
+static id pvk_prepass_pipeline(struct pvk_device *device, unsigned kernel)
+{
+    static const char *const names[PVK_PP_KERNEL_COUNT] = { "pvk_pp_widen", "pvk_pp_fan", "pvk_pp_records" };
+    id pso;
+    pthread_mutex_lock(&pvk_graphics_lock);
+    if (!device->prepass_pipelines[kernel]) {
+        char error[256];
+        device->prepass_pipelines[kernel] =
+            pvk_compile_compute(device, pvk_prepass_msl, names[kernel], 64, error, sizeof(error));
+        if (!device->prepass_pipelines[kernel])
+            pvk_log(PVK_LOG_ERROR, "internal draw preprocessing kernel %s: %s", names[kernel], error);
+    }
+    pso = device->prepass_pipelines[kernel];
+    pthread_mutex_unlock(&pvk_graphics_lock);
+    return pso;
+}
+
+/* Room for one more result. */
+static struct pvk_pp_result *pvk_pp_push(struct pvk_encoder *e)
+{
+    if (e->pp_count == e->pp_capacity) {
+        uint32_t n = e->pp_capacity ? e->pp_capacity * 2 : 16;
+        struct pvk_pp_result *p = pvk_alloc(pvk_device_alloc(e->device), sizeof(*p) * n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+        if (!p) {
+            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+            return NULL;
+        }
+        if (e->pp_count)
+            memcpy(p, e->pp, sizeof(*p) * e->pp_count);
+        pvk_free(pvk_device_alloc(e->device), e->pp);
+        e->pp = p;
+        e->pp_capacity = n;
+    }
+    memset(&e->pp[e->pp_count], 0, sizeof(e->pp[0]));
+    return &e->pp[e->pp_count++];
+}
+
+/* The next result, if it was made for this conversion. */
+static const struct pvk_pp_result *pvk_pp_pop(struct pvk_encoder *e, uint32_t conv)
+{
+    if (e->pp_next < e->pp_count && e->pp[e->pp_next].conv == conv)
+        return &e->pp[e->pp_next++];
+    return NULL;
+}
+
+/* Runs a preprocessing kernel over `threads` threads. */
+static void pvk_prepass_dispatch(struct pvk_encoder *e, unsigned kernel, const struct pvk_pp_args *args, uint32_t threads)
+{
+    id pso = pvk_prepass_pipeline(e->device, kernel), enc;
+    pvk_MTLGPUAddress address;
+    pvk_MTLSize groups, size;
+    void *p;
+    if (!pso) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return;
+    }
+    if (!threads || !(enc = pvk_encoder_get(e)) || !(p = pvk_upload(e, sizeof(*args), 16, NULL, NULL, &address)))
+        return;
+    memcpy(p, args, sizeof(*args));
+    pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+    pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, pso);
+    groups.width = (threads + 63) / 64;
+    groups.height = groups.depth = 1;
+    size.width = 64;
+    size.height = size.depth = 1;
+    pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(enc, groups, size);
+    e->pipeline_dirty = true;
+    e->push_bound = 0;
+    e->prepassed = true;
+}
+
+/* Upload memory for preprocessing output. */
+static uint64_t pvk_prepass_memory(struct pvk_encoder *e, uint64_t size)
+{
+    pvk_MTLGPUAddress address;
+    if (!size || size > ((uint64_t)1 << 32) || !pvk_upload(e, (size_t)size, 16, NULL, NULL, &address))
+        return 0;
+    return address;
+}
+
+/* Preprocesses one draw (see "Graphics" above); the result goes to e->pp. */
+static void pvk_prepass_draw(struct pvk_encoder *e, const struct pvk_draw_track *t, const struct pvk_cmd *c, uint32_t conv)
+{
+    struct pvk_pp_result *res = pvk_pp_push(e);
+    uint32_t isize = pvk_index_size(t->index_type);
+    struct pvk_pp_args a;
+    if (!res)
+        return;
+    res->conv = conv;
+    memset(&a, 0, sizeof(a));
+    a.indices = t->index_address;
+    a.index_size = isize;
+    a.restart = t->restart;
+    if (c->op == PVK_CMD_DRAW_INDEXED) {
+        const struct pvk_cmd_draw_indexed *d = (const struct pvk_cmd_draw_indexed *)c;
+        if (conv & PVK_CV_FAN) {
+            uint64_t total = d->index_count >= 3 ? 3ull * (d->index_count - 2) : 0;
+            if (!total || !(a.out = pvk_prepass_memory(e, total * 4)))
+                return;
+            a.n = d->index_count;
+            a.first = d->first_index;
+            pvk_prepass_dispatch(e, PVK_PP_FAN, &a, 1);
+            res->index_count = (uint32_t)total;
+            res->index_type = PVK_MTLIndexTypeUInt32;
+            res->indices_size = total * 4;
+        } else {
+            uint32_t osize = isize == 1 ? 2 : 4;
+            if (!(a.out = pvk_prepass_memory(e, (uint64_t)d->index_count * osize)))
+                return;
+            a.indices = t->index_address + (uint64_t)d->first_index * isize;
+            a.n = d->index_count;
+            pvk_prepass_dispatch(e, PVK_PP_WIDEN, &a, a.n);
+            res->index_count = d->index_count;
+            res->index_type = isize == 1 ? PVK_MTLIndexTypeUInt16 : PVK_MTLIndexTypeUInt32;
+            res->indices_size = (uint64_t)d->index_count * osize;
+        }
+        res->indices = a.out;
+        return;
+    }
+    {
+        const struct pvk_cmd_draw_indirect *d = (const struct pvk_cmd_draw_indirect *)c;
+        uint64_t elements = t->index_size / isize;
+        if (conv & PVK_CV_WIDEN) { /* the whole bound range */
+            uint32_t osize = isize == 1 ? 2 : 4;
+            if (!elements || elements > UINT32_MAX || !(a.out = pvk_prepass_memory(e, elements * osize)))
+                return;
+            a.n = (uint32_t)elements;
+            pvk_prepass_dispatch(e, PVK_PP_WIDEN, &a, a.n);
+            res->indices = a.out;
+            res->indices_size = elements * osize;
+            res->index_type = isize == 1 ? PVK_MTLIndexTypeUInt16 : PVK_MTLIndexTypeUInt32;
+            a.out = 0;
+        }
+        if (!(conv & PVK_CV_RECORDS))
+            return;
+        a.records = d->address;
+        a.stride = d->stride;
+        a.n = d->draw_count;
+        a.has_count = d->count_address != 0;
+        a.count = d->count_address;
+        a.index_size = d->indexed ? isize : 0;
+        if ((conv & PVK_CV_FAN) && !d->indexed) {
+            const struct pvk_fan_buffer *f = pvk_fan_buffer(e->device, PVK_FAN_MIN_VERTICES);
+            if (!f) {
+                e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+                return;
+            }
+            a.mode = 1;
+            a.fan_max = f->vertices;
+            res->indices = f->address;
+            res->indices_size = (uint64_t)(f->vertices - 2) * 12;
+            res->index_type = PVK_MTLIndexTypeUInt32;
+            res->record_stride = 20;
+        } else if (conv & PVK_CV_FAN) {
+            /* 3 * (elements - 2) indices per draw at most, 64 MB in all */
+            uint64_t region = elements >= 3 ? 3 * (elements - 2) : 3;
+            if (region * 4 * a.n > (64u << 20))
+                region = (64u << 20) / 4 / a.n / 3 * 3;
+            if (!region || !(a.out = pvk_prepass_memory(e, region * 4 * a.n)))
+                return;
+            a.mode = 2;
+            a.region = (uint32_t)region;
+            res->indices = a.out;
+            res->indices_size = region * 4 * a.n;
+            res->index_type = PVK_MTLIndexTypeUInt32;
+            res->record_stride = 20;
+        } else {
+            res->record_stride = d->indexed ? 20 : 16;
+        }
+        if (!(a.out_records = pvk_prepass_memory(e, (uint64_t)res->record_stride * a.n)))
+            return;
+        pvk_prepass_dispatch(e, PVK_PP_RECORDS, &a, a.n);
+        res->records = a.out_records;
+    }
+}
+
+/* The scan's state tracking (struct pvk_draw_track). */
+static void pvk_track_pipeline(struct pvk_draw_track *t, const struct pvk_pipeline *p)
+{
+    if (!p || !p->gfx)
+        return;
+    if (!(p->gfx->dynamic & PVK_DYN_BIT(PRIMITIVE_TOPOLOGY)))
+        t->topology = p->gfx->state.topology;
+    if (!(p->gfx->dynamic & PVK_DYN_BIT(PRIMITIVE_RESTART_ENABLE)))
+        t->restart = p->gfx->state.primitive_restart;
+    if (!t->samples)
+        t->samples = p->gfx->samples;
+}
+
+static bool pvk_scan_cb(struct pvk_encoder *e, struct pvk_draw_track *t, const struct pvk_command_buffer *cb, uint32_t depth);
+
+/* One packet of the scan; true at the END_PASS that ends the instance. */
+static bool pvk_scan_packet(struct pvk_encoder *e, struct pvk_draw_track *t, const struct pvk_cmd *c, uint32_t depth)
+{
+    uint32_t conv, i;
+    switch ((enum pvk_cmd_op)c->op) {
+    case PVK_CMD_BIND_PIPELINE:
+        pvk_track_pipeline(t, ((const struct pvk_cmd_bind_pipeline *)c)->pipeline);
+        break;
+    case PVK_CMD_SET_DYNAMIC: {
+        const struct pvk_cmd_dynamic *d = (const struct pvk_cmd_dynamic *)c;
+        if (d->state == PVK_DYN_PRIMITIVE_TOPOLOGY)
+            t->topology = *(const uint32_t *)(d + 1);
+        else if (d->state == PVK_DYN_PRIMITIVE_RESTART_ENABLE)
+            t->restart = *(const uint32_t *)(d + 1);
+        break;
+    }
+    case PVK_CMD_BIND_INDEX: {
+        const struct pvk_cmd_bind_index *b = (const struct pvk_cmd_bind_index *)c;
+        t->index_address = b->address;
+        t->index_size = b->size;
+        t->index_type = b->type;
+        break;
+    }
+    case PVK_CMD_DRAW_INDEXED:
+    case PVK_CMD_DRAW_INDIRECT:
+        if ((conv = pvk_draw_conv(t, c)))
+            pvk_prepass_draw(e, t, c, conv);
+        break;
+    case PVK_CMD_EXECUTE_COMMANDS: {
+        const struct pvk_cmd_execute *x = (const struct pvk_cmd_execute *)c;
+        const VkCommandBuffer *list = (const VkCommandBuffer *)(x + 1);
+        for (i = 0; i < x->count && depth < 8; i++)
+            pvk_scan_cb(e, t, (const struct pvk_command_buffer *)list[i], depth + 1);
+        break;
+    }
+    case PVK_CMD_END_PASS:
+        return !(((const struct pvk_cmd_end_pass *)c)->flags & VK_RENDERING_SUSPENDING_BIT);
+    default:
+        break;
+    }
+    return false;
+}
+
+static bool pvk_scan_cb(struct pvk_encoder *e, struct pvk_draw_track *t, const struct pvk_command_buffer *cb, uint32_t depth)
+{
+    const struct pvk_cmd_block *b;
+    for (b = cb->first; b; b = b->next) {
+        size_t at = 0;
+        while (at < b->used && e->result == VK_SUCCESS) {
+            const struct pvk_cmd *c = (const struct pvk_cmd *)((const char *)b->data + at);
+            at += c->size;
+            if (pvk_scan_packet(e, t, c, depth))
+                return true;
+        }
+    }
+    return false;
+}
+
+/* The packet at the cursor (advanced), across the batch's primaries. */
+static const struct pvk_cmd *pvk_cursor_next(struct pvk_cursor *cur)
+{
+    for (;;) {
+        if (cur->block && cur->at < cur->block->used) {
+            const struct pvk_cmd *c = (const struct pvk_cmd *)((const char *)cur->block->data + cur->at);
+            cur->at += c->size;
+            return c;
+        }
+        if (cur->block && cur->block->next) {
+            cur->block = cur->block->next;
+            cur->at = 0;
+            continue;
+        }
+        if (cur->index + 1 >= cur->count)
+            return NULL;
+        cur->index++;
+        cur->block = ((const struct pvk_command_buffer *)cur->cbs[cur->index].commandBuffer)->first;
+        cur->at = 0;
+    }
+}
+
+/* Preprocesses the draws of the render pass instance starting at the cursor. */
+static void pvk_prepass_scan(struct pvk_encoder *e, struct pvk_draw_track *t)
+{
+    struct pvk_cursor cur = e->cursor;
+    const struct pvk_cmd *c;
+    while (e->result == VK_SUCCESS && (c = pvk_cursor_next(&cur)))
+        if (pvk_scan_packet(e, t, c, 0))
+            break;
+}
+
+/* ---- Clears by drawing (vkCmdClearAttachments, partial LOAD_OP_CLEAR) ---- */
+
+struct pvk_clear_key {
+    pvk_MTLPixelFormat formats[PVK_MAX_COLOR_ATTACHMENTS]; /* cleared color slots; Invalid: not cleared */
+    uint32_t kinds[PVK_MAX_COLOR_ATTACHMENTS];             /* enum pvk_format_kind */
+    uint32_t samples;
+    uint32_t layered;
+};
+
+struct pvk_clear_pipeline {
+    struct pvk_clear_pipeline *next;
+    struct pvk_clear_key key;
+    id pso;
+};
+
+/* Arguments at buffer index 0 of the queue's render table. */
+struct pvk_clear_args {
+    float depth;
+    uint32_t base_layer, multiview, pad;
+    uint32_t layers[32]; /* multiview: the views' layers, by instance */
+    uint32_t colors[PVK_MAX_COLOR_ATTACHMENTS][4];
+};
+
+/* A clear pipeline's MSL: a triangle covering the viewport at the clear
+ * depth, one instance per layer, writing the clear colors. */
+static char *pvk_clear_msl(struct pvk_device *device, const struct pvk_clear_key *k)
+{
+    static const char *const types[] = { "float4", "uint4", "int4" };
+    size_t size = 4096;
+    char *msl = pvk_alloc(pvk_device_alloc(device), size, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND), *p;
+    uint32_t s;
+    bool colors = false;
+    if (!msl)
+        return NULL;
+    p = msl;
+    p += snprintf(p, size - (size_t)(p - msl),
+                  "#include <metal_stdlib>\nusing namespace metal;\n"
+                  "struct pvk_clear_args { float depth; uint base_layer, multiview, pad; uint layers[32]; uint4 colors[8]; };\n"
+                  "struct pvk_clear_v { float4 pos [[position]];%s };\n"
+                  "vertex pvk_clear_v pvk_clear_vs(uint vid [[vertex_id]], uint iid [[instance_id]],\n"
+                  "                                constant pvk_clear_args &a [[buffer(0)]])\n"
+                  "{\n"
+                  "    pvk_clear_v o;\n"
+                  "    float2 p = float2((vid << 1) & 2, vid & 2);\n"
+                  "    o.pos = float4(p * 2.0 - 1.0, a.depth, 1.0);\n%s"
+                  "    return o;\n"
+                  "}\n"
+                  "struct pvk_clear_f {\n",
+                  k->layered ? " uint layer [[render_target_array_index]];" : "",
+                  k->layered ? "    o.layer = a.multiview != 0u ? a.layers[iid] : a.base_layer + iid;\n" : "");
+    for (s = 0; s < PVK_MAX_COLOR_ATTACHMENTS; s++)
+        if (k->formats[s]) {
+            p += snprintf(p, size - (size_t)(p - msl), "    %s c%u [[color(%u)]];\n", types[k->kinds[s] <= 2 ? k->kinds[s] : 0], s, s);
+            colors = true;
+        }
+    if (!colors)
+        p += snprintf(p, size - (size_t)(p - msl), "    float4 unused;\n");
+    p += snprintf(p, size - (size_t)(p - msl),
+                  "};\nfragment pvk_clear_f pvk_clear_fs(constant pvk_clear_args &a [[buffer(0)]])\n{\n    pvk_clear_f o;\n");
+    for (s = 0; s < PVK_MAX_COLOR_ATTACHMENTS; s++)
+        if (k->formats[s])
+            p += snprintf(p, size - (size_t)(p - msl), "    o.c%u = as_type<%s>(a.colors[%u]);\n", s,
+                          types[k->kinds[s] <= 2 ? k->kinds[s] : 0], s);
+    snprintf(p, size - (size_t)(p - msl), "    return o;\n}\n");
+    return msl;
+}
+
+static id pvk_clear_pipeline(struct pvk_device *device, const struct pvk_clear_key *k)
+{
+    struct pvk_clear_pipeline *c;
+    id pso = NULL;
+    pthread_mutex_lock(&pvk_graphics_lock);
+    for (c = device->clear_pipelines; c; c = c->next)
+        if (memcmp(&c->key, k, sizeof(*k)) == 0)
+            break;
+    pso = c ? c->pso : NULL;
+    pthread_mutex_unlock(&pvk_graphics_lock);
+    if (!c) {
+        void *pool = objc_autoreleasePoolPush();
+        char *msl = pvk_clear_msl(device, k), error[256];
+        id library = msl ? pvk_msl_library(device, msl, error, sizeof(error)) : NULL;
+        bool colors = false;
+        uint32_t s;
+        if (library) {
+            id desc = pvk_MTL4RenderPipelineDescriptor_new(), vs = pvk_function_descriptor(library, "pvk_clear_vs"), fs = NULL;
+            id atts = pvk_MTL4RenderPipelineDescriptor_colorAttachments(desc);
+            for (s = 0; s < PVK_MAX_COLOR_ATTACHMENTS; s++) {
+                if (!k->formats[s])
+                    continue;
+                pvk_MTL4RenderPipelineColorAttachmentDescriptor_setPixelFormat(
+                    pvk_MTL4RenderPipelineColorAttachmentDescriptorArray_objectAtIndexedSubscript(atts, s), k->formats[s]);
+                colors = true;
+            }
+            pvk_MTL4RenderPipelineDescriptor_setVertexFunctionDescriptor(desc, vs);
+            if (colors) {
+                fs = pvk_function_descriptor(library, "pvk_clear_fs");
+                pvk_MTL4RenderPipelineDescriptor_setFragmentFunctionDescriptor(desc, fs);
+            }
+            pvk_MTL4RenderPipelineDescriptor_setRasterSampleCount(desc, k->samples ? k->samples : 1);
+            if (k->layered)
+                pvk_MTL4RenderPipelineDescriptor_setInputPrimitiveTopology(desc, PVK_MTLPrimitiveTopologyClassTriangle);
+            pvk_MTL4RenderPipelineDescriptor_setColorAttachmentMappingState(
+                desc, PVK_MTL4LogicalToPhysicalColorAttachmentMappingStateInherited);
+            pso = pvk_render_pipeline_compile(device, desc, error, sizeof(error));
+            pvk_release(fs);
+            pvk_release(vs);
+            pvk_release(desc);
+            pvk_release(library);
+        }
+        if (!pso)
+            pvk_log(PVK_LOG_ERROR, "internal clear pipeline: %s", error);
+        pvk_free(pvk_device_alloc(device), msl);
+        objc_autoreleasePoolPop(pool);
+        if (pso) {
+            pthread_mutex_lock(&pvk_graphics_lock);
+            for (c = device->clear_pipelines; c; c = c->next) /* made meanwhile by another queue */
+                if (memcmp(&c->key, k, sizeof(*k)) == 0)
+                    break;
+            if (c) {
+                pvk_release(pso);
+                pso = c->pso;
+            } else if ((c = pvk_alloc(pvk_device_alloc(device), sizeof(*c), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE))) {
+                c->key = *k;
+                c->pso = pso;
+                c->next = device->clear_pipelines;
+                device->clear_pipelines = c;
+            } else {
+                pvk_release(pso);
+                pso = NULL;
+            }
+            pthread_mutex_unlock(&pvk_graphics_lock);
+        }
+    }
+    return pso;
+}
+
+/* Values a clear writes to a color slot: its Metal channels, integers kept
+ * to the format's bits (as vkCmdClearColorImage). */
+static void pvk_clear_value_bits(const struct pvk_format *f, const VkClearColorValue *v, uint32_t out[4])
+{
+    pvk_MTLClearColor c = pvk_clear_color(f, v);
+    double d[4];
+    unsigned i;
+    d[0] = c.red;
+    d[1] = c.green;
+    d[2] = c.blue;
+    d[3] = c.alpha;
+    for (i = 0; i < 4; i++) {
+        if (f->kind == PVK_FK_UINT) {
+            out[i] = (uint32_t)d[i];
+        } else if (f->kind == PVK_FK_SINT) {
+            int32_t s = (int32_t)d[i];
+            memcpy(&out[i], &s, 4);
+        } else {
+            float x = (float)d[i];
+            memcpy(&out[i], &x, 4);
+        }
+    }
+}
+
+static void pvk_render_set_map(struct pvk_encoder *e, const uint8_t *map);
+
+/* Clears color slots `colors` (values[slot]), depth and/or stencil in the
+ * rectangles by drawing; restores what it changes on the next draw. */
+static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint32_t (*values)[4], bool depth,
+                             float depth_value, bool stencil, uint32_t stencil_value, const VkClearRect *rects,
+                             uint32_t rect_count)
+{
+    struct pvk_render *r = &e->render;
+    struct pvk_clear_key key;
+    struct pvk_ds_key dk;
+    uint8_t map[PVK_MAX_COLOR_ATTACHMENTS];
+    id pso, ds, enc = r->enc;
+    uint32_t s, i, views = 0, view_layers[32];
+
+    if (!enc)
+        return;
+    memset(&key, 0, sizeof(key));
+    for (s = 0; s < PVK_MAX_COLOR_ATTACHMENTS; s++) {
+        map[s] = PVK_NO_SLOT;
+        if (!(colors & (1u << s)) || s >= r->color_count || !r->formats[s])
+            continue;
+        key.formats[s] = r->formats[s];
+        key.kinds[s] = r->kinds[s];
+        map[s] = (uint8_t)s;
+    }
+    key.samples = r->samples_pass;
+    key.layered = r->layers > 0;
+    memset(&dk, 0, sizeof(dk));
+    dk.depth_compare = PVK_MTLCompareFunctionAlways;
+    dk.depth_write = depth && r->depth_fmt;
+    if (stencil && r->stencil_fmt) {
+        dk.stencil = 1;
+        for (s = 0; s < 2; s++) {
+            dk.face[s][0] = PVK_MTLCompareFunctionAlways;
+            dk.face[s][1] = dk.face[s][2] = dk.face[s][3] = PVK_MTLStencilOperationReplace;
+            dk.face[s][4] = dk.face[s][5] = 0xff;
+        }
+    }
+    pso = pvk_clear_pipeline(e->device, &key);
+    ds = pvk_ds_state(e->device, &dk);
+    if (!pso || !ds) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return;
+    }
+    for (s = 0; r->view_mask >> s; s++)
+        if (r->view_mask & (1u << s))
+            view_layers[views++] = s;
+    pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
+    pvk_render_set_map(e, map);
+    pvk_MTL4RenderCommandEncoder_setDepthStencilState(enc, ds);
+    pvk_MTL4RenderCommandEncoder_setStencilFrontReferenceValue_backReferenceValue(enc, stencil_value & 0xff,
+                                                                                   stencil_value & 0xff);
+    pvk_MTL4RenderCommandEncoder_setCullMode(enc, PVK_MTLCullModeNone);
+    pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(enc, 0.0f, 0.0f, 0.0f);
+    pvk_MTL4RenderCommandEncoder_setDepthClipMode(enc, PVK_MTLDepthClipModeClip);
+    pvk_MTL4RenderCommandEncoder_setTriangleFillMode(enc, PVK_MTLTriangleFillModeFill);
+    pvk_MTL4RenderCommandEncoder_setDepthTestMinBound_maxBound(enc, 0.0f, 1.0f);
+    if (r->amplification > 1) {
+        pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, 1, NULL);
+        r->amplification = 1;
+    }
+    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->render_table,
+                                                           PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
+    for (i = 0; i < rect_count; i++) {
+        const VkClearRect *rc = &rects[i];
+        int64_t x0 = rc->rect.offset.x, y0 = rc->rect.offset.y;
+        int64_t x1 = x0 + rc->rect.extent.width, y1 = y0 + rc->rect.extent.height;
+        uint32_t instances = views ? views : rc->layerCount;
+        struct pvk_clear_args *args;
+        pvk_MTLGPUAddress address;
+        pvk_MTLViewport vp;
+        pvk_MTLScissorRect sc;
+        if (x0 < 0)
+            x0 = 0;
+        if (y0 < 0)
+            y0 = 0;
+        if (x1 > r->width)
+            x1 = r->width;
+        if (y1 > r->height)
+            y1 = r->height;
+        if (x1 <= x0 || y1 <= y0 || !instances)
+            continue;
+        if (!key.layered)
+            instances = 1;
+        if (!(args = pvk_upload(e, sizeof(*args), 16, NULL, NULL, &address)))
+            break;
+        memset(args, 0, sizeof(*args));
+        args->depth = depth_value;
+        args->base_layer = rc->baseArrayLayer;
+        args->multiview = views != 0;
+        memcpy(args->layers, view_layers, sizeof(uint32_t) * views);
+        for (s = 0; s < PVK_MAX_COLOR_ATTACHMENTS; s++)
+            if (key.formats[s])
+                memcpy(args->colors[s], values[s], sizeof(args->colors[s]));
+        vp.originX = (double)x0;
+        vp.originY = (double)y0;
+        vp.width = (double)(x1 - x0);
+        vp.height = (double)(y1 - y0);
+        vp.znear = 0.0;
+        vp.zfar = 1.0;
+        sc.x = (unsigned long)x0;
+        sc.y = (unsigned long)y0;
+        sc.width = (unsigned long)(x1 - x0);
+        sc.height = (unsigned long)(y1 - y0);
+        pvk_MTL4RenderCommandEncoder_setViewports_count(enc, &vp, 1);
+        pvk_MTL4RenderCommandEncoder_setScissorRects_count(enc, &sc, 1);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->render_table, address, 0);
+        pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
+            enc, PVK_MTLPrimitiveTypeTriangle, 0, 3, instances, 0);
+    }
+    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->argument_table,
+                                                           PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
+    r->ds_state = NULL;
+    r->dirty = PVK_RD_ALL;
+}
+
+/* ---- Render passes ---- */
+
+static void pvk_render_end(struct pvk_encoder *e)
+{
+    struct pvk_render *r = &e->render;
+    if (r->enc) {
+        pvk_MTL4CommandEncoder_endEncoding(r->enc);
+        r->enc = NULL;
+    }
+    r->suspended = false;
+    e->pp_count = e->pp_next = 0;
+}
+
+/* The encoder's view of a draw's preprocessing state. */
+static struct pvk_draw_track pvk_render_track(const struct pvk_render *r)
+{
+    struct pvk_draw_track t = r->track;
+    t.topology = r->dyn.topology;
+    t.restart = r->dyn.primitive_restart;
+    return t;
+}
+
+static void pvk_pass_set_attachment(id att, const struct pvk_pass_attachment *pa)
+{
+    pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, pa->texture);
+    pvk_MTLRenderPassAttachmentDescriptor_setLevel(att, pa->level);
+    pvk_MTLRenderPassAttachmentDescriptor_setSlice(att, pa->slice);
+    pvk_MTLRenderPassAttachmentDescriptor_setDepthPlane(att, pa->plane);
+    pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, pa->load);
+    pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, pa->store);
+    if (pa->resolve) {
+        pvk_MTLRenderPassAttachmentDescriptor_setResolveTexture(att, pa->resolve);
+        pvk_MTLRenderPassAttachmentDescriptor_setResolveLevel(att, pa->resolve_level);
+        pvk_MTLRenderPassAttachmentDescriptor_setResolveSlice(att, pa->resolve_slice);
+        pvk_MTLRenderPassAttachmentDescriptor_setResolveDepthPlane(att, pa->resolve_plane);
+    }
+}
+
+static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_begin_pass *c)
+{
+    struct pvk_render *r = &e->render;
+    struct pvk_draw_track track;
+    uint32_t s, clears = 0, values[PVK_MAX_COLOR_ATTACHMENTS][4];
+    uint32_t width = UINT32_MAX, height = UINT32_MAX, samples = 0;
+    id pass, enc;
+    void *pool;
+
+    if (r->enc && r->suspended && (c->flags & VK_RENDERING_RESUMING_BIT)) {
+        r->suspended = false; /* the same instance goes on */
+        return;
+    }
+    pvk_render_end(e);
+    if (e->result != VK_SUCCESS)
+        return;
+    track = pvk_render_track(r);
+    track.samples = r->pipeline && r->pipeline->gfx ? r->pipeline->gfx->samples : 0;
+    pvk_prepass_scan(e, &track);
+    pvk_encoder_end(e);
+    if (e->result != VK_SUCCESS)
+        return;
+
+    pool = objc_autoreleasePoolPush();
+    pass = pvk_MTL4RenderPassDescriptor_new();
+    if (!pass) {
+        e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        objc_autoreleasePoolPop(pool);
+        return;
+    }
+    memset(r->formats, 0, sizeof(r->formats));
+    memset(r->kinds, 0, sizeof(r->kinds));
+    memset((void *)r->fmts, 0, sizeof(r->fmts));
+    for (s = 0; s < c->color_count; s++) {
+        const struct pvk_pass_attachment *pa = &c->colors[s];
+        id att;
+        if (!pa->texture)
+            continue;
+        att = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
+            pvk_MTL4RenderPassDescriptor_colorAttachments(pass), s);
+        pvk_pass_set_attachment(att, pa);
+        pvk_MTLRenderPassColorAttachmentDescriptor_setClearColor(att, pvk_clear_color(pa->fmt, &pa->clear.color));
+        r->formats[s] = pa->fmt->mtl;
+        r->kinds[s] = pa->fmt->kind;
+        r->fmts[s] = pa->fmt;
+        if (pa->clear_in_area) {
+            clears |= 1u << s;
+            pvk_clear_value_bits(pa->fmt, &pa->clear.color, values[s]);
+        }
+    }
+    if (c->depth.texture) {
+        id att = pvk_MTL4RenderPassDescriptor_depthAttachment(pass);
+        pvk_pass_set_attachment(att, &c->depth);
+        pvk_MTLRenderPassDepthAttachmentDescriptor_setClearDepth(att, c->depth.clear.depthStencil.depth);
+        if (c->depth.resolve)
+            pvk_MTLRenderPassDepthAttachmentDescriptor_setDepthResolveFilter(att, c->depth.resolve_filter);
+    }
+    if (c->stencil.texture) {
+        id att = pvk_MTL4RenderPassDescriptor_stencilAttachment(pass);
+        pvk_pass_set_attachment(att, &c->stencil);
+        pvk_MTLRenderPassStencilAttachmentDescriptor_setClearStencil(att, c->stencil.clear.depthStencil.stencil & 0xffu);
+        if (c->stencil.resolve)
+            pvk_MTLRenderPassStencilAttachmentDescriptor_setStencilResolveFilter(
+                att, PVK_MTLMultisampleStencilResolveFilterSample0);
+    }
+    for (s = 0; s < PVK_MAX_COLOR_ATTACHMENTS + 2; s++) {
+        const struct pvk_pass_attachment *pa = s < PVK_MAX_COLOR_ATTACHMENTS ? &c->colors[s]
+                                             : s == PVK_MAX_COLOR_ATTACHMENTS ? &c->depth
+                                                                              : &c->stencil;
+        if (!pa->texture)
+            continue;
+        if (pa->width < width)
+            width = pa->width;
+        if (pa->height < height)
+            height = pa->height;
+        samples = pa->samples;
+    }
+    if (c->layers)
+        pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, c->layers);
+    if (!samples) { /* no attachments */
+        width = c->width;
+        height = c->height;
+        samples = track.samples ? track.samples : 1;
+        pvk_MTL4RenderPassDescriptor_setRenderTargetWidth(pass, width);
+        pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(pass, height);
+        pvk_MTL4RenderPassDescriptor_setDefaultRasterSampleCount(pass, samples);
+    }
+    pvk_MTL4RenderPassDescriptor_setSupportColorAttachmentMapping(pass, true);
+    enc = pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass);
+    pvk_release(pass);
+    objc_autoreleasePoolPop(pool);
+    if (!enc) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return;
+    }
+    if (e->waits || e->queue->ordered || e->prepassed)
+        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
+            enc, PVK_STAGES_ALL, PVK_STAGES_RENDER, PVK_MTL4VisibilityOptionDevice);
+    e->prepassed = false;
+    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->argument_table,
+                                                           PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
+    r->enc = enc;
+    r->suspended = false;
+    r->width = width;
+    r->height = height;
+    r->layers = c->layers;
+    r->samples_pass = samples;
+    r->color_count = c->color_count;
+    r->depth_fmt = c->depth.texture ? c->depth.fmt : NULL;
+    r->stencil_fmt = c->stencil.texture ? c->stencil.fmt : NULL;
+    memset(r->map, PVK_NO_SLOT, sizeof(r->map));
+    r->view_mask = 0;
+    r->depth = r->stencil = false;
+    r->dirty = PVK_RD_ALL;
+    r->ds_state = NULL;
+    r->map_valid = false;
+    r->amplification = 0;
+    e->push_bound = 0; /* the render stages have not seen the push constants */
+    memset(e->sets_bound, 0, sizeof(e->sets_bound));
+    if (clears || (c->depth.clear_in_area || c->stencil.clear_in_area)) {
+        VkClearRect rect;
+        rect.rect = c->area;
+        rect.baseArrayLayer = 0;
+        rect.layerCount = c->layers ? c->layers : 1;
+        pvk_render_clear(e, clears, (const uint32_t(*)[4])values, c->depth.clear_in_area != 0,
+                         c->depth.clear.depthStencil.depth, c->stencil.clear_in_area != 0,
+                         c->stencil.clear.depthStencil.stencil, &rect, 1);
+    }
+}
+
+static void pvk_encode_subpass(struct pvk_encoder *e, const struct pvk_cmd_subpass *c)
+{
+    struct pvk_render *r = &e->render;
+    memcpy(r->map, c->map, sizeof(r->map));
+    r->view_mask = c->view_mask;
+    r->depth = c->depth && r->depth_fmt;
+    r->stencil = c->stencil && r->stencil_fmt;
+    r->dynamic = c->dynamic != 0;
+    r->dirty |= PVK_RD_MAP | PVK_RD_DS | PVK_RD_DEPTH_BOUNDS | PVK_RD_AMPLIFICATION;
+}
+
+/* ---- State ---- */
+
+static void pvk_render_set_map(struct pvk_encoder *e, const uint8_t *map)
+{
+    struct pvk_render *r = &e->render;
+    void *pool;
+    id m;
+    uint32_t l;
+    if (r->map_valid && memcmp(r->map_set, map, sizeof(r->map_set)) == 0)
+        return;
+    pool = objc_autoreleasePoolPush();
+    m = pvk_MTLLogicalToPhysicalColorAttachmentMap_new();
+    for (l = 0; m && l < PVK_MAX_COLOR_ATTACHMENTS; l++)
+        if (map[l] != PVK_NO_SLOT)
+            pvk_MTLLogicalToPhysicalColorAttachmentMap_setPhysicalIndex_forLogicalIndex(m, map[l], l);
+    pvk_MTL4RenderCommandEncoder_setColorAttachmentMap(r->enc, m);
+    pvk_release(m);
+    objc_autoreleasePoolPop(pool);
+    memcpy(r->map_set, map, sizeof(r->map_set));
+    r->map_valid = true;
+}
+
+/* Applies a SET_DYNAMIC packet. */
+static void pvk_encode_set_dynamic(struct pvk_encoder *e, const struct pvk_cmd_dynamic *c)
+{
+    struct pvk_render *r = &e->render;
+    struct pvk_dynamic_state *d = &r->dyn;
+    const uint32_t *u = (const uint32_t *)(c + 1);
+    const float *f = (const float *)(c + 1);
+    unsigned face;
+    switch ((enum pvk_dyn)c->state) {
+    case PVK_DYN_VIEWPORT_COUNT:
+        d->viewport_count = c->count;
+        /* fallthrough */
+    case PVK_DYN_VIEWPORT:
+        memcpy(d->viewports + c->first, c + 1, sizeof(VkViewport) * c->count);
+        r->dirty |= PVK_RD_VIEWPORT;
+        break;
+    case PVK_DYN_SCISSOR_COUNT:
+        d->scissor_count = c->count;
+        /* fallthrough */
+    case PVK_DYN_SCISSOR:
+        memcpy(d->scissors + c->first, c + 1, sizeof(VkRect2D) * c->count);
+        r->dirty |= PVK_RD_SCISSOR;
+        break;
+    case PVK_DYN_LINE_WIDTH:
+        d->line_width = f[0];
+        break;
+    case PVK_DYN_DEPTH_BIAS:
+        memcpy(d->depth_bias, f, sizeof(d->depth_bias));
+        r->dirty |= PVK_RD_DEPTH_BIAS;
+        break;
+    case PVK_DYN_BLEND_CONSTANTS:
+        memcpy(d->blend_constants, f, sizeof(d->blend_constants));
+        r->dirty |= PVK_RD_BLEND;
+        break;
+    case PVK_DYN_DEPTH_BOUNDS:
+        memcpy(d->depth_bounds, f, sizeof(d->depth_bounds));
+        r->dirty |= PVK_RD_DEPTH_BOUNDS;
+        break;
+    case PVK_DYN_STENCIL_COMPARE_MASK:
+    case PVK_DYN_STENCIL_WRITE_MASK:
+    case PVK_DYN_STENCIL_REFERENCE:
+    case PVK_DYN_STENCIL_OP:
+        for (face = 0; face < 2; face++) {
+            struct pvk_stencil_face *s = &d->stencil[face];
+            if (!(c->first & (face ? VK_STENCIL_FACE_BACK_BIT : VK_STENCIL_FACE_FRONT_BIT)))
+                continue;
+            if (c->state == PVK_DYN_STENCIL_COMPARE_MASK)
+                s->compare_mask = u[0];
+            else if (c->state == PVK_DYN_STENCIL_WRITE_MASK)
+                s->write_mask = u[0];
+            else if (c->state == PVK_DYN_STENCIL_REFERENCE)
+                s->reference = u[0];
+            else {
+                s->fail = u[0];
+                s->pass = u[1];
+                s->depth_fail = u[2];
+                s->compare = u[3];
+            }
+        }
+        r->dirty |= c->state == PVK_DYN_STENCIL_REFERENCE ? PVK_RD_STENCIL_REF : PVK_RD_DS;
+        break;
+    case PVK_DYN_CULL_MODE:
+        d->cull_mode = u[0];
+        r->dirty |= PVK_RD_CULL;
+        break;
+    case PVK_DYN_FRONT_FACE:
+        d->front_face = u[0];
+        r->dirty |= PVK_RD_FRONT_FACE;
+        break;
+    case PVK_DYN_PRIMITIVE_TOPOLOGY:
+        d->topology = u[0];
+        break;
+    case PVK_DYN_DEPTH_TEST_ENABLE:
+        d->depth_test = (uint8_t)u[0];
+        r->dirty |= PVK_RD_DS;
+        break;
+    case PVK_DYN_DEPTH_WRITE_ENABLE:
+        d->depth_write = (uint8_t)u[0];
+        r->dirty |= PVK_RD_DS;
+        break;
+    case PVK_DYN_DEPTH_COMPARE_OP:
+        d->depth_compare = u[0];
+        r->dirty |= PVK_RD_DS;
+        break;
+    case PVK_DYN_DEPTH_BOUNDS_TEST_ENABLE:
+        d->depth_bounds_test = (uint8_t)u[0];
+        r->dirty |= PVK_RD_DEPTH_BOUNDS;
+        break;
+    case PVK_DYN_STENCIL_TEST_ENABLE:
+        d->stencil_test = (uint8_t)u[0];
+        r->dirty |= PVK_RD_DS;
+        break;
+    case PVK_DYN_RASTERIZER_DISCARD_ENABLE:
+        d->rasterizer_discard = (uint8_t)u[0];
+        break;
+    case PVK_DYN_DEPTH_BIAS_ENABLE:
+        d->depth_bias_enable = (uint8_t)u[0];
+        r->dirty |= PVK_RD_DEPTH_BIAS;
+        break;
+    case PVK_DYN_PRIMITIVE_RESTART_ENABLE:
+        d->primitive_restart = (uint8_t)u[0];
+        break;
+    case PVK_DYN_LINE_STIPPLE:
+        d->line_stipple[0] = u[0];
+        d->line_stipple[1] = u[1];
+        break;
+    default:
+        break;
+    }
+}
+
+static void pvk_encode_bind_graphics(struct pvk_encoder *e, struct pvk_pipeline *p)
+{
+    struct pvk_render *r = &e->render;
+    r->pipeline = p;
+    if (!p || !p->gfx)
+        return;
+    pvk_dynamic_copy(&r->dyn, &p->gfx->state, ~p->gfx->dynamic & ((1u << PVK_DYN_COUNT) - 1));
+    r->dirty = PVK_RD_ALL;
+}
+
+static void pvk_encode_bind_vertex(struct pvk_encoder *e, const struct pvk_cmd_bind_vertex *c)
+{
+    struct pvk_render *r = &e->render;
+    const struct pvk_vertex_binding *v = (const struct pvk_vertex_binding *)(c + 1);
+    uint32_t i;
+    for (i = 0; i < c->count; i++) {
+        r->vertex[c->first + i] = v[i];
+        if (v[i].has_stride)
+            r->dyn.strides[c->first + i] = v[i].stride;
+    }
+    r->dirty |= PVK_RD_VERTEX;
+}
+
+static pvk_MTLPrimitiveType pvk_primitive_type(uint32_t topology)
+{
+    switch (topology) {
+    case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
+        return PVK_MTLPrimitiveTypePoint;
+    case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
+        return PVK_MTLPrimitiveTypeLine;
+    case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
+        return PVK_MTLPrimitiveTypeLineStrip;
+    case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP:
+        return PVK_MTLPrimitiveTypeTriangleStrip;
+    default: /* lists, fans (rewritten as lists) */
+        return PVK_MTLPrimitiveTypeTriangle;
+    }
+}
+
+static bool pvk_topology_triangles(uint32_t topology)
+{
+    return topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST || topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
+           topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN ||
+           topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY ||
+           topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY;
+}
+
+/* Whether the state discards every primitive or fragment, so draws can be
+ * skipped: rasterizer discard, FRONT_AND_BACK culling of triangles (Metal
+ * cannot cull both), an empty scissor or empty depth bounds. */
+static bool pvk_render_discards(const struct pvk_render *r)
+{
+    const struct pvk_dynamic_state *d = &r->dyn;
+    return d->rasterizer_discard || r->skip_scissor || r->skip_bounds ||
+           ((d->cull_mode & VK_CULL_MODE_FRONT_AND_BACK) == VK_CULL_MODE_FRONT_AND_BACK &&
+            pvk_topology_triangles(d->topology));
+}
+
+static float pvk_clamp01(float x)
+{
+    return x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x;
+}
+
+/* Applies what the next draw needs; false when it cannot draw. */
+static bool pvk_render_flush(struct pvk_encoder *e)
+{
+    struct pvk_render *r = &e->render;
+    struct pvk_dynamic_state *d = &r->dyn;
+    struct pvk_pipeline *p = r->pipeline;
+    const struct pvk_gfx_pipeline *g;
+    uint32_t dirty = r->dirty, i, n, need;
+    id enc = r->enc;
+
+    if (!enc || !p || !p->gfx || !p->mtl_pipeline || e->result != VK_SUCCESS)
+        return false;
+    g = p->gfx;
+    if (dirty & PVK_RD_PIPELINE)
+        pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, p->mtl_pipeline);
+    if (dirty & PVK_RD_MAP)
+        pvk_render_set_map(e, r->map);
+    if (dirty & PVK_RD_AMPLIFICATION) {
+        pvk_MTLVertexAmplificationViewMapping views[32];
+        n = 0;
+        for (i = 0; r->view_mask >> i; i++)
+            if (r->view_mask & (1u << i)) {
+                views[n].viewportArrayIndexOffset = 0;
+                views[n++].renderTargetArrayIndexOffset = i;
+            }
+        if (n && n != r->amplification) {
+            pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, n, views);
+            r->amplification = n;
+        } else if (!n && r->amplification > 1) {
+            pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, 1, NULL);
+            r->amplification = 1;
+        }
+    }
+    if (dirty & PVK_RD_VIEWPORT) {
+        pvk_MTLViewport vp[PVK_MAX_VIEWPORTS];
+        n = d->viewport_count ? d->viewport_count : 1;
+        for (i = 0; i < n && i < PVK_MAX_VIEWPORTS; i++) {
+            vp[i].originX = d->viewports[i].x;
+            vp[i].originY = d->viewports[i].y;
+            vp[i].width = d->viewports[i].width;
+            vp[i].height = d->viewports[i].height;
+            vp[i].znear = d->viewports[i].minDepth;
+            vp[i].zfar = d->viewports[i].maxDepth;
+        }
+        pvk_MTL4RenderCommandEncoder_setViewports_count(enc, vp, i);
+    }
+    if (dirty & PVK_RD_SCISSOR) {
+        pvk_MTLScissorRect sc[PVK_MAX_VIEWPORTS];
+        n = d->scissor_count ? d->scissor_count : 1;
+        r->skip_scissor = false;
+        for (i = 0; i < n && i < PVK_MAX_VIEWPORTS; i++) {
+            /* Metal wants scissors within the render target. */
+            int64_t x0 = d->scissors[i].offset.x, y0 = d->scissors[i].offset.y;
+            int64_t x1 = x0 + d->scissors[i].extent.width, y1 = y0 + d->scissors[i].extent.height;
+            x0 = x0 < 0 ? 0 : x0 > r->width ? r->width : x0;
+            y0 = y0 < 0 ? 0 : y0 > r->height ? r->height : y0;
+            x1 = x1 < x0 ? x0 : x1 > r->width ? r->width : x1;
+            y1 = y1 < y0 ? y0 : y1 > r->height ? r->height : y1;
+            if (x1 == x0 || y1 == y0) { /* empty: nothing passes (one scissor: skip the draw) */
+                if (n == 1)
+                    r->skip_scissor = true;
+                x1 = x0 < r->width ? x0 + 1 : x0;
+                y1 = y0 < r->height ? y0 + 1 : y0;
+            }
+            sc[i].x = (unsigned long)x0;
+            sc[i].y = (unsigned long)y0;
+            sc[i].width = (unsigned long)(x1 - x0);
+            sc[i].height = (unsigned long)(y1 - y0);
+        }
+        pvk_MTL4RenderCommandEncoder_setScissorRects_count(enc, sc, i);
+    }
+    if (dirty & PVK_RD_DEPTH_BIAS) {
+        if (d->depth_bias_enable)
+            pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(enc, d->depth_bias[0], d->depth_bias[2],
+                                                                        d->depth_bias[1]);
+        else
+            pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(enc, 0.0f, 0.0f, 0.0f);
+    }
+    if (dirty & PVK_RD_BLEND)
+        pvk_MTL4RenderCommandEncoder_setBlendColorRed_green_blue_alpha(enc, d->blend_constants[0], d->blend_constants[1],
+                                                                       d->blend_constants[2], d->blend_constants[3]);
+    if (dirty & PVK_RD_DEPTH_BOUNDS) {
+        float lo = 0.0f, hi = 1.0f;
+        r->skip_bounds = false;
+        if (d->depth_bounds_test && r->depth) {
+            lo = pvk_clamp01(d->depth_bounds[0]);
+            hi = pvk_clamp01(d->depth_bounds[1]);
+            if (lo > hi) { /* nothing passes */
+                r->skip_bounds = true;
+                hi = lo;
+            }
+        }
+        pvk_MTL4RenderCommandEncoder_setDepthTestMinBound_maxBound(enc, lo, hi);
+    }
+    if (dirty & PVK_RD_DS) {
+        struct pvk_ds_key k;
+        id ds;
+        unsigned f;
+        memset(&k, 0, sizeof(k));
+        k.depth_compare = r->depth && d->depth_test ? pvk_compare_function((VkCompareOp)d->depth_compare)
+                                                    : PVK_MTLCompareFunctionAlways;
+        k.depth_write = r->depth && d->depth_test && d->depth_write;
+        k.stencil = r->stencil && d->stencil_test;
+        for (f = 0; k.stencil && f < 2; f++) {
+            const struct pvk_stencil_face *s = &d->stencil[f];
+            k.face[f][0] = pvk_compare_function((VkCompareOp)s->compare);
+            k.face[f][1] = s->fail;
+            k.face[f][2] = s->depth_fail;
+            k.face[f][3] = s->pass;
+            k.face[f][4] = s->compare_mask & 0xff;
+            k.face[f][5] = s->write_mask & 0xff;
+        }
+        if (!(ds = pvk_ds_state(e->device, &k))) {
+            e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+            return false;
+        }
+        if (ds != r->ds_state) {
+            pvk_MTL4RenderCommandEncoder_setDepthStencilState(enc, ds);
+            r->ds_state = ds;
+        }
+    }
+    if (dirty & PVK_RD_STENCIL_REF)
+        pvk_MTL4RenderCommandEncoder_setStencilFrontReferenceValue_backReferenceValue(enc, d->stencil[0].reference & 0xff,
+                                                                                       d->stencil[1].reference & 0xff);
+    if (dirty & PVK_RD_CULL) {
+        uint32_t m = d->cull_mode & VK_CULL_MODE_FRONT_AND_BACK;
+        pvk_MTL4RenderCommandEncoder_setCullMode(enc, m == VK_CULL_MODE_FRONT_BIT  ? PVK_MTLCullModeFront
+                                                      : m == VK_CULL_MODE_BACK_BIT ? PVK_MTLCullModeBack
+                                                                                   : PVK_MTLCullModeNone);
+    }
+    if (dirty & PVK_RD_FRONT_FACE) /* y is flipped in the vertex shader: windings pass through (section 13) */
+        pvk_MTL4RenderCommandEncoder_setFrontFacingWinding(enc, d->front_face == VK_FRONT_FACE_CLOCKWISE
+                                                                    ? PVK_MTLWindingClockwise
+                                                                    : PVK_MTLWindingCounterClockwise);
+    if (dirty & PVK_RD_DEPTH_CLIP)
+        pvk_MTL4RenderCommandEncoder_setDepthClipMode(enc, g->depth_clamp ? PVK_MTLDepthClipModeClamp
+                                                                          : PVK_MTLDepthClipModeClip);
+    if (dirty & PVK_RD_FILL)
+        pvk_MTL4RenderCommandEncoder_setTriangleFillMode(enc, g->lines ? PVK_MTLTriangleFillModeLines
+                                                                       : PVK_MTLTriangleFillModeFill);
+    if ((dirty & PVK_RD_VERTEX) && g->vertex_bindings) {
+        struct pvk_msl_vertex_buffer *t;
+        pvk_MTLGPUAddress address;
+        for (n = 0; g->vertex_bindings >> n; n++)
+            ;
+        if (!(t = pvk_upload(e, sizeof(*t) * n, 16, NULL, NULL, &address)))
+            return false;
+        for (i = 0; i < n; i++) {
+            t[i].address = r->vertex[i].address;
+            t[i].size = r->vertex[i].size;
+            t[i].stride = (g->dynamic & PVK_DYN_BIT(VERTEX_STRIDE)) ? d->strides[i] : g->strides[i];
+            t[i].reserved = 0;
+        }
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_VERTEX_TABLE_BUFFER);
+    }
+    r->dirty = 0;
+    for (n = 0; n < PVK_MAX_BOUND_SETS; n++) {
+        if ((p->set_mask & (1u << n)) && e->sets_bound[n] != e->sets[0][n]) {
+            pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, e->sets[0][n], n);
+            e->sets_bound[n] = e->sets[0][n];
+        }
+    }
+    need = p->push_size;
+    if (need && (e->push_dirty || e->push_bound < need)) {
+        pvk_MTLGPUAddress address;
+        void *data = pvk_upload(e, need, 16, NULL, NULL, &address);
+        if (!data)
+            return false;
+        memcpy(data, e->push, need);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+        e->push_bound = need;
+        e->push_dirty = false;
+    }
+    return true;
+}
+
+/* ---- Draws ---- */
+
+static void pvk_encode_draw(struct pvk_encoder *e, const struct pvk_cmd_draw *c)
+{
+    struct pvk_render *r = &e->render;
+    if (!pvk_render_flush(e) || pvk_render_discards(r))
+        return;
+    if (r->dyn.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
+        const struct pvk_fan_buffer *f;
+        if (c->vertex_count < 3)
+            return;
+        if (!(f = pvk_fan_buffer(e->device, c->vertex_count))) {
+            e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+            return;
+        }
+        pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferLength_instanceCount_baseVertex_baseInstance(
+            r->enc, PVK_MTLPrimitiveTypeTriangle, 3ul * (c->vertex_count - 2), PVK_MTLIndexTypeUInt32, f->address,
+            (unsigned long)(f->vertices - 2) * 12, c->instance_count, (long)c->first_vertex, c->first_instance);
+        return;
+    }
+    pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
+        r->enc, pvk_primitive_type(r->dyn.topology), c->first_vertex, c->vertex_count, c->instance_count,
+        c->first_instance);
+}
+
+static void pvk_encode_draw_indexed(struct pvk_encoder *e, const struct pvk_cmd_draw_indexed *c)
+{
+    struct pvk_render *r = &e->render;
+    struct pvk_draw_track t = pvk_render_track(r);
+    uint32_t conv = pvk_draw_conv(&t, &c->hdr);
+    const struct pvk_pp_result *res = conv ? pvk_pp_pop(e, conv) : NULL;
+    pvk_MTLPrimitiveType prim = pvk_primitive_type(r->dyn.topology);
+    uint32_t size = pvk_index_size(t.index_type);
+    uint64_t at = (uint64_t)c->first_index * size;
+
+    if (!pvk_render_flush(e) || pvk_render_discards(r))
+        return;
+    if (conv) {
+        if (res && res->index_count)
+            pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferLength_instanceCount_baseVertex_baseInstance(
+                r->enc, prim, res->index_count, res->index_type, res->indices, res->indices_size, c->instance_count,
+                c->vertex_offset, c->first_instance);
+        return;
+    }
+    if (!t.index_address) { /* maintenance6: no index buffer reads index 0 */
+        pvk_MTLGPUAddress address;
+        void *zeros = pvk_upload(e, (size_t)c->index_count * 4, 16, NULL, NULL, &address);
+        if (!zeros)
+            return;
+        memset(zeros, 0, (size_t)c->index_count * 4);
+        pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferLength_instanceCount_baseVertex_baseInstance(
+            r->enc, prim, c->index_count, PVK_MTLIndexTypeUInt32, address, (unsigned long)c->index_count * 4,
+            c->instance_count, c->vertex_offset, c->first_instance);
+        return;
+    }
+    if (at >= t.index_size)
+        return;
+    pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferLength_instanceCount_baseVertex_baseInstance(
+        r->enc, prim, c->index_count, t.index_type == VK_INDEX_TYPE_UINT16 ? PVK_MTLIndexTypeUInt16 : PVK_MTLIndexTypeUInt32,
+        t.index_address + at, t.index_size - at, c->instance_count, c->vertex_offset, c->first_instance);
+}
+
+static void pvk_encode_draw_indirect(struct pvk_encoder *e, const struct pvk_cmd_draw_indirect *c)
+{
+    struct pvk_render *r = &e->render;
+    struct pvk_draw_track t = pvk_render_track(r);
+    uint32_t conv = pvk_draw_conv(&t, &c->hdr);
+    const struct pvk_pp_result *res = conv ? pvk_pp_pop(e, conv) : NULL;
+    pvk_MTLPrimitiveType prim = pvk_primitive_type(r->dyn.topology);
+    uint64_t records = c->address, stride = c->stride, indices = t.index_address, indices_size = t.index_size;
+    uint32_t type = t.index_type == VK_INDEX_TYPE_UINT16 ? PVK_MTLIndexTypeUInt16 : PVK_MTLIndexTypeUInt32;
+    uint32_t n = c->draw_count, max = e->device->physical_device->properties.limits.maxDrawIndirectCount, d;
+    bool indexed = c->indexed != 0;
+
+    if (conv && !res)
+        return;
+    if (!pvk_render_flush(e) || pvk_render_discards(r))
+        return;
+    if (res && res->records) {
+        records = res->records;
+        stride = res->record_stride;
+    }
+    if (res && res->indices) {
+        indices = res->indices;
+        indices_size = res->indices_size;
+        type = res->index_type;
+    }
+    if (conv & PVK_CV_FAN)
+        indexed = true; /* non-indexed fans draw the fan pattern */
+    if (c->count_address && n > max) /* the count may not exceed maxDrawIndirectCount */
+        n = max;
+    if (indexed && !indices)
+        return;
+    for (d = 0; d < n; d++) {
+        if (indexed)
+            pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexType_indexBuffer_indexBufferLength_indirectBuffer(
+                r->enc, prim, type, indices, indices_size, records + d * stride);
+        else
+            pvk_MTL4RenderCommandEncoder_drawPrimitives_indirectBuffer(r->enc, prim, records + d * stride);
+    }
+}
+
+static void pvk_encode_clear_attachments(struct pvk_encoder *e, const struct pvk_cmd_clear_attachments *c)
+{
+    struct pvk_render *r = &e->render;
+    const struct pvk_clear_att *a = (const struct pvk_clear_att *)(c + 1);
+    const VkClearRect *rects = (const VkClearRect *)(a + c->count);
+    uint32_t values[PVK_MAX_COLOR_ATTACHMENTS][4], colors = 0, i, stencil_value = 0;
+    bool depth = false, stencil = false;
+    float depth_value = 0.0f;
+
+    if (!r->enc)
+        return;
+    memset(values, 0, sizeof(values));
+    for (i = 0; i < c->count; i++) {
+        if (a[i].aspects & VK_IMAGE_ASPECT_COLOR_BIT) {
+            uint32_t slot = a[i].attachment;
+            if (!r->dynamic) /* a subpass color attachment: its location */
+                slot = slot < PVK_MAX_COLOR_ATTACHMENTS ? r->map[slot] : PVK_NO_SLOT;
+            if (slot >= r->color_count || !r->formats[slot])
+                continue;
+            colors |= 1u << slot;
+            pvk_clear_value_bits(r->fmts[slot], &a[i].value.color, values[slot]);
+        }
+        if ((a[i].aspects & VK_IMAGE_ASPECT_DEPTH_BIT) && r->depth) {
+            depth = true;
+            depth_value = a[i].value.depthStencil.depth;
+        }
+        if ((a[i].aspects & VK_IMAGE_ASPECT_STENCIL_BIT) && r->stencil) {
+            stencil = true;
+            stencil_value = a[i].value.depthStencil.stencil;
+        }
+    }
+    if (colors || depth || stencil)
+        pvk_render_clear(e, colors, (const uint32_t(*)[4])values, depth, depth_value, stencil, stencil_value, rects,
+                         c->rect_count);
+}
+
+/* At vkDestroyDevice (pvk_device_finish), after the GPU is done. */
+static void pvk_device_finish_graphics(struct pvk_device *device)
+{
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(device);
+    unsigned i;
+    for (i = 0; i < PVK_ARRAY_SIZE(device->ds_states); i++) {
+        struct pvk_ds_state *s = device->ds_states[i], *next;
+        for (; s; s = next) {
+            next = s->next;
+            pvk_release(s->state);
+            pvk_free(alloc, s);
+        }
+        device->ds_states[i] = NULL;
+    }
+    while (device->clear_pipelines) {
+        struct pvk_clear_pipeline *c = device->clear_pipelines;
+        device->clear_pipelines = c->next;
+        pvk_release(c->pso);
+        pvk_free(alloc, c);
+    }
+    while (device->fan_buffers) {
+        struct pvk_fan_buffer *f = device->fan_buffers;
+        device->fan_buffers = f->next;
+        pvk_device_evict(device, f->buffer);
+        pvk_release(f->buffer);
+        pvk_free(alloc, f);
+    }
+    for (i = 0; i < PVK_ARRAY_SIZE(device->prepass_pipelines); i++) {
+        pvk_release(device->prepass_pipelines[i]);
+        device->prepass_pipelines[i] = NULL;
+    }
+    pvk_release(device->compiler);
+    device->compiler = NULL;
+}
+
 static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_buffer *cb, uint32_t depth)
 {
     static const uint32_t zero[3] = { 0, 0, 0 };
@@ -47001,6 +50117,10 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
             const struct pvk_cmd *c = (const struct pvk_cmd *)((const char *)b->data + at);
             id enc;
             at += c->size;
+            if (!depth) { /* render passes scan ahead from here */
+                e->cursor.block = b;
+                e->cursor.at = at;
+            }
             switch ((enum pvk_cmd_op)c->op) {
             case PVK_CMD_FILL_BUFFER:
                 pvk_encode_fill(e, (const struct pvk_cmd_fill *)c);
@@ -47018,12 +50138,16 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
             case PVK_CMD_BARRIER:
                 pvk_encode_barrier(e, (const struct pvk_cmd_barrier *)c);
                 break;
-            case PVK_CMD_BIND_PIPELINE:
-                if (e->pipeline != ((const struct pvk_cmd_bind_pipeline *)c)->pipeline) {
-                    e->pipeline = ((const struct pvk_cmd_bind_pipeline *)c)->pipeline;
+            case PVK_CMD_BIND_PIPELINE: {
+                struct pvk_pipeline *p = ((const struct pvk_cmd_bind_pipeline *)c)->pipeline;
+                if (p && p->bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS) {
+                    pvk_encode_bind_graphics(e, p);
+                } else if (e->pipeline != p) {
+                    e->pipeline = p;
                     e->pipeline_dirty = true;
                 }
                 break;
+            }
             case PVK_CMD_PUSH_CONSTANTS: {
                 const struct pvk_cmd_push *pc = (const struct pvk_cmd_push *)c;
                 memcpy(e->push + pc->offset, pc + 1, pc->size);
@@ -47074,6 +50198,43 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
             case PVK_CMD_CLEAR_IMAGE:
                 pvk_encode_clear(e, (const struct pvk_cmd_clear *)c);
                 break;
+            case PVK_CMD_BEGIN_PASS:
+                pvk_encode_begin_pass(e, (const struct pvk_cmd_begin_pass *)c);
+                break;
+            case PVK_CMD_SUBPASS:
+                pvk_encode_subpass(e, (const struct pvk_cmd_subpass *)c);
+                break;
+            case PVK_CMD_END_PASS:
+                if (((const struct pvk_cmd_end_pass *)c)->flags & VK_RENDERING_SUSPENDING_BIT)
+                    e->render.suspended = true; /* resumed later in this batch */
+                else
+                    pvk_render_end(e);
+                break;
+            case PVK_CMD_SET_DYNAMIC:
+                pvk_encode_set_dynamic(e, (const struct pvk_cmd_dynamic *)c);
+                break;
+            case PVK_CMD_BIND_VERTEX:
+                pvk_encode_bind_vertex(e, (const struct pvk_cmd_bind_vertex *)c);
+                break;
+            case PVK_CMD_BIND_INDEX: {
+                const struct pvk_cmd_bind_index *bi = (const struct pvk_cmd_bind_index *)c;
+                e->render.track.index_address = bi->address;
+                e->render.track.index_size = bi->size;
+                e->render.track.index_type = bi->type;
+                break;
+            }
+            case PVK_CMD_DRAW:
+                pvk_encode_draw(e, (const struct pvk_cmd_draw *)c);
+                break;
+            case PVK_CMD_DRAW_INDEXED:
+                pvk_encode_draw_indexed(e, (const struct pvk_cmd_draw_indexed *)c);
+                break;
+            case PVK_CMD_DRAW_INDIRECT:
+                pvk_encode_draw_indirect(e, (const struct pvk_cmd_draw_indirect *)c);
+                break;
+            case PVK_CMD_CLEAR_ATTACHMENTS:
+                pvk_encode_clear_attachments(e, (const struct pvk_cmd_clear_attachments *)c);
+                break;
             }
         }
     }
@@ -47091,11 +50252,17 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
     e.serial = serial;
     e.cb = s->cb;
     e.waits = submit->waitSemaphoreInfoCount > 0;
+    e.cursor.cbs = submit->pCommandBufferInfos;
+    e.cursor.count = submit->commandBufferInfoCount;
     pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(s->cb, s->allocator);
-    for (i = 0; i < submit->commandBufferInfoCount && e.result == VK_SUCCESS; i++)
+    for (i = 0; i < submit->commandBufferInfoCount && e.result == VK_SUCCESS; i++) {
+        e.cursor.index = i;
         pvk_encode_commands(&e, (const struct pvk_command_buffer *)submit->pCommandBufferInfos[i].commandBuffer, 0);
+    }
+    pvk_render_end(&e); /* only an instance left suspended (invalid) can still be open */
     pvk_encoder_end(&e);
     pvk_MTL4CommandBuffer_endCommandBuffer(s->cb);
+    pvk_free(pvk_device_alloc(e.device), e.pp);
     return e.result;
 }
 
@@ -47601,6 +50768,7 @@ static void pvk_device_finish(struct pvk_device *device)
     pvk_release(device->fill_pipeline);
     device->fill_pipeline = NULL;
     pvk_device_finish_images(device);
+    pvk_device_finish_graphics(device);
 }
 
 /* ---- Fences ---- */
@@ -47732,14 +50900,37 @@ VKAPI_ATTR VkResult VKAPI_CALL vkWaitSemaphores(VkDevice device, const VkSemapho
 /* ==========================================================================
  * 17. Pipelines
  *
- * Shader modules, pipeline layouts and pipelines.
+ * Shader modules, pipeline layouts, pipeline caches, render passes and
+ * framebuffers, compute and graphics pipelines.
  *
  * A compute pipeline is translated (section 13) and compiled when created:
  * MSL 3.2, MTLMathModeSafe, maxTotalThreadsPerThreadgroup = the workgroup
  * size (so the compiler fits it). Push constants are bound by GPU address at
  * the translator's push-constant index; descriptor set N is a table
  * (section 11 format) bound at index N, laid out as the pipeline layout's
- * set layout N says (section 12). The pipeline cache is not used yet.
+ * set layout N says (section 12).
+ *
+ * A graphics pipeline translates its vertex and fragment shaders together
+ * (pvk_spirv_to_msl_graphics), compiles each into a library, and makes an
+ * MTLRenderPipelineState with an MTL4RenderPipelineDescriptor through the
+ * device's MTL4Compiler: color formats, blending and write masks by logical
+ * color index (section 15's "Graphics": the pipeline inherits the encoder's
+ * color attachment map), sample count, alpha to coverage and to one,
+ * vertex amplification for multiview. Everything else Vulkan calls pipeline
+ * state is kept as struct pvk_gfx_pipeline and applied by the encoder
+ * (section 16), so the same Metal pipeline serves any value of it.
+ *
+ * PIPELINE CACHES
+ *   A cache maps a 128-bit hash of everything a pipeline is made from (the
+ *   SPIR-V, entry points, specialization, the translator options derived
+ *   from the layout and state, and the render pipeline descriptor's inputs)
+ *   to the translated MSL and the reflection the pipeline keeps, plus, once
+ *   made in this process, the Metal pipeline state itself. A hit with a
+ *   pipeline state costs a lookup; a hit from loaded data skips the
+ *   translation (Metal's own shader cache then usually serves the compile).
+ *   vkGetPipelineCacheData writes the standard header (pipelineCacheUUID
+ *   names this PlasmaVK version and GPU) and the entries; data with another
+ *   header, or malformed, is ignored.
  * ========================================================================== */
 
 struct pvk_shader_module {
@@ -47916,36 +51107,442 @@ static VkPipelineCreateFlags2 pvk_pipeline_flags(VkPipelineCreateFlags flags, co
     return flags;
 }
 
-static VkResult pvk_compute_pipeline_create(struct pvk_device *device, const VkComputePipelineCreateInfo *info,
-                                            const VkAllocationCallbacks *alloc, VkPipeline *pPipeline)
+/* The SPIR-V of a stage: its module's, or (maintenance5) a chained
+ * VkShaderModuleCreateInfo's. */
+static void pvk_stage_code(const VkPipelineShaderStageCreateInfo *stage, const uint32_t **code, size_t *words)
+{
+    const struct pvk_shader_module *module = (const struct pvk_shader_module *)stage->module;
+    const VkBaseInStructure *ext;
+    *code = module ? module->code : NULL;
+    *words = module ? module->word_count : 0;
+    for (ext = stage->pNext; ext && !*code; ext = ext->pNext) {
+        if (ext->sType == VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO) {
+            *code = ((const VkShaderModuleCreateInfo *)ext)->pCode;
+            *words = ((const VkShaderModuleCreateInfo *)ext)->codeSize / 4;
+        }
+    }
+}
+
+static void pvk_creation_feedback(const void *pNext, uint64_t start, bool hit)
+{
+    const VkBaseInStructure *ext;
+    for (ext = pNext; ext; ext = ext->pNext) {
+        if (ext->sType == VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO) {
+            const VkPipelineCreationFeedbackCreateInfo *fb = (const VkPipelineCreationFeedbackCreateInfo *)ext;
+            uint32_t i;
+            fb->pPipelineCreationFeedback->flags =
+                VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT |
+                (hit ? VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT : 0);
+            fb->pPipelineCreationFeedback->duration = pvk_now_ns() - start;
+            for (i = 0; fb->pPipelineStageCreationFeedbacks && i < fb->pipelineStageCreationFeedbackCount; i++)
+                fb->pPipelineStageCreationFeedbacks[i] = *fb->pPipelineCreationFeedback;
+        }
+    }
+}
+
+/* ---- Pipeline caches ---- */
+
+/* A 128-bit key: two FNV-1a hashes with different bases. */
+struct pvk_key {
+    uint64_t a, b;
+};
+
+static void pvk_key_init(struct pvk_key *k, char kind)
+{
+    k->a = pvk_hash64(0xcbf29ce484222325ull, &kind, 1);
+    k->b = pvk_hash64(0x84222325cbf29ce4ull, &kind, 1);
+}
+
+static void pvk_key_add(struct pvk_key *k, const void *data, size_t size)
+{
+    uint64_t n = size;
+    k->a = pvk_hash64(pvk_hash64(k->a, &n, sizeof(n)), data, size);
+    k->b = pvk_hash64(pvk_hash64(k->b ^ 0x9e3779b97f4a7c15ull, data, size), &n, sizeof(n));
+}
+
+static void pvk_key_add_string(struct pvk_key *k, const char *s)
+{
+    pvk_key_add(k, s ? s : "", s ? strlen(s) : 0);
+}
+
+static void pvk_key_add_spec(struct pvk_key *k, const VkSpecializationInfo *spec)
+{
+    uint32_t i;
+    if (!spec) {
+        pvk_key_add(k, NULL, 0);
+        return;
+    }
+    for (i = 0; i < spec->mapEntryCount; i++)
+        pvk_key_add(k, &spec->pMapEntries[i], sizeof(spec->pMapEntries[i]));
+    pvk_key_add(k, spec->pData, spec->pData ? spec->dataSize : 0);
+}
+
+static void pvk_key_add_sets(struct pvk_key *k, const struct pvk_msl_set_layout *sets, uint32_t count)
+{
+    uint32_t i, j;
+    pvk_key_add(k, &count, sizeof(count));
+    for (i = 0; sets && i < count; i++)
+        for (j = 0; j < sets[i].binding_count; j++) {
+            const struct pvk_msl_binding *b = &sets[i].bindings[j];
+            uint32_t v[7];
+            v[0] = i;
+            v[1] = b->binding;
+            v[2] = (uint32_t)b->type;
+            v[3] = b->count;
+            v[4] = b->offset;
+            v[5] = b->stride;
+            v[6] = b->variable_count;
+            pvk_key_add(k, v, sizeof(v));
+        }
+}
+
+/* What a pipeline keeps from its translation. */
+struct pvk_cache_info {
+    uint32_t push_size, set_mask, vertex_bindings, dispatch_base;
+    uint32_t dispatch_base_offset, workgroup[3];
+};
+
+struct pvk_cache_entry {
+    struct pvk_cache_entry *next;
+    struct pvk_key key;
+    struct pvk_cache_info info;
+    char entry[2][64];
+    char *msl[2]; /* NUL-terminated, [1] NULL: one stage */
+    id pso;       /* made in this process (retained), else NULL */
+};
+
+struct pvk_pipeline_cache {
+    struct pvk_device *device;
+    VkAllocationCallbacks alloc;
+    bool has_alloc;
+    pthread_mutex_t lock;
+    struct pvk_cache_entry *entries;
+    uint32_t count;
+};
+
+static const VkAllocationCallbacks *pvk_cache_alloc(const struct pvk_pipeline_cache *cache)
+{
+    return cache->has_alloc ? &cache->alloc : NULL;
+}
+
+/* An entry (locked by the caller). */
+static struct pvk_cache_entry *pvk_cache_find_locked(struct pvk_pipeline_cache *cache, const struct pvk_key *key)
+{
+    struct pvk_cache_entry *e;
+    for (e = cache->entries; e; e = e->next)
+        if (e->key.a == key->a && e->key.b == key->b)
+            return e;
+    return NULL;
+}
+
+/* Copies what an entry holds. Returns 0: miss, 1: hit (MSL), 2: hit with
+ * a pipeline state (*pso retained). msl[] is the caller's to free. */
+static int pvk_cache_lookup(struct pvk_pipeline_cache *cache, const struct pvk_key *key, struct pvk_cache_info *info,
+                            char entry[2][64], char *msl[2], id *pso, const VkAllocationCallbacks *alloc)
+{
+    struct pvk_cache_entry *e;
+    int hit = 0;
+    unsigned i;
+    if (!cache)
+        return 0;
+    pthread_mutex_lock(&cache->lock);
+    if ((e = pvk_cache_find_locked(cache, key))) {
+        *info = e->info;
+        memcpy(entry, e->entry, sizeof(e->entry));
+        hit = 1;
+        if (e->pso) {
+            *pso = pvk_retain(e->pso);
+            hit = 2;
+        }
+        for (i = 0; i < 2 && hit == 1; i++) {
+            msl[i] = NULL;
+            if (e->msl[i]) {
+                size_t n = strlen(e->msl[i]) + 1;
+                if ((msl[i] = pvk_alloc(alloc, n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND)))
+                    memcpy(msl[i], e->msl[i], n);
+                else
+                    hit = 0;
+            }
+        }
+        if (!hit)
+            for (i = 0; i < 2; i++)
+                pvk_free(alloc, msl[i]);
+    }
+    pthread_mutex_unlock(&cache->lock);
+    return hit;
+}
+
+static char *pvk_cache_strdup(const struct pvk_pipeline_cache *cache, const char *s, size_t n)
+{
+    char *p;
+    if (!s)
+        return NULL;
+    p = pvk_alloc(pvk_cache_alloc(cache), n + 1, VK_SYSTEM_ALLOCATION_SCOPE_CACHE);
+    if (p) {
+        memcpy(p, s, n);
+        p[n] = 0;
+    }
+    return p;
+}
+
+static void pvk_cache_entry_free(const struct pvk_pipeline_cache *cache, struct pvk_cache_entry *e)
+{
+    pvk_free(pvk_cache_alloc(cache), e->msl[0]);
+    pvk_free(pvk_cache_alloc(cache), e->msl[1]);
+    pvk_release(e->pso);
+    pvk_free(pvk_cache_alloc(cache), e);
+}
+
+/* Adds an entry, or the pipeline state to an entry without one. Out of
+ * memory: nothing is added (a cache may forget). */
+static void pvk_cache_insert(struct pvk_pipeline_cache *cache, const struct pvk_key *key, const struct pvk_cache_info *info,
+                             const char *entry0, const char *entry1, const char *msl0, const char *msl1, id pso)
+{
+    struct pvk_cache_entry *e;
+    if (!cache)
+        return;
+    pthread_mutex_lock(&cache->lock);
+    if ((e = pvk_cache_find_locked(cache, key))) {
+        if (!e->pso && pso)
+            e->pso = pvk_retain(pso);
+    } else if ((e = pvk_alloc(pvk_cache_alloc(cache), sizeof(*e), VK_SYSTEM_ALLOCATION_SCOPE_CACHE))) {
+        e->key = *key;
+        e->info = *info;
+        snprintf(e->entry[0], sizeof(e->entry[0]), "%s", entry0 ? entry0 : "");
+        snprintf(e->entry[1], sizeof(e->entry[1]), "%s", entry1 ? entry1 : "");
+        e->msl[0] = pvk_cache_strdup(cache, msl0, msl0 ? strlen(msl0) : 0);
+        e->msl[1] = pvk_cache_strdup(cache, msl1, msl1 ? strlen(msl1) : 0);
+        if ((msl0 && !e->msl[0]) || (msl1 && !e->msl[1])) {
+            pvk_cache_entry_free(cache, e);
+        } else {
+            e->pso = pso ? pvk_retain(pso) : NULL;
+            e->next = cache->entries;
+            cache->entries = e;
+            cache->count++;
+        }
+    }
+    pthread_mutex_unlock(&cache->lock);
+}
+
+/* Serialized entry: key (16 B), info, entry points (2 x 64 B), MSL sizes
+ * (2 x uint32, 0: none) and the MSL bytes (without NULs), 4-byte padded. */
+#define PVK_CACHE_ENTRY_FIXED (16u + sizeof(struct pvk_cache_info) + 128u + 8u)
+
+static size_t pvk_cache_entry_size(const struct pvk_cache_entry *e)
+{
+    size_t a = e->msl[0] ? strlen(e->msl[0]) : 0, b = e->msl[1] ? strlen(e->msl[1]) : 0;
+    return PVK_CACHE_ENTRY_FIXED + ((a + 3) & ~(size_t)3) + ((b + 3) & ~(size_t)3);
+}
+
+static void pvk_cache_header(const struct pvk_device *device, VkPipelineCacheHeaderVersionOne *h)
+{
+    const VkPhysicalDeviceProperties *p = &device->physical_device->properties;
+    memset(h, 0, sizeof(*h));
+    h->headerSize = sizeof(*h);
+    h->headerVersion = VK_PIPELINE_CACHE_HEADER_VERSION_ONE;
+    h->vendorID = p->vendorID;
+    h->deviceID = p->deviceID;
+    memcpy(h->pipelineCacheUUID, p->pipelineCacheUUID, VK_UUID_SIZE);
+}
+
+/* Loads entries from vkCreatePipelineCache's initial data; data of another
+ * device or version, or malformed, adds nothing. */
+static void pvk_cache_load(struct pvk_pipeline_cache *cache, const unsigned char *data, size_t size)
+{
+    VkPipelineCacheHeaderVersionOne want, have;
+    size_t at = sizeof(have) + 4;
+    uint32_t count, i;
+    pvk_cache_header(cache->device, &want);
+    if (!data || size < at)
+        return;
+    memcpy(&have, data, sizeof(have));
+    if (memcmp(&have, &want, sizeof(have)) != 0)
+        return;
+    memcpy(&count, data + sizeof(have), 4);
+    for (i = 0; i < count && size - at >= PVK_CACHE_ENTRY_FIXED; i++) {
+        struct pvk_key key;
+        struct pvk_cache_info info;
+        char entry[2][64];
+        uint32_t len[2];
+        const char *msl[2];
+        memcpy(&key, data + at, 16);
+        memcpy(&info, data + at + 16, sizeof(info));
+        memcpy(entry, data + at + 16 + sizeof(info), 128);
+        memcpy(len, data + at + 16 + sizeof(info) + 128, 8);
+        at += PVK_CACHE_ENTRY_FIXED;
+        if (len[0] > size - at || ((len[0] + 3) & ~3u) > size - at)
+            return;
+        msl[0] = (const char *)data + at;
+        at += (len[0] + 3) & ~3u;
+        if (len[1] > size - at || ((len[1] + 3) & ~3u) > size - at)
+            return;
+        msl[1] = (const char *)data + at;
+        at += (len[1] + 3) & ~3u;
+        entry[0][63] = entry[1][63] = 0;
+        {
+            char *a = pvk_cache_strdup(cache, len[0] ? msl[0] : NULL, len[0]);
+            char *b = pvk_cache_strdup(cache, len[1] ? msl[1] : NULL, len[1]);
+            if ((len[0] && !a) || (len[1] && !b)) {
+                pvk_free(pvk_cache_alloc(cache), a);
+                pvk_free(pvk_cache_alloc(cache), b);
+                return;
+            }
+            pvk_cache_insert(cache, &key, &info, entry[0], entry[1], a, b, NULL);
+            pvk_free(pvk_cache_alloc(cache), a);
+            pvk_free(pvk_cache_alloc(cache), b);
+        }
+    }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineCache(VkDevice _device, const VkPipelineCacheCreateInfo *pCreateInfo,
+                                                     const VkAllocationCallbacks *pAllocator,
+                                                     VkPipelineCache *pPipelineCache)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    struct pvk_pipeline_cache *cache = pvk_alloc(alloc, sizeof(*cache), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!cache)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    if (pthread_mutex_init(&cache->lock, NULL) != 0) {
+        pvk_free(alloc, cache);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    cache->device = device;
+    if (alloc) {
+        cache->alloc = *alloc;
+        cache->has_alloc = true;
+    }
+    pvk_cache_load(cache, pCreateInfo->pInitialData, pCreateInfo->initialDataSize);
+    *pPipelineCache = (VkPipelineCache)cache;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineCache(VkDevice device, VkPipelineCache pipelineCache,
+                                                  const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_pipeline_cache *cache = (struct pvk_pipeline_cache *)pipelineCache;
+    void *pool;
+    (void)device;
+    (void)pAllocator; /* must match creation; the stored copy is authoritative */
+    if (!cache)
+        return;
+    pool = objc_autoreleasePoolPush();
+    while (cache->entries) {
+        struct pvk_cache_entry *e = cache->entries;
+        cache->entries = e->next;
+        pvk_cache_entry_free(cache, e);
+    }
+    objc_autoreleasePoolPop(pool);
+    pthread_mutex_destroy(&cache->lock);
+    pvk_free(pvk_cache_alloc(cache), cache);
+}
+
+/* Pipeline Cache > Retrieving Pipeline Cache Data: as many whole entries as
+ * fit, VK_INCOMPLETE if not all; nothing (size 0) if the header does not fit. */
+VKAPI_ATTR VkResult VKAPI_CALL vkGetPipelineCacheData(VkDevice device, VkPipelineCache pipelineCache, size_t *pDataSize,
+                                                      void *pData)
+{
+    struct pvk_pipeline_cache *cache = (struct pvk_pipeline_cache *)pipelineCache;
+    VkPipelineCacheHeaderVersionOne header;
+    struct pvk_cache_entry *e;
+    size_t total = sizeof(header) + 4, at;
+    uint32_t count = 0;
+    VkResult result = VK_SUCCESS;
+    (void)device;
+    pthread_mutex_lock(&cache->lock);
+    for (e = cache->entries; e; e = e->next)
+        total += pvk_cache_entry_size(e);
+    if (!pData) {
+        *pDataSize = total;
+        pthread_mutex_unlock(&cache->lock);
+        return VK_SUCCESS;
+    }
+    if (*pDataSize < sizeof(header) + 4) {
+        *pDataSize = 0;
+        pthread_mutex_unlock(&cache->lock);
+        return VK_INCOMPLETE;
+    }
+    pvk_cache_header(cache->device, &header);
+    memcpy(pData, &header, sizeof(header));
+    at = sizeof(header) + 4;
+    for (e = cache->entries; e; e = e->next) {
+        unsigned char *p = (unsigned char *)pData + at;
+        size_t n = pvk_cache_entry_size(e);
+        uint32_t len[2], s;
+        if (n > *pDataSize - at) {
+            result = VK_INCOMPLETE;
+            break;
+        }
+        memset(p, 0, n);
+        len[0] = e->msl[0] ? (uint32_t)strlen(e->msl[0]) : 0;
+        len[1] = e->msl[1] ? (uint32_t)strlen(e->msl[1]) : 0;
+        memcpy(p, &e->key, 16);
+        memcpy(p + 16, &e->info, sizeof(e->info));
+        memcpy(p + 16 + sizeof(e->info), e->entry, 128);
+        memcpy(p + 16 + sizeof(e->info) + 128, len, 8);
+        p += PVK_CACHE_ENTRY_FIXED;
+        for (s = 0; s < 2; s++) {
+            if (len[s])
+                memcpy(p, e->msl[s], len[s]);
+            p += (len[s] + 3) & ~3u;
+        }
+        at += n;
+        count++;
+    }
+    memcpy((unsigned char *)pData + sizeof(header), &count, 4);
+    *pDataSize = at;
+    pthread_mutex_unlock(&cache->lock);
+    return result;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkMergePipelineCaches(VkDevice device, VkPipelineCache dstCache, uint32_t srcCacheCount,
+                                                     const VkPipelineCache *pSrcCaches)
+{
+    struct pvk_pipeline_cache *dst = (struct pvk_pipeline_cache *)dstCache;
+    uint32_t i;
+    (void)device;
+    for (i = 0; i < srcCacheCount; i++) {
+        struct pvk_pipeline_cache *src = (struct pvk_pipeline_cache *)pSrcCaches[i];
+        struct pvk_cache_entry *e;
+        if (src == dst)
+            continue;
+        pthread_mutex_lock(&src->lock);
+        for (e = src->entries; e; e = e->next)
+            pvk_cache_insert(dst, &e->key, &e->info, e->entry[0], e->entry[1], e->msl[0], e->msl[1], e->pso);
+        pthread_mutex_unlock(&src->lock);
+    }
+    return VK_SUCCESS;
+}
+
+/* ---- Compute pipelines ---- */
+
+static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pvk_pipeline_cache *cache,
+                                            const VkComputePipelineCreateInfo *info, const VkAllocationCallbacks *alloc,
+                                            VkPipeline *pPipeline)
 {
     const VkPipelineShaderStageCreateInfo *stage = &info->stage;
     const struct pvk_pipeline_layout *layout = (const struct pvk_pipeline_layout *)info->layout;
     VkPipelineCreateFlags2 flags = pvk_pipeline_flags(info->flags, info->pNext);
-    const struct pvk_shader_module *module = (const struct pvk_shader_module *)stage->module;
-    const uint32_t *code = module ? module->code : NULL;
-    size_t words = module ? module->word_count : 0;
+    const uint32_t *code;
+    size_t words;
     struct pvk_msl_set_layout sets[PVK_MAX_BOUND_SETS];
     struct pvk_msl_binding *bindings = NULL;
     struct pvk_msl_options options;
     struct pvk_msl_result res;
+    struct pvk_cache_info ci;
     struct pvk_pipeline *pipeline;
-    const VkBaseInStructure *ext;
-    char error[256];
+    struct pvk_key key;
+    char error[256], entry[2][64], *msl[2] = { NULL, NULL };
+    const char *source, *name;
+    id pso = NULL;
+    int hit;
     VkResult result;
     uint64_t start = pvk_now_ns();
 
     *pPipeline = VK_NULL_HANDLE;
-    for (ext = stage->pNext; ext && !code; ext = ext->pNext) {
-        if (ext->sType == VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO) { /* maintenance5: no module */
-            code = ((const VkShaderModuleCreateInfo *)ext)->pCode;
-            words = ((const VkShaderModuleCreateInfo *)ext)->codeSize / 4;
-        }
-    }
-    if (flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)
-        return VK_PIPELINE_COMPILE_REQUIRED; /* no pipeline cache yet: always compiles */
-
+    pvk_stage_code(stage, &code, &words);
     memset(&options, 0, sizeof(options));
+    memset(&res, 0, sizeof(res));
     options.specialization = stage->pSpecializationInfo;
     options.image_1d_as_2d = true; /* 1D image views are 2D textures of height 1 (section 11) */
     if (flags & VK_PIPELINE_CREATE_2_DISPATCH_BASE_BIT) {
@@ -47958,55 +51555,74 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, const VkC
         options.set_layouts = sets;
         options.set_layout_count = layout->set_count;
     }
-    result = pvk_spirv_to_msl(code, words, stage->pName, &options, &res);
-    pvk_free(alloc, bindings);
-    if (result != VK_SUCCESS) {
-        pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: cannot translate the shader: %s", res.error);
-        pvk_msl_result_free(&res);
-        return result == VK_ERROR_OUT_OF_HOST_MEMORY ? result : VK_ERROR_UNKNOWN;
+    pvk_key_init(&key, 'C');
+    pvk_key_add(&key, code, words * 4);
+    pvk_key_add_string(&key, stage->pName);
+    pvk_key_add_spec(&key, stage->pSpecializationInfo);
+    pvk_key_add_sets(&key, options.set_layouts, options.set_layout_count);
+    pvk_key_add(&key, &options.dispatch_base, sizeof(options.dispatch_base));
+    pvk_key_add(&key, &options.dispatch_base_offset, sizeof(options.dispatch_base_offset));
+    hit = pvk_cache_lookup(cache, &key, &ci, entry, msl, &pso, alloc);
+    if (!hit && (flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)) {
+        pvk_free(alloc, bindings);
+        return VK_PIPELINE_COMPILE_REQUIRED;
     }
-    if ((res.has_push_constants && res.push_constant_offset + res.push_constant_size > PVK_MAX_PUSH_CONSTANTS_SIZE) ||
-        (res.dispatch_base && res.dispatch_base_offset > PVK_MAX_PUSH_CONSTANTS_SIZE)) {
-        pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: push constants beyond maxPushConstantsSize");
+    if (!hit) {
+        result = pvk_spirv_to_msl(code, words, stage->pName, &options, &res);
+        if (result != VK_SUCCESS) {
+            pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: cannot translate the shader: %s", res.error);
+            pvk_msl_result_free(&res);
+            pvk_free(alloc, bindings);
+            return result == VK_ERROR_OUT_OF_HOST_MEMORY ? result : VK_ERROR_UNKNOWN;
+        }
+        if ((res.has_push_constants && res.push_constant_offset + res.push_constant_size > PVK_MAX_PUSH_CONSTANTS_SIZE) ||
+            (res.dispatch_base && res.dispatch_base_offset > PVK_MAX_PUSH_CONSTANTS_SIZE)) {
+            pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: push constants beyond maxPushConstantsSize");
+            pvk_msl_result_free(&res);
+            pvk_free(alloc, bindings);
+            return VK_ERROR_UNKNOWN;
+        }
+        memset(&ci, 0, sizeof(ci));
+        if (res.has_push_constants)
+            ci.push_size = (res.push_constant_offset + res.push_constant_size + 15) & ~15u;
+        ci.set_mask = res.set_mask;
+        ci.dispatch_base = res.dispatch_base;
+        ci.dispatch_base_offset = res.dispatch_base_offset;
+        memcpy(ci.workgroup, res.workgroup_size, sizeof(ci.workgroup));
+    }
+    pvk_free(alloc, bindings);
+    source = hit ? msl[0] : res.msl;
+    name = hit ? entry[0] : res.entry_point;
+    if (!pso)
+        pso = pvk_compile_compute(device, source, name,
+                                  (unsigned long)ci.workgroup[0] * ci.workgroup[1] * ci.workgroup[2], error,
+                                  sizeof(error));
+    if (!pso) {
+        pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: %s", error);
+        pvk_log(PVK_LOG_DEBUG, "MSL:\n%s", source);
+        pvk_free(alloc, msl[0]);
         pvk_msl_result_free(&res);
         return VK_ERROR_UNKNOWN;
     }
+    pvk_cache_insert(cache, &key, &ci, name, NULL, source, NULL, pso);
+    pvk_free(alloc, msl[0]);
+    pvk_msl_result_free(&res);
+
     pipeline = pvk_alloc(alloc, sizeof(*pipeline), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (!pipeline) {
-        pvk_msl_result_free(&res);
+        pvk_release(pso);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
     pipeline->bind_point = VK_PIPELINE_BIND_POINT_COMPUTE;
-    pipeline->threads.width = res.workgroup_size[0];
-    pipeline->threads.height = res.workgroup_size[1];
-    pipeline->threads.depth = res.workgroup_size[2];
-    if (res.has_push_constants)
-        pipeline->push_size = (res.push_constant_offset + res.push_constant_size + 15) & ~15u;
-    pipeline->dispatch_base = res.dispatch_base;
-    pipeline->dispatch_base_offset = res.dispatch_base_offset;
-    pipeline->set_mask = res.set_mask;
-    pipeline->mtl_pipeline = pvk_compile_compute(device, res.msl, res.entry_point,
-                                                 (unsigned long)res.workgroup_size[0] * res.workgroup_size[1] *
-                                                     res.workgroup_size[2],
-                                                 error, sizeof(error));
-    if (!pipeline->mtl_pipeline) {
-        pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: %s", error);
-        pvk_log(PVK_LOG_DEBUG, "MSL:\n%s", res.msl);
-        pvk_msl_result_free(&res);
-        pvk_free(alloc, pipeline);
-        return VK_ERROR_UNKNOWN;
-    }
-    pvk_msl_result_free(&res);
-
-    for (ext = info->pNext; ext; ext = ext->pNext) {
-        if (ext->sType == VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO) {
-            const VkPipelineCreationFeedbackCreateInfo *fb = (const VkPipelineCreationFeedbackCreateInfo *)ext;
-            fb->pPipelineCreationFeedback->flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT;
-            fb->pPipelineCreationFeedback->duration = pvk_now_ns() - start;
-            if (fb->pipelineStageCreationFeedbackCount && fb->pPipelineStageCreationFeedbacks)
-                *fb->pPipelineStageCreationFeedbacks = *fb->pPipelineCreationFeedback;
-        }
-    }
+    pipeline->mtl_pipeline = pso;
+    pipeline->threads.width = ci.workgroup[0];
+    pipeline->threads.height = ci.workgroup[1];
+    pipeline->threads.depth = ci.workgroup[2];
+    pipeline->push_size = ci.push_size;
+    pipeline->dispatch_base = ci.dispatch_base != 0;
+    pipeline->dispatch_base_offset = ci.dispatch_base_offset;
+    pipeline->set_mask = ci.set_mask;
+    pvk_creation_feedback(info->pNext, start, hit != 0);
     *pPipeline = (VkPipeline)pipeline;
     return VK_SUCCESS;
 }
@@ -48020,9 +51636,986 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateComputePipelines(VkDevice device, VkPipel
     const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
     VkResult result = VK_SUCCESS;
     uint32_t i;
-    (void)pipelineCache;
     for (i = 0; i < createInfoCount; i++) {
-        VkResult r = pvk_compute_pipeline_create((struct pvk_device *)device, &pCreateInfos[i], alloc, &pPipelines[i]);
+        VkResult r = pvk_compute_pipeline_create((struct pvk_device *)device, (struct pvk_pipeline_cache *)pipelineCache,
+                                                 &pCreateInfos[i], alloc, &pPipelines[i]);
+        if (r == VK_SUCCESS)
+            continue;
+        if (result == VK_SUCCESS)
+            result = r;
+        if (pvk_pipeline_flags(pCreateInfos[i].flags, pCreateInfos[i].pNext) &
+            VK_PIPELINE_CREATE_2_EARLY_RETURN_ON_FAILURE_BIT) {
+            for (i++; i < createInfoCount; i++)
+                pPipelines[i] = VK_NULL_HANDLE;
+            break;
+        }
+    }
+    return result;
+}
+
+/* ---- Render passes ----
+ *
+ * Subpasses are grouped into Metal render passes (struct pvk_rp_pass,
+ * section 15's RENDER PASSES): a subpass joins the previous one's group
+ * unless the group would need more than 8 color attachments, two
+ * depth/stencil attachments, two sample counts or view masks, or the
+ * subpass uses an attachment the group resolves into, writes one it
+ * resolves, or depends on it without VK_DEPENDENCY_BY_REGION_BIT for
+ * shader reads or writes (it may sample what the group renders, which a
+ * Metal pass cannot). */
+
+static void pvk_rp_use(struct pvk_render_pass *rp, uint32_t a, uint32_t subpass)
+{
+    if (a >= rp->attachment_count)
+        return;
+    if (rp->attachments[a].first_use == UINT32_MAX)
+        rp->attachments[a].first_use = subpass;
+    rp->attachments[a].last_use = subpass;
+}
+
+static bool pvk_rp_color(const struct pvk_render_pass *rp, uint32_t a)
+{
+    return a < rp->attachment_count && rp->attachments[a].fmt && pvk_format_is_color(rp->attachments[a].fmt);
+}
+
+/* The slot of attachment a in a Metal pass, or color_count if absent. */
+static uint32_t pvk_rp_slot(const struct pvk_rp_pass *mp, uint32_t a)
+{
+    uint32_t s;
+    for (s = 0; s < mp->color_count && mp->colors[s] != a; s++)
+        ;
+    return s;
+}
+
+static bool pvk_rp_resolves_into(const struct pvk_rp_pass *mp, uint32_t a)
+{
+    uint32_t s;
+    if (a == VK_ATTACHMENT_UNUSED)
+        return false;
+    for (s = 0; s < mp->color_count; s++)
+        if (mp->resolves[s] == a)
+            return true;
+    return mp->depth_resolve == a;
+}
+
+static bool pvk_rp_can_merge(const struct pvk_render_pass *rp, const struct pvk_rp_pass *mp, uint32_t k,
+                             const VkRenderPassCreateInfo2 *info)
+{
+    const struct pvk_subpass *sp = &rp->subpasses[k];
+    const VkAccessFlags2 shader = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT |
+                                  VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                  VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    uint32_t slots = mp->color_count, i, s;
+
+    if (sp->view_mask != mp->view_mask)
+        return false;
+    if (sp->depth != VK_ATTACHMENT_UNUSED && mp->depth != VK_ATTACHMENT_UNUSED && sp->depth != mp->depth)
+        return false;
+    if (pvk_rp_resolves_into(mp, sp->depth) || pvk_rp_resolves_into(mp, sp->depth_resolve) ||
+        (sp->depth != VK_ATTACHMENT_UNUSED && mp->depth_resolve != VK_ATTACHMENT_UNUSED))
+        return false;
+    if (sp->depth != VK_ATTACHMENT_UNUSED && mp->samples && rp->attachments[sp->depth].samples != mp->samples)
+        return false;
+    for (i = 0; i < sp->color_count; i++) {
+        uint32_t a = sp->colors[i];
+        if (a == VK_ATTACHMENT_UNUSED)
+            continue;
+        if (pvk_rp_resolves_into(mp, a) || pvk_rp_resolves_into(mp, sp->resolves[i]))
+            return false;
+        if (mp->samples && rp->attachments[a].samples != mp->samples)
+            return false;
+        s = pvk_rp_slot(mp, a);
+        if (s < mp->color_count && mp->resolves[s] != VK_ATTACHMENT_UNUSED)
+            return false; /* written after its resolve */
+        if (s == mp->color_count)
+            slots++;
+    }
+    for (i = 0; i < sp->input_count; i++) {
+        uint32_t a = sp->inputs[i];
+        if (a == VK_ATTACHMENT_UNUSED)
+            continue;
+        if (pvk_rp_resolves_into(mp, a))
+            return false;
+        if (pvk_rp_color(rp, a) && pvk_rp_slot(mp, a) == mp->color_count) {
+            uint32_t j;
+            for (j = 0; j < sp->color_count && sp->colors[j] != a; j++)
+                ;
+            if (j == sp->color_count) {
+                for (j = 0; j < i && sp->inputs[j] != a; j++)
+                    ;
+                if (j == i)
+                    slots++;
+            }
+        }
+    }
+    if (slots > PVK_MAX_COLOR_ATTACHMENTS)
+        return false;
+    for (i = 0; i < info->dependencyCount; i++) {
+        const VkSubpassDependency2 *d = &info->pDependencies[i];
+        const VkBaseInStructure *ext;
+        VkAccessFlags2 dst = d->dstAccessMask;
+        for (ext = d->pNext; ext; ext = ext->pNext)
+            if (ext->sType == VK_STRUCTURE_TYPE_MEMORY_BARRIER_2)
+                dst = ((const VkMemoryBarrier2 *)ext)->dstAccessMask;
+        if (d->dstSubpass == k && d->srcSubpass != VK_SUBPASS_EXTERNAL && d->srcSubpass >= mp->first &&
+            d->srcSubpass < k && !(d->dependencyFlags & VK_DEPENDENCY_BY_REGION_BIT) && (dst & shader))
+            return false;
+    }
+    return true;
+}
+
+static uint32_t pvk_rp_slot_add(struct pvk_rp_pass *mp, uint32_t a)
+{
+    uint32_t s = pvk_rp_slot(mp, a);
+    if (s == mp->color_count && s < PVK_MAX_COLOR_ATTACHMENTS) {
+        mp->colors[s] = a;
+        mp->resolves[s] = VK_ATTACHMENT_UNUSED;
+        mp->color_count++;
+    }
+    return s;
+}
+
+static void pvk_rp_pass_add(const struct pvk_render_pass *rp, struct pvk_rp_pass *mp, uint32_t k)
+{
+    const struct pvk_subpass *sp = &rp->subpasses[k];
+    uint32_t i;
+    mp->last = k;
+    mp->view_mask = sp->view_mask;
+    for (i = 0; i < sp->color_count; i++) {
+        uint32_t a = sp->colors[i], s;
+        if (a == VK_ATTACHMENT_UNUSED)
+            continue;
+        s = pvk_rp_slot_add(mp, a);
+        if (s < PVK_MAX_COLOR_ATTACHMENTS && sp->resolves[i] != VK_ATTACHMENT_UNUSED)
+            mp->resolves[s] = sp->resolves[i];
+        mp->samples = rp->attachments[a].samples;
+    }
+    for (i = 0; i < sp->input_count; i++)
+        if (pvk_rp_color(rp, sp->inputs[i]))
+            pvk_rp_slot_add(mp, sp->inputs[i]);
+    if (sp->depth != VK_ATTACHMENT_UNUSED) {
+        mp->depth = sp->depth;
+        mp->samples = rp->attachments[sp->depth].samples;
+    }
+    if (sp->depth_resolve != VK_ATTACHMENT_UNUSED) {
+        mp->depth_resolve = sp->depth_resolve;
+        mp->depth_resolve_mode = sp->depth_resolve_mode;
+        mp->stencil_resolve_mode = sp->stencil_resolve_mode;
+    }
+}
+
+/* A subpass's color locations and color input attachments as section 15's
+ * pvk_color_logical takes them, naming attachments by index. */
+static void pvk_subpass_ids(const struct pvk_render_pass *rp, const struct pvk_subpass *sp,
+                            uint32_t loc_ids[PVK_MAX_COLOR_ATTACHMENTS], uint32_t input_ids[PVK_MAX_INPUT_ATTACHMENTS])
+{
+    uint32_t i;
+    for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
+        loc_ids[i] = i < sp->color_count ? sp->colors[i] : PVK_NO_ID;
+    for (i = 0; i < PVK_MAX_INPUT_ATTACHMENTS; i++)
+        input_ids[i] = i < sp->input_count && pvk_rp_color(rp, sp->inputs[i]) ? sp->inputs[i] : PVK_NO_ID;
+}
+
+static VkResult pvk_render_pass_create(struct pvk_device *device, const VkRenderPassCreateInfo2 *info,
+                                       const VkAllocationCallbacks *alloc, VkRenderPass *pRenderPass)
+{
+    uint32_t na = info->attachmentCount, ns = info->subpassCount, i, j;
+    struct pvk_render_pass *rp;
+    (void)device;
+    rp = pvk_alloc(alloc,
+                   sizeof(*rp) + sizeof(struct pvk_rp_attachment) * na + sizeof(struct pvk_subpass) * ns +
+                       sizeof(struct pvk_rp_pass) * ns,
+                   VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!rp)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    rp->attachment_count = na;
+    rp->subpass_count = ns;
+    rp->attachments = (struct pvk_rp_attachment *)(rp + 1);
+    rp->subpasses = (struct pvk_subpass *)(rp->attachments + na);
+    rp->passes = (struct pvk_rp_pass *)(rp->subpasses + ns);
+    for (i = 0; i < na; i++) {
+        const VkAttachmentDescription2 *a = &info->pAttachments[i];
+        struct pvk_rp_attachment *ra = &rp->attachments[i];
+        ra->format = a->format;
+        ra->fmt = pvk_format(a->format);
+        ra->samples = (uint32_t)a->samples;
+        ra->load_op = a->loadOp;
+        ra->store_op = a->storeOp;
+        ra->stencil_load_op = a->stencilLoadOp;
+        ra->stencil_store_op = a->stencilStoreOp;
+        ra->first_use = UINT32_MAX;
+    }
+    for (i = 0; i < ns; i++) {
+        const VkSubpassDescription2 *d = &info->pSubpasses[i];
+        struct pvk_subpass *sp = &rp->subpasses[i];
+        const VkBaseInStructure *ext;
+        sp->color_count = d->colorAttachmentCount < PVK_MAX_COLOR_ATTACHMENTS ? d->colorAttachmentCount
+                                                                              : PVK_MAX_COLOR_ATTACHMENTS;
+        for (j = 0; j < PVK_MAX_COLOR_ATTACHMENTS; j++) {
+            sp->colors[j] = j < sp->color_count ? d->pColorAttachments[j].attachment : VK_ATTACHMENT_UNUSED;
+            sp->resolves[j] = j < sp->color_count && d->pResolveAttachments ? d->pResolveAttachments[j].attachment
+                                                                           : VK_ATTACHMENT_UNUSED;
+            if (sp->colors[j] == VK_ATTACHMENT_UNUSED)
+                sp->resolves[j] = VK_ATTACHMENT_UNUSED;
+            pvk_rp_use(rp, sp->colors[j], i);
+            pvk_rp_use(rp, sp->resolves[j], i);
+        }
+        sp->input_count = d->inputAttachmentCount < PVK_MAX_INPUT_ATTACHMENTS ? d->inputAttachmentCount
+                                                                              : PVK_MAX_INPUT_ATTACHMENTS;
+        for (j = 0; j < PVK_MAX_INPUT_ATTACHMENTS; j++) {
+            sp->inputs[j] = j < sp->input_count ? d->pInputAttachments[j].attachment : VK_ATTACHMENT_UNUSED;
+            pvk_rp_use(rp, sp->inputs[j], i);
+        }
+        sp->depth = d->pDepthStencilAttachment ? d->pDepthStencilAttachment->attachment : VK_ATTACHMENT_UNUSED;
+        pvk_rp_use(rp, sp->depth, i);
+        sp->depth_resolve = VK_ATTACHMENT_UNUSED;
+        for (ext = d->pNext; ext; ext = ext->pNext) {
+            if (ext->sType == VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE) {
+                const VkSubpassDescriptionDepthStencilResolve *r = (const VkSubpassDescriptionDepthStencilResolve *)ext;
+                if (r->pDepthStencilResolveAttachment && sp->depth != VK_ATTACHMENT_UNUSED) {
+                    sp->depth_resolve = r->pDepthStencilResolveAttachment->attachment;
+                    sp->depth_resolve_mode = r->depthResolveMode;
+                    sp->stencil_resolve_mode = r->stencilResolveMode;
+                    pvk_rp_use(rp, sp->depth_resolve, i);
+                }
+            }
+        }
+        sp->view_mask = d->viewMask;
+    }
+    /* Groups of subpasses */
+    for (i = 0; i < ns; i++) {
+        struct pvk_rp_pass *mp = rp->pass_count ? &rp->passes[rp->pass_count - 1] : NULL;
+        if (!mp || !pvk_rp_can_merge(rp, mp, i, info)) {
+            mp = &rp->passes[rp->pass_count++];
+            memset(mp, 0, sizeof(*mp));
+            mp->first = i;
+            mp->depth = mp->depth_resolve = VK_ATTACHMENT_UNUSED;
+            mp->view_mask = rp->subpasses[i].view_mask;
+        }
+        pvk_rp_pass_add(rp, mp, i);
+        rp->subpasses[i].pass = rp->pass_count - 1;
+    }
+    for (i = 0; i < ns; i++) {
+        struct pvk_subpass *sp = &rp->subpasses[i];
+        const struct pvk_rp_pass *mp = &rp->passes[sp->pass];
+        uint32_t loc_ids[PVK_MAX_COLOR_ATTACHMENTS], input_ids[PVK_MAX_INPUT_ATTACHMENTS], ids[PVK_MAX_COLOR_ATTACHMENTS];
+        uint8_t input_logical[PVK_MAX_INPUT_ATTACHMENTS];
+        pvk_subpass_ids(rp, sp, loc_ids, input_ids);
+        pvk_color_logical(loc_ids, input_ids, ids, input_logical);
+        for (j = 0; j < PVK_MAX_COLOR_ATTACHMENTS; j++) {
+            uint32_t s = ids[j] == PVK_NO_ID ? mp->color_count : pvk_rp_slot(mp, ids[j]);
+            sp->map[j] = s < mp->color_count ? (uint8_t)s : PVK_NO_SLOT;
+        }
+    }
+    *pRenderPass = (VkRenderPass)rp;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass2(VkDevice device, const VkRenderPassCreateInfo2 *pCreateInfo,
+                                                   const VkAllocationCallbacks *pAllocator, VkRenderPass *pRenderPass)
+{
+    return pvk_render_pass_create((struct pvk_device *)device, pCreateInfo,
+                                  pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), pRenderPass);
+}
+
+static void pvk_attachment_ref2(const VkAttachmentReference *in, VkAttachmentReference2 *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2;
+    out->attachment = in->attachment;
+    out->layout = in->layout;
+}
+
+/* VkRenderPassCreateInfo as VkRenderPassCreateInfo2 (multiview view masks
+ * included). */
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRenderPassCreateInfo *pCreateInfo,
+                                                  const VkAllocationCallbacks *pAllocator, VkRenderPass *pRenderPass)
+{
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
+    const VkRenderPassMultiviewCreateInfo *mv = NULL;
+    const VkBaseInStructure *ext;
+    VkRenderPassCreateInfo2 info;
+    VkAttachmentDescription2 *atts;
+    VkSubpassDescription2 *subs;
+    VkSubpassDependency2 *deps;
+    VkAttachmentReference2 *refs;
+    size_t nrefs = 0;
+    uint32_t i, j;
+    VkResult result;
+
+    for (ext = pCreateInfo->pNext; ext; ext = ext->pNext)
+        if (ext->sType == VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO)
+            mv = (const VkRenderPassMultiviewCreateInfo *)ext;
+    for (i = 0; i < pCreateInfo->subpassCount; i++) {
+        const VkSubpassDescription *s = &pCreateInfo->pSubpasses[i];
+        nrefs += s->inputAttachmentCount + s->colorAttachmentCount * (s->pResolveAttachments ? 2u : 1u) +
+                 (s->pDepthStencilAttachment ? 1u : 0u);
+    }
+    atts = pvk_alloc(alloc,
+                     sizeof(*atts) * pCreateInfo->attachmentCount + sizeof(*subs) * pCreateInfo->subpassCount +
+                         sizeof(*deps) * pCreateInfo->dependencyCount + sizeof(*refs) * nrefs + 1,
+                     VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+    if (!atts)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    subs = (VkSubpassDescription2 *)(atts + pCreateInfo->attachmentCount);
+    deps = (VkSubpassDependency2 *)(subs + pCreateInfo->subpassCount);
+    refs = (VkAttachmentReference2 *)(deps + pCreateInfo->dependencyCount);
+    for (i = 0; i < pCreateInfo->attachmentCount; i++) {
+        const VkAttachmentDescription *a = &pCreateInfo->pAttachments[i];
+        atts[i].sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2;
+        atts[i].flags = a->flags;
+        atts[i].format = a->format;
+        atts[i].samples = a->samples;
+        atts[i].loadOp = a->loadOp;
+        atts[i].storeOp = a->storeOp;
+        atts[i].stencilLoadOp = a->stencilLoadOp;
+        atts[i].stencilStoreOp = a->stencilStoreOp;
+        atts[i].initialLayout = a->initialLayout;
+        atts[i].finalLayout = a->finalLayout;
+    }
+    for (i = 0; i < pCreateInfo->subpassCount; i++) {
+        const VkSubpassDescription *s = &pCreateInfo->pSubpasses[i];
+        VkSubpassDescription2 *d = &subs[i];
+        d->sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2;
+        d->flags = s->flags;
+        d->pipelineBindPoint = s->pipelineBindPoint;
+        d->viewMask = mv && i < mv->subpassCount ? mv->pViewMasks[i] : 0;
+        d->inputAttachmentCount = s->inputAttachmentCount;
+        d->pInputAttachments = refs;
+        for (j = 0; j < s->inputAttachmentCount; j++)
+            pvk_attachment_ref2(&s->pInputAttachments[j], refs++);
+        d->colorAttachmentCount = s->colorAttachmentCount;
+        d->pColorAttachments = refs;
+        for (j = 0; j < s->colorAttachmentCount; j++)
+            pvk_attachment_ref2(&s->pColorAttachments[j], refs++);
+        if (s->pResolveAttachments) {
+            d->pResolveAttachments = refs;
+            for (j = 0; j < s->colorAttachmentCount; j++)
+                pvk_attachment_ref2(&s->pResolveAttachments[j], refs++);
+        }
+        if (s->pDepthStencilAttachment) {
+            d->pDepthStencilAttachment = refs;
+            pvk_attachment_ref2(s->pDepthStencilAttachment, refs++);
+        }
+        d->preserveAttachmentCount = s->preserveAttachmentCount;
+        d->pPreserveAttachments = s->pPreserveAttachments;
+    }
+    for (i = 0; i < pCreateInfo->dependencyCount; i++) {
+        const VkSubpassDependency *s = &pCreateInfo->pDependencies[i];
+        deps[i].sType = VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2;
+        deps[i].srcSubpass = s->srcSubpass;
+        deps[i].dstSubpass = s->dstSubpass;
+        deps[i].srcStageMask = s->srcStageMask;
+        deps[i].dstStageMask = s->dstStageMask;
+        deps[i].srcAccessMask = s->srcAccessMask;
+        deps[i].dstAccessMask = s->dstAccessMask;
+        deps[i].dependencyFlags = s->dependencyFlags;
+        deps[i].viewOffset = mv && i < mv->dependencyCount ? mv->pViewOffsets[i] : 0;
+    }
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2;
+    info.flags = pCreateInfo->flags;
+    info.attachmentCount = pCreateInfo->attachmentCount;
+    info.pAttachments = atts;
+    info.subpassCount = pCreateInfo->subpassCount;
+    info.pSubpasses = subs;
+    info.dependencyCount = pCreateInfo->dependencyCount;
+    info.pDependencies = deps;
+    result = pvk_render_pass_create((struct pvk_device *)device, &info, alloc, pRenderPass);
+    pvk_free(alloc, atts);
+    return result;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyRenderPass(VkDevice device, VkRenderPass renderPass,
+                                               const VkAllocationCallbacks *pAllocator)
+{
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), renderPass);
+}
+
+/* Metal has no render area constraint: any area is as fast as another. */
+VKAPI_ATTR void VKAPI_CALL vkGetRenderAreaGranularity(VkDevice device, VkRenderPass renderPass, VkExtent2D *pGranularity)
+{
+    (void)device;
+    (void)renderPass;
+    pGranularity->width = 1;
+    pGranularity->height = 1;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetRenderingAreaGranularity(VkDevice device, const VkRenderingAreaInfo *pRenderingAreaInfo,
+                                                         VkExtent2D *pGranularity)
+{
+    (void)device;
+    (void)pRenderingAreaInfo;
+    pGranularity->width = 1;
+    pGranularity->height = 1;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateFramebuffer(VkDevice device, const VkFramebufferCreateInfo *pCreateInfo,
+                                                   const VkAllocationCallbacks *pAllocator, VkFramebuffer *pFramebuffer)
+{
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
+    bool imageless = (pCreateInfo->flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT) != 0;
+    uint32_t n = imageless ? 0 : pCreateInfo->attachmentCount, i;
+    struct pvk_framebuffer *fb = pvk_alloc(alloc, sizeof(*fb) + sizeof(fb->attachments[0]) * n,
+                                           VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!fb)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    fb->width = pCreateInfo->width;
+    fb->height = pCreateInfo->height;
+    fb->layers = pCreateInfo->layers;
+    fb->imageless = imageless;
+    fb->attachment_count = n;
+    for (i = 0; i < n; i++)
+        fb->attachments[i] = (struct pvk_image_view *)pCreateInfo->pAttachments[i];
+    *pFramebuffer = (VkFramebuffer)fb;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyFramebuffer(VkDevice device, VkFramebuffer framebuffer,
+                                                const VkAllocationCallbacks *pAllocator)
+{
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), framebuffer);
+}
+
+/* ---- Graphics pipelines ---- */
+
+/* What the Metal render pipeline and the translator options beyond the
+ * shaders, layout and vertex input come from (hashed into the cache key). */
+struct pvk_gfx_desc {
+    uint32_t formats[PVK_MAX_COLOR_ATTACHMENTS];    /* pvk_MTLPixelFormat by logical index */
+    uint32_t blend[PVK_MAX_COLOR_ATTACHMENTS][7];   /* on, src/dst RGB factor, RGB op, src/dst alpha, alpha op */
+    uint32_t write_masks[PVK_MAX_COLOR_ATTACHMENTS]; /* pvk_MTLColorWriteMask */
+    uint32_t samples, alpha_to_coverage, alpha_to_one, rasterization, amplification, topology_class;
+    uint32_t input_colors[PVK_MAX_INPUT_ATTACHMENTS]; /* logical index of input attachment i */
+    uint32_t outputs;                                 /* fragment output locations with an attachment */
+    uint32_t output_types[PVK_MAX_COLOR_ATTACHMENTS]; /* enum pvk_msl_scalar_type */
+    uint32_t sample_shading, view_mask, point_size, dynamic_strides, robust, has_fragment;
+};
+
+static pvk_MTLBlendFactor pvk_blend_factor(VkBlendFactor f)
+{
+    static const pvk_MTLBlendFactor map[] = {
+        [VK_BLEND_FACTOR_ZERO] = PVK_MTLBlendFactorZero,
+        [VK_BLEND_FACTOR_ONE] = PVK_MTLBlendFactorOne,
+        [VK_BLEND_FACTOR_SRC_COLOR] = PVK_MTLBlendFactorSourceColor,
+        [VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR] = PVK_MTLBlendFactorOneMinusSourceColor,
+        [VK_BLEND_FACTOR_DST_COLOR] = PVK_MTLBlendFactorDestinationColor,
+        [VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR] = PVK_MTLBlendFactorOneMinusDestinationColor,
+        [VK_BLEND_FACTOR_SRC_ALPHA] = PVK_MTLBlendFactorSourceAlpha,
+        [VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA] = PVK_MTLBlendFactorOneMinusSourceAlpha,
+        [VK_BLEND_FACTOR_DST_ALPHA] = PVK_MTLBlendFactorDestinationAlpha,
+        [VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA] = PVK_MTLBlendFactorOneMinusDestinationAlpha,
+        [VK_BLEND_FACTOR_CONSTANT_COLOR] = PVK_MTLBlendFactorBlendColor,
+        [VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR] = PVK_MTLBlendFactorOneMinusBlendColor,
+        [VK_BLEND_FACTOR_CONSTANT_ALPHA] = PVK_MTLBlendFactorBlendAlpha,
+        [VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA] = PVK_MTLBlendFactorOneMinusBlendAlpha,
+        [VK_BLEND_FACTOR_SRC_ALPHA_SATURATE] = PVK_MTLBlendFactorSourceAlphaSaturated,
+        [VK_BLEND_FACTOR_SRC1_COLOR] = PVK_MTLBlendFactorSource1Color,
+        [VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR] = PVK_MTLBlendFactorOneMinusSource1Color,
+        [VK_BLEND_FACTOR_SRC1_ALPHA] = PVK_MTLBlendFactorSource1Alpha,
+        [VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA] = PVK_MTLBlendFactorOneMinusSource1Alpha,
+    };
+    return (unsigned)f < PVK_ARRAY_SIZE(map) ? map[f] : PVK_MTLBlendFactorOne;
+}
+
+static pvk_MTLBlendOperation pvk_blend_op(VkBlendOp op)
+{
+    switch (op) {
+    case VK_BLEND_OP_SUBTRACT:
+        return PVK_MTLBlendOperationSubtract;
+    case VK_BLEND_OP_REVERSE_SUBTRACT:
+        return PVK_MTLBlendOperationReverseSubtract;
+    case VK_BLEND_OP_MIN:
+        return PVK_MTLBlendOperationMin;
+    case VK_BLEND_OP_MAX:
+        return PVK_MTLBlendOperationMax;
+    default:
+        return PVK_MTLBlendOperationAdd;
+    }
+}
+
+static pvk_MTLColorWriteMask pvk_write_mask(VkColorComponentFlags m)
+{
+    return ((m & VK_COLOR_COMPONENT_R_BIT) ? PVK_MTLColorWriteMaskRed : 0) |
+           ((m & VK_COLOR_COMPONENT_G_BIT) ? PVK_MTLColorWriteMaskGreen : 0) |
+           ((m & VK_COLOR_COMPONENT_B_BIT) ? PVK_MTLColorWriteMaskBlue : 0) |
+           ((m & VK_COLOR_COMPONENT_A_BIT) ? PVK_MTLColorWriteMaskAlpha : 0);
+}
+
+static uint32_t pvk_dynamic_bits(VkDynamicState s)
+{
+    switch (s) {
+    case VK_DYNAMIC_STATE_VIEWPORT: return PVK_DYN_BIT(VIEWPORT);
+    case VK_DYNAMIC_STATE_SCISSOR: return PVK_DYN_BIT(SCISSOR);
+    case VK_DYNAMIC_STATE_LINE_WIDTH: return PVK_DYN_BIT(LINE_WIDTH);
+    case VK_DYNAMIC_STATE_DEPTH_BIAS: return PVK_DYN_BIT(DEPTH_BIAS);
+    case VK_DYNAMIC_STATE_BLEND_CONSTANTS: return PVK_DYN_BIT(BLEND_CONSTANTS);
+    case VK_DYNAMIC_STATE_DEPTH_BOUNDS: return PVK_DYN_BIT(DEPTH_BOUNDS);
+    case VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK: return PVK_DYN_BIT(STENCIL_COMPARE_MASK);
+    case VK_DYNAMIC_STATE_STENCIL_WRITE_MASK: return PVK_DYN_BIT(STENCIL_WRITE_MASK);
+    case VK_DYNAMIC_STATE_STENCIL_REFERENCE: return PVK_DYN_BIT(STENCIL_REFERENCE);
+    case VK_DYNAMIC_STATE_CULL_MODE: return PVK_DYN_BIT(CULL_MODE);
+    case VK_DYNAMIC_STATE_FRONT_FACE: return PVK_DYN_BIT(FRONT_FACE);
+    case VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY: return PVK_DYN_BIT(PRIMITIVE_TOPOLOGY);
+    case VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT: return PVK_DYN_BIT(VIEWPORT) | PVK_DYN_BIT(VIEWPORT_COUNT);
+    case VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT: return PVK_DYN_BIT(SCISSOR) | PVK_DYN_BIT(SCISSOR_COUNT);
+    case VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE: return PVK_DYN_BIT(VERTEX_STRIDE);
+    case VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE: return PVK_DYN_BIT(DEPTH_TEST_ENABLE);
+    case VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE: return PVK_DYN_BIT(DEPTH_WRITE_ENABLE);
+    case VK_DYNAMIC_STATE_DEPTH_COMPARE_OP: return PVK_DYN_BIT(DEPTH_COMPARE_OP);
+    case VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE: return PVK_DYN_BIT(DEPTH_BOUNDS_TEST_ENABLE);
+    case VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE: return PVK_DYN_BIT(STENCIL_TEST_ENABLE);
+    case VK_DYNAMIC_STATE_STENCIL_OP: return PVK_DYN_BIT(STENCIL_OP);
+    case VK_DYNAMIC_STATE_RASTERIZER_DISCARD_ENABLE: return PVK_DYN_BIT(RASTERIZER_DISCARD_ENABLE);
+    case VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE: return PVK_DYN_BIT(DEPTH_BIAS_ENABLE);
+    case VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE: return PVK_DYN_BIT(PRIMITIVE_RESTART_ENABLE);
+    case VK_DYNAMIC_STATE_LINE_STIPPLE: return PVK_DYN_BIT(LINE_STIPPLE);
+    default: return 0; /* extension states PlasmaVK does not offer */
+    }
+}
+
+static uint32_t pvk_topology_class(uint32_t topology)
+{
+    switch (topology) {
+    case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
+        return PVK_MTLPrimitiveTopologyClassPoint;
+    case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
+    case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
+    case VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY:
+    case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY:
+        return PVK_MTLPrimitiveTopologyClassLine;
+    default:
+        return PVK_MTLPrimitiveTopologyClassTriangle;
+    }
+}
+
+static enum pvk_msl_scalar_type pvk_output_type(const struct pvk_format *f)
+{
+    return f->kind == PVK_FK_UINT ? PVK_MSL_SCALAR_UINT : f->kind == PVK_FK_SINT ? PVK_MSL_SCALAR_INT : PVK_MSL_SCALAR_FLOAT;
+}
+
+static void pvk_stencil_face_state(struct pvk_stencil_face *f, const VkStencilOpState *s)
+{
+    f->fail = s->failOp;
+    f->pass = s->passOp;
+    f->depth_fail = s->depthFailOp;
+    f->compare = s->compareOp;
+    f->compare_mask = s->compareMask;
+    f->write_mask = s->writeMask;
+    f->reference = s->reference;
+}
+
+/* A render pipeline state from translated shaders (retained), NULL with a
+ * message in error[]. */
+static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *d, const char *vs_msl,
+                          const char *vs_entry, const char *fs_msl, const char *fs_entry, bool layered, char *error,
+                          size_t error_size)
+{
+    void *pool = objc_autoreleasePoolPush();
+    id vs_lib = pvk_msl_library(device, vs_msl, error, error_size), fs_lib = NULL, desc = NULL, vf = NULL, ff = NULL;
+    id pso = NULL;
+    uint32_t l;
+    if (vs_lib && fs_msl)
+        fs_lib = pvk_msl_library(device, fs_msl, error, error_size);
+    if (vs_lib && (fs_lib || !fs_msl))
+        desc = pvk_MTL4RenderPipelineDescriptor_new();
+    if (desc) {
+        id atts = pvk_MTL4RenderPipelineDescriptor_colorAttachments(desc);
+        vf = pvk_function_descriptor(vs_lib, vs_entry);
+        pvk_MTL4RenderPipelineDescriptor_setVertexFunctionDescriptor(desc, vf);
+        if (fs_lib) {
+            ff = pvk_function_descriptor(fs_lib, fs_entry);
+            pvk_MTL4RenderPipelineDescriptor_setFragmentFunctionDescriptor(desc, ff);
+        }
+        for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS; l++) {
+            id a;
+            if (!d->formats[l])
+                continue;
+            a = pvk_MTL4RenderPipelineColorAttachmentDescriptorArray_objectAtIndexedSubscript(atts, l);
+            pvk_MTL4RenderPipelineColorAttachmentDescriptor_setPixelFormat(a, d->formats[l]);
+            pvk_MTL4RenderPipelineColorAttachmentDescriptor_setWriteMask(a, d->write_masks[l]);
+            pvk_MTL4RenderPipelineColorAttachmentDescriptor_setBlendingState(
+                a, d->blend[l][0] ? PVK_MTL4BlendStateEnabled : PVK_MTL4BlendStateDisabled);
+            if (d->blend[l][0]) {
+                pvk_MTL4RenderPipelineColorAttachmentDescriptor_setSourceRGBBlendFactor(a, d->blend[l][1]);
+                pvk_MTL4RenderPipelineColorAttachmentDescriptor_setDestinationRGBBlendFactor(a, d->blend[l][2]);
+                pvk_MTL4RenderPipelineColorAttachmentDescriptor_setRgbBlendOperation(a, d->blend[l][3]);
+                pvk_MTL4RenderPipelineColorAttachmentDescriptor_setSourceAlphaBlendFactor(a, d->blend[l][4]);
+                pvk_MTL4RenderPipelineColorAttachmentDescriptor_setDestinationAlphaBlendFactor(a, d->blend[l][5]);
+                pvk_MTL4RenderPipelineColorAttachmentDescriptor_setAlphaBlendOperation(a, d->blend[l][6]);
+            }
+        }
+        pvk_MTL4RenderPipelineDescriptor_setRasterSampleCount(desc, d->samples);
+        pvk_MTL4RenderPipelineDescriptor_setAlphaToCoverageState(
+            desc, d->alpha_to_coverage ? PVK_MTL4AlphaToCoverageStateEnabled : PVK_MTL4AlphaToCoverageStateDisabled);
+        pvk_MTL4RenderPipelineDescriptor_setAlphaToOneState(
+            desc, d->alpha_to_one ? PVK_MTL4AlphaToOneStateEnabled : PVK_MTL4AlphaToOneStateDisabled);
+        pvk_MTL4RenderPipelineDescriptor_setRasterizationEnabled(desc, d->rasterization != 0);
+        if (d->amplification > 1)
+            pvk_MTL4RenderPipelineDescriptor_setMaxVertexAmplificationCount(desc, d->amplification);
+        if (layered)
+            pvk_MTL4RenderPipelineDescriptor_setInputPrimitiveTopology(desc, d->topology_class);
+        pvk_MTL4RenderPipelineDescriptor_setColorAttachmentMappingState(
+            desc, PVK_MTL4LogicalToPhysicalColorAttachmentMappingStateInherited);
+        pso = pvk_render_pipeline_compile(device, desc, error, error_size);
+    }
+    pvk_release(ff);
+    pvk_release(vf);
+    pvk_release(desc);
+    pvk_release(fs_lib);
+    pvk_release(vs_lib);
+    objc_autoreleasePoolPop(pool);
+    return pso;
+}
+
+static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct pvk_pipeline_cache *cache,
+                                             const VkGraphicsPipelineCreateInfo *info, const VkAllocationCallbacks *alloc,
+                                             VkPipeline *pPipeline)
+{
+    const struct pvk_pipeline_layout *layout = (const struct pvk_pipeline_layout *)info->layout;
+    const struct pvk_render_pass *rp = (const struct pvk_render_pass *)info->renderPass;
+    VkPipelineCreateFlags2 flags = pvk_pipeline_flags(info->flags, info->pNext);
+    const VkPipelineShaderStageCreateInfo *vs = NULL, *fs = NULL;
+    const VkPipelineRasterizationStateCreateInfo *rs = info->pRasterizationState;
+    const VkPipelineMultisampleStateCreateInfo *ms = info->pMultisampleState;
+    const VkPipelineDepthStencilStateCreateInfo *ds = info->pDepthStencilState;
+    const VkPipelineColorBlendStateCreateInfo *cb = info->pColorBlendState;
+    const VkPipelineInputAssemblyStateCreateInfo *ia = info->pInputAssemblyState;
+    const VkPipelineViewportStateCreateInfo *vp = info->pViewportState;
+    const VkPipelineVertexInputStateCreateInfo *vi = info->pVertexInputState;
+    const VkPipelineVertexInputDivisorStateCreateInfo *divisors = NULL;
+    const VkPipelineRenderingCreateInfo *rendering = NULL;
+    const VkRenderingAttachmentLocationInfo *locations = NULL;
+    const VkRenderingInputAttachmentIndexInfo *input_indices = NULL;
+    const VkPipelineRobustnessCreateInfo *robustness = NULL;
+    uint32_t loc_ids[PVK_MAX_COLOR_ATTACHMENTS], input_ids[PVK_MAX_INPUT_ATTACHMENTS], ids[PVK_MAX_COLOR_ATTACHMENTS];
+    uint32_t input_colors[PVK_MAX_INPUT_ATTACHMENTS];
+    uint8_t input_logical[PVK_MAX_INPUT_ATTACHMENTS];
+    struct pvk_msl_set_layout sets[PVK_MAX_BOUND_SETS];
+    struct pvk_msl_binding *bindings = NULL;
+    struct pvk_msl_options vo, fo;
+    struct pvk_msl_result vres, fres;
+    struct pvk_gfx_pipeline gfx;
+    struct pvk_gfx_desc d;
+    struct pvk_cache_info ci;
+    struct pvk_pipeline *pipeline;
+    struct pvk_key key;
+    const uint32_t *vs_code = NULL, *fs_code = NULL;
+    size_t vs_words = 0, fs_words = 0;
+    char error[256], entry[2][64], *msl[2] = { NULL, NULL };
+    const char *sources[2], *names[2];
+    const VkBaseInStructure *ext;
+    uint32_t i, view_mask = 0, dynamic = 0, color_count = 0;
+    bool discard, layered = false;
+    id pso = NULL;
+    int hit;
+    VkResult result;
+    uint64_t start = pvk_now_ns();
+
+    *pPipeline = VK_NULL_HANDLE;
+    for (i = 0; i < info->stageCount; i++) {
+        if (info->pStages[i].stage == VK_SHADER_STAGE_VERTEX_BIT)
+            vs = &info->pStages[i];
+        else if (info->pStages[i].stage == VK_SHADER_STAGE_FRAGMENT_BIT)
+            fs = &info->pStages[i];
+    }
+    if (!vs) {
+        pvk_log(PVK_LOG_ERROR, "vkCreateGraphicsPipelines: no vertex shader (other stages are not supported)");
+        return VK_ERROR_UNKNOWN;
+    }
+    for (ext = info->pNext; ext; ext = ext->pNext) {
+        if (ext->sType == VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO)
+            rendering = (const VkPipelineRenderingCreateInfo *)ext;
+        else if (ext->sType == VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_LOCATION_INFO)
+            locations = (const VkRenderingAttachmentLocationInfo *)ext;
+        else if (ext->sType == VK_STRUCTURE_TYPE_RENDERING_INPUT_ATTACHMENT_INDEX_INFO)
+            input_indices = (const VkRenderingInputAttachmentIndexInfo *)ext;
+        else if (ext->sType == VK_STRUCTURE_TYPE_PIPELINE_ROBUSTNESS_CREATE_INFO)
+            robustness = (const VkPipelineRobustnessCreateInfo *)ext;
+    }
+    if (info->pDynamicState)
+        for (i = 0; i < info->pDynamicState->dynamicStateCount; i++)
+            dynamic |= pvk_dynamic_bits(info->pDynamicState->pDynamicStates[i]);
+    discard = rs && rs->rasterizerDiscardEnable && !(dynamic & PVK_DYN_BIT(RASTERIZER_DISCARD_ENABLE));
+    if (discard) /* nothing rasterizes: the fragment state may be anything */
+        fs = NULL;
+    pvk_stage_code(vs, &vs_code, &vs_words);
+    if (fs)
+        pvk_stage_code(fs, &fs_code, &fs_words);
+
+    /* Static state */
+    memset(&gfx, 0, sizeof(gfx));
+    gfx.dynamic = dynamic;
+    gfx.has_fragment = fs != NULL;
+    if (ia) {
+        gfx.state.topology = ia->topology;
+        gfx.state.primitive_restart = ia->primitiveRestartEnable != VK_FALSE;
+    }
+    if (vp) {
+        gfx.state.viewport_count = vp->viewportCount;
+        gfx.state.scissor_count = vp->scissorCount;
+        if (vp->pViewports && !(dynamic & PVK_DYN_BIT(VIEWPORT)))
+            memcpy(gfx.state.viewports, vp->pViewports,
+                   sizeof(VkViewport) * (vp->viewportCount < PVK_MAX_VIEWPORTS ? vp->viewportCount : PVK_MAX_VIEWPORTS));
+        if (vp->pScissors && !(dynamic & PVK_DYN_BIT(SCISSOR)))
+            memcpy(gfx.state.scissors, vp->pScissors,
+                   sizeof(VkRect2D) * (vp->scissorCount < PVK_MAX_VIEWPORTS ? vp->scissorCount : PVK_MAX_VIEWPORTS));
+    }
+    if (rs) {
+        gfx.depth_clamp = rs->depthClampEnable != VK_FALSE;
+        gfx.lines = rs->polygonMode == VK_POLYGON_MODE_LINE;
+        gfx.state.rasterizer_discard = rs->rasterizerDiscardEnable != VK_FALSE;
+        gfx.state.cull_mode = rs->cullMode;
+        gfx.state.front_face = rs->frontFace;
+        gfx.state.depth_bias_enable = rs->depthBiasEnable != VK_FALSE;
+        gfx.state.depth_bias[0] = rs->depthBiasConstantFactor;
+        gfx.state.depth_bias[1] = rs->depthBiasClamp;
+        gfx.state.depth_bias[2] = rs->depthBiasSlopeFactor;
+        gfx.state.line_width = rs->lineWidth;
+    }
+    if (ds && !discard) {
+        gfx.state.depth_test = ds->depthTestEnable != VK_FALSE;
+        gfx.state.depth_write = ds->depthWriteEnable != VK_FALSE;
+        gfx.state.depth_compare = ds->depthCompareOp;
+        gfx.state.depth_bounds_test = ds->depthBoundsTestEnable != VK_FALSE;
+        gfx.state.stencil_test = ds->stencilTestEnable != VK_FALSE;
+        pvk_stencil_face_state(&gfx.state.stencil[0], &ds->front);
+        pvk_stencil_face_state(&gfx.state.stencil[1], &ds->back);
+        gfx.state.depth_bounds[0] = ds->minDepthBounds;
+        gfx.state.depth_bounds[1] = ds->maxDepthBounds;
+    }
+    if (cb && !discard)
+        memcpy(gfx.state.blend_constants, cb->blendConstants, sizeof(gfx.state.blend_constants));
+    if (vi) {
+        for (i = 0; i < vi->vertexBindingDescriptionCount; i++)
+            if (vi->pVertexBindingDescriptions[i].binding < PVK_MAX_VERTEX_BINDINGS)
+                gfx.strides[vi->pVertexBindingDescriptions[i].binding] = vi->pVertexBindingDescriptions[i].stride;
+        for (ext = vi->pNext; ext; ext = ext->pNext)
+            if (ext->sType == VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO)
+                divisors = (const VkPipelineVertexInputDivisorStateCreateInfo *)ext;
+    }
+
+    /* Attachments: logical color indices (section 15) */
+    memset(&d, 0, sizeof(d));
+    if (rp && info->subpass < rp->subpass_count) {
+        const struct pvk_subpass *sp = &rp->subpasses[info->subpass];
+        pvk_subpass_ids(rp, sp, loc_ids, input_ids);
+        view_mask = sp->view_mask;
+        color_count = sp->color_count;
+    } else {
+        static const uint32_t identity[PVK_MAX_COLOR_ATTACHMENTS] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+        const uint32_t *locs = identity, *inputs = identity;
+        rp = NULL;
+        color_count = rendering ? rendering->colorAttachmentCount : 0;
+        if (color_count > PVK_MAX_COLOR_ATTACHMENTS)
+            color_count = PVK_MAX_COLOR_ATTACHMENTS;
+        if (locations && locations->pColorAttachmentLocations)
+            locs = locations->pColorAttachmentLocations;
+        if (input_indices && input_indices->pColorAttachmentInputIndices)
+            inputs = input_indices->pColorAttachmentInputIndices;
+        pvk_local_read_ids(color_count, locs, inputs, loc_ids, input_ids);
+        view_mask = rendering ? rendering->viewMask : 0;
+    }
+    pvk_color_logical(loc_ids, input_ids, ids, input_logical);
+    for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS && !discard; i++) {
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        const struct pvk_format *f;
+        uint32_t b = rp ? i : ids[i]; /* the blend state: per location (render pass) or attachment */
+        if (ids[i] == PVK_NO_ID)
+            continue;
+        if (rp)
+            format = rp->attachments[ids[i]].format;
+        else if (rendering && ids[i] < rendering->colorAttachmentCount)
+            format = rendering->pColorAttachmentFormats[ids[i]];
+        if (!(f = pvk_format(format)) || !f->mtl)
+            continue;
+        d.formats[i] = (uint32_t)f->mtl;
+        d.output_types[i] = pvk_output_type(f);
+        if (loc_ids[i] == ids[i]) { /* a location the fragment shader writes */
+            const VkPipelineColorBlendAttachmentState *a = cb && b < cb->attachmentCount ? &cb->pAttachments[b] : NULL;
+            d.outputs |= 1u << i;
+            d.write_masks[i] = a ? pvk_write_mask(a->colorWriteMask) : PVK_MTLColorWriteMaskAll;
+            if (a && a->blendEnable && (f->caps & PVK_FC_BLEND)) {
+                d.blend[i][0] = 1;
+                d.blend[i][1] = pvk_blend_factor(a->srcColorBlendFactor);
+                d.blend[i][2] = pvk_blend_factor(a->dstColorBlendFactor);
+                d.blend[i][3] = pvk_blend_op(a->colorBlendOp);
+                d.blend[i][4] = pvk_blend_factor(a->srcAlphaBlendFactor);
+                d.blend[i][5] = pvk_blend_factor(a->dstAlphaBlendFactor);
+                d.blend[i][6] = pvk_blend_op(a->alphaBlendOp);
+            }
+        } else { /* an input attachment only: read, never written */
+            d.write_masks[i] = PVK_MTLColorWriteMaskNone;
+        }
+    }
+    for (i = 0; i < PVK_MAX_INPUT_ATTACHMENTS; i++)
+        d.input_colors[i] = input_colors[i] = input_logical[i];
+    d.samples = ms && ms->rasterizationSamples ? (uint32_t)ms->rasterizationSamples : 1;
+    if (ms && !discard) {
+        d.alpha_to_coverage = ms->alphaToCoverageEnable != VK_FALSE;
+        d.alpha_to_one = ms->alphaToOneEnable != VK_FALSE;
+        d.sample_shading = ms->sampleShadingEnable && ms->minSampleShading * (float)d.samples > 1.0f;
+        if (ms->pSampleMask && (ms->pSampleMask[0] & ((1u << d.samples) - 1)) != (1u << d.samples) - 1) {
+            static int warned;
+            if (!warned++)
+                pvk_log(PVK_LOG_WARN, "vkCreateGraphicsPipelines: sample masks are not supported (all samples are written)");
+        }
+    }
+    d.rasterization = !discard;
+    d.amplification = (uint32_t)__builtin_popcount(view_mask);
+    d.topology_class = pvk_topology_class(gfx.state.topology);
+    d.view_mask = view_mask;
+    d.point_size = d.topology_class == PVK_MTLPrimitiveTopologyClassPoint;
+    d.dynamic_strides = (dynamic & PVK_DYN_BIT(VERTEX_STRIDE)) != 0;
+    d.robust = device->features.core.robustBufferAccess ||
+               (robustness && robustness->vertexInputs != VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT &&
+                robustness->vertexInputs != VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED);
+    d.has_fragment = fs != NULL;
+    gfx.samples = d.samples;
+    gfx.view_mask = view_mask;
+    (void)color_count;
+
+    /* Translator options */
+    memset(&vo, 0, sizeof(vo));
+    memset(&fo, 0, sizeof(fo));
+    memset(&vres, 0, sizeof(vres));
+    memset(&fres, 0, sizeof(fres));
+    if (layout) {
+        if (pvk_msl_set_layouts(layout, alloc, sets, &bindings) != VK_SUCCESS)
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        vo.set_layouts = fo.set_layouts = sets;
+        vo.set_layout_count = fo.set_layout_count = layout->set_count;
+    }
+    vo.specialization = vs->pSpecializationInfo;
+    vo.image_1d_as_2d = fo.image_1d_as_2d = true;
+    if (vi) {
+        vo.vertex_attributes = vi->pVertexAttributeDescriptions;
+        vo.vertex_attribute_count = vi->vertexAttributeDescriptionCount;
+        vo.vertex_bindings = vi->pVertexBindingDescriptions;
+        vo.vertex_binding_count = vi->vertexBindingDescriptionCount;
+    }
+    if (divisors) {
+        vo.vertex_divisors = divisors->pVertexBindingDivisors;
+        vo.vertex_divisor_count = divisors->vertexBindingDivisorCount;
+    }
+    vo.dynamic_vertex_strides = d.dynamic_strides != 0;
+    vo.robust_vertex_input = d.robust != 0;
+    vo.point_size = d.point_size != 0;
+    vo.view_mask = fo.view_mask = view_mask;
+    if (fs)
+        fo.specialization = fs->pSpecializationInfo;
+    fo.input_attachment_colors = input_colors;
+    fo.input_attachment_color_count = PVK_MAX_INPUT_ATTACHMENTS;
+    fo.color_attachments_valid = true;
+    fo.color_attachments = d.outputs;
+    for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
+        fo.color_attachment_types[i] = (enum pvk_msl_scalar_type)d.output_types[i];
+    fo.sample_shading = d.sample_shading != 0;
+
+    /* The cache key: everything above that the MSL and the Metal pipeline depend on */
+    pvk_key_init(&key, 'G');
+    pvk_key_add(&key, vs_code, vs_words * 4);
+    pvk_key_add_string(&key, vs->pName);
+    pvk_key_add_spec(&key, vs->pSpecializationInfo);
+    pvk_key_add(&key, fs_code, fs_words * 4);
+    pvk_key_add_string(&key, fs ? fs->pName : NULL);
+    pvk_key_add_spec(&key, fs ? fs->pSpecializationInfo : NULL);
+    pvk_key_add_sets(&key, vo.set_layouts, vo.set_layout_count);
+    if (vi) {
+        pvk_key_add(&key, vi->pVertexAttributeDescriptions,
+                    sizeof(VkVertexInputAttributeDescription) * vi->vertexAttributeDescriptionCount);
+        pvk_key_add(&key, vi->pVertexBindingDescriptions,
+                    sizeof(VkVertexInputBindingDescription) * vi->vertexBindingDescriptionCount);
+    }
+    if (divisors)
+        pvk_key_add(&key, divisors->pVertexBindingDivisors,
+                    sizeof(VkVertexInputBindingDivisorDescription) * divisors->vertexBindingDivisorCount);
+    pvk_key_add(&key, &d, sizeof(d));
+    hit = pvk_cache_lookup(cache, &key, &ci, entry, msl, &pso, alloc);
+    if (!hit && (flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)) {
+        pvk_free(alloc, bindings);
+        return VK_PIPELINE_COMPILE_REQUIRED;
+    }
+    if (!hit) {
+        result = pvk_spirv_to_msl_graphics(vs_code, vs_words, vs->pName, &vo, fs_code, fs ? fs_words : 0,
+                                           fs ? fs->pName : NULL, &fo, &vres, &fres);
+        if (result != VK_SUCCESS) {
+            pvk_log(PVK_LOG_ERROR, "vkCreateGraphicsPipelines: cannot translate the shaders: %s",
+                    vres.error[0] ? vres.error : fres.error);
+            pvk_msl_result_free(&vres);
+            pvk_msl_result_free(&fres);
+            pvk_free(alloc, bindings);
+            return result == VK_ERROR_OUT_OF_HOST_MEMORY ? result : VK_ERROR_UNKNOWN;
+        }
+        memset(&ci, 0, sizeof(ci));
+        if (vres.has_push_constants)
+            ci.push_size = (vres.push_constant_offset + vres.push_constant_size + 15) & ~15u;
+        if (fres.has_push_constants && ((fres.push_constant_offset + fres.push_constant_size + 15) & ~15u) > ci.push_size)
+            ci.push_size = (fres.push_constant_offset + fres.push_constant_size + 15) & ~15u;
+        if (ci.push_size > PVK_MAX_PUSH_CONSTANTS_SIZE) {
+            pvk_log(PVK_LOG_ERROR, "vkCreateGraphicsPipelines: push constants beyond maxPushConstantsSize");
+            pvk_msl_result_free(&vres);
+            pvk_msl_result_free(&fres);
+            pvk_free(alloc, bindings);
+            return VK_ERROR_UNKNOWN;
+        }
+        ci.set_mask = vres.set_mask | fres.set_mask;
+        ci.vertex_bindings = vres.vertex_bindings;
+        ci.dispatch_base = vres.layered; /* graphics: the vertex shader writes Layer or ViewportIndex */
+    }
+    pvk_free(alloc, bindings);
+    sources[0] = hit ? msl[0] : vres.msl;
+    sources[1] = hit ? msl[1] : (fs ? fres.msl : NULL);
+    names[0] = hit ? entry[0] : vres.entry_point;
+    names[1] = hit ? entry[1] : fres.entry_point;
+    layered = ci.dispatch_base != 0;
+    if (!pso)
+        pso = pvk_gfx_compile(device, &d, sources[0], names[0], sources[1], names[1], layered, error, sizeof(error));
+    if (!pso) {
+        pvk_log(PVK_LOG_ERROR, "vkCreateGraphicsPipelines: %s", error);
+        pvk_log(PVK_LOG_DEBUG, "vertex MSL:\n%s", sources[0]);
+        if (sources[1])
+            pvk_log(PVK_LOG_DEBUG, "fragment MSL:\n%s", sources[1]);
+        pvk_free(alloc, msl[0]);
+        pvk_free(alloc, msl[1]);
+        pvk_msl_result_free(&vres);
+        pvk_msl_result_free(&fres);
+        return VK_ERROR_UNKNOWN;
+    }
+    pvk_cache_insert(cache, &key, &ci, names[0], names[1], sources[0], sources[1], pso);
+    pvk_free(alloc, msl[0]);
+    pvk_free(alloc, msl[1]);
+    pvk_msl_result_free(&vres);
+    pvk_msl_result_free(&fres);
+
+    pipeline = pvk_alloc(alloc, sizeof(*pipeline) + sizeof(gfx), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!pipeline) {
+        pvk_release(pso);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    pipeline->bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    pipeline->mtl_pipeline = pso;
+    pipeline->push_size = ci.push_size;
+    pipeline->set_mask = ci.set_mask;
+    pipeline->gfx = (struct pvk_gfx_pipeline *)(pipeline + 1);
+    gfx.vertex_bindings = ci.vertex_bindings;
+    *pipeline->gfx = gfx;
+    pvk_creation_feedback(info->pNext, start, hit != 0);
+    *pPipeline = (VkPipeline)pipeline;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateGraphicsPipelines(VkDevice device, VkPipelineCache pipelineCache,
+                                                         uint32_t createInfoCount,
+                                                         const VkGraphicsPipelineCreateInfo *pCreateInfos,
+                                                         const VkAllocationCallbacks *pAllocator, VkPipeline *pPipelines)
+{
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
+    VkResult result = VK_SUCCESS;
+    uint32_t i;
+    for (i = 0; i < createInfoCount; i++) {
+        VkResult r = pvk_graphics_pipeline_create((struct pvk_device *)device, (struct pvk_pipeline_cache *)pipelineCache,
+                                                  &pCreateInfos[i], alloc, &pPipelines[i]);
         if (r == VK_SUCCESS)
             continue;
         if (result == VK_SUCCESS)
@@ -48069,80 +52662,27 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
 VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImage2KHR(VkDevice device, const VkAcquireNextImageInfoKHR* pAcquireInfo, uint32_t* pImageIndex) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImageKHR(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t* pImageIndex) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t query, VkQueryControlFlags flags) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo* pRenderPassBegin, VkSubpassContents contents) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass2(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo* pRenderPassBegin, const VkSubpassBeginInfo* pSubpassBeginInfo) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, const VkRenderingInfo* pRenderingInfo) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, VkIndexType indexType) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer2(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size, VkIndexType indexType) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers(VkCommandBuffer commandBuffer, uint32_t firstBinding, uint32_t bindingCount, const VkBuffer* pBuffers, const VkDeviceSize* pOffsets) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers2(VkCommandBuffer commandBuffer, uint32_t firstBinding, uint32_t bindingCount, const VkBuffer* pBuffers, const VkDeviceSize* pOffsets, const VkDeviceSize* pSizes, const VkDeviceSize* pStrides) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdClearAttachments(VkCommandBuffer commandBuffer, uint32_t attachmentCount, const VkClearAttachment* pAttachments, uint32_t rectCount, const VkClearRect* pRects) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyQueryPoolResults(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount, VkBuffer dstBuffer, VkDeviceSize dstOffset, VkDeviceSize stride, VkQueryResultFlags flags) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdDraw(VkCommandBuffer commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexed(VkCommandBuffer commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexedIndirect(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, uint32_t drawCount, uint32_t stride) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexedIndirectCount(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, VkBuffer countBuffer, VkDeviceSize countBufferOffset, uint32_t maxDrawCount, uint32_t stride) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndirect(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, uint32_t drawCount, uint32_t stride) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndirectCount(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, VkBuffer countBuffer, VkDeviceSize countBufferOffset, uint32_t maxDrawCount, uint32_t stride) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdEndQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t query) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass(VkCommandBuffer commandBuffer) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass2(VkCommandBuffer commandBuffer, const VkSubpassEndInfo* pSubpassEndInfo) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdEndRendering(VkCommandBuffer commandBuffer) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass(VkCommandBuffer commandBuffer, VkSubpassContents contents) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass2(VkCommandBuffer commandBuffer, const VkSubpassBeginInfo* pSubpassBeginInfo, const VkSubpassEndInfo* pSubpassEndInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdResetEvent(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags stageMask) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdResetEvent2(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags2 stageMask) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdResetQueryPool(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetBlendConstants(VkCommandBuffer commandBuffer, const float blendConstants[4]) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetCullMode(VkCommandBuffer commandBuffer, VkCullModeFlags cullMode) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthBias(VkCommandBuffer commandBuffer, float depthBiasConstantFactor, float depthBiasClamp, float depthBiasSlopeFactor) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthBiasEnable(VkCommandBuffer commandBuffer, VkBool32 depthBiasEnable) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthBounds(VkCommandBuffer commandBuffer, float minDepthBounds, float maxDepthBounds) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthBoundsTestEnable(VkCommandBuffer commandBuffer, VkBool32 depthBoundsTestEnable) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthCompareOp(VkCommandBuffer commandBuffer, VkCompareOp depthCompareOp) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthTestEnable(VkCommandBuffer commandBuffer, VkBool32 depthTestEnable) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthWriteEnable(VkCommandBuffer commandBuffer, VkBool32 depthWriteEnable) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uint32_t deviceMask) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetEvent(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags stageMask) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetEvent2(VkCommandBuffer commandBuffer, VkEvent event, const VkDependencyInfo* pDependencyInfo) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetFrontFace(VkCommandBuffer commandBuffer, VkFrontFace frontFace) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetLineStipple(VkCommandBuffer commandBuffer, uint32_t lineStippleFactor, uint16_t lineStipplePattern) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetLineWidth(VkCommandBuffer commandBuffer, float lineWidth) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetPrimitiveRestartEnable(VkCommandBuffer commandBuffer, VkBool32 primitiveRestartEnable) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetPrimitiveTopology(VkCommandBuffer commandBuffer, VkPrimitiveTopology primitiveTopology) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetRasterizerDiscardEnable(VkCommandBuffer commandBuffer, VkBool32 rasterizerDiscardEnable) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetRenderingAttachmentLocations(VkCommandBuffer commandBuffer, const VkRenderingAttachmentLocationInfo* pLocationInfo) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetRenderingInputAttachmentIndices(VkCommandBuffer commandBuffer, const VkRenderingInputAttachmentIndexInfo* pInputAttachmentIndexInfo) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetScissor(VkCommandBuffer commandBuffer, uint32_t firstScissor, uint32_t scissorCount, const VkRect2D* pScissors) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetScissorWithCount(VkCommandBuffer commandBuffer, uint32_t scissorCount, const VkRect2D* pScissors) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetStencilCompareMask(VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMask, uint32_t compareMask) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetStencilOp(VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMask, VkStencilOp failOp, VkStencilOp passOp, VkStencilOp depthFailOp, VkCompareOp compareOp) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetStencilReference(VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMask, uint32_t reference) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetStencilTestEnable(VkCommandBuffer commandBuffer, VkBool32 stencilTestEnable) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetStencilWriteMask(VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMask, uint32_t writeMask) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetViewport(VkCommandBuffer commandBuffer, uint32_t firstViewport, uint32_t viewportCount, const VkViewport* pViewports) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetViewportWithCount(VkCommandBuffer commandBuffer, uint32_t viewportCount, const VkViewport* pViewports) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdWaitEvents(VkCommandBuffer commandBuffer, uint32_t eventCount, const VkEvent* pEvents, VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask, uint32_t memoryBarrierCount, const VkMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const VkBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const VkImageMemoryBarrier* pImageMemoryBarriers) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdWaitEvents2(VkCommandBuffer commandBuffer, uint32_t eventCount, const VkEvent* pEvents, const VkDependencyInfo* pDependencyInfos) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp(VkCommandBuffer commandBuffer, VkPipelineStageFlagBits pipelineStage, VkQueryPool queryPool, uint32_t query) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp2(VkCommandBuffer commandBuffer, VkPipelineStageFlags2 stage, VkQueryPool queryPool, uint32_t query) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateEvent(VkDevice device, const VkEventCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkEvent* pEvent) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateFramebuffer(VkDevice device, const VkFramebufferCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkFramebuffer* pFramebuffer) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateGraphicsPipelines(VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount, const VkGraphicsPipelineCreateInfo* pCreateInfos, const VkAllocationCallbacks* pAllocator, VkPipeline* pPipelines) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateMetalSurfaceEXT(VkInstance instance, const VkMetalSurfaceCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineCache(VkDevice device, const VkPipelineCacheCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkPipelineCache* pPipelineCache) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreatePrivateDataSlot(VkDevice device, const VkPrivateDataSlotCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkPrivateDataSlot* pPrivateDataSlot) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkQueryPool* pQueryPool) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRenderPassCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkRenderPass* pRenderPass) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass2(VkDevice device, const VkRenderPassCreateInfo2* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkRenderPass* pRenderPass) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSamplerYcbcrConversion(VkDevice device, const VkSamplerYcbcrConversionCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSamplerYcbcrConversion* pYcbcrConversion) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSwapchainKHR* pSwapchain) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkDestroyEvent(VkDevice device, VkEvent event, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyFramebuffer(VkDevice device, VkFramebuffer framebuffer, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineCache(VkDevice device, VkPipelineCache pipelineCache, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyPrivateDataSlot(VkDevice device, VkPrivateDataSlot privateDataSlot, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyQueryPool(VkDevice device, VkQueryPool queryPool, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyRenderPass(VkDevice device, VkRenderPass renderPass, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySamplerYcbcrConversion(VkDevice device, VkSamplerYcbcrConversion ycbcrConversion, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
@@ -48159,13 +52699,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDe
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfacePresentModesKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pPresentModeCount, VkPresentModeKHR* pPresentModes) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice physicalDevice, uint32_t queueFamilyIndex, VkSurfaceKHR surface, VkBool32* pSupported) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceToolProperties(VkPhysicalDevice physicalDevice, uint32_t* pToolCount, VkPhysicalDeviceToolProperties* pToolProperties) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetPipelineCacheData(VkDevice device, VkPipelineCache pipelineCache, size_t* pDataSize, void* pData) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkGetPrivateData(VkDevice device, VkObjectType objectType, uint64_t objectHandle, VkPrivateDataSlot privateDataSlot, uint64_t* pData) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetQueryPoolResults(VkDevice device, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* pData, VkDeviceSize stride, VkQueryResultFlags flags) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkGetRenderAreaGranularity(VkDevice device, VkRenderPass renderPass, VkExtent2D* pGranularity) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetRenderingAreaGranularity(VkDevice device, const VkRenderingAreaInfo* pRenderingAreaInfo, VkExtent2D* pGranularity) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesKHR(VkDevice device, VkSwapchainKHR swapchain, uint32_t* pSwapchainImageCount, VkImage* pSwapchainImages) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkMergePipelineCaches(VkDevice device, VkPipelineCache dstCache, uint32_t srcCacheCount, const VkPipelineCache* pSrcCaches) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkQueueBindSparse(VkQueue queue, uint32_t bindInfoCount, const VkBindSparseInfo* pBindInfo, VkFence fence) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkResetEvent(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
@@ -48252,8 +52788,10 @@ static const struct pvk_entrypoint {
     { "vkCmdDrawIndexed", (PFN_vkVoidFunction)vkCmdDrawIndexed, PVK_SCOPE_DEVICE },
     { "vkCmdDrawIndexedIndirect", (PFN_vkVoidFunction)vkCmdDrawIndexedIndirect, PVK_SCOPE_DEVICE },
     { "vkCmdDrawIndexedIndirectCount", (PFN_vkVoidFunction)vkCmdDrawIndexedIndirectCount, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkCmdDrawIndexedIndirectCountKHR", (PFN_vkVoidFunction)vkCmdDrawIndexedIndirectCount, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_draw_indirect_count) },
     { "vkCmdDrawIndirect", (PFN_vkVoidFunction)vkCmdDrawIndirect, PVK_SCOPE_DEVICE },
     { "vkCmdDrawIndirectCount", (PFN_vkVoidFunction)vkCmdDrawIndirectCount, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkCmdDrawIndirectCountKHR", (PFN_vkVoidFunction)vkCmdDrawIndirectCount, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_draw_indirect_count) },
     { "vkCmdEndQuery", (PFN_vkVoidFunction)vkCmdEndQuery, PVK_SCOPE_DEVICE },
     { "vkCmdEndRenderPass", (PFN_vkVoidFunction)vkCmdEndRenderPass, PVK_SCOPE_DEVICE },
     { "vkCmdEndRenderPass2", (PFN_vkVoidFunction)vkCmdEndRenderPass2, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
