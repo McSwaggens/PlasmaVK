@@ -2256,6 +2256,113 @@ static void test_draw_kinds(void)
     free_img(&target);
 }
 
+/* Multi-draw indirect (multiDrawIndirect, drawIndirectCount): every draw of
+ * a multi-draw reads its own record and DrawIndex is its number. One point
+ * per draw, pixel = vertex: 64 draws of vkCmdDrawIndirect (rows 0-3), 64 of
+ * vkCmdDrawIndexedIndirect with a 32-byte stride (rows 4-7), a count of 64
+ * out of maxDrawCount = maxDrawIndirectCount (rows 8-11; the records past
+ * the count would draw pixel (15, 15)), and an indexed count of 32 out of
+ * 100 (rows 12-13). */
+static void test_multi_draw(void)
+{
+    static const VkVertexInputBindingDescription binding = { 0, 8, VK_VERTEX_INPUT_RATE_VERTEX };
+    static const VkVertexInputAttributeDescription attr = { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 };
+    static const float zero[4] = { 0, 0, 0, 0 };
+    VkPhysicalDeviceProperties props;
+    VkPipelineVertexInputStateCreateInfo vi;
+    struct img target = make_img(VK_FORMAT_R32G32B32A32_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 16), vb = make_buf(256 * 8), ib = make_buf(256 * 4), cnt = make_buf(16), ind;
+    uint32_t *u, i, x, y, max, c_at, d_at;
+    float *f;
+    struct pipe p;
+    VkPipeline pipeline;
+    VkCommandBuffer cb;
+    VkDeviceSize zero_offset = 0;
+    int bad = 0;
+
+    vkGetPhysicalDeviceProperties(pd, &props);
+    REQUIRE(features.multiDrawIndirect && props.limits.maxDrawIndirectCount >= 65535);
+    max = props.limits.maxDrawIndirectCount;
+    c_at = 8192;
+    d_at = c_at + max * 16;
+    ind = make_buf(d_at + 100 * 20);
+    memset(&vi, 0, sizeof(vi));
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount = 1;
+    vi.pVertexBindingDescriptions = &binding;
+    vi.vertexAttributeDescriptionCount = 1;
+    vi.pVertexAttributeDescriptions = &attr;
+    pipe_init(&p, spv_params_vs, sizeof(spv_params_vs), spv_params_fs, sizeof(spv_params_fs));
+    p.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+    p.color_formats[0] = VK_FORMAT_R32G32B32A32_UINT;
+    p.vertex = &vi;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline && ind.data);
+    f = (float *)vb.data;
+    u = (uint32_t *)ib.data;
+    for (i = 0; i < 256; i++) { /* vertex i: pixel (i % 16, i / 16) */
+        f[2 * i] = ndc_x((float)(i % W) + 0.5f);
+        f[2 * i + 1] = ndc_y((float)(i / W) + 0.5f);
+        u[i] = i;
+    }
+    for (i = 0; i < 64; i++) {
+        u = (uint32_t *)(ind.data + 16 * i); /* VkDrawIndirectCommand */
+        u[0] = 1, u[1] = 1, u[2] = i, u[3] = 0;
+        u = (uint32_t *)(ind.data + 4096 + 32 * i); /* VkDrawIndexedIndirectCommand, stride 32 */
+        u[0] = 1, u[1] = 1, u[2] = i, u[3] = 64, u[4] = 0;
+    }
+    for (i = 0; i < max; i++) {
+        u = (uint32_t *)(ind.data + c_at + 16 * i);
+        u[0] = 1, u[1] = 1, u[2] = i < 64 ? 128 + i : 255, u[3] = 0;
+    }
+    for (i = 0; i < 100; i++) {
+        u = (uint32_t *)(ind.data + d_at + 20 * i);
+        u[0] = 1, u[1] = 1, u[2] = i < 32 ? i : 63, u[3] = 192, u[4] = 0; /* past the count: pixel (15, 15) */
+    }
+    u = (uint32_t *)cnt.data;
+    u[0] = 64;
+    u[1] = 32;
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, zero, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindVertexBuffers(cb, 0, 1, &vb.buffer, &zero_offset);
+    vkCmdBindIndexBuffer(cb, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndirect(cb, ind.buffer, 0, 64, 16);
+    vkCmdDrawIndexedIndirect(cb, ind.buffer, 4096, 64, 32);
+    vkCmdDrawIndirectCount(cb, ind.buffer, c_at, cnt.buffer, 0, max, 16);
+    vkCmdDrawIndexedIndirectCount(cb, ind.buffer, d_at, cnt.buffer, 4, 100, 20);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            const uint32_t *got = (const uint32_t *)out.data + 4 * (y * W + x);
+            uint32_t v = y * W + x, e[4] = { 0, 0, 0, 0 };
+            if (v < 64) /* InstanceIndex, BaseVertex, BaseInstance, DrawIndex, each + 1 */
+                e[0] = 1, e[1] = v + 1, e[2] = 1, e[3] = v + 1;
+            else if (v < 128)
+                e[0] = 1, e[1] = 65, e[2] = 1, e[3] = v - 64 + 1;
+            else if (v < 192)
+                e[0] = 1, e[1] = v + 1, e[2] = 1, e[3] = v - 128 + 1;
+            else if (v < 224)
+                e[0] = 1, e[1] = 193, e[2] = 1, e[3] = v - 192 + 1;
+            if (memcmp(got, e, sizeof(e)) != 0) {
+                if (bad < 6)
+                    fprintf(stderr, "multi-draw: pixel (%u, %u) is (%u %u %u %u), expected (%u %u %u %u)\n", x, y, got[0],
+                            got[1], got[2], got[3], e[0], e[1], e[2], e[3]);
+                bad++;
+            }
+        }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_buf(&vb);
+    free_buf(&ib);
+    free_buf(&ind);
+    free_buf(&cnt);
+    free_img(&target);
+}
+
 /* Vertices of spv_basic_vs: position (R32G32_SFLOAT) and color
  * (R8G8B8A8_UNORM) interleaved, 12 bytes apart. */
 struct vtx {
@@ -3708,6 +3815,7 @@ int main(void)
     RUN(test_multiview);
     RUN(test_occlusion);
     RUN(test_draw_kinds);
+    RUN(test_multi_draw);
     RUN(test_indices);
     RUN(test_vertex_input);
     RUN(test_clear_attachments);

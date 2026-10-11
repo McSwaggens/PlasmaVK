@@ -31944,6 +31944,8 @@ struct pvk_device {
     struct pvk_clear_pipeline *clear_pipelines; /* vkCmdClearAttachments draws, by formats */
     id prepass_pipelines[3];                  /* draw preprocessing kernels (section 16) */
     struct pvk_fan_buffer *fan_buffers;       /* triangle fan index patterns, newest first */
+    id draw_indices;                          /* MTLBuffer of uints 0, 1, 2, ...: DrawIndex values */
+    pvk_MTLGPUAddress draw_indices_address;
     /* Queries (sections 14-16) */
     id query_copy_pipeline; /* internal kernel of vkCmdCopyQueryPoolResults, made on first use */
     /* Private data (section 9): slots reserved by VkDevicePrivateDataCreateInfo */
@@ -32172,7 +32174,8 @@ static void pvk_physical_device_init_limits(struct pvk_physical_device *pd)
     l->subTexelPrecisionBits = 8;
     l->mipmapPrecisionBits = 8;
     l->maxDrawIndexedIndexValue = UINT32_MAX; /* fullDrawIndexUint32 */
-    l->maxDrawIndirectCount = 1;              /* multiDrawIndirect is not supported */
+    /* multiDrawIndirect: Metal draws a multi-draw's records one by one (section 16, "Draw indices"); Vulkan's minimum */
+    l->maxDrawIndirectCount = 65535;
     l->maxSamplerLodBias = 15.984375f;        /* MTLSamplerDescriptor.lodBias: S4.6 in [-16, 15.999] */
     l->maxSamplerAnisotropy = 16.0f;          /* MTLSamplerDescriptor.maxAnisotropy: 1 to 16 */
     l->maxViewports = 16;                     /* multiViewport (FST: 16 viewports and scissors) */
@@ -32568,13 +32571,13 @@ static void pvk_physical_device_init_descriptor_features(struct pvk_physical_dev
  *   alphaToOne             MTL4AlphaToOneState
  *   dualSrcBlend           MSL [[color(0), index(1)]] and the Source1 blend factors
  *   shaderDrawParameters   BaseVertex, BaseInstance and DrawIndex (section 13);
- *                          DrawIndex is 0, right as long as multiDrawIndirect is
- *                          not reported (one draw per command)
+ *                          DrawIndex is read from a buffer the encoder points at
+ *                          each draw's number (section 16, "Draw indices")
+ *   multiDrawIndirect      the records drawn one by one, maxDrawIndirectCount
+ *                          65535 (Vulkan's minimum: a count draw's loop length)
  *   drawIndirectCount      draw preprocessing (section 16)
  *   shaderOutputLayer, shaderOutputViewportIndex   vertex shaders write
  *                          [[render_target_array_index]] / [[viewport_array_index]]
- * multiDrawIndirect is not reported: Metal draws indirect records one by one,
- * which works, but DrawIndex would need the translator to read it per draw.
  * fillModeNonSolid needs points too (Metal fills triangles or lines only),
  * wideLines and logicOp have no Metal equivalent. depthBounds is not
  * reported: Metal 4 encoders have setDepthTestMinBound:maxBound:, but on
@@ -32588,6 +32591,7 @@ static void pvk_physical_device_init_graphics_features(struct pvk_physical_devic
     c->occlusionQueryPrecise = VK_TRUE; /* visibility results count samples exactly */
     c->inheritedQueries = VK_TRUE;      /* secondaries run in the primary's render encoder */
     c->dualSrcBlend = VK_TRUE;
+    c->multiDrawIndirect = VK_TRUE;
     pd->features.v11.shaderDrawParameters = VK_TRUE;
     pd->features.v12.drawIndirectCount = VK_TRUE;
     pd->features.v12.shaderOutputViewportIndex = VK_TRUE;
@@ -37431,8 +37435,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *
  *   Buffer indices: set N at N, the vertex buffer table at 29
  *   (PVK_MSL_VERTEX_TABLE_BUFFER, options->vertex_table_buffer), push
- *   constants at 30. Graphics stages bind theirs separately (Metal has
- *   per-stage tables), with the same indices.
+ *   constants at 30, the draw index at 28 (PVK_MSL_DRAW_INDEX_BUFFER: a
+ *   uint, vertex shaders reading DrawIndex). Graphics stages bind theirs
+ *   separately (Metal has per-stage tables), with the same indices.
  *
  * STAGE INTERFACE (vertex and fragment shaders; pvk_spv_emit_stage)
  *   The SPIR-V entry point becomes an ordinary helper function, and the
@@ -37470,8 +37475,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *     VertexIndex [[vertex_id]] and InstanceIndex [[instance_id]] (Metal's
  *     include the base vertex / vertexStart and the base instance, as
  *     Vulkan's do), BaseVertex [[base_vertex]] (vertexStart for non-indexed
- *     draws), BaseInstance [[base_instance]], DrawIndex 0 (one draw per
- *     command), ViewIndex (multiview by vertex amplification: the
+ *     draws), BaseInstance [[base_instance]], DrawIndex (the uint at buffer
+ *     index 28, which the encoder points at each draw's number: Metal has
+ *     no multi-draw), ViewIndex (multiview by vertex amplification: the
  *     options->view_mask bit of [[amplification_id]], 0 without multiview).
  *     FragCoord [[position]] (origin top left, centers at .5, w = 1/w; at
  *     the sample with sample shading), FrontFacing, SampleId, SamplePosition
@@ -37740,6 +37746,7 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
 
 #define PVK_MSL_PUSH_CONSTANT_BUFFER 30u
 #define PVK_MSL_VERTEX_TABLE_BUFFER 29u
+#define PVK_MSL_DRAW_INDEX_BUFFER 28u
 #define PVK_MSL_MAX_SETS 30u
 #define PVK_MSL_MAX_LOCATIONS 32u /* stage input/output locations */
 
@@ -46467,6 +46474,7 @@ static void pvk_spv_vertex_fetch(struct pvk_spv *ctx, uint32_t loc, enum pvk_msl
 #define PVK_SPV_NEED_VIEWPORT 0x800u
 #define PVK_SPV_NEED_PRIMITIVE_ID 0x1000u
 #define PVK_SPV_NEED_LANE 0x2000u
+#define PVK_SPV_NEED_DRAW_INDEX 0x4000u
 
 /* Global indices the entry point's OpEntryPoint lists. */
 static uint32_t *pvk_spv_interface_list(struct pvk_spv *ctx)
@@ -46637,7 +46645,8 @@ static void pvk_spv_stage_builtin(struct pvk_spv *ctx, uint32_t builtin, uint32_
         break;
     case 100000u + PVK_SPV_BuiltInDrawIndex:
         res->builtins |= PVK_MSL_BUILTIN_DRAW_INDEX;
-        e = "0u"; /* one draw per command (multiDrawIndirect is not supported) */
+        *need |= PVK_SPV_NEED_DRAW_INDEX; /* the encoder points buffer 28 at the draw's number */
+        e = "pvk_draw_index";
         break;
     case 100000u + PVK_SPV_BuiltInViewIndex:
     case PVK_SPV_BuiltInViewIndex:
@@ -47075,6 +47084,12 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_primitive_id [[primitive_id]]");
     if (need & PVK_SPV_NEED_LANE)
         PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_lane [[thread_index_in_simdgroup]]");
+    if (need & PVK_SPV_NEED_DRAW_INDEX) {
+        if ((res->set_mask >> PVK_MSL_DRAW_INDEX_BUFFER) & 1u)
+            pvk_spv_fail(ctx, "the draw index's buffer index %u is taken", PVK_MSL_DRAW_INDEX_BUFFER);
+        PVK_SPV_PUSH(ctx, params, nparams, cap,
+                     pvk_spv_fmt(ctx, "constant uint& pvk_draw_index [[buffer(%u)]]", PVK_MSL_DRAW_INDEX_BUFFER));
+    }
     for (set = 0; set < PVK_MSL_MAX_SETS; set++)
         if (res->set_mask & (1u << set))
             PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_fmt(ctx, "constant pvk_set%u& set%u [[buffer(%u)]]", set, set, set));
@@ -49456,6 +49471,7 @@ struct pvk_gfx_pipeline {
     bool depth_clamp;
     bool lines;                     /* polygon mode LINE */
     bool has_fragment;
+    bool draw_index;                /* the vertex shader reads DrawIndex (buffer index 28) */
 };
 
 /* ---- Packets ---- */
@@ -50974,6 +50990,7 @@ struct pvk_render {
     uint8_t map_set[PVK_MAX_COLOR_ATTACHMENTS]; /* the color attachment map set */
     bool map_valid;
     uint32_t amplification; /* vertex amplification count set (0: never set) */
+    uint32_t draw_index;    /* DrawIndex bound at buffer index 28 (UINT32_MAX: none) */
     /* Occlusion queries: the pass's visibility result buffer is vis_pool's */
     struct pvk_query_pool *vis_pool;
     bool counting;          /* visibility counting is on */
@@ -51870,8 +51887,10 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
  * Direct non-indexed fans draw the fan pattern (triangle t: t+1, t+2, 0)
  * with firstVertex as the base vertex, no preprocessing needed. Indirect
  * draws whose indices are widened read the whole bound index range,
- * widened. Metal draws records one by one: at most maxDrawIndirectCount
- * per command, which Vulkan also requires of the count. */
+ * widened. Metal draws records one by one ("Draw indices" below): at most
+ * maxDrawIndirectCount per command, which Vulkan also requires of the
+ * count, so a count draw encodes min(maxDrawCount, maxDrawIndirectCount)
+ * draws, those past the count drawing nothing. */
 
 static pthread_mutex_t pvk_graphics_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -52058,6 +52077,54 @@ static const struct pvk_fan_buffer *pvk_fan_buffer(struct pvk_device *device, ui
     }
     pthread_mutex_unlock(&pvk_graphics_lock);
     return f;
+}
+
+/* ---- Draw indices ----
+ *
+ * Vertex shaders read DrawIndex from buffer index 28 (section 13). Metal
+ * has no multi-draw: the draws of a multi-draw command are encoded one by
+ * one, each with buffer index 28 pointing at its number in a buffer of the
+ * uints 0, 1, ..., maxDrawIndirectCount - 1 (made on first use), so a draw
+ * costs one more argument table entry, nothing uploaded. Draws of other
+ * commands read 0. */
+
+static pvk_MTLGPUAddress pvk_draw_indices(struct pvk_device *device)
+{
+    pvk_MTLGPUAddress address;
+    pthread_mutex_lock(&pvk_graphics_lock);
+    if (!device->draw_indices) {
+        uint32_t n = device->physical_device->properties.limits.maxDrawIndirectCount, i;
+        id b = pvk_MTLDevice_newBufferWithLength_options(
+            device->physical_device->mtl_device, (unsigned long)n * 4,
+            PVK_MTLResourceStorageModeShared | PVK_MTLResourceHazardTrackingModeUntracked);
+        if (b) {
+            uint32_t *p = pvk_MTLBuffer_contents(b);
+            for (i = 0; i < n; i++)
+                p[i] = i;
+            pvk_device_make_resident(device, b);
+            device->draw_indices = b;
+            device->draw_indices_address = pvk_MTLBuffer_gpuAddress(b);
+        }
+    }
+    address = device->draw_indices_address;
+    pthread_mutex_unlock(&pvk_graphics_lock);
+    return address;
+}
+
+/* Points buffer index 28 at DrawIndex d (< maxDrawIndirectCount). */
+static bool pvk_render_draw_index(struct pvk_encoder *e, uint32_t d)
+{
+    struct pvk_render *r = &e->render;
+    pvk_MTLGPUAddress base;
+    if (r->draw_index == d)
+        return true;
+    if (!(base = pvk_draw_indices(e->device))) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return false;
+    }
+    pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, base + 4ull * d, PVK_MSL_DRAW_INDEX_BUFFER);
+    r->draw_index = d;
+    return true;
 }
 
 /* ---- Draw preprocessing ---- */
@@ -52305,7 +52372,9 @@ static void pvk_prepass_draw(struct pvk_encoder *e, const struct pvk_draw_track 
             return;
         a.records = d->address;
         a.stride = d->stride;
-        a.n = d->draw_count;
+        a.n = d->draw_count; /* the encoder draws at most maxDrawIndirectCount */
+        if (a.n > e->device->physical_device->properties.limits.maxDrawIndirectCount)
+            a.n = e->device->physical_device->properties.limits.maxDrawIndirectCount;
         a.has_count = d->count_address != 0;
         a.count = d->count_address;
         a.index_size = d->indexed ? isize : 0;
@@ -53036,6 +53105,7 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     r->ds_state = NULL;
     r->map_valid = false;
     r->amplification = 0;
+    r->draw_index = UINT32_MAX;
     r->counting = false;
     r->pending_count = 0;
     e->push_bound = 0; /* the render stages have not seen the push constants */
@@ -53432,6 +53502,8 @@ static bool pvk_render_flush(struct pvk_encoder *e)
         e->push_bound = need;
         e->push_dirty = false;
     }
+    if (g->draw_index && !pvk_render_draw_index(e, 0)) /* multi-draws set theirs per draw */
+        return false;
     return true;
 }
 
@@ -53524,11 +53596,13 @@ static void pvk_encode_draw_indirect(struct pvk_encoder *e, const struct pvk_cmd
     }
     if (conv & PVK_CV_FAN)
         indexed = true; /* non-indexed fans draw the fan pattern */
-    if (c->count_address && n > max) /* the count may not exceed maxDrawIndirectCount */
+    if (n > max) /* drawCount, and the count of a count buffer, are at most maxDrawIndirectCount */
         n = max;
     if (indexed && !indices)
         return;
     for (d = 0; d < n; d++) {
+        if (r->pipeline->gfx->draw_index && !pvk_render_draw_index(e, d))
+            return;
         if (indexed)
             pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexType_indexBuffer_indexBufferLength_indirectBuffer(
                 r->enc, prim, type, indices, indices_size, records + d * stride);
@@ -53599,6 +53673,11 @@ static void pvk_device_finish_graphics(struct pvk_device *device)
         pvk_device_evict(device, f->buffer);
         pvk_release(f->buffer);
         pvk_free(alloc, f);
+    }
+    if (device->draw_indices) {
+        pvk_device_evict(device, device->draw_indices);
+        pvk_release(device->draw_indices);
+        device->draw_indices = NULL;
     }
     for (i = 0; i < PVK_ARRAY_SIZE(device->prepass_pipelines); i++) {
         pvk_release(device->prepass_pipelines[i]);
@@ -55253,8 +55332,11 @@ struct pvk_cache_info {
     uint32_t dispatch_base_offset, workgroup[3];
     /* graphics pipelines: dispatch_base is "layered" (the vertex shader
      * writes Layer or ViewportIndex), dispatch_base_offset "invariant"
-     * (Position is invariant: compile with preserveInvariance) */
+     * (Position is invariant: compile with preserveInvariance), workgroup[0]
+     * PVK_GFX_* flags */
 };
+
+#define PVK_GFX_DRAW_INDEX 0x1u /* the vertex shader reads DrawIndex */
 
 struct pvk_cache_entry {
     struct pvk_cache_entry *next;
@@ -56652,6 +56734,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         ci.vertex_bindings = vres.vertex_bindings;
         ci.dispatch_base = vres.layered; /* graphics: the vertex shader writes Layer or ViewportIndex */
         ci.dispatch_base_offset = vres.invariant; /* graphics: Position is invariant */
+        ci.workgroup[0] = (vres.builtins & PVK_MSL_BUILTIN_DRAW_INDEX) ? PVK_GFX_DRAW_INDEX : 0;
     }
     pvk_free(alloc, bindings);
     pvk_free(alloc, ycbcr);
@@ -56691,6 +56774,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     pipeline->set_mask = ci.set_mask;
     pipeline->gfx = (struct pvk_gfx_pipeline *)(pipeline + 1);
     gfx.vertex_bindings = ci.vertex_bindings;
+    gfx.draw_index = (ci.workgroup[0] & PVK_GFX_DRAW_INDEX) != 0;
     *pipeline->gfx = gfx;
     pvk_creation_feedback(info->pNext, start, hit != 0);
     *pPipeline = (VkPipeline)pipeline;

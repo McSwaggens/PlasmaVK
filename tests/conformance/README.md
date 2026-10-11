@@ -250,7 +250,6 @@ a required behaviour.
 | `resources.buffer_capture_replay` | Metal cannot place a resource at a requested GPU address, so `bufferDeviceAddressCaptureReplay` is unsupported. |
 | `extensions.instance_layer_extensions` | No layers: PlasmaVK is linked directly, without a loader. |
 | `features.shaderInt64` | Required only with 64-bit shader atomics, which Apple7/Apple8 GPUs lack. |
-| `drawing.draw_index_multi_draw` | `multiDrawIndirect` is not supported (Metal draws indirect records one at a time and the translator has no per-draw DrawIndex), so `maxDrawIndirectCount` is 1 and no multi-draw has a DrawIndex other than 0. |
 | `fragops.depth_bounds_test` | `depthBounds` is not reported: Metal 4's `setDepthTestMinBound:maxBound:` traps in the Apple9 (M4) driver. |
 | `framebuffer.logic_op` | Metal has no logic operations. |
 | `features.samplerFilterMinmax`, `formats.filter_minmax_formats`, `samplers.create_sampler_reduction` | Required only with VK_EXT_sampler_filter_minmax, which PlasmaVK offers from Apple10 (M5, A19): Metal's `MTLSamplerDescriptor.reductionMode` is an Apple10 feature (FST "Sampler minimum and maximum reduction"), and on Apple9 (M4 Max) it is accepted and ignored, minimum and maximum sampling as the weighted average. A shader cannot emulate it: a sampler descriptor is only its MTLResourceID. |

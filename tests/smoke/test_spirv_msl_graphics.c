@@ -3257,7 +3257,7 @@ static void test_interface_opt(void)
 
 /* VertexIndex includes firstVertex / vertexOffset, InstanceIndex includes
  * firstInstance; BaseVertex is firstVertex for vkCmdDraw and vertexOffset
- * for vkCmdDrawIndexed; DrawIndex is 0. */
+ * for vkCmdDrawIndexed; DrawIndex is the uint at PVK_MSL_DRAW_INDEX_BUFFER. */
 static void test_draw_parameters(void)
 {
     static const pvk_MTLPixelFormat fmts[2] = { PVK_MTLPixelFormatRGBA32Uint, PVK_MTLPixelFormatR32Uint };
@@ -3305,12 +3305,14 @@ static void test_draw_parameters(void)
     draw.instance_count = 2;
     draw.base_instance = 2;
     draw.base_vertex = 10;
+    draw.draw_index = 6; /* the seventh draw of a multi-draw */
     REQUIRE(mr_render(&pass, &draw, 1));
     mt_download(tgt[0], 0, 0, 8, 8, 1, 16, ids);
+    mt_download(tgt[1], 0, 0, 8, 8, 1, 4, draws);
     for (row = 0; row < 2; row++)
         for (col = 0; col < 4; col++) {
             const uint32_t *p = &ids[(row * 8 + col) * 4];
-            bad += p[0] != 10u + col || p[1] != 2u + row || p[2] != 10 || p[3] != 2;
+            bad += p[0] != 10u + col || p[1] != 2u + row || p[2] != 10 || p[3] != 2 || draws[row * 8 + col] != 7;
         }
     CHECK(bad == 0);
     pvk_release(pso);

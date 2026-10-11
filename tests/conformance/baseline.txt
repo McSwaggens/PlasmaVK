@@ -564,6 +564,7 @@ drawing.primitive_topologies
 drawing.draw_indirect
 drawing.draw_indirect_count
 drawing.draw_parameters
+drawing.draw_index_multi_draw
 drawing.vertex_attributes
 drawing.vertex_attribute_divisor
 drawing.vertex_binding_stride_dynamic

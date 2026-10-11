@@ -192,6 +192,7 @@ struct mr_draw {
     pvk_MTLCompareFunction depth_compare; /* 0 (never): no depth state */
     bool depth_write;
     float blend_color[4];
+    uint32_t draw_index;              /* DrawIndex (bound at PVK_MSL_DRAW_INDEX_BUFFER) */
 };
 
 static inline void mr_bind_stage(id enc, const struct pvk_msl_result *res, const struct mr_draw *d, bool fragment,
@@ -312,6 +313,10 @@ static inline bool mr_render(const struct mr_pass *pass, const struct mr_draw *d
                 PVK_MSG(void, (id, SEL, const void *, unsigned long, unsigned long))(
                     enc, sel_registerName("setVertexBytes:length:atIndex:"), table, sizeof(table),
                     d->vs->vertex_table_buffer);
+            if (d->vs->builtins & PVK_MSL_BUILTIN_DRAW_INDEX)
+                PVK_MSG(void, (id, SEL, const void *, unsigned long, unsigned long))(
+                    enc, sel_registerName("setVertexBytes:length:atIndex:"), &d->draw_index, sizeof(d->draw_index),
+                    PVK_MSL_DRAW_INDEX_BUFFER);
         }
         if (d->fs) {
             mr_bind_stage(enc, d->fs, d, true, &sets[nsets]);
