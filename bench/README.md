@@ -159,4 +159,6 @@ its other configurations have run:
   sometimes reports implausible minimums, such as a few µs for a 22 MB
   `image_mips_2048` copy or for `chain_100`, whose median is about 2 ms.
   This happens most with transfer-only frames. Compare medians, and
-  cross-check with `frame_us`.
+  cross-check with `frame_us`. PlasmaVK takes every timestamp once all
+  earlier work of the queue is done (`plasmavk.h` section 14), so its
+  `gpu_us` is the frame's own GPU time, not counting earlier frames.

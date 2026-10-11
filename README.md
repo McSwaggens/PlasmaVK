@@ -15,7 +15,8 @@ linker flags: the header links Metal itself.
 
 **Status:** early. Instances, devices and queues, memory and buffers, command
 buffers with transfer and compute commands, queue submission, fences, binary
-and timeline semaphores, and compute pipelines (SPIR-V translated to MSL,
+and timeline semaphores, events, timestamp queries (query pools, results and
+their copies), private data, and compute pipelines (SPIR-V translated to MSL,
 push constants and buffer device addresses) work. Formats (every core format
 Metal can hold, compressed BC/ETC2/ASTC included), images, image and buffer
 views, samplers, image copies, blits, clears and resolves, and host image

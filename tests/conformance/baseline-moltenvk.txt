@@ -8,6 +8,15 @@
 #   extensions.device_extension_needs_instance_extension
 #                                                    lists VK_KHR_swapchain etc.
 #                                                    without VK_KHR_surface enabled
+#   queries.copy_results_same_commands               copies 0 for timestamps written
+#   queries.copy_results_wait                        earlier in the command buffer
+#                                                    (intermittent)
+#   synchronization.event_device_state               vkCmdSetEvent / vkCmdResetEvent
+#                                                    in one command buffer not ordered
+#                                                    by a pipeline barrier
+#   privatedata.private_data_slot_destroy_null       crashes on VK_NULL_HANDLE
+#   privatedata.private_data_new_objects             a new object at a destroyed one's
+#                                                    address reads its private data
 
 initialization.enumerate_instance_version
 initialization.gipa_global_commands_null_instance
@@ -464,3 +473,27 @@ descriptorsets.variable_count_partially_bound
 descriptorsets.set_layout_lifetime
 descriptorsets.image_descriptors
 descriptorsets.immutable_samplers
+queries.create_query_pools
+queries.host_reset_unavailable
+queries.cmd_reset_unavailable
+queries.occlusion_partial_unavailable
+queries.timestamp_available
+queries.timestamp_order
+queries.timestamp_period
+queries.timestamp_write2
+queries.timestamp_secondary
+queries.timestamp_rewrite
+queries.results_layout
+queries.results_wait
+queries.copy_results
+synchronization.event_host_state
+synchronization.event_device_state2
+synchronization.event_device_signal_host_sees
+synchronization.event_wait_host_signal
+synchronization.event_wait_device_signal
+synchronization.event_wait2
+privatedata.private_data_slots
+privatedata.private_data_objects
+privatedata.private_data_many
+privatedata.private_data_reserved
+privatedata.private_data_allocator
