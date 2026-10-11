@@ -31348,6 +31348,52 @@ static inline void pvk_MTLResidencySet_addAllocation(id self, id allocation) { P
 static inline void pvk_MTLResidencySet_removeAllocation(id self, id allocation) { PVK_SEL_CACHE("removeAllocation:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, allocation); }
 static inline void pvk_MTLResidencySet_commit(id self) { PVK_SEL_CACHE("commit"); PVK_MSG(void, (id, SEL))(self, pvk_sel_); }
 static inline void pvk_MTL4CommandQueue_addResidencySet(id self, id residencySet) { PVK_SEL_CACHE("addResidencySet:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, residencySet); }
+static inline id pvk_NSString_stringWithUTF8String(const char * nullTerminatedCString) { PVK_CLASS_CACHE("NSString"); PVK_SEL_CACHE("stringWithUTF8String:"); return PVK_MSG(id, (id, SEL, const char *))((id)pvk_cls_, pvk_sel_, nullTerminatedCString); }
+static inline id pvk_NSError_localizedDescription(id self) { PVK_SEL_CACHE("localizedDescription"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline long pvk_NSError_code(id self) { PVK_SEL_CACHE("code"); return PVK_MSG(long, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_MTLDevice_newCommandBuffer(id self) { PVK_SEL_CACHE("newCommandBuffer"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_MTLDevice_newCommandAllocator(id self) { PVK_SEL_CACHE("newCommandAllocator"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_MTLDevice_newArgumentTableWithDescriptor_error(id self, id descriptor, id * error) { PVK_SEL_CACHE("newArgumentTableWithDescriptor:error:"); return PVK_MSG(id, (id, SEL, id, id *))(self, pvk_sel_, descriptor, error); }
+static inline id pvk_MTLDevice_newSharedEvent(id self) { PVK_SEL_CACHE("newSharedEvent"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_MTLDevice_newBufferWithLength_options(id self, unsigned long length, pvk_MTLResourceOptions options) { PVK_SEL_CACHE("newBufferWithLength:options:"); return PVK_MSG(id, (id, SEL, unsigned long, pvk_MTLResourceOptions))(self, pvk_sel_, length, options); }
+static inline id pvk_MTLDevice_newLibraryWithSource_options_error(id self, id source, id options, id * error) { PVK_SEL_CACHE("newLibraryWithSource:options:error:"); return PVK_MSG(id, (id, SEL, id, id, id *))(self, pvk_sel_, source, options, error); }
+static inline id pvk_MTLDevice_newComputePipelineStateWithDescriptor_options_reflection_error(id self, id descriptor, pvk_MTLPipelineOption options, id * reflection, id * error) { PVK_SEL_CACHE("newComputePipelineStateWithDescriptor:options:reflection:error:"); return PVK_MSG(id, (id, SEL, id, pvk_MTLPipelineOption, id *, id *))(self, pvk_sel_, descriptor, options, reflection, error); }
+static inline void pvk_MTL4CommandQueue_commit_count(id self, const id * commandBuffers, unsigned long count) { PVK_SEL_CACHE("commit:count:"); PVK_MSG(void, (id, SEL, const id *, unsigned long))(self, pvk_sel_, commandBuffers, count); }
+static inline void pvk_MTL4CommandQueue_commit_count_options(id self, const id * commandBuffers, unsigned long count, id options) { PVK_SEL_CACHE("commit:count:options:"); PVK_MSG(void, (id, SEL, const id *, unsigned long, id))(self, pvk_sel_, commandBuffers, count, options); }
+static inline void pvk_MTL4CommandQueue_signalEvent_value(id self, id event, uint64_t value) { PVK_SEL_CACHE("signalEvent:value:"); PVK_MSG(void, (id, SEL, id, uint64_t))(self, pvk_sel_, event, value); }
+static inline void pvk_MTL4CommandQueue_waitForEvent_value(id self, id event, uint64_t value) { PVK_SEL_CACHE("waitForEvent:value:"); PVK_MSG(void, (id, SEL, id, uint64_t))(self, pvk_sel_, event, value); }
+static inline id pvk_MTL4CommitOptions_new(void) { PVK_CLASS_CACHE("MTL4CommitOptions"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTL4CommitOptions_addFeedbackHandler(id self, void * block) { PVK_SEL_CACHE("addFeedbackHandler:"); PVK_MSG(void, (id, SEL, void *))(self, pvk_sel_, block); }
+static inline id pvk_MTL4CommitFeedback_error(id self) { PVK_SEL_CACHE("error"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(id self, id allocator) { PVK_SEL_CACHE("beginCommandBufferWithAllocator:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, allocator); }
+static inline void pvk_MTL4CommandBuffer_endCommandBuffer(id self) { PVK_SEL_CACHE("endCommandBuffer"); PVK_MSG(void, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_MTL4CommandBuffer_computeCommandEncoder(id self) { PVK_SEL_CACHE("computeCommandEncoder"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTL4CommandAllocator_reset(id self) { PVK_SEL_CACHE("reset"); PVK_MSG(void, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(id self, pvk_MTLStages afterQueueStages, pvk_MTLStages beforeStages, pvk_MTL4VisibilityOptions visibilityOptions) { PVK_SEL_CACHE("barrierAfterQueueStages:beforeStages:visibilityOptions:"); PVK_MSG(void, (id, SEL, pvk_MTLStages, pvk_MTLStages, pvk_MTL4VisibilityOptions))(self, pvk_sel_, afterQueueStages, beforeStages, visibilityOptions); }
+static inline void pvk_MTL4CommandEncoder_barrierAfterStages_beforeQueueStages_visibilityOptions(id self, pvk_MTLStages afterStages, pvk_MTLStages beforeQueueStages, pvk_MTL4VisibilityOptions visibilityOptions) { PVK_SEL_CACHE("barrierAfterStages:beforeQueueStages:visibilityOptions:"); PVK_MSG(void, (id, SEL, pvk_MTLStages, pvk_MTLStages, pvk_MTL4VisibilityOptions))(self, pvk_sel_, afterStages, beforeQueueStages, visibilityOptions); }
+static inline void pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(id self, pvk_MTLStages afterEncoderStages, pvk_MTLStages beforeEncoderStages, pvk_MTL4VisibilityOptions visibilityOptions) { PVK_SEL_CACHE("barrierAfterEncoderStages:beforeEncoderStages:visibilityOptions:"); PVK_MSG(void, (id, SEL, pvk_MTLStages, pvk_MTLStages, pvk_MTL4VisibilityOptions))(self, pvk_sel_, afterEncoderStages, beforeEncoderStages, visibilityOptions); }
+static inline void pvk_MTL4CommandEncoder_endEncoding(id self) { PVK_SEL_CACHE("endEncoding"); PVK_MSG(void, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTL4ComputeCommandEncoder_setComputePipelineState(id self, id state) { PVK_SEL_CACHE("setComputePipelineState:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, state); }
+static inline void pvk_MTL4ComputeCommandEncoder_setArgumentTable(id self, id argumentTable) { PVK_SEL_CACHE("setArgumentTable:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, argumentTable); }
+static inline void pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(id self, pvk_MTLSize threadgroupsPerGrid, pvk_MTLSize threadsPerThreadgroup) { PVK_SEL_CACHE("dispatchThreadgroups:threadsPerThreadgroup:"); PVK_MSG(void, (id, SEL, pvk_MTLSize, pvk_MTLSize))(self, pvk_sel_, threadgroupsPerGrid, threadsPerThreadgroup); }
+static inline void pvk_MTL4ComputeCommandEncoder_dispatchThreadgroupsWithIndirectBuffer_threadsPerThreadgroup(id self, pvk_MTLGPUAddress indirectBuffer, pvk_MTLSize threadsPerThreadgroup) { PVK_SEL_CACHE("dispatchThreadgroupsWithIndirectBuffer:threadsPerThreadgroup:"); PVK_MSG(void, (id, SEL, pvk_MTLGPUAddress, pvk_MTLSize))(self, pvk_sel_, indirectBuffer, threadsPerThreadgroup); }
+static inline void pvk_MTL4ComputeCommandEncoder_copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(id self, id sourceBuffer, unsigned long sourceOffset, id destinationBuffer, unsigned long destinationOffset, unsigned long size) { PVK_SEL_CACHE("copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:"); PVK_MSG(void, (id, SEL, id, unsigned long, id, unsigned long, unsigned long))(self, pvk_sel_, sourceBuffer, sourceOffset, destinationBuffer, destinationOffset, size); }
+static inline void pvk_MTL4ComputeCommandEncoder_fillBuffer_range_value(id self, id buffer, pvk_NSRange range, uint8_t value) { PVK_SEL_CACHE("fillBuffer:range:value:"); PVK_MSG(void, (id, SEL, id, pvk_NSRange, uint8_t))(self, pvk_sel_, buffer, range, value); }
+static inline id pvk_MTL4ArgumentTableDescriptor_new(void) { PVK_CLASS_CACHE("MTL4ArgumentTableDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTL4ArgumentTableDescriptor_setMaxBufferBindCount(id self, unsigned long maxBufferBindCount) { PVK_SEL_CACHE("setMaxBufferBindCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, maxBufferBindCount); }
+static inline void pvk_MTL4ArgumentTableDescriptor_setInitializeBindings(id self, bool initializeBindings) { PVK_SEL_CACHE("setInitializeBindings:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, initializeBindings); }
+static inline void pvk_MTL4ArgumentTable_setAddress_atIndex(id self, pvk_MTLGPUAddress gpuAddress, unsigned long bindingIndex) { PVK_SEL_CACHE("setAddress:atIndex:"); PVK_MSG(void, (id, SEL, pvk_MTLGPUAddress, unsigned long))(self, pvk_sel_, gpuAddress, bindingIndex); }
+static inline uint64_t pvk_MTLSharedEvent_signaledValue(id self) { PVK_SEL_CACHE("signaledValue"); return PVK_MSG(uint64_t, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTLSharedEvent_setSignaledValue(id self, uint64_t signaledValue) { PVK_SEL_CACHE("setSignaledValue:"); PVK_MSG(void, (id, SEL, uint64_t))(self, pvk_sel_, signaledValue); }
+static inline bool pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(id self, uint64_t value, uint64_t milliseconds) { PVK_SEL_CACHE("waitUntilSignaledValue:timeoutMS:"); return PVK_MSG(bool, (id, SEL, uint64_t, uint64_t))(self, pvk_sel_, value, milliseconds); }
+static inline id pvk_MTLCompileOptions_new(void) { PVK_CLASS_CACHE("MTLCompileOptions"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTLCompileOptions_setMathMode(id self, pvk_MTLMathMode mathMode) { PVK_SEL_CACHE("setMathMode:"); PVK_MSG(void, (id, SEL, pvk_MTLMathMode))(self, pvk_sel_, mathMode); }
+static inline void pvk_MTLCompileOptions_setLanguageVersion(id self, pvk_MTLLanguageVersion languageVersion) { PVK_SEL_CACHE("setLanguageVersion:"); PVK_MSG(void, (id, SEL, pvk_MTLLanguageVersion))(self, pvk_sel_, languageVersion); }
+static inline id pvk_MTLLibrary_newFunctionWithName(id self, id functionName) { PVK_SEL_CACHE("newFunctionWithName:"); return PVK_MSG(id, (id, SEL, id))(self, pvk_sel_, functionName); }
+static inline id pvk_MTLComputePipelineDescriptor_new(void) { PVK_CLASS_CACHE("MTLComputePipelineDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTLComputePipelineDescriptor_setComputeFunction(id self, id computeFunction) { PVK_SEL_CACHE("setComputeFunction:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, computeFunction); }
+static inline void pvk_MTLComputePipelineDescriptor_setMaxTotalThreadsPerThreadgroup(id self, unsigned long maxTotalThreadsPerThreadgroup) { PVK_SEL_CACHE("setMaxTotalThreadsPerThreadgroup:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, maxTotalThreadsPerThreadgroup); }
+static inline unsigned long pvk_MTLComputePipelineState_maxTotalThreadsPerThreadgroup(id self) { PVK_SEL_CACHE("maxTotalThreadsPerThreadgroup"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
 
 /* ==========================================================================
  * 5. Internals
@@ -31510,12 +31556,34 @@ struct pvk_physical_device {
     VkPhysicalDeviceMemoryProperties memory_properties;
 };
 
+struct pvk_submission;
+struct pvk_upload_chunk;
+struct pvk_deferred;
+
 struct pvk_queue {
     struct pvk_device *device;
     id mtl_queue; /* MTL4CommandQueue */
     uint32_t family_index;
     uint32_t index;
     VkDeviceQueueCreateFlags flags;
+    /* Submission (section 13). vkQueueSubmit is externally synchronized, so
+     * only it, vkQueueWaitIdle and vkDeviceWaitIdle touch these. */
+    id timeline;          /* MTLSharedEvent: reaches N when submission N is done */
+    uint64_t serial;      /* value of the last submission */
+    id argument_table;    /* MTL4ArgumentTable the encoder binds (snapshotted per dispatch) */
+    struct pvk_submission *pending, *pending_tail; /* in flight, oldest first */
+    struct pvk_submission *free_submissions;
+    struct pvk_upload_chunk *upload;               /* being filled */
+    struct pvk_upload_chunk *retired, *retired_tail; /* full, in flight, oldest first */
+    struct pvk_upload_chunk *free_chunks;
+    /* Batches whose semaphore waits the host resolves (section 13): the
+     * queue's thread commits them in order. */
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    bool lock_ready, thread_running, stop;
+    pthread_t thread;
+    struct pvk_deferred *deferred, *deferred_tail; /* to do; the head is in progress */
+    struct pvk_deferred *done;                     /* done, freed by vkQueueSubmit */
 };
 
 struct pvk_device {
@@ -31527,7 +31595,17 @@ struct pvk_device {
     struct pvk_queue queues[PVK_MAX_QUEUES];
     id residency_set; /* MTLResidencySet attached to every queue (section 9) */
     pthread_mutex_t residency_lock;
+    /* GPU execution (sections 12-14) */
+    int lost;              /* a command buffer failed: VK_ERROR_DEVICE_LOST (atomic) */
+    long feedback_pending; /* commit feedback handlers still to run (atomic) */
+    id fill_pipeline;      /* internal kernel of vkCmdFillBuffer, made on first use */
 };
+
+/* Section 13: a queue's submission state, and waiting for the GPU before
+ * the device goes away. */
+static VkResult pvk_queue_init(struct pvk_queue *queue);
+static void pvk_queue_finish(struct pvk_queue *queue);
+static void pvk_device_finish(struct pvk_device *device);
 
 static const VkAllocationCallbacks *pvk_instance_alloc(const struct pvk_instance *instance)
 {
@@ -31912,8 +31990,11 @@ static bool pvk_features_supported(struct pvk_physical_device *pd, const VkPhysi
 static void pvk_device_free(struct pvk_device *device)
 {
     uint32_t i;
-    for (i = 0; i < device->queue_count; i++)
+    pvk_device_finish(device);
+    for (i = 0; i < device->queue_count; i++) {
+        pvk_queue_finish(&device->queues[i]);
         pvk_release(device->queues[i].mtl_queue);
+    }
     pvk_release(device->residency_set);
     pthread_mutex_destroy(&device->residency_lock);
     pvk_free(pvk_device_alloc(device), device);
@@ -32025,6 +32106,12 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
             queue->family_index = info->queueFamilyIndex;
             queue->index = j;
             queue->flags = info->flags;
+            if (pvk_queue_init(queue) != VK_SUCCESS) {
+                pvk_queue_finish(queue);
+                pvk_release(queue->mtl_queue);
+                pvk_device_free(device);
+                return VK_ERROR_INITIALIZATION_FAILED;
+            }
             device->queue_count++;
         }
     }
@@ -32432,6 +32519,12 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  *   range of each resource with size_index >= 0: descriptor i of the binding
  *   at index size_index + i.
  *
+ *   Dispatch base (options->dispatch_base, for vkCmdDispatchBase): the push-
+ *   constant buffer is then `constant uchar*` and also holds the base
+ *   workgroup (3 x uint32) at result->dispatch_base_offset (16-aligned, at or
+ *   past options->dispatch_base_offset and the push constants); WorkgroupId
+ *   and GlobalInvocationId include it. The kernel always takes the buffer.
+ *
  *   Compute builtins are kernel parameters ([[thread_position_in_grid]] ...).
  *   Specialization constants (options->specialization, same layout as
  *   VkSpecializationInfo) are applied while translating, so the MSL and the
@@ -32454,16 +32547,30 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  *   stored as arrays of lines and converted on access. Arrays are values
  *   (pvk_array<T, N>), so they load, store, copy and return like SPIR-V's.
  *   Storage: StorageBuffer, Uniform, PushConstant, Workgroup, Private,
- *   Function, Input (compute builtins), descriptor arrays of buffers.
+ *   Function, Input (compute builtins), descriptor arrays of buffers,
+ *   PhysicalStorageBuffer (buffer device addresses, below).
  *   Instructions: arithmetic, bit, logical, relational, conversion,
  *   composite, memory, GLSL.std.450, barriers, 32-bit integer atomics and
  *   float atomic add, function calls, OpArrayLength, specialization
  *   constants (including OpSpecConstantOp on integers), structured control
  *   flow (if, switch with fallthrough, loops with break/continue, early
  *   returns, phis). NonSemantic debug info is ignored.
+ *   Physical storage buffer pointers (PhysicalStorageBuffer64 addressing,
+ *   GL_EXT_buffer_reference): `device T*` values, in any memory, struct or
+ *   array; OpTypeForwardPointer (structs are declared up front, so pointers
+ *   may name structs defined later or themselves); OpConvertUToPtr,
+ *   OpConvertPtrToU, OpBitcast to/from 64-bit integers and 2 x 32-bit
+ *   vectors, OpPtrAccessChain (ArrayStride of the pointer type), OpPtrEqual,
+ *   OpPtrNotEqual, atomics through them. A pointer to a runtime array is a
+ *   pointer to its first element. Loaded or converted pointers are values;
+ *   access chains on them stay lvalue expressions whose address is taken
+ *   when used as a value. Aligned memory operands are ignored: accesses
+ *   assume the alignment of the MSL type, so a vector reached through a
+ *   pointer aligned to less than its size (a small buffer_reference_align)
+ *   is not supported yet.
  *   Not yet: other stages, images/samplers, subgroup ops, 64-bit atomics,
- *   physical storage buffers, variable pointers, runtime descriptor arrays,
- *   OpCopyMemorySized, scalar-layout corner cases Metal cannot express.
+ *   variable pointers, runtime descriptor arrays, OpCopyMemorySized,
+ *   scalar-layout corner cases Metal cannot express.
  *   Semantics to know: atomics are memory_order_relaxed (barriers carry the
  *   ordering); signed integer overflow is undefined in MSL where SPIR-V
  *   wraps; NoContraction is ignored.
@@ -32501,6 +32608,11 @@ struct pvk_msl_options {
     uint32_t binding_offset_count;
     uint32_t push_constant_buffer; /* 0: PVK_MSL_PUSH_CONSTANT_BUFFER */
     uint32_t buffer_sizes_buffer;  /* 0: PVK_MSL_BUFFER_SIZES_BUFFER */
+    /* vkCmdDispatchBase: the base workgroup (3 x uint32) is read from the
+     * push-constant buffer at this byte offset (a multiple of 16, at or past
+     * the end of the push constants). */
+    bool dispatch_base;
+    uint32_t dispatch_base_offset;
 };
 
 enum pvk_msl_resource_type {
@@ -32545,6 +32657,8 @@ struct pvk_msl_result {
     uint32_t push_constant_buffer;
     uint32_t push_constant_offset; /* range the shader declares, in bytes */
     uint32_t push_constant_size;
+    bool dispatch_base; /* kernel reads the base workgroup (options->dispatch_base) */
+    uint32_t dispatch_base_offset; /* where: options->dispatch_base_offset or past the push constants */
     uint32_t buffer_size_count; /* > 0: kernel takes the buffer-sizes array */
     uint32_t buffer_sizes_buffer;
     struct pvk_msl_spec_constant *spec_constants;
@@ -32553,11 +32667,9 @@ struct pvk_msl_result {
     char error[256];
 };
 
-/* Not called by any command yet: pipelines will. */
 static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const char *entry_point,
-                                 const struct pvk_msl_options *options, struct pvk_msl_result *result)
-    __attribute__((unused));
-static void pvk_msl_result_free(struct pvk_msl_result *result) __attribute__((unused));
+                                 const struct pvk_msl_options *options, struct pvk_msl_result *result);
+static void pvk_msl_result_free(struct pvk_msl_result *result);
 
 /* ---- SPIR-V constants (from the SPIR-V specification; only what we use) ---- */
 
@@ -32615,6 +32727,7 @@ enum {
     PVK_SPV_OpCopyMemory = 63,
     PVK_SPV_OpAccessChain = 65,
     PVK_SPV_OpInBoundsAccessChain = 66,
+    PVK_SPV_OpPtrAccessChain = 67,
     PVK_SPV_OpArrayLength = 68,
     PVK_SPV_OpDecorate = 71,
     PVK_SPV_OpMemberDecorate = 72,
@@ -32637,6 +32750,8 @@ enum {
     PVK_SPV_OpSConvert = 114,
     PVK_SPV_OpFConvert = 115,
     PVK_SPV_OpQuantizeToF16 = 116,
+    PVK_SPV_OpConvertPtrToU = 117,
+    PVK_SPV_OpConvertUToPtr = 120,
     PVK_SPV_OpBitcast = 124,
     PVK_SPV_OpSNegate = 126,
     PVK_SPV_OpFNegate = 127,
@@ -32743,6 +32858,8 @@ enum {
     PVK_SPV_OpExecutionModeId = 331,
     PVK_SPV_OpDecorateId = 332,
     PVK_SPV_OpCopyLogical = 400,
+    PVK_SPV_OpPtrEqual = 401,
+    PVK_SPV_OpPtrNotEqual = 402,
     PVK_SPV_OpTerminateInvocation = 4416,
     PVK_SPV_OpDecorateString = 5632,
     PVK_SPV_OpMemberDecorateString = 5633,
@@ -32758,8 +32875,11 @@ enum {
     PVK_SPV_StoragePrivate = 6,
     PVK_SPV_StorageFunction = 7,
     PVK_SPV_StoragePushConstant = 9,
-    PVK_SPV_StorageStorageBuffer = 12
+    PVK_SPV_StorageStorageBuffer = 12,
+    PVK_SPV_StoragePhysicalStorageBuffer = 5349
 };
+
+#define PVK_SPV_AddressingPhysicalStorageBuffer64 5348u
 
 enum {
     PVK_SPV_DecoSpecId = 1,
@@ -33034,6 +33154,7 @@ struct pvk_spv {
     struct pvk_sb *out; /* where pvk_spv_line writes */
     uint32_t indent;
     bool use_array, use_padded; /* emit the pvk_array / pvk_padded templates */
+    bool use_psb;               /* PhysicalStorageBuffer pointers: declare structs up front */
     uint32_t helper_mask;       /* PVK_SPV_H_* helper functions used */
     uint32_t budget;           /* blocks left to emit */
     uint32_t aggregate_budget; /* elements left for storage aggregates */
@@ -33292,6 +33413,12 @@ static struct pvk_spv_type *pvk_spv_type(struct pvk_spv *ctx, uint32_t tid)
 static bool pvk_spv_is_scalar(const struct pvk_spv_type *t)
 {
     return t->op == PVK_SPV_OpTypeBool || t->op == PVK_SPV_OpTypeInt || t->op == PVK_SPV_OpTypeFloat;
+}
+
+/* A PhysicalStorageBuffer pointer: a value (MSL `device T*`) as well as a pointer. */
+static bool pvk_spv_is_psb(const struct pvk_spv_type *t)
+{
+    return t->op == PVK_SPV_OpTypePointer && t->storage == PVK_SPV_StoragePhysicalStorageBuffer;
 }
 
 /* Scalar type of a scalar or vector type, NULL otherwise. */
@@ -33886,6 +34013,8 @@ static int pvk_spv_shape(uint32_t op)
     case PVK_SPV_OpFunctionCall: case PVK_SPV_OpVariable: case PVK_SPV_OpLoad: case PVK_SPV_OpAccessChain:
     case PVK_SPV_OpInBoundsAccessChain: case PVK_SPV_OpArrayLength: case PVK_SPV_OpPhi:
     case PVK_SPV_OpCopyLogical: case PVK_SPV_OpAtomicLoad: case PVK_SPV_OpAtomicFAddEXT:
+    case PVK_SPV_OpPtrAccessChain: case PVK_SPV_OpConvertPtrToU: case PVK_SPV_OpConvertUToPtr:
+    case PVK_SPV_OpPtrEqual: case PVK_SPV_OpPtrNotEqual:
         return 2;
     default:
         break;
@@ -33913,8 +34042,8 @@ static const char *pvk_spv_unsupported_reason(uint32_t op)
         return "subgroup instructions are not supported yet";
     if (op >= 207 && op <= 215)
         return "derivatives are only available in fragment shaders";
-    if (op == 67 || op == 70 || op == 117 || op == 120 || (op >= 401 && op <= 403))
-        return "pointer arithmetic is not supported";
+    if (op == 70 || op == 403)
+        return "pointer arithmetic is only supported on physical storage buffer pointers";
     return "unsupported instruction";
 }
 
@@ -33961,7 +34090,7 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         t->elem = pvk_spv_arg(ctx, in, 2);
         e = pvk_spv_type(ctx, t->elem);
         if (e->op == PVK_SPV_OpTypeVoid || e->op == PVK_SPV_OpTypeRuntimeArray || e->op == PVK_SPV_OpTypeFunction ||
-            e->op == PVK_SPV_OpTypePointer)
+            (e->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(e)))
             pvk_spv_fail(ctx, "unsupported array element type");
         if (in->op == PVK_SPV_OpTypeArray) {
             uint64_t len = pvk_spv_const_uint(ctx, pvk_spv_arg(ctx, in, 3));
@@ -33978,7 +34107,8 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         for (i = 0; i < t->nmembers; i++) {
             t->members[i].type = in->w[2 + i];
             e = pvk_spv_type(ctx, in->w[2 + i]);
-            if (e->op == PVK_SPV_OpTypeVoid || e->op == PVK_SPV_OpTypeFunction || e->op == PVK_SPV_OpTypePointer ||
+            if (e->op == PVK_SPV_OpTypeVoid || e->op == PVK_SPV_OpTypeFunction ||
+                (e->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(e)) ||
                 (e->op == PVK_SPV_OpTypeRuntimeArray && i + 1 != t->nmembers))
                 pvk_spv_fail(ctx, "unsupported struct member type");
         }
@@ -33986,7 +34116,13 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     case PVK_SPV_OpTypePointer:
         t->storage = pvk_spv_arg(ctx, in, 2);
         t->elem = pvk_spv_arg(ctx, in, 3);
+        if (x->kind == PVK_SPV_K_TYPE && (x->t->op != PVK_SPV_OpTypePointer || x->t->storage != t->storage))
+            pvk_spv_fail(ctx, "pointer type %u does not match its OpTypeForwardPointer", rid);
         pvk_spv_type(ctx, t->elem);
+        if (pvk_spv_is_psb(t)) {
+            t->size = t->align = 8;
+            ctx->use_psb = true;
+        }
         break;
     case PVK_SPV_OpTypeFunction:
         t->elem = pvk_spv_arg(ctx, in, 2);
@@ -34114,14 +34250,13 @@ static void pvk_spv_capability(struct pvk_spv *ctx, uint32_t cap)
     case 4448: case 4449: case 4450: /* 8-bit storage */
     case 4464: case 4465: case 4466: case 4467: case 4468: /* float controls: Metal defaults */
     case 5345: case 5346: /* VulkanMemoryModel */
+    case 5347: /* PhysicalStorageBufferAddresses */
     case 6033: /* AtomicFloat32AddEXT */
         return;
     case 2: case 3: case 6:
         pvk_spv_fail(ctx, "only compute shaders are supported");
     case 61: case 62: case 63: case 64: case 65: case 66: case 67: case 68: case 4423:
         pvk_spv_fail(ctx, "subgroup operations are not supported yet");
-    case 5347:
-        pvk_spv_fail(ctx, "physical storage buffer pointers are not supported yet");
     case 4441: case 4442:
         pvk_spv_fail(ctx, "variable pointers are not supported");
     default:
@@ -34183,8 +34318,8 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         ctx->ids[in->w[2]].kind = PVK_SPV_K_OTHER;
         break;
     case PVK_SPV_OpMemoryModel:
-        if (pvk_spv_arg(ctx, in, 1) != 0)
-            pvk_spv_fail(ctx, "only the Logical addressing model is supported");
+        if (pvk_spv_arg(ctx, in, 1) != 0 && in->w[1] != PVK_SPV_AddressingPhysicalStorageBuffer64)
+            pvk_spv_fail(ctx, "only the Logical and PhysicalStorageBuffer64 addressing models are supported");
         break;
     case PVK_SPV_OpEntryPoint: {
         uint32_t model = pvk_spv_arg(ctx, in, 1), fid = pvk_spv_arg(ctx, in, 2);
@@ -34226,8 +34361,23 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
     case PVK_SPV_OpGroupDecorate:
     case PVK_SPV_OpGroupMemberDecorate:
         pvk_spv_fail(ctx, "decoration groups are not supported");
-    case PVK_SPV_OpTypeForwardPointer:
-        pvk_spv_fail(ctx, "physical storage buffer pointers are not supported yet");
+    case PVK_SPV_OpTypeForwardPointer: {
+        /* Declares the pointer type early (structs may contain pointers to
+         * themselves); its OpTypePointer fills it in. Not in type_order. */
+        struct pvk_spv_type *t;
+        rid = pvk_spv_arg(ctx, in, 1);
+        if (pvk_spv_arg(ctx, in, 2) != PVK_SPV_StoragePhysicalStorageBuffer)
+            pvk_spv_fail(ctx, "OpTypeForwardPointer is only supported for PhysicalStorageBuffer pointers");
+        if (rid == 0 || rid >= ctx->bound || ctx->ids[rid].kind != PVK_SPV_K_NONE || ctx->ids[rid].insn)
+            pvk_spv_fail(ctx, "OpTypeForwardPointer of invalid id %u", rid);
+        t = pvk_spv_alloc(ctx, sizeof(*t));
+        t->op = PVK_SPV_OpTypePointer;
+        t->storage = PVK_SPV_StoragePhysicalStorageBuffer;
+        t->size = t->align = 8;
+        ctx->ids[rid].kind = PVK_SPV_K_TYPE;
+        ctx->ids[rid].t = t;
+        break;
+    }
     case PVK_SPV_OpConstantTrue: case PVK_SPV_OpConstantFalse: case PVK_SPV_OpConstant:
     case PVK_SPV_OpConstantComposite: case PVK_SPV_OpConstantNull: case PVK_SPV_OpSpecConstantTrue:
     case PVK_SPV_OpSpecConstantFalse: case PVK_SPV_OpSpecConstant: case PVK_SPV_OpSpecConstantComposite:
@@ -34311,7 +34461,7 @@ static void pvk_spv_parse_body(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         if (fn->nblocks || fn->nparams >= ft->count || ft->params[fn->nparams] != in->w[1])
             pvk_spv_fail(ctx, "function %u: unexpected OpFunctionParameter", fn->fid);
         x->kind = PVK_SPV_K_PARAM;
-        if (pvk_spv_type(ctx, in->w[1])->op == PVK_SPV_OpTypePointer)
+        if (pvk_spv_type(ctx, in->w[1])->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(pvk_spv_type(ctx, in->w[1])))
             pvk_spv_new_ptr(ctx, x, in->w[2], in->w[1], in->w[2]);
         PVK_SPV_PUSH(ctx, fn->params, fn->nparams, fn->cap_params, in->w[2]);
         return;
@@ -34403,8 +34553,12 @@ static void pvk_spv_parse_body(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     }
     ctx->seen_non_phi = true;
     if (shape == 2) {
+        /* Physical pointers are values, except access chains: those stay
+         * expressions like other pointers (pvk_spv_val takes their address). */
         struct pvk_spv_type *t = pvk_spv_type(ctx, in->w[1]);
-        x->kind = t->op == PVK_SPV_OpTypePointer ? PVK_SPV_K_PTR : PVK_SPV_K_VALUE;
+        bool chain = in->op == PVK_SPV_OpAccessChain || in->op == PVK_SPV_OpInBoundsAccessChain ||
+                     in->op == PVK_SPV_OpPtrAccessChain;
+        x->kind = t->op == PVK_SPV_OpTypePointer && (chain || !pvk_spv_is_psb(t)) ? PVK_SPV_K_PTR : PVK_SPV_K_VALUE;
     } else if (shape == 1) {
         pvk_spv_fail(ctx, "unexpected instruction (opcode %u) in a function", in->op);
     } else if (in->op != PVK_SPV_OpStore && in->op != PVK_SPV_OpCopyMemory && in->op != PVK_SPV_OpControlBarrier &&
@@ -34541,6 +34695,34 @@ static uint32_t pvk_spv_round(uint32_t v, uint32_t align)
     return align > 1 ? (v + align - 1) / align * align : v;
 }
 
+/* MSL type of a PhysicalStorageBuffer pointer: `device T*`, where a pointer
+ * to a runtime array points at its first element. Structs are named before
+ * any layout (pvk_spv_layout_types), so pointers to structs defined later
+ * (forward pointers) work; other pointees are laid out before the pointer. */
+static void pvk_spv_psb_layout(struct pvk_spv *ctx, struct pvk_spv_type *t)
+{
+    struct pvk_spv_type *e;
+    if (t->msl)
+        return;
+    e = pvk_spv_type(ctx, t->elem);
+    if (e->op == PVK_SPV_OpTypeRuntimeArray && e->slot)
+        t->msl = pvk_spv_fmt(ctx, "device %s*", e->slot);
+    else if (pvk_spv_is_psb(e) && e->msl)
+        t->msl = pvk_spv_fmt(ctx, "%s device*", e->msl);
+    else if (e->msl && e->op != PVK_SPV_OpTypeVoid && e->op != PVK_SPV_OpTypeBool && e->op != PVK_SPV_OpTypePointer &&
+             e->op != PVK_SPV_OpTypeFunction && e->op != PVK_SPV_OpTypeRuntimeArray)
+        t->msl = pvk_spv_fmt(ctx, "device %s*", e->msl);
+    else
+        pvk_spv_fail(ctx, "unsupported physical pointer type (pointee %u)", t->elem);
+}
+
+static void pvk_spv_name_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_spv_type *t)
+{
+    char buf[48];
+    pvk_spv_sanitize(pvk_spv_get(ctx, tid)->name, buf, sizeof(buf));
+    t->msl = buf[0] ? pvk_spv_fmt(ctx, "%s_%u", buf, tid) : pvk_spv_fmt(ctx, "pvk_struct_%u", tid);
+}
+
 static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_spv_type *t)
 {
     uint32_t i, cur = 0, align = 1, nexplicit = 0;
@@ -34556,8 +34738,12 @@ static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_
     for (i = 0; i < t->nmembers; i++) {
         struct pvk_spv_member *m = &t->members[i];
         struct pvk_spv_type *mt = pvk_spv_type(ctx, m->type);
-        uint32_t size = mt->size, a = mt->align;
+        uint32_t size, a;
 
+        if (pvk_spv_is_psb(mt))
+            pvk_spv_psb_layout(ctx, mt);
+        size = mt->size;
+        a = mt->align;
         m->decl = mt->msl;
         m->runtime = mt->op == PVK_SPV_OpTypeRuntimeArray;
         if (m->runtime) {
@@ -34602,8 +34788,6 @@ static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_
         t->tail_pad = t->pad_to - cur;
         t->size = t->pad_to;
     }
-    pvk_spv_sanitize(pvk_spv_get(ctx, tid)->name, buf, sizeof(buf));
-    t->msl = buf[0] ? pvk_spv_fmt(ctx, "%s_%u", buf, tid) : pvk_spv_fmt(ctx, "pvk_struct_%u", tid);
 
     /* Field names: OpMemberName when usable and unique. */
     for (i = 0; i < t->nmembers; i++) {
@@ -34637,6 +34821,9 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
             e->pad_conflict = true;
         e->pad_to = stride;
     }
+    for (i = 0; i < ctx->ntypes; i++)
+        if (ctx->ids[ctx->type_order[i]].t->op == PVK_SPV_OpTypeStruct)
+            pvk_spv_name_struct(ctx, ctx->type_order[i], ctx->ids[ctx->type_order[i]].t);
 
     for (i = 0; i < ctx->ntypes; i++) {
         uint32_t tid = ctx->type_order[i];
@@ -34663,9 +34850,15 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
             t->size = t->count * e->size;
             t->align = e->align;
             break;
+        case PVK_SPV_OpTypePointer:
+            if (pvk_spv_is_psb(t))
+                pvk_spv_psb_layout(ctx, t);
+            break;
         case PVK_SPV_OpTypeArray:
         case PVK_SPV_OpTypeRuntimeArray:
             e = pvk_spv_type(ctx, t->elem);
+            if (pvk_spv_is_psb(e))
+                pvk_spv_psb_layout(ctx, e);
             if (!e->msl || !e->size)
                 pvk_spv_fail(ctx, "array of unsized type");
             s = pvk_spv_slot(ctx, e->msl, e->size, e->align, pvk_spv_vec3_scalar(ctx, e), ctx->ids[tid].array_stride);
@@ -34936,6 +35129,12 @@ static void pvk_spv_emit_constants(struct pvk_spv *ctx)
 static void pvk_spv_emit_types(struct pvk_spv *ctx)
 {
     uint32_t i, j;
+    if (ctx->use_psb) { /* pointers may name structs declared further down */
+        for (i = 0; i < ctx->ntypes; i++)
+            if (ctx->ids[ctx->type_order[i]].t->op == PVK_SPV_OpTypeStruct)
+                pvk_sb_printf(ctx, &ctx->types, "struct %s;\n", ctx->ids[ctx->type_order[i]].t->msl);
+        pvk_sb_append(ctx, &ctx->types, "\n", 1);
+    }
     for (i = 0; i < ctx->ntypes; i++) {
         struct pvk_spv_type *t = ctx->ids[ctx->type_order[i]].t;
         if (t->op != PVK_SPV_OpTypeStruct)
@@ -35078,7 +35277,8 @@ static void pvk_spv_analyze(struct pvk_spv *ctx, uint32_t fidx)
                 if (in.op == PVK_SPV_OpArrayLength)
                     fn->uses_sizes = true;
                 if ((in.op == PVK_SPV_OpAccessChain || in.op == PVK_SPV_OpInBoundsAccessChain ||
-                     in.op == PVK_SPV_OpCopyObject) && shape == 2 && pvk_spv_get(ctx, in.w[2])->kind == PVK_SPV_K_PTR)
+                     in.op == PVK_SPV_OpPtrAccessChain || in.op == PVK_SPV_OpCopyObject) && shape == 2 &&
+                    pvk_spv_get(ctx, in.w[2])->kind == PVK_SPV_K_PTR)
                     PVK_SPV_PUSH(ctx, ptrs, nptrs, cap_ptrs, off);
             }
             off += in.wc;
@@ -35395,6 +35595,10 @@ static struct pvk_spv_type *pvk_spv_data_type(struct pvk_spv *ctx, uint32_t tid)
         if (t->msl)
             return t;
         break;
+    case PVK_SPV_OpTypePointer:
+        if (pvk_spv_is_psb(t) && t->msl)
+            return t;
+        break;
     default:
         break;
     }
@@ -35415,6 +35619,16 @@ static const char *pvk_spv_val(struct pvk_spv *ctx, uint32_t v)
             break;
         pvk_spv_data_type(ctx, x->type);
         return x->msl;
+    case PVK_SPV_K_PTR: /* a physical pointer made by an access chain: its address */
+        if (!x->p || !x->p->expr || x->func != pvk_spv_fidx(ctx) ||
+            x->p->storage != PVK_SPV_StoragePhysicalStorageBuffer)
+            break;
+        if (x->p->node || x->p->rm_col)
+            pvk_spv_fail(ctx, "cannot take the address of this physical storage buffer location");
+        pvk_spv_data_type(ctx, x->type);
+        if (pvk_spv_type(ctx, x->p->type)->op == PVK_SPV_OpTypeRuntimeArray)
+            return pvk_spv_fmt(ctx, "(%s)", x->p->expr); /* decays to its first element */
+        return pvk_spv_fmt(ctx, "(&%s)", x->p->expr);
     default:
         break;
     }
@@ -35430,9 +35644,21 @@ static struct pvk_spv_type *pvk_spv_vtype(struct pvk_spv *ctx, uint32_t v)
 static const struct pvk_spv_ptr *pvk_spv_ptr_of(struct pvk_spv *ctx, uint32_t v)
 {
     struct pvk_spv_id *x = pvk_spv_get(ctx, v);
+    struct pvk_spv_type *t;
     if ((x->kind == PVK_SPV_K_VAR || x->kind == PVK_SPV_K_PTR || x->kind == PVK_SPV_K_PARAM) && x->p && x->p->expr &&
         (x->func == 0 || x->func == pvk_spv_fidx(ctx)))
         return x->p;
+    if ((x->kind == PVK_SPV_K_VALUE || x->kind == PVK_SPV_K_PARAM) && !x->p && x->type &&
+        pvk_spv_is_psb(t = pvk_spv_type(ctx, x->type))) {
+        /* A physical pointer value: what it points at. A pointer to a
+         * runtime array is a pointer to its first element: index it. */
+        struct pvk_spv_ptr *p = pvk_spv_alloc(ctx, sizeof(*p));
+        const char *val = pvk_spv_val(ctx, v);
+        p->type = t->elem;
+        p->storage = PVK_SPV_StoragePhysicalStorageBuffer;
+        p->expr = pvk_spv_type(ctx, t->elem)->op == PVK_SPV_OpTypeRuntimeArray ? val : pvk_spv_fmt(ctx, "(*%s)", val);
+        return p;
+    }
     pvk_spv_fail(ctx, "id %u is not a pointer here", v);
 }
 
@@ -36000,8 +36226,8 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         pvk_spv_fail(ctx, "atomic result type differs from the pointee type");
     if (p->storage == PVK_SPV_StorageWorkgroup)
         space = "threadgroup";
-    else if ((p->storage == PVK_SPV_StorageStorageBuffer || p->storage == PVK_SPV_StorageUniform) &&
-             pvk_spv_writable(ctx, p))
+    else if ((p->storage == PVK_SPV_StorageStorageBuffer || p->storage == PVK_SPV_StorageUniform ||
+              p->storage == PVK_SPV_StoragePhysicalStorageBuffer) && pvk_spv_writable(ctx, p))
         space = "device";
     else
         pvk_spv_fail(ctx, "atomics are only supported on storage buffers and workgroup memory");
@@ -36174,13 +36400,34 @@ static void pvk_spv_shuffle(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 
 static void pvk_spv_access_chain(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
-    uint32_t rid = in->w[2], i;
+    uint32_t rid = in->w[2], i, first = 4;
     struct pvk_spv_id *x = pvk_spv_get(ctx, rid);
     struct pvk_spv_type *rt = pvk_spv_type(ctx, in->w[1]);
     struct pvk_spv_ptr *p = pvk_spv_alloc(ctx, sizeof(*p));
 
     *p = *pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 3));
-    for (i = 4; i < in->wc; i++) {
+    if (in->op == PVK_SPV_OpPtrAccessChain) {
+        /* Element: pointer arithmetic in units of the pointer type's
+         * ArrayStride (else the pointee's size). */
+        uint32_t base = in->w[3], btid = pvk_spv_get(ctx, base)->type, stride = pvk_spv_get(ctx, btid)->array_stride;
+        uint32_t elem = pvk_spv_arg(ctx, in, 4);
+        struct pvk_spv_type *bt = pvk_spv_type(ctx, btid), *e = pvk_spv_type(ctx, p->type);
+        bool zero = pvk_spv_get(ctx, elem)->kind == PVK_SPV_K_CONST && pvk_spv_const_uint(ctx, elem) == 0;
+        if (!pvk_spv_is_psb(bt))
+            pvk_spv_fail(ctx, "OpPtrAccessChain is only supported on physical storage buffer pointers");
+        if (!stride)
+            stride = e->op == PVK_SPV_OpTypeRuntimeArray ? 0 : e->size;
+        if (!stride)
+            pvk_spv_fail(ctx, "OpPtrAccessChain on a pointer without ArrayStride");
+        if (!zero) {
+            const char *addr = pvk_spv_fmt(ctx, "(%s)((device char*)%s + long(%s) * %ul)", bt->msl,
+                                           pvk_spv_val(ctx, base), pvk_spv_ival(ctx, elem, true), stride);
+            p->expr = e->op == PVK_SPV_OpTypeRuntimeArray ? pvk_spv_fmt(ctx, "(%s)", addr)
+                                                           : pvk_spv_fmt(ctx, "(*%s)", addr);
+        }
+        first = 5;
+    }
+    for (i = first; i < in->wc; i++) {
         struct pvk_spv_id *ix = pvk_spv_get(ctx, in->w[i]);
         struct pvk_spv_type *it = pvk_spv_type(ctx, ix->type);
         int64_t cidx = -1;
@@ -36240,7 +36487,7 @@ static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     for (i = 0; i < ft->count; i++) {
         struct pvk_spv_type *pt = pvk_spv_type(ctx, ft->params[i]);
         const char *arg;
-        if (pt->op == PVK_SPV_OpTypePointer) {
+        if (pt->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(pt)) {
             const struct pvk_spv_ptr *p = pvk_spv_ptr_of(ctx, in->w[4 + i]);
             if (p->node || p->rm_col || p->desc_array || p->type != pt->elem || p->storage != pt->storage)
                 pvk_spv_fail(ctx, "OpFunctionCall: unsupported pointer argument");
@@ -36333,7 +36580,27 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
     }
     case PVK_SPV_OpAccessChain:
     case PVK_SPV_OpInBoundsAccessChain:
+    case PVK_SPV_OpPtrAccessChain:
         pvk_spv_access_chain(ctx, in);
+        return;
+    case PVK_SPV_OpConvertUToPtr:
+        if (!pvk_spv_is_psb(r))
+            pvk_spv_fail(ctx, "OpConvertUToPtr to a non-physical pointer");
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "reinterpret_cast<%s>(ulong(%s))", r->msl,
+                                          pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 3), false)));
+        return;
+    case PVK_SPV_OpConvertPtrToU:
+        if (!pvk_spv_is_psb(pvk_spv_type(ctx, pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 3))->type)) ||
+            r->op != PVK_SPV_OpTypeInt)
+            pvk_spv_fail(ctx, "unsupported OpConvertPtrToU");
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(reinterpret_cast<ulong>(%s))", r->msl, pvk_spv_val(ctx, in->w[3])));
+        return;
+    case PVK_SPV_OpPtrEqual:
+    case PVK_SPV_OpPtrNotEqual:
+        if (!pvk_spv_is_psb(pvk_spv_type(ctx, pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 3))->type)))
+            pvk_spv_fail(ctx, "pointer comparison is only supported on physical storage buffer pointers");
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s %s %s", pvk_spv_val(ctx, in->w[3]),
+                                          op == PVK_SPV_OpPtrEqual ? "==" : "!=", pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 4))));
         return;
     case PVK_SPV_OpArrayLength:
         pvk_spv_array_length(ctx, in);
@@ -36342,7 +36609,7 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         pvk_spv_call(ctx, in);
         return;
     case PVK_SPV_OpCopyObject:
-        if (r->op == PVK_SPV_OpTypePointer) {
+        if (r->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(r)) {
             struct pvk_spv_ptr *p = pvk_spv_alloc(ctx, sizeof(*p));
             *p = *pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 3));
             if (r->elem != p->type)
@@ -36532,11 +36799,24 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
                                           pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 3),
                                                        op == PVK_SPV_OpConvertSToF || op == PVK_SPV_OpSConvert)));
         return;
-    case PVK_SPV_OpBitcast:
-        if (r->op == PVK_SPV_OpTypePointer || pvk_spv_vtype(ctx, pvk_spv_arg(ctx, in, 3))->op == PVK_SPV_OpTypePointer)
-            pvk_spv_fail(ctx, "pointer bitcasts are not supported");
-        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "as_type<%s>(%s)", r->msl, pvk_spv_val(ctx, in->w[3])));
+    case PVK_SPV_OpBitcast: {
+        /* Physical pointers convert to and from 64-bit integers and 2 x 32-bit vectors. */
+        struct pvk_spv_type *src = pvk_spv_type(ctx, pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 3))->type);
+        bool rp = r->op == PVK_SPV_OpTypePointer, sp = src->op == PVK_SPV_OpTypePointer;
+        if ((rp && !pvk_spv_is_psb(r)) || (sp && !pvk_spv_is_psb(src)))
+            pvk_spv_fail(ctx, "bitcasts of logical pointers are not supported");
+        if (rp && sp)
+            pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "reinterpret_cast<%s>(%s)", r->msl, pvk_spv_val(ctx, in->w[3])));
+        else if (rp)
+            pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "reinterpret_cast<%s>(as_type<ulong>(%s))", r->msl,
+                                              pvk_spv_val(ctx, in->w[3])));
+        else if (sp)
+            pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "as_type<%s>(reinterpret_cast<ulong>(%s))", pvk_spv_data_type(ctx, rtype)->msl,
+                                              pvk_spv_val(ctx, in->w[3])));
+        else
+            pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "as_type<%s>(%s)", r->msl, pvk_spv_val(ctx, in->w[3])));
         return;
+    }
     case PVK_SPV_OpQuantizeToF16:
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s(%s))", r->msl,
                                           pvk_spv_components(r) > 1 ? pvk_spv_fmt(ctx, "half%u", r->count) : "half",
@@ -37060,6 +37340,7 @@ static const char *pvk_spv_space(struct pvk_spv *ctx, const struct pvk_spv_ptr *
     case PVK_SPV_StorageWorkgroup:
         return "threadgroup";
     case PVK_SPV_StorageStorageBuffer:
+    case PVK_SPV_StoragePhysicalStorageBuffer:
         return "device";
     case PVK_SPV_StorageUniform:
         return p->var && pvk_spv_get(ctx, p->var)->func == 0 && pvk_spv_is_storage_block(ctx, p->var) ? "device"
@@ -37071,6 +37352,16 @@ static const char *pvk_spv_space(struct pvk_spv *ctx, const struct pvk_spv_ptr *
     default:
         pvk_spv_fail(ctx, "unsupported storage class %u", p->storage);
     }
+}
+
+/* Type tid in address space `space`, for a declaration. A physical pointer
+ * takes the qualifier after its '*' (device T* thread&). */
+static const char *pvk_spv_qualified(struct pvk_spv *ctx, const char *space, uint32_t tid)
+{
+    struct pvk_spv_type *t = pvk_spv_type(ctx, tid);
+    if (pvk_spv_is_psb(t))
+        return pvk_spv_fmt(ctx, "%s %s", t->msl, space);
+    return pvk_spv_fmt(ctx, "%s %s", space, t->msl);
 }
 
 /* A global variable as a parameter of a helper function. */
@@ -37089,7 +37380,7 @@ static const char *pvk_spv_global_param(struct pvk_spv *ctx, uint32_t var)
     case PVK_SPV_StorageInput:
         return pvk_spv_fmt(ctx, "%s %s", t->msl, x->msl);
     default:
-        return pvk_spv_fmt(ctx, "%s %s& %s", pvk_spv_space(ctx, x->p), t->msl, x->msl);
+        return pvk_spv_fmt(ctx, "%s& %s", pvk_spv_qualified(ctx, pvk_spv_space(ctx, x->p), x->p->type), x->msl);
     }
 }
 
@@ -37102,6 +37393,14 @@ static const char *pvk_spv_builtin_attr(uint32_t builtin)
     case PVK_SPV_BuiltInGlobalInvocationId: return "thread_position_in_grid";
     default: return "thread_index_in_threadgroup";
     }
+}
+
+/* Built-ins that vkCmdDispatchBase offsets: the kernel parameter is the
+ * Metal value (pvk_raw_<name>), the variable adds the base. */
+static bool pvk_spv_based(struct pvk_spv *ctx, const struct pvk_spv_id *x)
+{
+    return ctx->result->dispatch_base &&
+           (x->builtin == PVK_SPV_BuiltInWorkgroupId || x->builtin == PVK_SPV_BuiltInGlobalInvocationId);
 }
 
 /* Type of the address-table entry of a binding: the first variable's block. */
@@ -37158,7 +37457,7 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
         struct pvk_spv_id *x = pvk_spv_get(ctx, fn->params[i]);
         const char *decl;
         if (x->p)
-            decl = pvk_spv_fmt(ctx, "%s %s& %s", pvk_spv_space(ctx, x->p), pvk_spv_type(ctx, x->p->type)->msl, x->msl);
+            decl = pvk_spv_fmt(ctx, "%s& %s", pvk_spv_qualified(ctx, pvk_spv_space(ctx, x->p), x->p->type), x->msl);
         else
             decl = pvk_spv_fmt(ctx, "%s %s", pvk_spv_type(ctx, x->type)->msl, x->msl);
         PVK_SPV_PUSH(ctx, params, nparams, cap, decl);
@@ -37169,11 +37468,14 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             if (res->set_mask & (1u << set))
                 PVK_SPV_PUSH(ctx, params, nparams, cap,
                              pvk_spv_fmt(ctx, "constant pvk_set%u& set%u [[buffer(%u)]]", set, set, set));
+        if (res->dispatch_base) /* push constants and the base workgroup: bytes */
+            PVK_SPV_PUSH(ctx, params, nparams, cap,
+                         pvk_spv_fmt(ctx, "constant uchar* pvk_push_data [[buffer(%u)]]", res->push_constant_buffer));
         for (g = 0; g < ctx->nglobals; g++) {
             struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
             if (!pvk_spv_bit(fn->globals, g))
                 continue;
-            if (x->p->storage == PVK_SPV_StoragePushConstant)
+            if (x->p->storage == PVK_SPV_StoragePushConstant && !res->dispatch_base)
                 PVK_SPV_PUSH(ctx, params, nparams, cap,
                              pvk_spv_fmt(ctx, "constant %s& %s [[buffer(%u)]]", pvk_spv_type(ctx, x->p->type)->msl,
                                          x->msl, res->push_constant_buffer));
@@ -37185,7 +37487,8 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
             if (pvk_spv_bit(fn->globals, g) && x->p->storage == PVK_SPV_StorageInput)
                 PVK_SPV_PUSH(ctx, params, nparams, cap,
-                             pvk_spv_fmt(ctx, "%s %s [[%s]]", pvk_spv_type(ctx, x->p->type)->msl, x->msl,
+                             pvk_spv_fmt(ctx, "%s %s%s [[%s]]", pvk_spv_type(ctx, x->p->type)->msl,
+                                         pvk_spv_based(ctx, x) ? "pvk_raw_" : "", x->msl,
                                          pvk_spv_builtin_attr(x->builtin)));
         }
         pvk_sb_printf(ctx, out, "kernel void %s(", fn->msl);
@@ -37205,6 +37508,24 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
     ctx->out = out;
     ctx->indent = 1;
     if (entry) {
+        if (res->dispatch_base)
+            pvk_spv_line(ctx, "uint3 pvk_dispatch_base = uint3(*(constant packed_uint3*)(pvk_push_data + %u));",
+                         res->dispatch_base_offset);
+        for (g = 0; g < ctx->nglobals; g++) {
+            struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+            const char *t;
+            if (!pvk_spv_bit(fn->globals, g))
+                continue;
+            t = pvk_spv_type(ctx, x->p->type)->msl;
+            if (x->p->storage == PVK_SPV_StoragePushConstant && res->dispatch_base)
+                pvk_spv_line(ctx, "constant %s& %s = *(constant %s*)pvk_push_data;", t, x->msl, t);
+            else if (x->p->storage == PVK_SPV_StorageInput && pvk_spv_based(ctx, x) &&
+                     x->builtin == PVK_SPV_BuiltInWorkgroupId)
+                pvk_spv_line(ctx, "%s %s = pvk_raw_%s + %s(pvk_dispatch_base);", t, x->msl, x->msl, t);
+            else if (x->p->storage == PVK_SPV_StorageInput && pvk_spv_based(ctx, x))
+                pvk_spv_line(ctx, "%s %s = pvk_raw_%s + %s(pvk_dispatch_base * uint3(%uu, %uu, %uu));", t, x->msl,
+                             x->msl, t, res->workgroup_size[0], res->workgroup_size[1], res->workgroup_size[2]);
+        }
         for (g = 0; g < ctx->nglobals; g++) {
             uint32_t var = ctx->globals[g], count, block;
             struct pvk_spv_id *x = &ctx->ids[var];
@@ -37230,7 +37551,7 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
                 break;
             }
             case PVK_SPV_StorageWorkgroup:
-                pvk_spv_line(ctx, "threadgroup %s %s;", t->msl, x->msl);
+                pvk_spv_line(ctx, "%s %s;", pvk_spv_qualified(ctx, "threadgroup", x->p->type), x->msl);
                 break;
             case PVK_SPV_StoragePrivate: {
                 struct pvk_spv_insn in = pvk_spv_insn_at(ctx, x->insn);
@@ -37406,6 +37727,15 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         fn->msl = fn->fid == ctx->entry_fid ? kernel : pvk_spv_name(ctx, fn->fid);
     }
     pvk_spv_assign_resources(ctx);
+    if (ctx->options && ctx->options->dispatch_base) {
+        uint32_t end = res->has_push_constants ? pvk_spv_round(res->push_constant_offset + res->push_constant_size, 16) : 0;
+        if (ctx->options->dispatch_base_offset > 65536)
+            pvk_spv_fail(ctx, "dispatch base offset %u is too large", ctx->options->dispatch_base_offset);
+        res->dispatch_base = true;
+        res->dispatch_base_offset = pvk_spv_round(ctx->options->dispatch_base_offset, 16);
+        if (res->dispatch_base_offset < end)
+            res->dispatch_base_offset = end;
+    }
     for (g = 0; g < ctx->nglobals; g++) {
         struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
         uint32_t count, block;
@@ -37429,11 +37759,12 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
     /* Metal has buffer indices 0-30; the extra buffers must not hit a set. */
     if (res->push_constant_buffer > 30 || res->buffer_sizes_buffer > 30)
         pvk_spv_fail(ctx, "buffer index out of range (Metal has 0-30)");
-    if (res->has_push_constants && (res->set_mask >> res->push_constant_buffer) & 1u)
+    if ((res->has_push_constants || res->dispatch_base) && (res->set_mask >> res->push_constant_buffer) & 1u)
         pvk_spv_fail(ctx, "push-constant buffer %u is also descriptor set %u", res->push_constant_buffer,
                      res->push_constant_buffer);
     if (res->buffer_size_count && (((res->set_mask >> res->buffer_sizes_buffer) & 1u) ||
-                                   (res->has_push_constants && res->buffer_sizes_buffer == res->push_constant_buffer)))
+                                   ((res->has_push_constants || res->dispatch_base) &&
+                                    res->buffer_sizes_buffer == res->push_constant_buffer)))
         pvk_spv_fail(ctx, "buffer-sizes buffer %u collides with another buffer", res->buffer_sizes_buffer);
 
     pvk_sb_printf(ctx, out, "/* Generated by PlasmaVK from SPIR-V. Kernel: %s */\n\n#include <metal_stdlib>\n\n"
@@ -37521,19 +37852,2044 @@ static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const
  * 12. Command buffers
  *
  * Command pools and command buffers: recording vkCmd* commands.
+ *
+ * Recording is deferred. Each vkCmd* appends a compact packet to the command
+ * buffer's blocks (memory from its pool, through the pool's allocation
+ * callbacks) and touches no Metal object; vkQueueSubmit replays the packets
+ * into a fresh MTL4CommandBuffer (section 13). So a command buffer can be
+ * submitted any number of times, also simultaneously, and is free to reset
+ * as soon as vkQueueSubmit returns. Buffers are resolved to their memory's
+ * MTLBuffer and GPU address when recorded (Vulkan requires them bound by
+ * then).
  * ========================================================================== */
+
+/* Pipelines (section 14) as the commands see them. */
+struct pvk_pipeline_layout {
+    uint32_t set_count;          /* descriptor sets will be tables at buffer indices 0.. */
+    uint32_t push_constant_size; /* end of the highest push-constant range */
+};
+
+struct pvk_pipeline {
+    VkPipelineBindPoint bind_point;
+    id mtl_pipeline;               /* MTLComputePipelineState */
+    pvk_MTLSize threads;           /* threads per threadgroup: the workgroup size */
+    uint32_t push_size;            /* push-constant bytes to bind from offset 0 (0: none) */
+    bool dispatch_base;            /* reads the base workgroup at dispatch_base_offset */
+    uint32_t dispatch_base_offset; /* in the push-constant buffer */
+};
+
+/* Push-constant bytes the encoder tracks: at least maxPushConstantsSize. */
+#define PVK_MAX_PUSH_CONSTANTS_SIZE 4096u
+
+/* ---- Pools and packet storage ---- */
+
+#define PVK_CMD_BLOCK_SIZE 16384u
+
+struct pvk_cmd_block {
+    struct pvk_cmd_block *next;
+    size_t size, used; /* bytes of data */
+    uint64_t data[];   /* packets, 8-byte aligned */
+};
+
+struct pvk_command_pool {
+    struct pvk_device *device;
+    VkAllocationCallbacks alloc;
+    bool has_alloc;
+    VkCommandPoolCreateFlags flags;
+    uint32_t queue_family;
+    struct pvk_command_buffer *buffers; /* every buffer allocated from the pool */
+    struct pvk_cmd_block *free_blocks;  /* PVK_CMD_BLOCK_SIZE blocks to reuse */
+};
+
+enum pvk_command_buffer_state { PVK_CB_INITIAL, PVK_CB_RECORDING, PVK_CB_EXECUTABLE };
+
+struct pvk_command_buffer {
+    struct pvk_command_pool *pool;
+    struct pvk_command_buffer *prev, *next; /* pool->buffers */
+    VkCommandBufferLevel level;
+    enum pvk_command_buffer_state state;
+    VkCommandBufferUsageFlags usage;
+    VkResult result; /* first recording error, returned by vkEndCommandBuffer */
+    struct pvk_cmd_block *first, *last;
+};
+
+static const VkAllocationCallbacks *pvk_pool_alloc(const struct pvk_command_pool *pool)
+{
+    return pool->has_alloc ? &pool->alloc : NULL;
+}
+
+static struct pvk_cmd_block *pvk_cmd_block_get(struct pvk_command_pool *pool, size_t size)
+{
+    struct pvk_cmd_block *b = pool->free_blocks;
+    if (size <= PVK_CMD_BLOCK_SIZE && b) {
+        pool->free_blocks = b->next;
+    } else {
+        size_t n = size > PVK_CMD_BLOCK_SIZE ? size : PVK_CMD_BLOCK_SIZE;
+        b = pvk_alloc(pvk_pool_alloc(pool), sizeof(*b) + n, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+        if (!b)
+            return NULL;
+        b->size = n;
+    }
+    b->next = NULL;
+    b->used = 0;
+    return b;
+}
+
+/* Back to the initial state; blocks go to the pool unless released. */
+static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release)
+{
+    struct pvk_command_pool *pool = cb->pool;
+    struct pvk_cmd_block *b = cb->first, *next;
+    for (; b; b = next) {
+        next = b->next;
+        if (!release && b->size == PVK_CMD_BLOCK_SIZE) {
+            b->next = pool->free_blocks;
+            pool->free_blocks = b;
+        } else {
+            pvk_free(pvk_pool_alloc(pool), b);
+        }
+    }
+    cb->first = cb->last = NULL;
+    cb->state = PVK_CB_INITIAL;
+    cb->result = VK_SUCCESS;
+}
+
+static void pvk_command_pool_trim(struct pvk_command_pool *pool)
+{
+    struct pvk_cmd_block *b = pool->free_blocks, *next;
+    for (; b; b = next) {
+        next = b->next;
+        pvk_free(pvk_pool_alloc(pool), b);
+    }
+    pool->free_blocks = NULL;
+}
+
+static void pvk_command_buffer_free(struct pvk_command_buffer *cb)
+{
+    struct pvk_command_pool *pool = cb->pool;
+    pvk_command_buffer_reset(cb, false);
+    if (cb->prev)
+        cb->prev->next = cb->next;
+    else
+        pool->buffers = cb->next;
+    if (cb->next)
+        cb->next->prev = cb->prev;
+    pvk_free(pvk_pool_alloc(pool), cb);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateCommandPool(VkDevice _device, const VkCommandPoolCreateInfo *pCreateInfo,
+                                                   const VkAllocationCallbacks *pAllocator,
+                                                   VkCommandPool *pCommandPool)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    struct pvk_command_pool *pool = pvk_alloc(alloc, sizeof(*pool), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+
+    if (!pool)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    pool->device = device;
+    if (alloc) { /* command buffers allocate through the pool's callbacks */
+        pool->alloc = *alloc;
+        pool->has_alloc = true;
+    }
+    pool->flags = pCreateInfo->flags;
+    pool->queue_family = pCreateInfo->queueFamilyIndex;
+    *pCommandPool = (VkCommandPool)pool;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyCommandPool(VkDevice device, VkCommandPool commandPool,
+                                                const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_command_pool *pool = (struct pvk_command_pool *)commandPool;
+    (void)device;
+    (void)pAllocator; /* must match creation; the stored copy is authoritative */
+    if (!pool)
+        return;
+    while (pool->buffers)
+        pvk_command_buffer_free(pool->buffers);
+    pvk_command_pool_trim(pool);
+    pvk_free(pvk_pool_alloc(pool), pool);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkResetCommandPool(VkDevice device, VkCommandPool commandPool,
+                                                  VkCommandPoolResetFlags flags)
+{
+    struct pvk_command_pool *pool = (struct pvk_command_pool *)commandPool;
+    bool release = (flags & VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT) != 0;
+    struct pvk_command_buffer *cb;
+    (void)device;
+    for (cb = pool->buffers; cb; cb = cb->next)
+        pvk_command_buffer_reset(cb, release);
+    if (release)
+        pvk_command_pool_trim(pool);
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkTrimCommandPool(VkDevice device, VkCommandPool commandPool, VkCommandPoolTrimFlags flags)
+{
+    (void)device;
+    (void)flags;
+    pvk_command_pool_trim((struct pvk_command_pool *)commandPool);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkAllocateCommandBuffers(VkDevice device, const VkCommandBufferAllocateInfo *pAllocateInfo,
+                                                        VkCommandBuffer *pCommandBuffers)
+{
+    struct pvk_command_pool *pool = (struct pvk_command_pool *)pAllocateInfo->commandPool;
+    uint32_t i, j;
+    (void)device;
+    for (i = 0; i < pAllocateInfo->commandBufferCount; i++) {
+        struct pvk_command_buffer *cb =
+            pvk_alloc(pvk_pool_alloc(pool), sizeof(*cb), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+        if (!cb) {
+            for (j = 0; j < i; j++)
+                pvk_command_buffer_free((struct pvk_command_buffer *)pCommandBuffers[j]);
+            for (j = 0; j < pAllocateInfo->commandBufferCount; j++)
+                pCommandBuffers[j] = VK_NULL_HANDLE;
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
+        cb->pool = pool;
+        cb->level = pAllocateInfo->level;
+        cb->next = pool->buffers;
+        if (pool->buffers)
+            pool->buffers->prev = cb;
+        pool->buffers = cb;
+        pCommandBuffers[i] = (VkCommandBuffer)cb;
+    }
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkFreeCommandBuffers(VkDevice device, VkCommandPool commandPool, uint32_t commandBufferCount,
+                                                const VkCommandBuffer *pCommandBuffers)
+{
+    uint32_t i;
+    (void)device;
+    (void)commandPool;
+    for (i = 0; i < commandBufferCount; i++)
+        if (pCommandBuffers[i])
+            pvk_command_buffer_free((struct pvk_command_buffer *)pCommandBuffers[i]);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkBeginCommandBuffer(VkCommandBuffer commandBuffer,
+                                                    const VkCommandBufferBeginInfo *pBeginInfo)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    if (cb->state != PVK_CB_INITIAL) /* implicit reset */
+        pvk_command_buffer_reset(cb, false);
+    cb->state = PVK_CB_RECORDING;
+    cb->usage = pBeginInfo->flags; /* inheritance info: nothing to inherit yet */
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkEndCommandBuffer(VkCommandBuffer commandBuffer)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    cb->state = PVK_CB_EXECUTABLE;
+    return cb->result;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkResetCommandBuffer(VkCommandBuffer commandBuffer, VkCommandBufferResetFlags flags)
+{
+    pvk_command_buffer_reset((struct pvk_command_buffer *)commandBuffer,
+                             (flags & VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT) != 0);
+    return VK_SUCCESS;
+}
+
+/* ---- Packets ---- */
+
+enum pvk_cmd_op {
+    PVK_CMD_FILL_BUFFER,       /* struct pvk_cmd_fill */
+    PVK_CMD_COPY_BUFFER,       /* struct pvk_cmd_copy */
+    PVK_CMD_UPDATE_BUFFER,     /* struct pvk_cmd_update, then the data */
+    PVK_CMD_BARRIER,           /* struct pvk_cmd_barrier */
+    PVK_CMD_BIND_PIPELINE,     /* struct pvk_cmd_bind_pipeline */
+    PVK_CMD_PUSH_CONSTANTS,    /* struct pvk_cmd_push, then the data */
+    PVK_CMD_DISPATCH,          /* struct pvk_cmd_dispatch */
+    PVK_CMD_DISPATCH_INDIRECT, /* struct pvk_cmd_dispatch_indirect */
+    PVK_CMD_EXECUTE_COMMANDS   /* struct pvk_cmd_execute, then the command buffers */
+};
+
+struct pvk_cmd {
+    uint32_t op;   /* enum pvk_cmd_op */
+    uint32_t size; /* bytes, header included, a multiple of 8 */
+};
+
+struct pvk_cmd_fill {
+    struct pvk_cmd hdr;
+    id buffer;                 /* the memory's MTLBuffer */
+    VkDeviceSize offset, size; /* in it, multiples of 4 */
+    pvk_MTLGPUAddress address; /* of offset */
+    uint32_t data;
+};
+
+struct pvk_cmd_copy {
+    struct pvk_cmd hdr;
+    id src, dst;
+    VkDeviceSize src_offset, dst_offset, size;
+};
+
+struct pvk_cmd_update {
+    struct pvk_cmd hdr;
+    id buffer;
+    VkDeviceSize offset;
+    uint32_t size;
+    uint32_t pad;
+};
+
+struct pvk_cmd_barrier {
+    struct pvk_cmd hdr;
+    VkPipelineStageFlags2 src_stages, dst_stages;
+    VkAccessFlags2 src_access, dst_access;
+};
+
+struct pvk_cmd_bind_pipeline {
+    struct pvk_cmd hdr;
+    struct pvk_pipeline *pipeline;
+};
+
+struct pvk_cmd_push {
+    struct pvk_cmd hdr;
+    uint32_t offset, size;
+};
+
+struct pvk_cmd_dispatch {
+    struct pvk_cmd hdr;
+    uint32_t base[3], count[3];
+};
+
+struct pvk_cmd_dispatch_indirect {
+    struct pvk_cmd hdr;
+    pvk_MTLGPUAddress address; /* VkDispatchIndirectCommand */
+};
+
+struct pvk_cmd_execute {
+    struct pvk_cmd hdr;
+    uint32_t count;
+    uint32_t pad;
+};
+
+/* Room for a packet of `size` bytes at the end of the command buffer, NULL
+ * (and the error kept for vkEndCommandBuffer) when out of memory. */
+static void *pvk_cmd_append(struct pvk_command_buffer *cb, enum pvk_cmd_op op, size_t size)
+{
+    struct pvk_cmd_block *b = cb->last;
+    struct pvk_cmd *c;
+
+    size = (size + 7) & ~(size_t)7;
+    if (cb->result != VK_SUCCESS)
+        return NULL;
+    if (!b || b->size - b->used < size) {
+        b = pvk_cmd_block_get(cb->pool, size);
+        if (!b) {
+            cb->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+            return NULL;
+        }
+        if (cb->last)
+            cb->last->next = b;
+        else
+            cb->first = b;
+        cb->last = b;
+    }
+    c = (struct pvk_cmd *)((char *)b->data + b->used);
+    b->used += size;
+    c->op = op;
+    c->size = (uint32_t)size;
+    return c;
+}
+
+/* ---- Transfer commands ---- */
+
+VKAPI_ATTR void VKAPI_CALL vkCmdFillBuffer(VkCommandBuffer commandBuffer, VkBuffer dstBuffer, VkDeviceSize dstOffset,
+                                           VkDeviceSize size, uint32_t data)
+{
+    struct pvk_buffer *buffer = (struct pvk_buffer *)dstBuffer;
+    struct pvk_cmd_fill *c;
+
+    if (size == VK_WHOLE_SIZE)
+        size = (buffer->size - dstOffset) & ~(VkDeviceSize)3;
+    if (!size || !buffer->memory)
+        return;
+    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_FILL_BUFFER, sizeof(*c));
+    if (!c)
+        return;
+    c->buffer = buffer->memory->mtl_buffer;
+    c->offset = buffer->offset + dstOffset;
+    c->size = size;
+    c->address = buffer->gpu_address + dstOffset;
+    c->data = data;
+}
+
+static void pvk_cmd_copy_buffer(struct pvk_command_buffer *cb, const struct pvk_buffer *src,
+                                const struct pvk_buffer *dst, VkDeviceSize src_offset, VkDeviceSize dst_offset,
+                                VkDeviceSize size)
+{
+    struct pvk_cmd_copy *c;
+    if (!size || !src->memory || !dst->memory)
+        return;
+    c = pvk_cmd_append(cb, PVK_CMD_COPY_BUFFER, sizeof(*c));
+    if (!c)
+        return;
+    c->src = src->memory->mtl_buffer;
+    c->dst = dst->memory->mtl_buffer;
+    c->src_offset = src->offset + src_offset;
+    c->dst_offset = dst->offset + dst_offset;
+    c->size = size;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdCopyBuffer(VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkBuffer dstBuffer,
+                                           uint32_t regionCount, const VkBufferCopy *pRegions)
+{
+    uint32_t i;
+    for (i = 0; i < regionCount; i++)
+        pvk_cmd_copy_buffer((struct pvk_command_buffer *)commandBuffer, (struct pvk_buffer *)srcBuffer,
+                            (struct pvk_buffer *)dstBuffer, pRegions[i].srcOffset, pRegions[i].dstOffset,
+                            pRegions[i].size);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdCopyBuffer2(VkCommandBuffer commandBuffer, const VkCopyBufferInfo2 *pCopyBufferInfo)
+{
+    uint32_t i;
+    for (i = 0; i < pCopyBufferInfo->regionCount; i++)
+        pvk_cmd_copy_buffer((struct pvk_command_buffer *)commandBuffer, (struct pvk_buffer *)pCopyBufferInfo->srcBuffer,
+                            (struct pvk_buffer *)pCopyBufferInfo->dstBuffer, pCopyBufferInfo->pRegions[i].srcOffset,
+                            pCopyBufferInfo->pRegions[i].dstOffset, pCopyBufferInfo->pRegions[i].size);
+}
+
+/* The data travels in the packet; at submit it goes through the upload ring
+ * and a copy. */
+VKAPI_ATTR void VKAPI_CALL vkCmdUpdateBuffer(VkCommandBuffer commandBuffer, VkBuffer dstBuffer, VkDeviceSize dstOffset,
+                                             VkDeviceSize dataSize, const void *pData)
+{
+    struct pvk_buffer *buffer = (struct pvk_buffer *)dstBuffer;
+    struct pvk_cmd_update *c;
+
+    if (!dataSize || dataSize > 65536 || !buffer->memory)
+        return;
+    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_UPDATE_BUFFER,
+                       sizeof(*c) + (size_t)dataSize);
+    if (!c)
+        return;
+    c->buffer = buffer->memory->mtl_buffer;
+    c->offset = buffer->offset + dstOffset;
+    c->size = (uint32_t)dataSize;
+    memcpy(c + 1, pData, (size_t)dataSize);
+}
+
+/* ---- Synchronization commands ---- */
+
+static void pvk_cmd_barrier(struct pvk_command_buffer *cb, VkPipelineStageFlags2 src_stages,
+                            VkPipelineStageFlags2 dst_stages, VkAccessFlags2 src_access, VkAccessFlags2 dst_access)
+{
+    struct pvk_cmd_barrier *c = pvk_cmd_append(cb, PVK_CMD_BARRIER, sizeof(*c));
+    if (!c)
+        return;
+    c->src_stages = src_stages;
+    c->dst_stages = dst_stages;
+    c->src_access = src_access;
+    c->dst_access = dst_access;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdPipelineBarrier(VkCommandBuffer commandBuffer, VkPipelineStageFlags srcStageMask,
+                                                VkPipelineStageFlags dstStageMask, VkDependencyFlags dependencyFlags,
+                                                uint32_t memoryBarrierCount, const VkMemoryBarrier *pMemoryBarriers,
+                                                uint32_t bufferMemoryBarrierCount,
+                                                const VkBufferMemoryBarrier *pBufferMemoryBarriers,
+                                                uint32_t imageMemoryBarrierCount,
+                                                const VkImageMemoryBarrier *pImageMemoryBarriers)
+{
+    VkAccessFlags2 src = 0, dst = 0;
+    uint32_t i;
+    (void)dependencyFlags;
+    for (i = 0; i < memoryBarrierCount; i++) {
+        src |= pMemoryBarriers[i].srcAccessMask;
+        dst |= pMemoryBarriers[i].dstAccessMask;
+    }
+    for (i = 0; i < bufferMemoryBarrierCount; i++) {
+        src |= pBufferMemoryBarriers[i].srcAccessMask;
+        dst |= pBufferMemoryBarriers[i].dstAccessMask;
+    }
+    for (i = 0; i < imageMemoryBarrierCount; i++) {
+        src |= pImageMemoryBarriers[i].srcAccessMask;
+        dst |= pImageMemoryBarriers[i].dstAccessMask;
+    }
+    /* The VkPipelineStageFlags bits have the same values in VkPipelineStageFlags2. */
+    pvk_cmd_barrier((struct pvk_command_buffer *)commandBuffer, srcStageMask, dstStageMask, src, dst);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdPipelineBarrier2(VkCommandBuffer commandBuffer, const VkDependencyInfo *pDependencyInfo)
+{
+    VkPipelineStageFlags2 src_stages = 0, dst_stages = 0;
+    VkAccessFlags2 src = 0, dst = 0;
+    uint32_t i;
+    for (i = 0; i < pDependencyInfo->memoryBarrierCount; i++) {
+        const VkMemoryBarrier2 *b = &pDependencyInfo->pMemoryBarriers[i];
+        src_stages |= b->srcStageMask;
+        dst_stages |= b->dstStageMask;
+        src |= b->srcAccessMask;
+        dst |= b->dstAccessMask;
+    }
+    for (i = 0; i < pDependencyInfo->bufferMemoryBarrierCount; i++) {
+        const VkBufferMemoryBarrier2 *b = &pDependencyInfo->pBufferMemoryBarriers[i];
+        src_stages |= b->srcStageMask;
+        dst_stages |= b->dstStageMask;
+        src |= b->srcAccessMask;
+        dst |= b->dstAccessMask;
+    }
+    for (i = 0; i < pDependencyInfo->imageMemoryBarrierCount; i++) {
+        const VkImageMemoryBarrier2 *b = &pDependencyInfo->pImageMemoryBarriers[i];
+        src_stages |= b->srcStageMask;
+        dst_stages |= b->dstStageMask;
+        src |= b->srcAccessMask;
+        dst |= b->dstAccessMask;
+    }
+    pvk_cmd_barrier((struct pvk_command_buffer *)commandBuffer, src_stages, dst_stages, src, dst);
+}
+
+/* ---- Compute commands ---- */
+
+VKAPI_ATTR void VKAPI_CALL vkCmdBindPipeline(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint,
+                                             VkPipeline pipeline)
+{
+    struct pvk_cmd_bind_pipeline *c;
+    if (pipelineBindPoint != VK_PIPELINE_BIND_POINT_COMPUTE) {
+        pvk_log(PVK_LOG_WARN, "vkCmdBindPipeline: only compute pipelines are supported");
+        return;
+    }
+    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_BIND_PIPELINE, sizeof(*c));
+    if (c)
+        c->pipeline = (struct pvk_pipeline *)pipeline;
+}
+
+static void pvk_cmd_push_constants(struct pvk_command_buffer *cb, uint32_t offset, uint32_t size, const void *data)
+{
+    struct pvk_cmd_push *c;
+    if (!size || offset >= PVK_MAX_PUSH_CONSTANTS_SIZE || size > PVK_MAX_PUSH_CONSTANTS_SIZE - offset)
+        return;
+    c = pvk_cmd_append(cb, PVK_CMD_PUSH_CONSTANTS, sizeof(*c) + size);
+    if (!c)
+        return;
+    c->offset = offset;
+    c->size = size;
+    memcpy(c + 1, data, size);
+}
+
+/* All stages share one push-constant block, so the stages do not matter. */
+VKAPI_ATTR void VKAPI_CALL vkCmdPushConstants(VkCommandBuffer commandBuffer, VkPipelineLayout layout,
+                                              VkShaderStageFlags stageFlags, uint32_t offset, uint32_t size,
+                                              const void *pValues)
+{
+    (void)layout;
+    (void)stageFlags;
+    pvk_cmd_push_constants((struct pvk_command_buffer *)commandBuffer, offset, size, pValues);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdPushConstants2(VkCommandBuffer commandBuffer,
+                                               const VkPushConstantsInfo *pPushConstantsInfo)
+{
+    pvk_cmd_push_constants((struct pvk_command_buffer *)commandBuffer, pPushConstantsInfo->offset,
+                           pPushConstantsInfo->size, pPushConstantsInfo->pValues);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdDispatchBase(VkCommandBuffer commandBuffer, uint32_t baseGroupX, uint32_t baseGroupY,
+                                             uint32_t baseGroupZ, uint32_t groupCountX, uint32_t groupCountY,
+                                             uint32_t groupCountZ)
+{
+    struct pvk_cmd_dispatch *c;
+    if (!groupCountX || !groupCountY || !groupCountZ)
+        return;
+    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_DISPATCH, sizeof(*c));
+    if (!c)
+        return;
+    c->base[0] = baseGroupX;
+    c->base[1] = baseGroupY;
+    c->base[2] = baseGroupZ;
+    c->count[0] = groupCountX;
+    c->count[1] = groupCountY;
+    c->count[2] = groupCountZ;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdDispatch(VkCommandBuffer commandBuffer, uint32_t groupCountX, uint32_t groupCountY,
+                                         uint32_t groupCountZ)
+{
+    vkCmdDispatchBase(commandBuffer, 0, 0, 0, groupCountX, groupCountY, groupCountZ);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdDispatchIndirect(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset)
+{
+    struct pvk_cmd_dispatch_indirect *c;
+    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_DISPATCH_INDIRECT, sizeof(*c));
+    if (c)
+        c->address = ((struct pvk_buffer *)buffer)->gpu_address + offset;
+}
+
+/* Secondary command buffers are replayed in place at submit. */
+VKAPI_ATTR void VKAPI_CALL vkCmdExecuteCommands(VkCommandBuffer commandBuffer, uint32_t commandBufferCount,
+                                                const VkCommandBuffer *pCommandBuffers)
+{
+    struct pvk_cmd_execute *c;
+    if (!commandBufferCount)
+        return;
+    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_EXECUTE_COMMANDS,
+                       sizeof(*c) + sizeof(VkCommandBuffer) * (size_t)commandBufferCount);
+    if (!c)
+        return;
+    c->count = commandBufferCount;
+    memcpy(c + 1, pCommandBuffers, sizeof(VkCommandBuffer) * (size_t)commandBufferCount);
+}
 
 /* ==========================================================================
  * 13. Queue submission and synchronization
  *
  * vkQueueSubmit, fences, semaphores and waiting for idle.
+ *
+ * SUBMISSION
+ *   Each batch (VkSubmitInfo) with command buffers is encoded into one
+ *   MTL4CommandBuffer from an MTL4CommandAllocator, with one compute encoder
+ *   (Metal 4 compute encoders also blit). All batches are encoded, and
+ *   everything allocated, before anything reaches the queue, so a failure
+ *   leaves no trace. Then, per batch: commit, signalEvent: for its signal
+ *   semaphores; finally the queue's timeline event is signalled with the
+ *   submission's serial. A fence is (timeline, serial). Semaphore waits are
+ *   resolved when submitting or by the queue's thread, not by the queue's
+ *   -waitForEvent:value: (see "Semaphore waits" below for why).
+ *
+ * TIMELINE
+ *   Each queue has an MTLSharedEvent that reaches N once submission N and
+ *   everything before it finished (a queue signal follows all earlier work).
+ *   Allocators, command buffers and upload chunks are tagged with the serial
+ *   of their last use and reused once the timeline passed it, at the next
+ *   submit or wait for idle. Commit feedback handlers only report errors: a
+ *   failed command buffer loses the device (VK_ERROR_DEVICE_LOST from then
+ *   on). They run after the timeline signal, so the wait that sees a failed
+ *   submission complete may still return VK_SUCCESS (allowed: device loss is
+ *   reported "eventually").
+ *
+ * UPLOAD RING
+ *   vkCmdUpdateBuffer data, push constants and internal kernel arguments go
+ *   into per-queue chunks of shared, write-combined memory in the device's
+ *   residency set, written while encoding and bound by GPU address.
+ *
+ * BARRIERS
+ *   Metal 4 does not track resources: commands in an encoder and across
+ *   encoders run concurrently unless barriers say otherwise. A Vulkan barrier
+ *   orders everything before it in submission order against everything
+ *   after, so it becomes (pvk_encode_barrier): an encoder barrier for the
+ *   commands around it, a consumer barrier against earlier encoders (once per
+ *   encoder) and a producer barrier towards later ones (once, at the end of
+ *   the encoder). Stages are conservative for now (pvk_barrier_stages): any
+ *   device stage is all the work a compute encoder runs.
+ *
+ * WAITS
+ *   Fences and semaphores are (MTLSharedEvent, value) pairs, waited for with
+ *   -waitUntilSignaledValue:timeoutMS: (nanoseconds rounded up to
+ *   milliseconds; UINT64_MAX is infinite). Waiting for any of several
+ *   objects polls them, sleeping at most 1 ms between looks.
  * ========================================================================== */
+
+#include <time.h>
+
+#define PVK_UPLOAD_CHUNK_SIZE (256u * 1024u)
+
+struct pvk_upload_chunk {
+    struct pvk_upload_chunk *next;
+    id buffer;     /* MTLBuffer: shared, write-combined, untracked, resident */
+    char *contents;
+    pvk_MTLGPUAddress address;
+    size_t used;
+    uint64_t serial; /* last submission that used it */
+};
+
+struct pvk_submission {
+    struct pvk_submission *next;
+    uint64_t serial;
+    uint32_t batch; /* index of its VkSubmitInfo while submitting */
+    id allocator;   /* MTL4CommandAllocator */
+    id cb;          /* MTL4CommandBuffer */
+};
+
+struct pvk_event_value {
+    id event; /* MTLSharedEvent */
+    uint64_t value;
+};
+
+/* The batches of one vkQueueSubmit from the first that must wait on the
+ * host: the queue's thread waits for each batch's values, commits it and
+ * signals its semaphores, then signals the timeline. One allocation. */
+struct pvk_deferred_batch {
+    id cb;            /* NULL: no command buffers */
+    uint32_t first;   /* in ops: nwaits waits, then nsignals signals */
+    uint32_t nwaits, nsignals;
+};
+
+struct pvk_deferred {
+    struct pvk_deferred *next;
+    uint64_t timeline; /* the submission's serial */
+    uint32_t nbatches;
+    struct pvk_deferred_batch *batches;
+    struct pvk_event_value *ops;
+};
+
+/* ---- Queues ---- */
+
+static VkResult pvk_queue_init(struct pvk_queue *queue)
+{
+    id mtl = queue->device->physical_device->mtl_device;
+    void *pool = objc_autoreleasePoolPush(); /* the NSError, on failure */
+    id desc = pvk_MTL4ArgumentTableDescriptor_new();
+
+    queue->timeline = pvk_MTLDevice_newSharedEvent(mtl);
+    if (desc) {
+        pvk_MTL4ArgumentTableDescriptor_setMaxBufferBindCount(desc, 31);
+        queue->argument_table = pvk_MTLDevice_newArgumentTableWithDescriptor_error(mtl, desc, NULL);
+        pvk_release(desc);
+    }
+    objc_autoreleasePoolPop(pool);
+    if (pthread_mutex_init(&queue->lock, NULL) == 0) {
+        if (pthread_cond_init(&queue->cond, NULL) == 0)
+            queue->lock_ready = true;
+        else
+            pthread_mutex_destroy(&queue->lock);
+    }
+    return queue->timeline && queue->argument_table && queue->lock_ready ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
+}
+
+static void pvk_deferred_free(struct pvk_device *device, struct pvk_deferred *d)
+{
+    struct pvk_deferred *next;
+    for (; d; d = next) {
+        next = d->next;
+        pvk_free(pvk_device_alloc(device), d);
+    }
+}
+
+static void pvk_upload_chunks_free(struct pvk_device *device, struct pvk_upload_chunk *c)
+{
+    struct pvk_upload_chunk *next;
+    for (; c; c = next) {
+        next = c->next;
+        pvk_device_evict(device, c->buffer);
+        pvk_release(c->buffer);
+        pvk_free(pvk_device_alloc(device), c);
+    }
+}
+
+static void pvk_submissions_free(struct pvk_device *device, struct pvk_submission *s)
+{
+    struct pvk_submission *next;
+    for (; s; s = next) {
+        next = s->next;
+        pvk_release(s->cb);
+        pvk_release(s->allocator);
+        pvk_free(pvk_device_alloc(device), s);
+    }
+}
+
+/* After pvk_device_finish: the GPU is done with everything. */
+static void pvk_queue_finish(struct pvk_queue *queue)
+{
+    struct pvk_device *device = queue->device;
+    void *pool = objc_autoreleasePoolPush();
+    pvk_submissions_free(device, queue->pending);
+    pvk_submissions_free(device, queue->free_submissions);
+    pvk_upload_chunks_free(device, queue->upload);
+    pvk_upload_chunks_free(device, queue->retired);
+    pvk_upload_chunks_free(device, queue->free_chunks);
+    pvk_release(queue->argument_table);
+    pvk_release(queue->timeline);
+    pvk_deferred_free(device, queue->deferred);
+    pvk_deferred_free(device, queue->done);
+    if (queue->lock_ready) {
+        pthread_cond_destroy(&queue->cond);
+        pthread_mutex_destroy(&queue->lock);
+    }
+    queue->pending = queue->pending_tail = queue->free_submissions = NULL;
+    queue->upload = queue->retired = queue->retired_tail = queue->free_chunks = NULL;
+    queue->argument_table = queue->timeline = NULL;
+    queue->deferred = queue->deferred_tail = queue->done = NULL;
+    queue->lock_ready = false;
+    objc_autoreleasePoolPop(pool);
+}
+
+/* Takes back what finished submissions used. */
+static void pvk_queue_recycle(struct pvk_queue *queue)
+{
+    uint64_t done = pvk_MTLSharedEvent_signaledValue(queue->timeline);
+    while (queue->pending && queue->pending->serial <= done) {
+        struct pvk_submission *s = queue->pending;
+        queue->pending = s->next;
+        pvk_MTL4CommandAllocator_reset(s->allocator);
+        s->next = queue->free_submissions;
+        queue->free_submissions = s;
+    }
+    if (!queue->pending)
+        queue->pending_tail = NULL;
+    while (queue->retired && queue->retired->serial <= done) {
+        struct pvk_upload_chunk *c = queue->retired;
+        queue->retired = c->next;
+        c->next = queue->free_chunks;
+        queue->free_chunks = c;
+    }
+    if (!queue->retired)
+        queue->retired_tail = NULL;
+}
+
+static struct pvk_submission *pvk_queue_get_submission(struct pvk_queue *queue)
+{
+    struct pvk_device *device = queue->device;
+    id mtl = device->physical_device->mtl_device;
+    struct pvk_submission *s = queue->free_submissions;
+    if (s) {
+        queue->free_submissions = s->next;
+        s->next = NULL;
+        return s;
+    }
+    s = pvk_alloc(pvk_device_alloc(device), sizeof(*s), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+    if (!s)
+        return NULL;
+    s->allocator = pvk_MTLDevice_newCommandAllocator(mtl);
+    s->cb = pvk_MTLDevice_newCommandBuffer(mtl);
+    if (!s->allocator || !s->cb) {
+        pvk_submissions_free(device, s);
+        return NULL;
+    }
+    return s;
+}
+
+/* Returns submissions that were encoded but not committed. */
+static void pvk_queue_put_submissions(struct pvk_queue *queue, struct pvk_submission *list)
+{
+    struct pvk_submission *next;
+    for (; list; list = next) {
+        next = list->next;
+        pvk_MTL4CommandAllocator_reset(list->allocator);
+        list->next = queue->free_submissions;
+        queue->free_submissions = list;
+    }
+}
+
+/* ---- Encoding ---- */
+
+struct pvk_encoder {
+    struct pvk_device *device;
+    struct pvk_queue *queue;
+    uint64_t serial;  /* timeline value of this submission */
+    id cb;            /* MTL4CommandBuffer */
+    id enc;           /* MTL4ComputeCommandEncoder, made by the first command that needs it */
+    VkResult result;
+    bool waits;                                 /* the batch waits for semaphores */
+    bool consumer_barrier;                      /* against earlier encoders: issued */
+    pvk_MTLStages producer_after, producer_before; /* towards later encoders: at the end */
+    struct pvk_pipeline *pipeline;
+    bool pipeline_dirty; /* setComputePipelineState: owed */
+    bool push_dirty;     /* push constants changed since they were bound */
+    uint32_t push_bound; /* bytes bound at the push-constant index */
+    /* push constants, then (dispatch base pipelines) the base workgroup */
+    unsigned char push[PVK_MAX_PUSH_CONSTANTS_SIZE + 16];
+};
+
+/* Upload-ring memory for this submission: size bytes at an align-aligned
+ * offset (align: a power of two), CPU pointer returned. */
+static void *pvk_upload(struct pvk_encoder *e, size_t size, size_t align, id *buffer, VkDeviceSize *offset,
+                        pvk_MTLGPUAddress *address)
+{
+    struct pvk_queue *queue = e->queue;
+    struct pvk_upload_chunk *c = queue->upload;
+    size_t at = c ? (c->used + align - 1) & ~(align - 1) : 0;
+
+    if (size > PVK_UPLOAD_CHUNK_SIZE) {
+        e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        return NULL;
+    }
+    if (!c || at + size > PVK_UPLOAD_CHUNK_SIZE) {
+        if (c) { /* full: reusable once its last user finished */
+            c->next = NULL;
+            if (queue->retired_tail)
+                queue->retired_tail->next = c;
+            else
+                queue->retired = c;
+            queue->retired_tail = c;
+        }
+        c = queue->free_chunks;
+        if (c) {
+            queue->free_chunks = c->next;
+        } else {
+            struct pvk_device *device = e->device;
+            c = pvk_alloc(pvk_device_alloc(device), sizeof(*c), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+            if (c)
+                c->buffer = pvk_MTLDevice_newBufferWithLength_options(
+                    device->physical_device->mtl_device, PVK_UPLOAD_CHUNK_SIZE,
+                    PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeWriteCombined |
+                        PVK_MTLResourceHazardTrackingModeUntracked);
+            if (!c || !c->buffer) {
+                pvk_free(pvk_device_alloc(device), c);
+                queue->upload = NULL;
+                e->result = c ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_ERROR_OUT_OF_HOST_MEMORY;
+                return NULL;
+            }
+            c->contents = pvk_MTLBuffer_contents(c->buffer);
+            c->address = pvk_MTLBuffer_gpuAddress(c->buffer);
+            pvk_device_make_resident(device, c->buffer);
+        }
+        c->next = NULL;
+        c->used = 0;
+        queue->upload = c;
+        at = 0;
+    }
+    c->used = at + size;
+    c->serial = e->serial;
+    if (buffer)
+        *buffer = c->buffer;
+    if (offset)
+        *offset = at;
+    *address = c->address + at;
+    return c->contents + at;
+}
+
+static id pvk_encoder_get(struct pvk_encoder *e)
+{
+    if (!e->enc && e->result == VK_SUCCESS) {
+        e->enc = pvk_MTL4CommandBuffer_computeCommandEncoder(e->cb);
+        if (!e->enc) {
+            e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+            return NULL;
+        }
+        pvk_MTL4ComputeCommandEncoder_setArgumentTable(e->enc, e->queue->argument_table);
+        e->consumer_barrier = false;
+        e->pipeline_dirty = true;
+        e->push_bound = 0;
+        if (e->waits) {
+            /* A semaphore signalled earlier on this queue is waited for by
+             * waiting for all earlier work (pvk_queue_submit). */
+            pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
+                e->enc, PVK_MTLStageDispatch | PVK_MTLStageBlit, PVK_MTLStageDispatch | PVK_MTLStageBlit,
+                PVK_MTL4VisibilityOptionDevice);
+            e->consumer_barrier = true;
+        }
+    }
+    return e->enc;
+}
+
+static void pvk_encoder_end(struct pvk_encoder *e)
+{
+    if (!e->enc)
+        return;
+    if (e->producer_after)
+        pvk_MTL4CommandEncoder_barrierAfterStages_beforeQueueStages_visibilityOptions(
+            e->enc, e->producer_after, e->producer_before, PVK_MTL4VisibilityOptionDevice);
+    pvk_MTL4CommandEncoder_endEncoding(e->enc);
+    e->enc = NULL;
+}
+
+/* The Metal stages that run the work of Vulkan stages, in the first (src)
+ * or second (dst) scope of a barrier; 0: no device work. Conservative: any
+ * device stage is everything a compute encoder runs (vkCmdFillBuffer, a
+ * transfer, may run as a dispatch). Host accesses need no GPU barrier: host
+ * writes before vkQueueSubmit are visible to it, and the GPU's writes are
+ * visible on the host once the fence or semaphore wait returns. */
+static pvk_MTLStages pvk_barrier_stages(VkPipelineStageFlags2 stages, bool src)
+{
+    stages &= ~(VkPipelineStageFlags2)VK_PIPELINE_STAGE_2_HOST_BIT;
+    /* TOP_OF_PIPE: no work as a source, all work as a destination;
+     * BOTTOM_OF_PIPE the other way around. */
+    stages &= ~(VkPipelineStageFlags2)(src ? VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+    return stages ? PVK_MTLStageDispatch | PVK_MTLStageBlit : 0;
+}
+
+static void pvk_encode_barrier(struct pvk_encoder *e, const struct pvk_cmd_barrier *c)
+{
+    pvk_MTLStages after = pvk_barrier_stages(c->src_stages, true), before = pvk_barrier_stages(c->dst_stages, false);
+    id enc;
+    if (!after || !before || !(enc = pvk_encoder_get(e)))
+        return;
+    if (!e->consumer_barrier) {
+        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(enc, after, before,
+                                                                                    PVK_MTL4VisibilityOptionDevice);
+        e->consumer_barrier = true;
+    }
+    pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(enc, after, before,
+                                                                                        PVK_MTL4VisibilityOptionDevice);
+    e->producer_after |= after;
+    e->producer_before |= before;
+}
+
+static id pvk_device_fill_pipeline(struct pvk_device *device);
+
+static void pvk_encode_fill(struct pvk_encoder *e, const struct pvk_cmd_fill *c)
+{
+    uint32_t byte = c->data & 0xffu;
+    VkDeviceSize words = c->size / 4, done;
+    id enc = pvk_encoder_get(e), pso;
+
+    if (!enc)
+        return;
+    if (c->data == byte * 0x01010101u) {
+        pvk_NSRange range;
+        range.location = c->offset;
+        range.length = c->size;
+        pvk_MTL4ComputeCommandEncoder_fillBuffer_range_value(enc, c->buffer, range, (uint8_t)byte);
+        return;
+    }
+    /* Metal fills bytes: other patterns take a kernel, args at the push-constant index. */
+    pso = pvk_device_fill_pipeline(e->device);
+    if (!pso) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return;
+    }
+    pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, pso);
+    e->pipeline_dirty = true;
+    for (done = 0; done < words;) {
+        uint32_t n = words - done > (1u << 30) ? 1u << 30 : (uint32_t)(words - done);
+        pvk_MTLSize groups, threads;
+        pvk_MTLGPUAddress address;
+        unsigned char *args = pvk_upload(e, 16, 16, NULL, NULL, &address);
+        uint64_t dst = c->address + done * 4;
+        if (!args)
+            return;
+        memcpy(args, &dst, 8);
+        memcpy(args + 8, &n, 4);
+        memcpy(args + 12, &c->data, 4);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+        groups.width = (n + 63) / 64;
+        groups.height = groups.depth = 1;
+        threads.width = 64;
+        threads.height = threads.depth = 1;
+        pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(enc, groups, threads);
+        done += n;
+    }
+    e->push_bound = 0;
+}
+
+static void pvk_encode_update(struct pvk_encoder *e, const struct pvk_cmd_update *c)
+{
+    pvk_MTLGPUAddress address;
+    VkDeviceSize offset;
+    id enc = pvk_encoder_get(e), buffer;
+    void *p;
+    if (!enc || !(p = pvk_upload(e, c->size, 16, &buffer, &offset, &address)))
+        return;
+    memcpy(p, c + 1, c->size);
+    pvk_MTL4ComputeCommandEncoder_copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+        enc, buffer, offset, c->buffer, c->offset, c->size);
+}
+
+/* Pipeline and push constants for a dispatch with base workgroup `base`. */
+static id pvk_encode_compute_state(struct pvk_encoder *e, const uint32_t base[3])
+{
+    struct pvk_pipeline *p = e->pipeline;
+    uint32_t need;
+    id enc;
+
+    if (!p || !p->mtl_pipeline || !(enc = pvk_encoder_get(e)))
+        return NULL;
+    if (e->pipeline_dirty) {
+        pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, p->mtl_pipeline);
+        e->pipeline_dirty = false;
+    }
+    need = p->push_size;
+    if (p->dispatch_base) {
+        if (memcmp(e->push + p->dispatch_base_offset, base, 12) != 0) {
+            memcpy(e->push + p->dispatch_base_offset, base, 12);
+            e->push_dirty = true;
+        }
+        need = p->dispatch_base_offset + 16;
+    }
+    if (need && (e->push_dirty || e->push_bound < need)) {
+        pvk_MTLGPUAddress address;
+        void *data = pvk_upload(e, need, 16, NULL, NULL, &address);
+        if (!data)
+            return NULL;
+        memcpy(data, e->push, need);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+        e->push_bound = need;
+        e->push_dirty = false;
+    }
+    return enc;
+}
+
+static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_buffer *cb, uint32_t depth)
+{
+    static const uint32_t zero[3] = { 0, 0, 0 };
+    const struct pvk_cmd_block *b;
+    for (b = cb->first; b; b = b->next) {
+        size_t at = 0;
+        while (at < b->used && e->result == VK_SUCCESS) {
+            const struct pvk_cmd *c = (const struct pvk_cmd *)((const char *)b->data + at);
+            id enc;
+            at += c->size;
+            switch ((enum pvk_cmd_op)c->op) {
+            case PVK_CMD_FILL_BUFFER:
+                pvk_encode_fill(e, (const struct pvk_cmd_fill *)c);
+                break;
+            case PVK_CMD_COPY_BUFFER: {
+                const struct pvk_cmd_copy *cp = (const struct pvk_cmd_copy *)c;
+                if ((enc = pvk_encoder_get(e)))
+                    pvk_MTL4ComputeCommandEncoder_copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+                        enc, cp->src, cp->src_offset, cp->dst, cp->dst_offset, cp->size);
+                break;
+            }
+            case PVK_CMD_UPDATE_BUFFER:
+                pvk_encode_update(e, (const struct pvk_cmd_update *)c);
+                break;
+            case PVK_CMD_BARRIER:
+                pvk_encode_barrier(e, (const struct pvk_cmd_barrier *)c);
+                break;
+            case PVK_CMD_BIND_PIPELINE:
+                if (e->pipeline != ((const struct pvk_cmd_bind_pipeline *)c)->pipeline) {
+                    e->pipeline = ((const struct pvk_cmd_bind_pipeline *)c)->pipeline;
+                    e->pipeline_dirty = true;
+                }
+                break;
+            case PVK_CMD_PUSH_CONSTANTS: {
+                const struct pvk_cmd_push *pc = (const struct pvk_cmd_push *)c;
+                memcpy(e->push + pc->offset, pc + 1, pc->size);
+                e->push_dirty = true;
+                break;
+            }
+            case PVK_CMD_DISPATCH: {
+                const struct pvk_cmd_dispatch *d = (const struct pvk_cmd_dispatch *)c;
+                pvk_MTLSize groups;
+                if (!(enc = pvk_encode_compute_state(e, d->base)))
+                    break;
+                groups.width = d->count[0];
+                groups.height = d->count[1];
+                groups.depth = d->count[2];
+                pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(enc, groups,
+                                                                                       e->pipeline->threads);
+                break;
+            }
+            case PVK_CMD_DISPATCH_INDIRECT:
+                if ((enc = pvk_encode_compute_state(e, zero)))
+                    pvk_MTL4ComputeCommandEncoder_dispatchThreadgroupsWithIndirectBuffer_threadsPerThreadgroup(
+                        enc, ((const struct pvk_cmd_dispatch_indirect *)c)->address, e->pipeline->threads);
+                break;
+            case PVK_CMD_EXECUTE_COMMANDS: {
+                const struct pvk_cmd_execute *x = (const struct pvk_cmd_execute *)c;
+                const VkCommandBuffer *list = (const VkCommandBuffer *)(x + 1);
+                uint32_t i;
+                for (i = 0; i < x->count && depth < 8; i++)
+                    pvk_encode_commands(e, (const struct pvk_command_buffer *)list[i], depth + 1);
+                e->pipeline_dirty = true; /* the state after it is undefined */
+                break;
+            }
+            }
+        }
+    }
+}
+
+static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission *s, const VkSubmitInfo2 *submit,
+                                 uint64_t serial)
+{
+    struct pvk_encoder e;
+    uint32_t i;
+
+    memset(&e, 0, sizeof(e));
+    e.device = queue->device;
+    e.queue = queue;
+    e.serial = serial;
+    e.cb = s->cb;
+    e.waits = submit->waitSemaphoreInfoCount > 0;
+    pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(s->cb, s->allocator);
+    for (i = 0; i < submit->commandBufferInfoCount && e.result == VK_SUCCESS; i++)
+        pvk_encode_commands(&e, (const struct pvk_command_buffer *)submit->pCommandBufferInfos[i].commandBuffer, 0);
+    pvk_encoder_end(&e);
+    pvk_MTL4CommandBuffer_endCommandBuffer(s->cb);
+    return e.result;
+}
+
+/* ---- Submission ---- */
+
+/* Read by waits on any thread while a submission sets it, hence atomics
+ * (event as void *: Objective-C builds take no id in __atomic builtins). */
+struct pvk_fence {
+    void *event;    /* MTLSharedEvent; NULL: unsignaled; else signaled once it reaches value */
+    uint64_t value; /* stored before event */
+    int signaled;   /* signaled on the host (created signaled) */
+};
+
+struct pvk_semaphore {
+    id event;      /* MTLSharedEvent */
+    bool timeline;
+    uint64_t value; /* binary: signal operations submitted so far */
+};
+
+static bool pvk_device_lost(struct pvk_device *device)
+{
+    return __atomic_load_n(&device->lost, __ATOMIC_ACQUIRE) != 0;
+}
+
+static void pvk_commit_feedback(void *user, id feedback)
+{
+    struct pvk_device *device = user;
+    id error = pvk_MTL4CommitFeedback_error(feedback);
+    if (error && !__atomic_exchange_n(&device->lost, 1, __ATOMIC_ACQ_REL)) {
+        void *pool = objc_autoreleasePoolPush();
+        pvk_log(PVK_LOG_ERROR, "a command buffer failed, the device is lost: %s",
+                pvk_ns_utf8(pvk_NSError_localizedDescription(error)));
+        objc_autoreleasePoolPop(pool);
+    }
+    __atomic_sub_fetch(&device->feedback_pending, 1, __ATOMIC_ACQ_REL);
+}
+
+static void pvk_queue_commit(struct pvk_queue *queue, id cb)
+{
+    struct pvk_device *device = queue->device;
+    struct pvk_block block = pvk_block_make(pvk_commit_feedback, device);
+    id options = pvk_MTL4CommitOptions_new();
+    pvk_MTL4CommitOptions_addFeedbackHandler(options, &block);
+    __atomic_add_fetch(&device->feedback_pending, 1, __ATOMIC_ACQ_REL);
+    pvk_MTL4CommandQueue_commit_count_options(queue->mtl_queue, &cb, 1, options);
+    pvk_release(options);
+}
+
+/* ---- Semaphore waits ----
+ *
+ * A queue's -waitForEvent:value: gives up silently after about 4 s (M4 Max,
+ * macOS 27: the work behind it then runs, the feedback reports no error), so
+ * it cannot wait for a host signal or for long work on another queue. So a
+ * wait is resolved when submitted, if possible: its value is reached
+ * already, or an earlier batch of the same vkQueueSubmit on this queue
+ * signals it (the waiting batch's encoder then starts with a barrier against
+ * all earlier work on the queue). Otherwise that batch and everything after
+ * it on the queue goes to the queue's thread, which waits on the CPU and
+ * commits in order. */
+
+/* The value of a binary semaphore after the signals of this submission
+ * before batch `batch`, signal `upto` (its count of signal operations). */
+static uint64_t pvk_binary_value(const VkSubmitInfo2 *submits, uint32_t batch, uint32_t upto,
+                                 const struct pvk_semaphore *sem)
+{
+    uint64_t value = sem->value;
+    uint32_t b, k;
+    for (b = 0; b <= batch; b++) {
+        uint32_t n = b < batch ? submits[b].signalSemaphoreInfoCount : upto;
+        for (k = 0; k < n; k++)
+            if ((const struct pvk_semaphore *)submits[b].pSignalSemaphoreInfos[k].semaphore == sem)
+                value++;
+    }
+    return value;
+}
+
+static uint64_t pvk_wait_value(const VkSubmitInfo2 *submits, uint32_t batch, const VkSemaphoreSubmitInfo *w)
+{
+    const struct pvk_semaphore *sem = (const struct pvk_semaphore *)w->semaphore;
+    return sem->timeline ? w->value : pvk_binary_value(submits, batch, 0, sem);
+}
+
+static uint64_t pvk_signal_value(const VkSubmitInfo2 *submits, uint32_t batch, uint32_t k)
+{
+    const VkSemaphoreSubmitInfo *s = &submits[batch].pSignalSemaphoreInfos[k];
+    const struct pvk_semaphore *sem = (const struct pvk_semaphore *)s->semaphore;
+    return sem->timeline ? s->value : pvk_binary_value(submits, batch, k, sem) + 1;
+}
+
+/* An earlier batch of this submission signals what w waits for. */
+static bool pvk_wait_covered(const VkSubmitInfo2 *submits, uint32_t batch, const VkSemaphoreSubmitInfo *w)
+{
+    const struct pvk_semaphore *sem = (const struct pvk_semaphore *)w->semaphore;
+    uint32_t b, k;
+    for (b = 0; b < batch; b++)
+        for (k = 0; k < submits[b].signalSemaphoreInfoCount; k++)
+            if (submits[b].pSignalSemaphoreInfos[k].semaphore == w->semaphore &&
+                (!sem->timeline || submits[b].pSignalSemaphoreInfos[k].value >= w->value))
+                return true;
+    return false;
+}
+
+static void *pvk_queue_thread(void *arg)
+{
+    struct pvk_queue *queue = arg;
+    pthread_mutex_lock(&queue->lock);
+    for (;;) {
+        struct pvk_deferred *d;
+        bool stop = false;
+        uint32_t b, k;
+        while (!queue->deferred && !queue->stop)
+            pthread_cond_wait(&queue->cond, &queue->lock);
+        if (!queue->deferred || queue->stop)
+            break;
+        d = queue->deferred; /* stays at the head until done: vkQueueSubmit commits nothing meanwhile */
+        pthread_mutex_unlock(&queue->lock);
+        for (b = 0; b < d->nbatches && !stop; b++) {
+            const struct pvk_deferred_batch *db = &d->batches[b];
+            void *pool = objc_autoreleasePoolPush();
+            for (k = 0; k < db->nwaits && !stop; k++) {
+                const struct pvk_event_value *w = &d->ops[db->first + k];
+                while (!stop && !pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(w->event, w->value, 100))
+                    stop = __atomic_load_n(&queue->stop, __ATOMIC_ACQUIRE);
+            }
+            if (!stop) {
+                if (db->cb)
+                    pvk_queue_commit(queue, db->cb);
+                for (k = 0; k < db->nsignals; k++) {
+                    const struct pvk_event_value *s = &d->ops[db->first + db->nwaits + k];
+                    pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, s->event, s->value);
+                }
+            }
+            objc_autoreleasePoolPop(pool);
+        }
+        if (!stop)
+            pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, queue->timeline, d->timeline);
+        pthread_mutex_lock(&queue->lock);
+        queue->deferred = d->next;
+        if (!queue->deferred)
+            queue->deferred_tail = NULL;
+        d->next = queue->done;
+        queue->done = d;
+        if (stop) /* the device is going away */
+            break;
+    }
+    pthread_mutex_unlock(&queue->lock);
+    return NULL;
+}
+
+/* The deferred part of a submission: batches first.. with the waits that
+ * are not covered. NULL when out of memory. */
+static struct pvk_deferred *pvk_deferred_make(struct pvk_queue *queue, uint32_t count, const VkSubmitInfo2 *submits,
+                                              uint32_t first, const struct pvk_submission *list, uint64_t serial)
+{
+    struct pvk_deferred *d;
+    uint32_t i, k, nops = 0, n;
+    size_t size;
+
+    for (i = first; i < count; i++)
+        nops += submits[i].waitSemaphoreInfoCount + submits[i].signalSemaphoreInfoCount;
+    size = sizeof(*d) + sizeof(*d->batches) * (count - first) + sizeof(*d->ops) * nops;
+    d = pvk_alloc(pvk_device_alloc(queue->device), size, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+    if (!d)
+        return NULL;
+    d->timeline = serial;
+    d->nbatches = count - first;
+    d->batches = (struct pvk_deferred_batch *)(d + 1);
+    d->ops = (struct pvk_event_value *)(d->batches + d->nbatches);
+    for (n = 0, i = first; i < count; i++) {
+        struct pvk_deferred_batch *db = &d->batches[i - first];
+        while (list && list->batch < i)
+            list = list->next;
+        db->cb = list && list->batch == i ? list->cb : NULL;
+        db->first = n;
+        for (k = 0; k < submits[i].waitSemaphoreInfoCount; k++) {
+            const VkSemaphoreSubmitInfo *w = &submits[i].pWaitSemaphoreInfos[k];
+            if (pvk_wait_covered(submits, i, w))
+                continue;
+            d->ops[n].event = ((struct pvk_semaphore *)w->semaphore)->event;
+            d->ops[n++].value = pvk_wait_value(submits, i, w);
+            db->nwaits++;
+        }
+        for (k = 0; k < submits[i].signalSemaphoreInfoCount; k++) {
+            d->ops[n].event = ((struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[k].semaphore)->event;
+            d->ops[n++].value = pvk_signal_value(submits, i, k);
+            db->nsignals++;
+        }
+    }
+    return d;
+}
+
+static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const VkSubmitInfo2 *submits, VkFence _fence)
+{
+    struct pvk_device *device = queue->device;
+    struct pvk_fence *fence = (struct pvk_fence *)_fence;
+    struct pvk_submission *list = NULL, **tail = &list, *s;
+    struct pvk_deferred *done, *deferred = NULL;
+    VkResult result = VK_SUCCESS;
+    uint32_t i, j, first;
+    uint64_t serial;
+    bool backlog;
+    void *pool;
+
+    if (pvk_device_lost(device))
+        return VK_ERROR_DEVICE_LOST;
+    pool = objc_autoreleasePoolPush();
+    pthread_mutex_lock(&queue->lock);
+    done = queue->done;
+    queue->done = NULL;
+    backlog = queue->deferred != NULL; /* then everything waits behind it */
+    pthread_mutex_unlock(&queue->lock);
+    first = backlog ? 0 : count;
+    pvk_deferred_free(device, done);
+    pvk_queue_recycle(queue);
+    serial = queue->serial + 1;
+
+    /* Encode every batch before the queue sees any of them. */
+    for (i = 0; i < count && result == VK_SUCCESS; i++) {
+        if (!submits[i].commandBufferInfoCount)
+            continue;
+        s = pvk_queue_get_submission(queue);
+        if (!s) {
+            result = VK_ERROR_OUT_OF_HOST_MEMORY;
+            break;
+        }
+        s->serial = serial;
+        s->batch = i;
+        *tail = s;
+        tail = &s->next;
+        result = pvk_encode_batch(queue, s, &submits[i], serial);
+    }
+
+    /* The first batch with a wait nothing resolves yet, and from there on
+     * the deferred part (needs the queue's thread). */
+    for (i = 0; i < first && result == VK_SUCCESS; i++) {
+        for (j = 0; j < submits[i].waitSemaphoreInfoCount; j++) {
+            const VkSemaphoreSubmitInfo *w = &submits[i].pWaitSemaphoreInfos[j];
+            if (!pvk_wait_covered(submits, i, w) &&
+                pvk_MTLSharedEvent_signaledValue(((struct pvk_semaphore *)w->semaphore)->event) <
+                    pvk_wait_value(submits, i, w))
+                break;
+        }
+        if (j < submits[i].waitSemaphoreInfoCount)
+            first = i;
+    }
+    if (result == VK_SUCCESS && (first < count || backlog)) {
+        deferred = pvk_deferred_make(queue, count, submits, first, list, serial);
+        if (!deferred)
+            result = VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    if (result == VK_SUCCESS && deferred && !queue->thread_running) {
+        if (pthread_create(&queue->thread, NULL, pvk_queue_thread, queue) == 0)
+            queue->thread_running = true;
+        else
+            result = VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    if (result != VK_SUCCESS) {
+        pvk_deferred_free(device, deferred);
+        pvk_queue_put_submissions(queue, list);
+        objc_autoreleasePoolPop(pool);
+        return result;
+    }
+
+    /* Batches before `first`: their waits are resolved. */
+    for (s = list, i = 0; i < first; i++) {
+        if (s && s->batch == i) {
+            pvk_queue_commit(queue, s->cb);
+            s = s->next;
+        }
+        for (j = 0; j < submits[i].signalSemaphoreInfoCount; j++)
+            pvk_MTL4CommandQueue_signalEvent_value(
+                queue->mtl_queue, ((struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[j].semaphore)->event,
+                pvk_signal_value(submits, i, j));
+    }
+    for (i = 0; i < count; i++) /* binary semaphores count their signals */
+        for (j = 0; j < submits[i].signalSemaphoreInfoCount; j++)
+            if (!((struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[j].semaphore)->timeline)
+                ((struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[j].semaphore)->value++;
+    if (deferred) {
+        pthread_mutex_lock(&queue->lock);
+        if (queue->deferred_tail)
+            queue->deferred_tail->next = deferred;
+        else
+            queue->deferred = deferred;
+        queue->deferred_tail = deferred;
+        pthread_cond_broadcast(&queue->cond);
+        pthread_mutex_unlock(&queue->lock);
+    } else {
+        pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, queue->timeline, serial);
+    }
+    queue->serial = serial;
+    if (list) {
+        if (queue->pending_tail)
+            queue->pending_tail->next = list;
+        else
+            queue->pending = list;
+        for (s = list; s->next; s = s->next)
+            ;
+        queue->pending_tail = s;
+    }
+    if (fence) {
+        fence->signaled = 0;
+        __atomic_store_n(&fence->value, serial, __ATOMIC_RELAXED);
+        __atomic_store_n(&fence->event, (void *)queue->timeline, __ATOMIC_RELEASE);
+    }
+    objc_autoreleasePoolPop(pool);
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit2(VkQueue queue, uint32_t submitCount, const VkSubmitInfo2 *pSubmits,
+                                              VkFence fence)
+{
+    return pvk_queue_submit((struct pvk_queue *)queue, submitCount, pSubmits, fence);
+}
+
+/* vkQueueSubmit: the batches as VkSubmitInfo2. */
+VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue _queue, uint32_t submitCount, const VkSubmitInfo *pSubmits,
+                                             VkFence fence)
+{
+    struct pvk_queue *queue = (struct pvk_queue *)_queue;
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(queue->device);
+    size_t nsem = 0, ncb = 0, size;
+    VkSemaphoreSubmitInfo *sems;
+    VkCommandBufferSubmitInfo *cbs;
+    VkSubmitInfo2 *submits;
+    VkResult result;
+    uint32_t i, j;
+
+    for (i = 0; i < submitCount; i++) {
+        nsem += (size_t)pSubmits[i].waitSemaphoreCount + pSubmits[i].signalSemaphoreCount;
+        ncb += pSubmits[i].commandBufferCount;
+    }
+    if (!submitCount)
+        return pvk_queue_submit(queue, 0, NULL, fence);
+    size = sizeof(*submits) * submitCount + sizeof(*sems) * nsem + sizeof(*cbs) * ncb;
+    submits = pvk_alloc(alloc, size, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+    if (!submits)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    sems = (VkSemaphoreSubmitInfo *)(submits + submitCount);
+    cbs = (VkCommandBufferSubmitInfo *)(sems + nsem);
+    for (i = 0; i < submitCount; i++) {
+        const VkSubmitInfo *in = &pSubmits[i];
+        const VkTimelineSemaphoreSubmitInfo *values = NULL;
+        const VkBaseInStructure *ext;
+        VkSubmitInfo2 *out = &submits[i];
+
+        for (ext = in->pNext; ext; ext = ext->pNext)
+            if (ext->sType == VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO)
+                values = (const VkTimelineSemaphoreSubmitInfo *)ext;
+        out->sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+        out->waitSemaphoreInfoCount = in->waitSemaphoreCount;
+        out->pWaitSemaphoreInfos = sems;
+        for (j = 0; j < in->waitSemaphoreCount; j++, sems++) {
+            sems->sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            sems->semaphore = in->pWaitSemaphores[j];
+            sems->stageMask = in->pWaitDstStageMask[j];
+            if (values && values->pWaitSemaphoreValues && j < values->waitSemaphoreValueCount)
+                sems->value = values->pWaitSemaphoreValues[j];
+        }
+        out->commandBufferInfoCount = in->commandBufferCount;
+        out->pCommandBufferInfos = cbs;
+        for (j = 0; j < in->commandBufferCount; j++, cbs++) {
+            cbs->sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+            cbs->commandBuffer = in->pCommandBuffers[j];
+        }
+        out->signalSemaphoreInfoCount = in->signalSemaphoreCount;
+        out->pSignalSemaphoreInfos = sems;
+        for (j = 0; j < in->signalSemaphoreCount; j++, sems++) {
+            sems->sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            sems->semaphore = in->pSignalSemaphores[j];
+            if (values && values->pSignalSemaphoreValues && j < values->signalSemaphoreValueCount)
+                sems->value = values->pSignalSemaphoreValues[j];
+        }
+    }
+    result = pvk_queue_submit(queue, submitCount, submits, fence);
+    pvk_free(alloc, submits);
+    return result;
+}
+
+/* ---- Waiting ---- */
+
+static uint64_t pvk_now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+}
+
+/* State of waitable i: 1 signaled; 0 signaled once *event reaches *value;
+ * -1 nothing to wait on yet (a fence not submitted). */
+typedef int (*pvk_wait_state)(const void *objects, const uint64_t *values, uint32_t i, id *event, uint64_t *value);
+
+/* Waits until all (or any) of count objects are signaled, timeout in ns
+ * (0: just look, UINT64_MAX: forever). */
+static VkResult pvk_wait(struct pvk_device *device, uint32_t count, bool all, uint64_t timeout, pvk_wait_state state,
+                         const void *objects, const uint64_t *values)
+{
+    uint64_t start = timeout && timeout != UINT64_MAX ? pvk_now_ns() : 0;
+
+    for (;;) {
+        uint32_t i, pending = 0;
+        id event = NULL;
+        uint64_t value = 0, remaining, slice;
+
+        for (i = 0; i < count; i++) {
+            id ev = NULL;
+            uint64_t v = 0;
+            int s = state(objects, values, i, &ev, &v);
+            if (s == 0 && pvk_MTLSharedEvent_signaledValue(ev) >= v)
+                s = 1;
+            if (s == 1 && !all)
+                break;
+            if (s == 1)
+                continue;
+            if (s == 0 && !event) {
+                event = ev;
+                value = v;
+            }
+            pending++;
+        }
+        if (pvk_device_lost(device))
+            return VK_ERROR_DEVICE_LOST;
+        if (i < count || !pending)
+            return VK_SUCCESS;
+        if (timeout == 0)
+            return VK_TIMEOUT;
+        if (timeout == UINT64_MAX) {
+            remaining = UINT64_MAX;
+        } else {
+            uint64_t elapsed = pvk_now_ns() - start;
+            if (elapsed >= timeout)
+                return VK_TIMEOUT;
+            remaining = timeout - elapsed;
+        }
+        /* Sleep on one object: all of them in turn, or the only one; poll
+         * otherwise. Long waits wake up each second to notice a lost device. */
+        slice = event && (all || pending == 1) ? 1000000000u : 1000000u;
+        if (slice > remaining)
+            slice = remaining;
+        if (event) {
+            pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(event, value, (slice + 999999u) / 1000000u);
+        } else {
+            struct timespec ts;
+            ts.tv_sec = 0;
+            ts.tv_nsec = (long)slice;
+            nanosleep(&ts, NULL);
+        }
+    }
+}
+
+static VkResult pvk_queue_wait_idle(struct pvk_queue *queue)
+{
+    struct pvk_device *device = queue->device;
+    while (!pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(queue->timeline, queue->serial, 1000))
+        if (pvk_device_lost(device))
+            break;
+    pvk_queue_recycle(queue);
+    return pvk_device_lost(device) ? VK_ERROR_DEVICE_LOST : VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkQueueWaitIdle(VkQueue queue)
+{
+    return pvk_queue_wait_idle((struct pvk_queue *)queue);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkDeviceWaitIdle(VkDevice _device)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    VkResult result = VK_SUCCESS;
+    uint32_t i;
+    for (i = 0; i < device->queue_count; i++)
+        if (pvk_queue_wait_idle(&device->queues[i]) != VK_SUCCESS)
+            result = VK_ERROR_DEVICE_LOST;
+    return result;
+}
+
+/* Before the device's objects go: the GPU and the feedback handlers (which
+ * use the device) must be done. Vulkan requires the work to be finished
+ * already; a submission stuck on a semaphore nobody signals is given 5 s. */
+static void pvk_device_finish(struct pvk_device *device)
+{
+    uint64_t start = pvk_now_ns();
+    uint32_t i;
+    for (i = 0; i < device->queue_count; i++) {
+        struct pvk_queue *queue = &device->queues[i];
+        if (queue->timeline && !pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(queue->timeline, queue->serial, 5000))
+            pvk_log(PVK_LOG_ERROR, "vkDestroyDevice: queue %u still has work", i);
+        if (queue->thread_running) { /* what it has not committed is dropped */
+            pthread_mutex_lock(&queue->lock);
+            __atomic_store_n(&queue->stop, true, __ATOMIC_RELEASE);
+            pthread_cond_broadcast(&queue->cond);
+            pthread_mutex_unlock(&queue->lock);
+            pthread_join(queue->thread, NULL);
+            queue->thread_running = false;
+        }
+    }
+    while (__atomic_load_n(&device->feedback_pending, __ATOMIC_ACQUIRE) > 0 && pvk_now_ns() - start < 10000000000ull) {
+        struct timespec ts;
+        ts.tv_sec = 0;
+        ts.tv_nsec = 100000;
+        nanosleep(&ts, NULL);
+    }
+    pvk_release(device->fill_pipeline);
+    device->fill_pipeline = NULL;
+}
+
+/* ---- Fences ---- */
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateFence(VkDevice device, const VkFenceCreateInfo *pCreateInfo,
+                                             const VkAllocationCallbacks *pAllocator, VkFence *pFence)
+{
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
+    struct pvk_fence *fence = pvk_alloc(alloc, sizeof(*fence), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!fence)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    fence->signaled = (pCreateInfo->flags & VK_FENCE_CREATE_SIGNALED_BIT) != 0;
+    *pFence = (VkFence)fence;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyFence(VkDevice device, VkFence fence, const VkAllocationCallbacks *pAllocator)
+{
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), fence);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkResetFences(VkDevice device, uint32_t fenceCount, const VkFence *pFences)
+{
+    uint32_t i;
+    (void)device;
+    for (i = 0; i < fenceCount; i++) {
+        struct pvk_fence *fence = (struct pvk_fence *)pFences[i];
+        fence->signaled = 0;
+        __atomic_store_n(&fence->event, NULL, __ATOMIC_RELEASE);
+    }
+    return VK_SUCCESS;
+}
+
+static int pvk_fence_state(const void *objects, const uint64_t *values, uint32_t i, id *event, uint64_t *value)
+{
+    struct pvk_fence *fence = (struct pvk_fence *)((const VkFence *)objects)[i];
+    (void)values;
+    if (fence->signaled)
+        return 1;
+    *event = (id)__atomic_load_n(&fence->event, __ATOMIC_ACQUIRE);
+    if (!*event)
+        return -1;
+    *value = __atomic_load_n(&fence->value, __ATOMIC_RELAXED);
+    return 0;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetFenceStatus(VkDevice _device, VkFence fence)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    VkResult result = pvk_wait(device, 1, true, 0, pvk_fence_state, &fence, NULL);
+    return result == VK_TIMEOUT ? VK_NOT_READY : result;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkWaitForFences(VkDevice device, uint32_t fenceCount, const VkFence *pFences,
+                                               VkBool32 waitAll, uint64_t timeout)
+{
+    return pvk_wait((struct pvk_device *)device, fenceCount, waitAll != VK_FALSE, timeout, pvk_fence_state, pFences,
+                    NULL);
+}
+
+/* ---- Semaphores ---- */
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateSemaphore(VkDevice _device, const VkSemaphoreCreateInfo *pCreateInfo,
+                                                 const VkAllocationCallbacks *pAllocator, VkSemaphore *pSemaphore)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    struct pvk_semaphore *sem = pvk_alloc(alloc, sizeof(*sem), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    const VkBaseInStructure *ext;
+    uint64_t initial = 0;
+
+    if (!sem)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    for (ext = pCreateInfo->pNext; ext; ext = ext->pNext) {
+        if (ext->sType == VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO) {
+            const VkSemaphoreTypeCreateInfo *type = (const VkSemaphoreTypeCreateInfo *)ext;
+            sem->timeline = type->semaphoreType == VK_SEMAPHORE_TYPE_TIMELINE;
+            initial = type->initialValue;
+        }
+    }
+    sem->event = pvk_MTLDevice_newSharedEvent(device->physical_device->mtl_device);
+    if (!sem->event) {
+        pvk_free(alloc, sem);
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    if (sem->timeline && initial)
+        pvk_MTLSharedEvent_setSignaledValue(sem->event, initial);
+    *pSemaphore = (VkSemaphore)sem;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroySemaphore(VkDevice device, VkSemaphore semaphore,
+                                              const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_semaphore *sem = (struct pvk_semaphore *)semaphore;
+    if (!sem)
+        return;
+    pvk_release(sem->event);
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), sem);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetSemaphoreCounterValue(VkDevice device, VkSemaphore semaphore, uint64_t *pValue)
+{
+    *pValue = pvk_MTLSharedEvent_signaledValue(((struct pvk_semaphore *)semaphore)->event);
+    return pvk_device_lost((struct pvk_device *)device) ? VK_ERROR_DEVICE_LOST : VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkSignalSemaphore(VkDevice device, const VkSemaphoreSignalInfo *pSignalInfo)
+{
+    (void)device;
+    pvk_MTLSharedEvent_setSignaledValue(((struct pvk_semaphore *)pSignalInfo->semaphore)->event, pSignalInfo->value);
+    return VK_SUCCESS;
+}
+
+static int pvk_semaphore_state(const void *objects, const uint64_t *values, uint32_t i, id *event, uint64_t *value)
+{
+    *event = ((struct pvk_semaphore *)((const VkSemaphore *)objects)[i])->event;
+    *value = values[i];
+    return 0;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkWaitSemaphores(VkDevice device, const VkSemaphoreWaitInfo *pWaitInfo, uint64_t timeout)
+{
+    return pvk_wait((struct pvk_device *)device, pWaitInfo->semaphoreCount,
+                    !(pWaitInfo->flags & VK_SEMAPHORE_WAIT_ANY_BIT), timeout, pvk_semaphore_state,
+                    pWaitInfo->pSemaphores, pWaitInfo->pValues);
+}
 
 /* ==========================================================================
  * 14. Pipelines
  *
  * Shader modules, pipeline layouts and pipelines.
+ *
+ * A compute pipeline is translated (section 11) and compiled when created:
+ * MSL 3.2, MTLMathModeSafe, maxTotalThreadsPerThreadgroup = the workgroup
+ * size (so the compiler fits it). Push constants are bound by GPU address at
+ * the translator's push-constant index; descriptor sets will be address
+ * tables at indices 0..N. The pipeline cache is not used yet.
  * ========================================================================== */
+
+struct pvk_shader_module {
+    size_t word_count;
+    uint32_t code[];
+};
+
+/* Compiles MSL into a compute pipeline state (retained), NULL with a message
+ * in error[] on failure. max_threads: the threadgroup size it must run with. */
+static id pvk_compile_compute(struct pvk_device *device, const char *msl, const char *entry,
+                              unsigned long max_threads, char *error, size_t error_size)
+{
+    id mtl = device->physical_device->mtl_device;
+    void *pool = objc_autoreleasePoolPush(); /* strings, NSErrors */
+    id options = pvk_MTLCompileOptions_new(), library = NULL, function = NULL, desc = NULL, pso = NULL, err = NULL;
+
+    if (options) {
+        pvk_MTLCompileOptions_setMathMode(options, PVK_MTLMathModeSafe);
+        pvk_MTLCompileOptions_setLanguageVersion(options, PVK_MTLLanguageVersion3_2);
+        library = pvk_MTLDevice_newLibraryWithSource_options_error(mtl, pvk_NSString_stringWithUTF8String(msl), options,
+                                                                 &err);
+    }
+    if (library)
+        function = pvk_MTLLibrary_newFunctionWithName(library, pvk_NSString_stringWithUTF8String(entry));
+    if (function)
+        desc = pvk_MTLComputePipelineDescriptor_new();
+    if (desc) {
+        pvk_MTLComputePipelineDescriptor_setComputeFunction(desc, function);
+        pvk_MTLComputePipelineDescriptor_setMaxTotalThreadsPerThreadgroup(desc, max_threads);
+        pso = pvk_MTLDevice_newComputePipelineStateWithDescriptor_options_reflection_error(
+            mtl, desc, PVK_MTLPipelineOptionNone, NULL, &err);
+    }
+    if (pso && pvk_MTLComputePipelineState_maxTotalThreadsPerThreadgroup(pso) < max_threads) {
+        snprintf(error, error_size, "the kernel cannot run %lu threads per threadgroup", max_threads);
+        pvk_release(pso);
+        pso = NULL;
+    } else if (!pso) {
+        snprintf(error, error_size, "%s", err ? pvk_ns_utf8(pvk_NSError_localizedDescription(err))
+                                             : "Metal could not compile the kernel");
+    }
+    pvk_release(desc);
+    pvk_release(function);
+    pvk_release(library);
+    pvk_release(options);
+    objc_autoreleasePoolPop(pool);
+    return pso;
+}
+
+/* vkCmdFillBuffer for patterns whose four bytes differ (section 13): one
+ * 32-bit word per thread, arguments at the push-constant index. */
+static const char pvk_fill_msl[] =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct pvk_fill_args { device uint *dst; uint count; uint value; };\n"
+    "kernel void pvk_fill_buffer(constant pvk_fill_args &a [[buffer(30)]], uint i [[thread_position_in_grid]])\n"
+    "{\n"
+    "    if (i < a.count)\n"
+    "        a.dst[i] = a.value;\n"
+    "}\n";
+
+static pthread_mutex_t pvk_internal_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static id pvk_device_fill_pipeline(struct pvk_device *device)
+{
+    id pso;
+    pthread_mutex_lock(&pvk_internal_lock); /* queues of a device encode concurrently */
+    if (!device->fill_pipeline) {
+        char error[256];
+        device->fill_pipeline = pvk_compile_compute(device, pvk_fill_msl, "pvk_fill_buffer", 64, error, sizeof(error));
+        if (!device->fill_pipeline)
+            pvk_log(PVK_LOG_ERROR, "internal fill kernel: %s", error);
+    }
+    pso = device->fill_pipeline;
+    pthread_mutex_unlock(&pvk_internal_lock);
+    return pso;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateShaderModule(VkDevice device, const VkShaderModuleCreateInfo *pCreateInfo,
+                                                    const VkAllocationCallbacks *pAllocator,
+                                                    VkShaderModule *pShaderModule)
+{
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
+    size_t words = pCreateInfo->codeSize / 4;
+    struct pvk_shader_module *module =
+        pvk_alloc(alloc, sizeof(*module) + words * sizeof(uint32_t), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!module)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    module->word_count = words;
+    memcpy(module->code, pCreateInfo->pCode, words * sizeof(uint32_t));
+    *pShaderModule = (VkShaderModule)module;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyShaderModule(VkDevice device, VkShaderModule shaderModule,
+                                                 const VkAllocationCallbacks *pAllocator)
+{
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), shaderModule);
+}
+
+/* Set layouts may be destroyed right after this call: when descriptor sets
+ * land, what pipelines need of them gets copied here. */
+VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineLayout(VkDevice device, const VkPipelineLayoutCreateInfo *pCreateInfo,
+                                                      const VkAllocationCallbacks *pAllocator,
+                                                      VkPipelineLayout *pPipelineLayout)
+{
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
+    struct pvk_pipeline_layout *layout = pvk_alloc(alloc, sizeof(*layout), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    uint32_t i;
+    if (!layout)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    layout->set_count = pCreateInfo->setLayoutCount;
+    for (i = 0; i < pCreateInfo->pushConstantRangeCount; i++) {
+        const VkPushConstantRange *r = &pCreateInfo->pPushConstantRanges[i];
+        if (r->offset + r->size > layout->push_constant_size)
+            layout->push_constant_size = r->offset + r->size;
+    }
+    *pPipelineLayout = (VkPipelineLayout)layout;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineLayout(VkDevice device, VkPipelineLayout pipelineLayout,
+                                                   const VkAllocationCallbacks *pAllocator)
+{
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), pipelineLayout);
+}
+
+/* VkPipelineCreateFlags2CreateInfo replaces the flags when chained. */
+static VkPipelineCreateFlags2 pvk_pipeline_flags(VkPipelineCreateFlags flags, const void *pNext)
+{
+    const VkBaseInStructure *ext;
+    for (ext = pNext; ext; ext = ext->pNext)
+        if (ext->sType == VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO)
+            return ((const VkPipelineCreateFlags2CreateInfo *)ext)->flags;
+    return flags;
+}
+
+static VkResult pvk_compute_pipeline_create(struct pvk_device *device, const VkComputePipelineCreateInfo *info,
+                                            const VkAllocationCallbacks *alloc, VkPipeline *pPipeline)
+{
+    const VkPipelineShaderStageCreateInfo *stage = &info->stage;
+    const struct pvk_pipeline_layout *layout = (const struct pvk_pipeline_layout *)info->layout;
+    VkPipelineCreateFlags2 flags = pvk_pipeline_flags(info->flags, info->pNext);
+    const struct pvk_shader_module *module = (const struct pvk_shader_module *)stage->module;
+    const uint32_t *code = module ? module->code : NULL;
+    size_t words = module ? module->word_count : 0;
+    struct pvk_msl_options options;
+    struct pvk_msl_result res;
+    struct pvk_pipeline *pipeline;
+    const VkBaseInStructure *ext;
+    char error[256];
+    VkResult result;
+    uint64_t start = pvk_now_ns();
+
+    *pPipeline = VK_NULL_HANDLE;
+    for (ext = stage->pNext; ext && !code; ext = ext->pNext) {
+        if (ext->sType == VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO) { /* maintenance5: no module */
+            code = ((const VkShaderModuleCreateInfo *)ext)->pCode;
+            words = ((const VkShaderModuleCreateInfo *)ext)->codeSize / 4;
+        }
+    }
+    if (flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)
+        return VK_PIPELINE_COMPILE_REQUIRED; /* no pipeline cache yet: always compiles */
+
+    memset(&options, 0, sizeof(options));
+    options.specialization = stage->pSpecializationInfo;
+    if (flags & VK_PIPELINE_CREATE_2_DISPATCH_BASE_BIT) {
+        options.dispatch_base = true;
+        options.dispatch_base_offset = layout ? layout->push_constant_size : 0;
+    }
+    result = pvk_spirv_to_msl(code, words, stage->pName, &options, &res);
+    if (result != VK_SUCCESS) {
+        pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: cannot translate the shader: %s", res.error);
+        pvk_msl_result_free(&res);
+        return result == VK_ERROR_OUT_OF_HOST_MEMORY ? result : VK_ERROR_UNKNOWN;
+    }
+    if (res.set_mask || res.buffer_size_count) {
+        pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: descriptor sets are not implemented yet");
+        pvk_msl_result_free(&res);
+        return VK_ERROR_UNKNOWN;
+    }
+    pipeline = pvk_alloc(alloc, sizeof(*pipeline), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!pipeline) {
+        pvk_msl_result_free(&res);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    pipeline->bind_point = VK_PIPELINE_BIND_POINT_COMPUTE;
+    pipeline->threads.width = res.workgroup_size[0];
+    pipeline->threads.height = res.workgroup_size[1];
+    pipeline->threads.depth = res.workgroup_size[2];
+    if (res.has_push_constants)
+        pipeline->push_size = (res.push_constant_offset + res.push_constant_size + 15) & ~15u;
+    pipeline->dispatch_base = res.dispatch_base;
+    pipeline->dispatch_base_offset = res.dispatch_base_offset;
+    pipeline->mtl_pipeline = pvk_compile_compute(device, res.msl, res.entry_point,
+                                                 (unsigned long)res.workgroup_size[0] * res.workgroup_size[1] *
+                                                     res.workgroup_size[2],
+                                                 error, sizeof(error));
+    if (!pipeline->mtl_pipeline) {
+        pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: %s", error);
+        pvk_log(PVK_LOG_DEBUG, "MSL:\n%s", res.msl);
+        pvk_msl_result_free(&res);
+        pvk_free(alloc, pipeline);
+        return VK_ERROR_UNKNOWN;
+    }
+    pvk_msl_result_free(&res);
+
+    for (ext = info->pNext; ext; ext = ext->pNext) {
+        if (ext->sType == VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO) {
+            const VkPipelineCreationFeedbackCreateInfo *fb = (const VkPipelineCreationFeedbackCreateInfo *)ext;
+            fb->pPipelineCreationFeedback->flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT;
+            fb->pPipelineCreationFeedback->duration = pvk_now_ns() - start;
+            if (fb->pipelineStageCreationFeedbackCount && fb->pPipelineStageCreationFeedbacks)
+                *fb->pPipelineStageCreationFeedbacks = *fb->pPipelineCreationFeedback;
+        }
+    }
+    *pPipeline = (VkPipeline)pipeline;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateComputePipelines(VkDevice device, VkPipelineCache pipelineCache,
+                                                        uint32_t createInfoCount,
+                                                        const VkComputePipelineCreateInfo *pCreateInfos,
+                                                        const VkAllocationCallbacks *pAllocator,
+                                                        VkPipeline *pPipelines)
+{
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
+    VkResult result = VK_SUCCESS;
+    uint32_t i;
+    (void)pipelineCache;
+    for (i = 0; i < createInfoCount; i++) {
+        VkResult r = pvk_compute_pipeline_create((struct pvk_device *)device, &pCreateInfos[i], alloc, &pPipelines[i]);
+        if (r == VK_SUCCESS)
+            continue;
+        if (result == VK_SUCCESS)
+            result = r;
+        if (pvk_pipeline_flags(pCreateInfos[i].flags, pCreateInfos[i].pNext) &
+            VK_PIPELINE_CREATE_2_EARLY_RETURN_ON_FAILURE_BIT) {
+            for (i++; i < createInfoCount; i++)
+                pPipelines[i] = VK_NULL_HANDLE;
+            break;
+        }
+    }
+    return result;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeline,
+                                             const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_pipeline *pipeline = (struct pvk_pipeline *)_pipeline;
+    if (!pipeline)
+        return;
+    pvk_release(pipeline->mtl_pipeline);
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), pipeline);
+}
 
 /* ==========================================================================
  * 15. Unimplemented commands
@@ -37550,9 +39906,7 @@ static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const
 
 VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImage2KHR(VkDevice device, const VkAcquireNextImageInfoKHR* pAcquireInfo, uint32_t* pImageIndex) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImageKHR(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t* pImageIndex) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkAllocateCommandBuffers(VkDevice device, const VkCommandBufferAllocateInfo* pAllocateInfo, VkCommandBuffer* pCommandBuffers) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkAllocateDescriptorSets(VkDevice device, const VkDescriptorSetAllocateInfo* pAllocateInfo, VkDescriptorSet* pDescriptorSets) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkBeginCommandBuffer(VkCommandBuffer commandBuffer, const VkCommandBufferBeginInfo* pBeginInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory(VkDevice device, VkImage image, VkDeviceMemory memory, VkDeviceSize memoryOffset) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory2(VkDevice device, uint32_t bindInfoCount, const VkBindImageMemoryInfo* pBindInfos) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t query, VkQueryControlFlags flags) { PVK_UNIMPLEMENTED(); }
@@ -37563,7 +39917,6 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBindDescriptorSets(VkCommandBuffer commandBuffer
 VKAPI_ATTR void VKAPI_CALL vkCmdBindDescriptorSets2(VkCommandBuffer commandBuffer, const VkBindDescriptorSetsInfo* pBindDescriptorSetsInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, VkIndexType indexType) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer2(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size, VkIndexType indexType) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdBindPipeline(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint, VkPipeline pipeline) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers(VkCommandBuffer commandBuffer, uint32_t firstBinding, uint32_t bindingCount, const VkBuffer* pBuffers, const VkDeviceSize* pOffsets) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers2(VkCommandBuffer commandBuffer, uint32_t firstBinding, uint32_t bindingCount, const VkBuffer* pBuffers, const VkDeviceSize* pOffsets, const VkDeviceSize* pSizes, const VkDeviceSize* pStrides) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBlitImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout, VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount, const VkImageBlit* pRegions, VkFilter filter) { PVK_UNIMPLEMENTED(); }
@@ -37571,8 +39924,6 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBlitImage2(VkCommandBuffer commandBuffer, const 
 VKAPI_ATTR void VKAPI_CALL vkCmdClearAttachments(VkCommandBuffer commandBuffer, uint32_t attachmentCount, const VkClearAttachment* pAttachments, uint32_t rectCount, const VkClearRect* pRects) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdClearColorImage(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout imageLayout, const VkClearColorValue* pColor, uint32_t rangeCount, const VkImageSubresourceRange* pRanges) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout imageLayout, const VkClearDepthStencilValue* pDepthStencil, uint32_t rangeCount, const VkImageSubresourceRange* pRanges) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdCopyBuffer(VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkBuffer dstBuffer, uint32_t regionCount, const VkBufferCopy* pRegions) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdCopyBuffer2(VkCommandBuffer commandBuffer, const VkCopyBufferInfo2* pCopyBufferInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyBufferToImage(VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount, const VkBufferImageCopy* pRegions) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyBufferToImage2(VkCommandBuffer commandBuffer, const VkCopyBufferToImageInfo2* pCopyBufferToImageInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout, VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount, const VkImageCopy* pRegions) { PVK_UNIMPLEMENTED(); }
@@ -37580,9 +39931,6 @@ VKAPI_ATTR void VKAPI_CALL vkCmdCopyImage2(VkCommandBuffer commandBuffer, const 
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyImageToBuffer(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout, VkBuffer dstBuffer, uint32_t regionCount, const VkBufferImageCopy* pRegions) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyImageToBuffer2(VkCommandBuffer commandBuffer, const VkCopyImageToBufferInfo2* pCopyImageToBufferInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyQueryPoolResults(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount, VkBuffer dstBuffer, VkDeviceSize dstOffset, VkDeviceSize stride, VkQueryResultFlags flags) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdDispatch(VkCommandBuffer commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdDispatchBase(VkCommandBuffer commandBuffer, uint32_t baseGroupX, uint32_t baseGroupY, uint32_t baseGroupZ, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdDispatchIndirect(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdDraw(VkCommandBuffer commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexed(VkCommandBuffer commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexedIndirect(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, uint32_t drawCount, uint32_t stride) { PVK_UNIMPLEMENTED(); }
@@ -37593,14 +39941,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdEndQuery(VkCommandBuffer commandBuffer, VkQueryP
 VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass(VkCommandBuffer commandBuffer) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass2(VkCommandBuffer commandBuffer, const VkSubpassEndInfo* pSubpassEndInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdEndRendering(VkCommandBuffer commandBuffer) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdExecuteCommands(VkCommandBuffer commandBuffer, uint32_t commandBufferCount, const VkCommandBuffer* pCommandBuffers) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdFillBuffer(VkCommandBuffer commandBuffer, VkBuffer dstBuffer, VkDeviceSize dstOffset, VkDeviceSize size, uint32_t data) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass(VkCommandBuffer commandBuffer, VkSubpassContents contents) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass2(VkCommandBuffer commandBuffer, const VkSubpassBeginInfo* pSubpassBeginInfo, const VkSubpassEndInfo* pSubpassEndInfo) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdPipelineBarrier(VkCommandBuffer commandBuffer, VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask, VkDependencyFlags dependencyFlags, uint32_t memoryBarrierCount, const VkMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const VkBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const VkImageMemoryBarrier* pImageMemoryBarriers) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdPipelineBarrier2(VkCommandBuffer commandBuffer, const VkDependencyInfo* pDependencyInfo) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdPushConstants(VkCommandBuffer commandBuffer, VkPipelineLayout layout, VkShaderStageFlags stageFlags, uint32_t offset, uint32_t size, const void* pValues) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdPushConstants2(VkCommandBuffer commandBuffer, const VkPushConstantsInfo* pPushConstantsInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdPushDescriptorSet(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint, VkPipelineLayout layout, uint32_t set, uint32_t descriptorWriteCount, const VkWriteDescriptorSet* pDescriptorWrites) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdPushDescriptorSet2(VkCommandBuffer commandBuffer, const VkPushDescriptorSetInfo* pPushDescriptorSetInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdPushDescriptorSetWithTemplate(VkCommandBuffer commandBuffer, VkDescriptorUpdateTemplate descriptorUpdateTemplate, VkPipelineLayout layout, uint32_t set, const void* pData) { PVK_UNIMPLEMENTED(); }
@@ -37639,7 +39981,6 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetStencilTestEnable(VkCommandBuffer commandBuff
 VKAPI_ATTR void VKAPI_CALL vkCmdSetStencilWriteMask(VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMask, uint32_t writeMask) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetViewport(VkCommandBuffer commandBuffer, uint32_t firstViewport, uint32_t viewportCount, const VkViewport* pViewports) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetViewportWithCount(VkCommandBuffer commandBuffer, uint32_t viewportCount, const VkViewport* pViewports) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdUpdateBuffer(VkCommandBuffer commandBuffer, VkBuffer dstBuffer, VkDeviceSize dstOffset, VkDeviceSize dataSize, const void* pData) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdWaitEvents(VkCommandBuffer commandBuffer, uint32_t eventCount, const VkEvent* pEvents, VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask, uint32_t memoryBarrierCount, const VkMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const VkBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const VkImageMemoryBarrier* pImageMemoryBarriers) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdWaitEvents2(VkCommandBuffer commandBuffer, uint32_t eventCount, const VkEvent* pEvents, const VkDependencyInfo* pDependencyInfos) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp(VkCommandBuffer commandBuffer, VkPipelineStageFlagBits pipelineStage, VkQueryPool queryPool, uint32_t query) { PVK_UNIMPLEMENTED(); }
@@ -37648,55 +39989,40 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToImage(VkDevice device, const VkCopyI
 VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToMemory(VkDevice device, const VkCopyImageToMemoryInfo* pCopyImageToMemoryInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCopyMemoryToImage(VkDevice device, const VkCopyMemoryToImageInfo* pCopyMemoryToImageInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateBufferView(VkDevice device, const VkBufferViewCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkBufferView* pView) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateCommandPool(VkDevice device, const VkCommandPoolCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkCommandPool* pCommandPool) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateComputePipelines(VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount, const VkComputePipelineCreateInfo* pCreateInfos, const VkAllocationCallbacks* pAllocator, VkPipeline* pPipelines) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorPool(VkDevice device, const VkDescriptorPoolCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDescriptorPool* pDescriptorPool) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice device, const VkDescriptorSetLayoutCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDescriptorSetLayout* pSetLayout) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorUpdateTemplate(VkDevice device, const VkDescriptorUpdateTemplateCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDescriptorUpdateTemplate* pDescriptorUpdateTemplate) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateEvent(VkDevice device, const VkEventCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkEvent* pEvent) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateFence(VkDevice device, const VkFenceCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkFence* pFence) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateFramebuffer(VkDevice device, const VkFramebufferCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkFramebuffer* pFramebuffer) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateGraphicsPipelines(VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount, const VkGraphicsPipelineCreateInfo* pCreateInfos, const VkAllocationCallbacks* pAllocator, VkPipeline* pPipelines) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateImage(VkDevice device, const VkImageCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkImage* pImage) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice device, const VkImageViewCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkImageView* pView) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateMetalSurfaceEXT(VkInstance instance, const VkMetalSurfaceCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineCache(VkDevice device, const VkPipelineCacheCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkPipelineCache* pPipelineCache) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineLayout(VkDevice device, const VkPipelineLayoutCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkPipelineLayout* pPipelineLayout) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreatePrivateDataSlot(VkDevice device, const VkPrivateDataSlotCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkPrivateDataSlot* pPrivateDataSlot) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkQueryPool* pQueryPool) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRenderPassCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkRenderPass* pRenderPass) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass2(VkDevice device, const VkRenderPassCreateInfo2* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkRenderPass* pRenderPass) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSampler(VkDevice device, const VkSamplerCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSampler* pSampler) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSamplerYcbcrConversion(VkDevice device, const VkSamplerYcbcrConversionCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSamplerYcbcrConversion* pYcbcrConversion) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateSemaphore(VkDevice device, const VkSemaphoreCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSemaphore* pSemaphore) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateShaderModule(VkDevice device, const VkShaderModuleCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkShaderModule* pShaderModule) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSwapchainKHR* pSwapchain) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkDestroyBufferView(VkDevice device, VkBufferView bufferView, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyCommandPool(VkDevice device, VkCommandPool commandPool, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorSetLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorUpdateTemplate(VkDevice device, VkDescriptorUpdateTemplate descriptorUpdateTemplate, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyEvent(VkDevice device, VkEvent event, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyFence(VkDevice device, VkFence fence, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyFramebuffer(VkDevice device, VkFramebuffer framebuffer, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyImage(VkDevice device, VkImage image, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyImageView(VkDevice device, VkImageView imageView, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline pipeline, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineCache(VkDevice device, VkPipelineCache pipelineCache, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineLayout(VkDevice device, VkPipelineLayout pipelineLayout, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyPrivateDataSlot(VkDevice device, VkPrivateDataSlot privateDataSlot, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyQueryPool(VkDevice device, VkQueryPool queryPool, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyRenderPass(VkDevice device, VkRenderPass renderPass, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySampler(VkDevice device, VkSampler sampler, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySamplerYcbcrConversion(VkDevice device, VkSamplerYcbcrConversion ycbcrConversion, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroySemaphore(VkDevice device, VkSemaphore semaphore, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyShaderModule(VkDevice device, VkShaderModule shaderModule, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkDeviceWaitIdle(VkDevice device) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkEndCommandBuffer(VkCommandBuffer commandBuffer) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkEnumeratePhysicalDeviceGroups(VkInstance instance, uint32_t* pPhysicalDeviceGroupCount, VkPhysicalDeviceGroupProperties* pPhysicalDeviceGroupProperties) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkFreeCommandBuffers(VkDevice device, VkCommandPool commandPool, uint32_t commandBufferCount, const VkCommandBuffer* pCommandBuffers) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkFreeDescriptorSets(VkDevice device, VkDescriptorPool descriptorPool, uint32_t descriptorSetCount, const VkDescriptorSet* pDescriptorSets) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkGetDescriptorSetLayoutSupport(VkDevice device, const VkDescriptorSetLayoutCreateInfo* pCreateInfo, VkDescriptorSetLayoutSupport* pSupport) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, uint32_t heapIndex, uint32_t localDeviceIndex, uint32_t remoteDeviceIndex, VkPeerMemoryFeatureFlags* pPeerMemoryFeatures) { PVK_UNIMPLEMENTED(); }
@@ -37706,7 +40032,6 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageMemoryRequirements(VkDevice device, c
 VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageSparseMemoryRequirements(VkDevice device, const VkDeviceImageMemoryRequirements* pInfo, uint32_t* pSparseMemoryRequirementCount, VkSparseImageMemoryRequirements2* pSparseMemoryRequirements) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageSubresourceLayout(VkDevice device, const VkDeviceImageSubresourceInfo* pInfo, VkSubresourceLayout2* pLayout) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetEventStatus(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetFenceStatus(VkDevice device, VkFence fence) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkGetImageMemoryRequirements(VkDevice device, VkImage image, VkMemoryRequirements* pMemoryRequirements) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetImageMemoryRequirements2(VkDevice device, const VkImageMemoryRequirementsInfo2* pInfo, VkMemoryRequirements2* pMemoryRequirements) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetImageSparseMemoryRequirements(VkDevice device, VkImage image, uint32_t* pSparseMemoryRequirementCount, VkSparseImageMemoryRequirements* pSparseMemoryRequirements) { PVK_UNIMPLEMENTED(); }
@@ -37733,29 +40058,18 @@ VKAPI_ATTR void VKAPI_CALL vkGetPrivateData(VkDevice device, VkObjectType object
 VKAPI_ATTR VkResult VKAPI_CALL vkGetQueryPoolResults(VkDevice device, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* pData, VkDeviceSize stride, VkQueryResultFlags flags) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkGetRenderAreaGranularity(VkDevice device, VkRenderPass renderPass, VkExtent2D* pGranularity) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetRenderingAreaGranularity(VkDevice device, const VkRenderingAreaInfo* pRenderingAreaInfo, VkExtent2D* pGranularity) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetSemaphoreCounterValue(VkDevice device, VkSemaphore semaphore, uint64_t* pValue) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesKHR(VkDevice device, VkSwapchainKHR swapchain, uint32_t* pSwapchainImageCount, VkImage* pSwapchainImages) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkMergePipelineCaches(VkDevice device, VkPipelineCache dstCache, uint32_t srcCacheCount, const VkPipelineCache* pSrcCaches) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkQueueBindSparse(VkQueue queue, uint32_t bindInfoCount, const VkBindSparseInfo* pBindInfo, VkFence fence) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue queue, uint32_t submitCount, const VkSubmitInfo* pSubmits, VkFence fence) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit2(VkQueue queue, uint32_t submitCount, const VkSubmitInfo2* pSubmits, VkFence fence) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkQueueWaitIdle(VkQueue queue) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkResetCommandBuffer(VkCommandBuffer commandBuffer, VkCommandBufferResetFlags flags) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkResetCommandPool(VkDevice device, VkCommandPool commandPool, VkCommandPoolResetFlags flags) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkResetDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool, VkDescriptorPoolResetFlags flags) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkResetEvent(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkResetFences(VkDevice device, uint32_t fenceCount, const VkFence* pFences) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkResetQueryPool(VkDevice device, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkSetEvent(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkSetPrivateData(VkDevice device, VkObjectType objectType, uint64_t objectHandle, VkPrivateDataSlot privateDataSlot, uint64_t data) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkSignalSemaphore(VkDevice device, const VkSemaphoreSignalInfo* pSignalInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t transitionCount, const VkHostImageLayoutTransitionInfo* pTransitions) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkTrimCommandPool(VkDevice device, VkCommandPool commandPool, VkCommandPoolTrimFlags flags) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, VkDescriptorSet descriptorSet, VkDescriptorUpdateTemplate descriptorUpdateTemplate, const void* pData) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount, const VkWriteDescriptorSet* pDescriptorWrites, uint32_t descriptorCopyCount, const VkCopyDescriptorSet* pDescriptorCopies) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkWaitForFences(VkDevice device, uint32_t fenceCount, const VkFence* pFences, VkBool32 waitAll, uint64_t timeout) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkWaitSemaphores(VkDevice device, const VkSemaphoreWaitInfo* pWaitInfo, uint64_t timeout) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 
 #if defined(__clang__)
 #pragma clang diagnostic pop
