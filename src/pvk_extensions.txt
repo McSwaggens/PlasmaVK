@@ -1,0 +1,11 @@
+# Extensions PlasmaVK advertises. tools/gen_vk.c builds the extension tables
+# from this list and exposes each extension's commands (stubbed until
+# implemented in src/*.c).
+
+# Instance
+VK_KHR_surface
+VK_EXT_metal_surface
+VK_KHR_portability_enumeration  # accepted so MoltenVK-era apps keep working
+
+# Device
+VK_KHR_swapchain
