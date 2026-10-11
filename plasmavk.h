@@ -31328,6 +31328,23 @@ static inline pvk_MTLSize pvk_MTLDevice_maxThreadsPerThreadgroup(id self) { PVK_
 static inline uint64_t pvk_MTLDevice_recommendedMaxWorkingSetSize(id self) { PVK_SEL_CACHE("recommendedMaxWorkingSetSize"); return PVK_MSG(uint64_t, (id, SEL))(self, pvk_sel_); }
 static inline bool pvk_MTLDevice_supportsFamily(id self, pvk_MTLGPUFamily gpuFamily) { PVK_SEL_CACHE("supportsFamily:"); return PVK_MSG(bool, (id, SEL, pvk_MTLGPUFamily))(self, pvk_sel_, gpuFamily); }
 static inline id pvk_MTLDevice_newMTL4CommandQueue(id self) { PVK_SEL_CACHE("newMTL4CommandQueue"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline unsigned long pvk_MTLDevice_maxBufferLength(id self) { PVK_SEL_CACHE("maxBufferLength"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
+static inline pvk_MTLSizeAndAlign pvk_MTLDevice_heapBufferSizeAndAlignWithLength_options(id self, unsigned long length, pvk_MTLResourceOptions options) { PVK_SEL_CACHE("heapBufferSizeAndAlignWithLength:options:"); return PVK_MSG(pvk_MTLSizeAndAlign, (id, SEL, unsigned long, pvk_MTLResourceOptions))(self, pvk_sel_, length, options); }
+static inline id pvk_MTLDevice_newHeapWithDescriptor(id self, id descriptor) { PVK_SEL_CACHE("newHeapWithDescriptor:"); return PVK_MSG(id, (id, SEL, id))(self, pvk_sel_, descriptor); }
+static inline unsigned long pvk_MTLDevice_minimumTextureBufferAlignmentForPixelFormat(id self, pvk_MTLPixelFormat format) { PVK_SEL_CACHE("minimumTextureBufferAlignmentForPixelFormat:"); return PVK_MSG(unsigned long, (id, SEL, pvk_MTLPixelFormat))(self, pvk_sel_, format); }
+static inline id pvk_MTLDevice_newResidencySetWithDescriptor_error(id self, id desc, id * error) { PVK_SEL_CACHE("newResidencySetWithDescriptor:error:"); return PVK_MSG(id, (id, SEL, id, id *))(self, pvk_sel_, desc, error); }
+static inline id pvk_MTLHeapDescriptor_new(void) { PVK_CLASS_CACHE("MTLHeapDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTLHeapDescriptor_setSize(id self, unsigned long size) { PVK_SEL_CACHE("setSize:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, size); }
+static inline void pvk_MTLHeapDescriptor_setResourceOptions(id self, pvk_MTLResourceOptions resourceOptions) { PVK_SEL_CACHE("setResourceOptions:"); PVK_MSG(void, (id, SEL, pvk_MTLResourceOptions))(self, pvk_sel_, resourceOptions); }
+static inline void pvk_MTLHeapDescriptor_setType(id self, pvk_MTLHeapType type) { PVK_SEL_CACHE("setType:"); PVK_MSG(void, (id, SEL, pvk_MTLHeapType))(self, pvk_sel_, type); }
+static inline id pvk_MTLHeap_newBufferWithLength_options_offset(id self, unsigned long length, pvk_MTLResourceOptions options, unsigned long offset) { PVK_SEL_CACHE("newBufferWithLength:options:offset:"); return PVK_MSG(id, (id, SEL, unsigned long, pvk_MTLResourceOptions, unsigned long))(self, pvk_sel_, length, options, offset); }
+static inline void * pvk_MTLBuffer_contents(id self) { PVK_SEL_CACHE("contents"); return PVK_MSG(void *, (id, SEL))(self, pvk_sel_); }
+static inline pvk_MTLGPUAddress pvk_MTLBuffer_gpuAddress(id self) { PVK_SEL_CACHE("gpuAddress"); return PVK_MSG(pvk_MTLGPUAddress, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_MTLResidencySetDescriptor_new(void) { PVK_CLASS_CACHE("MTLResidencySetDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTLResidencySet_addAllocation(id self, id allocation) { PVK_SEL_CACHE("addAllocation:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, allocation); }
+static inline void pvk_MTLResidencySet_removeAllocation(id self, id allocation) { PVK_SEL_CACHE("removeAllocation:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, allocation); }
+static inline void pvk_MTLResidencySet_commit(id self) { PVK_SEL_CACHE("commit"); PVK_MSG(void, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTL4CommandQueue_addResidencySet(id self, id residencySet) { PVK_SEL_CACHE("addResidencySet:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, residencySet); }
 
 /* ==========================================================================
  * 5. Internals
@@ -31505,6 +31522,8 @@ struct pvk_device {
     bool extensions[PVK_DEVICE_EXTENSION_COUNT];
     uint32_t queue_count;
     struct pvk_queue queues[PVK_MAX_QUEUES];
+    id residency_set; /* MTLResidencySet attached to every queue (section 9) */
+    pthread_mutex_t residency_lock;
 };
 
 static const VkAllocationCallbacks *pvk_instance_alloc(const struct pvk_instance *instance)
@@ -31522,6 +31541,88 @@ static const VkAllocationCallbacks *pvk_device_alloc(const struct pvk_device *de
  *
  * One per instance, backed by the system Metal 4 GPU.
  * ========================================================================== */
+
+/* "Metal feature set tables" (developer.apple.com/metal, May 2026) is cited
+ * as FST; its Apple7 column holds for every Metal 4 GPU. */
+
+/* Base alignment of buffer bindings. FST: constant buffer offsets need 4 B;
+ * Metal's setBuffer:offset: docs add the alignment of the data type the
+ * shader reads, at most 16 B for device and constant memory. The shader
+ * translator must not assume more. */
+#define PVK_BUFFER_OFFSET_ALIGNMENT 16
+
+/* Apple silicon VM page (macOS and iOS); heaps are whole pages, so mapped
+ * memory starts page-aligned. */
+#define PVK_PAGE_SIZE 16384
+
+static void pvk_physical_device_init_memory_limits(struct pvk_physical_device *pd)
+{
+    static const pvk_MTLPixelFormat texel_formats[] = {
+        PVK_MTLPixelFormatR8Unorm,       PVK_MTLPixelFormatRG8Unorm,     PVK_MTLPixelFormatR16Float,
+        PVK_MTLPixelFormatRGBA8Unorm,    PVK_MTLPixelFormatBGRA8Unorm,   PVK_MTLPixelFormatRGB10A2Unorm,
+        PVK_MTLPixelFormatRG11B10Float,  PVK_MTLPixelFormatRG32Float,    PVK_MTLPixelFormatRGBA16Float,
+        PVK_MTLPixelFormatRGBA32Float,
+    };
+    VkPhysicalDeviceLimits *l = &pd->properties.limits;
+    unsigned long max_buffer = pvk_MTLDevice_maxBufferLength(pd->mtl_device);
+    uint32_t max_range = max_buffer > UINT32_MAX ? UINT32_MAX : (uint32_t)max_buffer;
+    unsigned i;
+
+    /* Metal documents no limit on heaps (one per VkDeviceMemory). 150k heaps
+     * in one residency set worked on M4 Max; report the power of two below. */
+    l->maxMemoryAllocationCount = 131072;
+    /* A VkBuffer is a range of one MTLBuffer: MTLDevice.maxBufferLength. */
+    l->maxStorageBufferRange = max_range;
+    l->maxUniformBufferRange = max_range; /* FST lists no constant buffer size limit */
+    l->minStorageBufferOffsetAlignment = PVK_BUFFER_OFFSET_ALIGNMENT;
+    l->minUniformBufferOffsetAlignment = PVK_BUFFER_OFFSET_ALIGNMENT;
+    /* Buffer views will be texture buffers made at an offset into the memory's
+     * MTLBuffer, which needs minimumTextureBufferAlignmentForPixelFormat:
+     * (16 B for every format on M4 Max). */
+    l->minTexelBufferOffsetAlignment = PVK_BUFFER_OFFSET_ALIGNMENT;
+    for (i = 0; i < PVK_ARRAY_SIZE(texel_formats); i++) {
+        unsigned long a = pvk_MTLDevice_minimumTextureBufferAlignmentForPixelFormat(pd->mtl_device, texel_formats[i]);
+        if (a > l->minTexelBufferOffsetAlignment)
+            l->minTexelBufferOffsetAlignment = a;
+    }
+    l->minMemoryMapAlignment = PVK_PAGE_SIZE;
+    /* All host-visible memory is coherent, so this only rounds no-op flushes;
+     * use the CPU cache line (hw.cachelinesize on Apple silicon). */
+    l->nonCoherentAtomSize = 128;
+    /* Resources in a placement heap alias only where their ranges overlap
+     * (-[MTLHeap newTextureWithDescriptor:offset:]), and Metal itself packs
+     * textures tightly (heapTextureSizeAndAlignWithDescriptor: gives 128 B
+     * alignment and non-page sizes on M4 Max), so linear and optimal
+     * resources may be neighbours. */
+    l->bufferImageGranularity = 1;
+}
+
+/* Memory-related structs in vkGetPhysicalDeviceProperties2's chain. */
+static void pvk_physical_device_memory_properties2(struct pvk_physical_device *pd, void *pNext)
+{
+    /* Every allocation is backed by a buffer of its full size (section 10). */
+    VkDeviceSize max_size = pvk_MTLDevice_maxBufferLength(pd->mtl_device);
+    VkBaseOutStructure *s;
+
+    for (s = pNext; s; s = s->pNext) {
+        switch (s->sType) {
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES:
+            ((VkPhysicalDeviceMaintenance3Properties *)s)->maxMemoryAllocationSize = max_size;
+            break;
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES:
+            ((VkPhysicalDeviceMaintenance4Properties *)s)->maxBufferSize = max_size;
+            break;
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES:
+            ((VkPhysicalDeviceVulkan11Properties *)s)->maxMemoryAllocationSize = max_size;
+            break;
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES:
+            ((VkPhysicalDeviceVulkan13Properties *)s)->maxBufferSize = max_size;
+            break;
+        default:
+            break;
+        }
+    }
+}
 
 static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
 {
@@ -31543,6 +31644,7 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     p->limits.maxComputeWorkGroupSize[0] = (uint32_t)threads.width;
     p->limits.maxComputeWorkGroupSize[1] = (uint32_t)threads.height;
     p->limits.maxComputeWorkGroupSize[2] = (uint32_t)threads.depth;
+    pvk_physical_device_init_memory_limits(pd);
 
     /* Apple GPUs have unified memory: one heap, private and shared types. */
     m->memoryHeapCount = 1;
@@ -31603,6 +31705,7 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceProperties2(VkPhysicalDevice physi
 {
     /* TODO: fill pNext structures */
     vkGetPhysicalDeviceProperties(physicalDevice, &pProperties->properties);
+    pvk_physical_device_memory_properties2((struct pvk_physical_device *)physicalDevice, pProperties->pNext);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceFeatures(VkPhysicalDevice physicalDevice,
@@ -31808,7 +31911,47 @@ static void pvk_device_free(struct pvk_device *device)
     uint32_t i;
     for (i = 0; i < device->queue_count; i++)
         pvk_release(device->queues[i].mtl_queue);
+    pvk_release(device->residency_set);
+    pthread_mutex_destroy(&device->residency_lock);
     pvk_free(pvk_device_alloc(device), device);
+}
+
+/* ---- Residency ----
+ *
+ * Metal 4 queues do not track resources: the GPU may only touch allocations
+ * in a residency set attached to the queue or command buffer. Each device has
+ * one set, attached to all its queues, holding every VkDeviceMemory's heap
+ * (section 10). Changes are committed immediately: a commit costs ~0.3 us on
+ * M4 Max regardless of the set's size (measured with 150k heaps). The lock is
+ * there because MTLResidencySet is not documented as thread-safe while Vulkan
+ * lets any thread allocate. */
+
+static VkResult pvk_device_create_residency_set(struct pvk_device *device)
+{
+    void *pool = objc_autoreleasePoolPush(); /* the NSError, on failure */
+    id desc = pvk_MTLResidencySetDescriptor_new();
+    if (desc)
+        device->residency_set = pvk_MTLDevice_newResidencySetWithDescriptor_error(
+            device->physical_device->mtl_device, desc, NULL);
+    pvk_release(desc);
+    objc_autoreleasePoolPop(pool);
+    return device->residency_set ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
+}
+
+static void pvk_device_make_resident(struct pvk_device *device, id allocation)
+{
+    pthread_mutex_lock(&device->residency_lock);
+    pvk_MTLResidencySet_addAllocation(device->residency_set, allocation);
+    pvk_MTLResidencySet_commit(device->residency_set);
+    pthread_mutex_unlock(&device->residency_lock);
+}
+
+static void pvk_device_evict(struct pvk_device *device, id allocation)
+{
+    pthread_mutex_lock(&device->residency_lock);
+    pvk_MTLResidencySet_removeAllocation(device->residency_set, allocation);
+    pvk_MTLResidencySet_commit(device->residency_set);
+    pthread_mutex_unlock(&device->residency_lock);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
@@ -31835,10 +31978,18 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
     device = pvk_alloc(alloc, sizeof(*device), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
     if (!device)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
+    if (pthread_mutex_init(&device->residency_lock, NULL) != 0) {
+        pvk_free(alloc, device);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
     device->physical_device = pd;
     if (alloc) {
         device->alloc = *alloc;
         device->has_alloc = true;
+    }
+    if (pvk_device_create_residency_set(device) != VK_SUCCESS) {
+        pvk_device_free(device);
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
 
     for (i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
@@ -31866,6 +32017,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
                 pvk_device_free(device);
                 return VK_ERROR_INITIALIZATION_FAILED;
             }
+            pvk_MTL4CommandQueue_addResidencySet(queue->mtl_queue, device->residency_set);
             queue->device = device;
             queue->family_index = info->queueFamilyIndex;
             queue->index = j;
@@ -31917,7 +32069,322 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceQueue(VkDevice device, uint32_t queueFamil
  * 10. Memory and buffers
  *
  * VkDeviceMemory, VkBuffer and buffer device addresses.
+ *
+ * A VkDeviceMemory is a placement MTLHeap of the allocation's size plus one
+ * MTLBuffer placed at heap offset 0 that covers all of it. Why a heap and not
+ * just a buffer: images must later be bound into the same memory as
+ * optimally tiled textures at any offset, which only a placement heap can do
+ * (-[MTLHeap newTextureWithDescriptor:offset:]); a plain MTLBuffer can only
+ * back linear textures. Checked on M4 Max: placement heaps accept both
+ * storage modes (and textures in both); a heap is one contiguous range, so
+ * whatever sits at heap offset X has gpuAddress and contents of the buffer
+ * + X; heap + buffer costs the same as a plain buffer (~5 us); heaps larger
+ * than maxBufferLength fail cleanly. Overlapping resources in a placement heap
+ * alias, which is Vulkan's aliasing model.
+ *
+ * The heap, not the buffer, joins the device's residency set (section 9), so
+ * images placed in it later are resident too.
+ *
+ * A VkBuffer is only (memory, offset, size). Metal 4 binds buffers by GPU
+ * address, so its device address is the memory's gpuAddress + offset;
+ * commands that want an id<MTLBuffer> take the memory's buffer and offset.
  * ========================================================================== */
+
+struct pvk_device_memory {
+    id mtl_heap;   /* MTLHeap, MTLHeapTypePlacement */
+    id mtl_buffer; /* MTLBuffer at heap offset 0, allocationSize long */
+    pvk_MTLGPUAddress gpu_address;
+    char *contents; /* NULL unless host-visible */
+    VkDeviceSize size;
+    uint32_t type_index;
+};
+
+struct pvk_buffer {
+    VkDeviceSize size;
+    VkBufferUsageFlags2 usage;
+    VkBufferCreateFlags flags;
+    struct pvk_device_memory *memory; /* NULL until bound */
+    VkDeviceSize offset;
+    pvk_MTLGPUAddress gpu_address; /* memory->gpu_address + offset */
+};
+
+/* Resource options of the memory types in section 7. Hazard tracking is off:
+ * Metal 4 does not track, Vulkan barriers say what to wait for. */
+static const pvk_MTLResourceOptions pvk_memory_type_options[] = {
+    PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked,
+    PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeDefaultCache |
+        PVK_MTLResourceHazardTrackingModeUntracked,
+};
+
+VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemoryAllocateInfo *pAllocateInfo,
+                                                const VkAllocationCallbacks *pAllocator, VkDeviceMemory *pMemory)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    const VkPhysicalDeviceMemoryProperties *types = &device->physical_device->memory_properties;
+    id mtl = device->physical_device->mtl_device;
+    VkDeviceSize size = pAllocateInfo->allocationSize;
+    uint32_t type = pAllocateInfo->memoryTypeIndex;
+    struct pvk_device_memory *memory;
+    pvk_MTLResourceOptions options;
+    void *pool;
+    id desc;
+
+    /* The pNext structs PlasmaVK accepts (dedicated allocation, allocate
+     * flags, capture address) need nothing: every allocation is its own heap
+     * and has a GPU address. */
+    if (type >= PVK_ARRAY_SIZE(pvk_memory_type_options) || size == 0 || size > pvk_MTLDevice_maxBufferLength(mtl))
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    memory = pvk_alloc(alloc, sizeof(*memory), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!memory)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    options = pvk_memory_type_options[type];
+
+    pool = objc_autoreleasePoolPush();
+    desc = pvk_MTLHeapDescriptor_new();
+    if (desc) {
+        pvk_MTLHeapDescriptor_setType(desc, PVK_MTLHeapTypePlacement);
+        pvk_MTLHeapDescriptor_setResourceOptions(desc, options);
+        pvk_MTLHeapDescriptor_setSize(desc, pvk_MTLDevice_heapBufferSizeAndAlignWithLength_options(mtl, size, options).size);
+        memory->mtl_heap = pvk_MTLDevice_newHeapWithDescriptor(mtl, desc);
+        pvk_release(desc);
+    }
+    if (memory->mtl_heap)
+        memory->mtl_buffer = pvk_MTLHeap_newBufferWithLength_options_offset(memory->mtl_heap, size, options, 0);
+    objc_autoreleasePoolPop(pool);
+    if (!memory->mtl_buffer) {
+        pvk_release(memory->mtl_heap);
+        pvk_free(alloc, memory);
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+
+    memory->gpu_address = pvk_MTLBuffer_gpuAddress(memory->mtl_buffer);
+    if (types->memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
+        memory->contents = pvk_MTLBuffer_contents(memory->mtl_buffer);
+    memory->size = size;
+    memory->type_index = type;
+    pvk_device_make_resident(device, memory->mtl_heap);
+    *pMemory = (VkDeviceMemory)memory;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkFreeMemory(VkDevice _device, VkDeviceMemory _memory, const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    struct pvk_device_memory *memory = (struct pvk_device_memory *)_memory;
+    void *pool;
+
+    if (!memory)
+        return;
+    pool = objc_autoreleasePoolPush();
+    pvk_device_evict(device, memory->mtl_heap);
+    pvk_release(memory->mtl_buffer);
+    pvk_release(memory->mtl_heap);
+    objc_autoreleasePoolPop(pool);
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc(device), memory);
+}
+
+/* Host-visible memory is MTLStorageModeShared: always mapped, coherent. */
+VKAPI_ATTR VkResult VKAPI_CALL vkMapMemory(VkDevice device, VkDeviceMemory _memory, VkDeviceSize offset,
+                                           VkDeviceSize size, VkMemoryMapFlags flags, void **ppData)
+{
+    struct pvk_device_memory *memory = (struct pvk_device_memory *)_memory;
+    (void)device;
+    (void)size;
+    (void)flags;
+    if (!memory->contents) {
+        *ppData = NULL;
+        return VK_ERROR_MEMORY_MAP_FAILED;
+    }
+    *ppData = memory->contents + offset;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkMapMemory2(VkDevice device, const VkMemoryMapInfo *pMemoryMapInfo, void **ppData)
+{
+    return vkMapMemory(device, pMemoryMapInfo->memory, pMemoryMapInfo->offset, pMemoryMapInfo->size,
+                       pMemoryMapInfo->flags, ppData);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkUnmapMemory(VkDevice device, VkDeviceMemory memory)
+{
+    (void)device;
+    (void)memory;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkUnmapMemory2(VkDevice device, const VkMemoryUnmapInfo *pMemoryUnmapInfo)
+{
+    (void)device;
+    (void)pMemoryUnmapInfo;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkFlushMappedMemoryRanges(VkDevice device, uint32_t memoryRangeCount,
+                                                         const VkMappedMemoryRange *pMemoryRanges)
+{
+    (void)device;
+    (void)memoryRangeCount;
+    (void)pMemoryRanges;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkInvalidateMappedMemoryRanges(VkDevice device, uint32_t memoryRangeCount,
+                                                              const VkMappedMemoryRange *pMemoryRanges)
+{
+    (void)device;
+    (void)memoryRangeCount;
+    (void)pMemoryRanges;
+    return VK_SUCCESS;
+}
+
+/* Only meaningful for lazily allocated memory, which PlasmaVK does not offer:
+ * everything is committed. */
+VKAPI_ATTR void VKAPI_CALL vkGetDeviceMemoryCommitment(VkDevice device, VkDeviceMemory memory,
+                                                       VkDeviceSize *pCommittedMemoryInBytes)
+{
+    (void)device;
+    *pCommittedMemoryInBytes = ((struct pvk_device_memory *)memory)->size;
+}
+
+/* Metal cannot place a resource at a requested GPU address, so capture/replay
+ * (bufferDeviceAddressCaptureReplay) is not supported; 0 means "none". */
+VKAPI_ATTR uint64_t VKAPI_CALL vkGetDeviceMemoryOpaqueCaptureAddress(VkDevice device,
+                                                                     const VkDeviceMemoryOpaqueCaptureAddressInfo *pInfo)
+{
+    (void)device;
+    (void)pInfo;
+    return 0;
+}
+
+static VkBufferUsageFlags2 pvk_buffer_usage(const VkBufferCreateInfo *info)
+{
+    const VkBaseInStructure *ext;
+    for (ext = info->pNext; ext; ext = ext->pNext)
+        if (ext->sType == VK_STRUCTURE_TYPE_BUFFER_USAGE_FLAGS_2_CREATE_INFO)
+            return ((const VkBufferUsageFlags2CreateInfo *)ext)->usage;
+    return info->usage;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateBuffer(VkDevice device, const VkBufferCreateInfo *pCreateInfo,
+                                              const VkAllocationCallbacks *pAllocator, VkBuffer *pBuffer)
+{
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
+    struct pvk_buffer *buffer = pvk_alloc(alloc, sizeof(*buffer), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+
+    if (!buffer)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    buffer->size = pCreateInfo->size;
+    buffer->usage = pvk_buffer_usage(pCreateInfo);
+    buffer->flags = pCreateInfo->flags;
+    *pBuffer = (VkBuffer)buffer;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyBuffer(VkDevice device, VkBuffer buffer, const VkAllocationCallbacks *pAllocator)
+{
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), buffer);
+}
+
+/* A buffer has no Metal object of its own, so only how shaders and commands
+ * address it constrains placement: the largest binding alignment of section 7,
+ * whatever the usage (vkGetDeviceBufferMemoryRequirements then needs no
+ * buffer). It also covers Metal's 4 B index/indirect and 16 B
+ * texture-to-buffer copy alignments. Sizes round up to it. Any memory type. */
+static void pvk_buffer_memory_requirements(const struct pvk_device *device, VkDeviceSize size,
+                                           VkMemoryRequirements2 *pMemoryRequirements)
+{
+    const struct pvk_physical_device *pd = device->physical_device;
+    const VkPhysicalDeviceLimits *limits = &pd->properties.limits;
+    VkMemoryRequirements *req = &pMemoryRequirements->memoryRequirements;
+    VkDeviceSize align = limits->minStorageBufferOffsetAlignment;
+    VkBaseOutStructure *ext;
+
+    if (limits->minUniformBufferOffsetAlignment > align)
+        align = limits->minUniformBufferOffsetAlignment;
+    if (limits->minTexelBufferOffsetAlignment > align)
+        align = limits->minTexelBufferOffsetAlignment;
+    req->size = (size + align - 1) & ~(align - 1);
+    req->alignment = align;
+    req->memoryTypeBits = (1u << pd->memory_properties.memoryTypeCount) - 1;
+
+    for (ext = pMemoryRequirements->pNext; ext; ext = ext->pNext) {
+        if (ext->sType == VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS) {
+            VkMemoryDedicatedRequirements *dedicated = (VkMemoryDedicatedRequirements *)ext;
+            dedicated->prefersDedicatedAllocation = VK_FALSE;
+            dedicated->requiresDedicatedAllocation = VK_FALSE;
+        }
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetBufferMemoryRequirements2(VkDevice device, const VkBufferMemoryRequirementsInfo2 *pInfo,
+                                                          VkMemoryRequirements2 *pMemoryRequirements)
+{
+    pvk_buffer_memory_requirements((struct pvk_device *)device, ((struct pvk_buffer *)pInfo->buffer)->size,
+                                   pMemoryRequirements);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetBufferMemoryRequirements(VkDevice device, VkBuffer buffer,
+                                                         VkMemoryRequirements *pMemoryRequirements)
+{
+    VkMemoryRequirements2 req;
+    memset(&req, 0, sizeof(req));
+    req.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+    pvk_buffer_memory_requirements((struct pvk_device *)device, ((struct pvk_buffer *)buffer)->size, &req);
+    *pMemoryRequirements = req.memoryRequirements;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetDeviceBufferMemoryRequirements(VkDevice device,
+                                                               const VkDeviceBufferMemoryRequirements *pInfo,
+                                                               VkMemoryRequirements2 *pMemoryRequirements)
+{
+    pvk_buffer_memory_requirements((struct pvk_device *)device, pInfo->pCreateInfo->size, pMemoryRequirements);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkBindBufferMemory2(VkDevice device, uint32_t bindInfoCount,
+                                                   const VkBindBufferMemoryInfo *pBindInfos)
+{
+    uint32_t i;
+    (void)device;
+    for (i = 0; i < bindInfoCount; i++) {
+        const VkBindBufferMemoryInfo *info = &pBindInfos[i];
+        struct pvk_buffer *buffer = (struct pvk_buffer *)info->buffer;
+        const VkBaseInStructure *ext;
+
+        buffer->memory = (struct pvk_device_memory *)info->memory;
+        buffer->offset = info->memoryOffset;
+        buffer->gpu_address = buffer->memory->gpu_address + info->memoryOffset;
+        for (ext = info->pNext; ext; ext = ext->pNext)
+            if (ext->sType == VK_STRUCTURE_TYPE_BIND_MEMORY_STATUS)
+                *((const VkBindMemoryStatus *)ext)->pResult = VK_SUCCESS;
+    }
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkBindBufferMemory(VkDevice device, VkBuffer buffer, VkDeviceMemory memory,
+                                                  VkDeviceSize memoryOffset)
+{
+    VkBindBufferMemoryInfo info;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_INFO;
+    info.buffer = buffer;
+    info.memory = memory;
+    info.memoryOffset = memoryOffset;
+    return vkBindBufferMemory2(device, 1, &info);
+}
+
+VKAPI_ATTR VkDeviceAddress VKAPI_CALL vkGetBufferDeviceAddress(VkDevice device, const VkBufferDeviceAddressInfo *pInfo)
+{
+    (void)device;
+    return ((struct pvk_buffer *)pInfo->buffer)->gpu_address;
+}
+
+/* See vkGetDeviceMemoryOpaqueCaptureAddress. */
+VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, const VkBufferDeviceAddressInfo *pInfo)
+{
+    (void)device;
+    (void)pInfo;
+    return 0;
+}
 
 /* ==========================================================================
  * 11. Shader translator (SPIR-V -> MSL)
@@ -31942,10 +32409,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImage2KHR(VkDevice device, const VkA
 VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImageKHR(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t* pImageIndex) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkAllocateCommandBuffers(VkDevice device, const VkCommandBufferAllocateInfo* pAllocateInfo, VkCommandBuffer* pCommandBuffers) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkAllocateDescriptorSets(VkDevice device, const VkDescriptorSetAllocateInfo* pAllocateInfo, VkDescriptorSet* pDescriptorSets) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice device, const VkMemoryAllocateInfo* pAllocateInfo, const VkAllocationCallbacks* pAllocator, VkDeviceMemory* pMemory) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkBeginCommandBuffer(VkCommandBuffer commandBuffer, const VkCommandBufferBeginInfo* pBeginInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkBindBufferMemory(VkDevice device, VkBuffer buffer, VkDeviceMemory memory, VkDeviceSize memoryOffset) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkBindBufferMemory2(VkDevice device, uint32_t bindInfoCount, const VkBindBufferMemoryInfo* pBindInfos) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory(VkDevice device, VkImage image, VkDeviceMemory memory, VkDeviceSize memoryOffset) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory2(VkDevice device, uint32_t bindInfoCount, const VkBindImageMemoryInfo* pBindInfos) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t query, VkQueryControlFlags flags) { PVK_UNIMPLEMENTED(); }
@@ -32040,7 +32504,6 @@ VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp2(VkCommandBuffer commandBuffer, V
 VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToImage(VkDevice device, const VkCopyImageToImageInfo* pCopyImageToImageInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToMemory(VkDevice device, const VkCopyImageToMemoryInfo* pCopyImageToMemoryInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCopyMemoryToImage(VkDevice device, const VkCopyMemoryToImageInfo* pCopyMemoryToImageInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateBuffer(VkDevice device, const VkBufferCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkBuffer* pBuffer) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateBufferView(VkDevice device, const VkBufferViewCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkBufferView* pView) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateCommandPool(VkDevice device, const VkCommandPoolCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkCommandPool* pCommandPool) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateComputePipelines(VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount, const VkComputePipelineCreateInfo* pCreateInfos, const VkAllocationCallbacks* pAllocator, VkPipeline* pPipelines) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
@@ -32065,7 +32528,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSamplerYcbcrConversion(VkDevice device, c
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSemaphore(VkDevice device, const VkSemaphoreCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSemaphore* pSemaphore) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateShaderModule(VkDevice device, const VkShaderModuleCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkShaderModule* pShaderModule) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSwapchainKHR* pSwapchain) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkDestroyBuffer(VkDevice device, VkBuffer buffer, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyBufferView(VkDevice device, VkBufferView bufferView, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyCommandPool(VkDevice device, VkCommandPool commandPool, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
@@ -32091,24 +32553,15 @@ VKAPI_ATTR void VKAPI_CALL vkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR
 VKAPI_ATTR VkResult VKAPI_CALL vkDeviceWaitIdle(VkDevice device) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkEndCommandBuffer(VkCommandBuffer commandBuffer) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkEnumeratePhysicalDeviceGroups(VkInstance instance, uint32_t* pPhysicalDeviceGroupCount, VkPhysicalDeviceGroupProperties* pPhysicalDeviceGroupProperties) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkFlushMappedMemoryRanges(VkDevice device, uint32_t memoryRangeCount, const VkMappedMemoryRange* pMemoryRanges) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkFreeCommandBuffers(VkDevice device, VkCommandPool commandPool, uint32_t commandBufferCount, const VkCommandBuffer* pCommandBuffers) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkFreeDescriptorSets(VkDevice device, VkDescriptorPool descriptorPool, uint32_t descriptorSetCount, const VkDescriptorSet* pDescriptorSets) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkFreeMemory(VkDevice device, VkDeviceMemory memory, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkDeviceAddress VKAPI_CALL vkGetBufferDeviceAddress(VkDevice device, const VkBufferDeviceAddressInfo* pInfo) { PVK_UNIMPLEMENTED(); return 0; }
-VKAPI_ATTR void VKAPI_CALL vkGetBufferMemoryRequirements(VkDevice device, VkBuffer buffer, VkMemoryRequirements* pMemoryRequirements) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetBufferMemoryRequirements2(VkDevice device, const VkBufferMemoryRequirementsInfo2* pInfo, VkMemoryRequirements2* pMemoryRequirements) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, const VkBufferDeviceAddressInfo* pInfo) { PVK_UNIMPLEMENTED(); return 0; }
 VKAPI_ATTR void VKAPI_CALL vkGetDescriptorSetLayoutSupport(VkDevice device, const VkDescriptorSetLayoutCreateInfo* pCreateInfo, VkDescriptorSetLayoutSupport* pSupport) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetDeviceBufferMemoryRequirements(VkDevice device, const VkDeviceBufferMemoryRequirements* pInfo, VkMemoryRequirements2* pMemoryRequirements) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, uint32_t heapIndex, uint32_t localDeviceIndex, uint32_t remoteDeviceIndex, VkPeerMemoryFeatureFlags* pPeerMemoryFeatures) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetDeviceGroupPresentCapabilitiesKHR(VkDevice device, VkDeviceGroupPresentCapabilitiesKHR* pDeviceGroupPresentCapabilities) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetDeviceGroupSurfacePresentModesKHR(VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR* pModes) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageMemoryRequirements(VkDevice device, const VkDeviceImageMemoryRequirements* pInfo, VkMemoryRequirements2* pMemoryRequirements) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageSparseMemoryRequirements(VkDevice device, const VkDeviceImageMemoryRequirements* pInfo, uint32_t* pSparseMemoryRequirementCount, VkSparseImageMemoryRequirements2* pSparseMemoryRequirements) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageSubresourceLayout(VkDevice device, const VkDeviceImageSubresourceInfo* pInfo, VkSubresourceLayout2* pLayout) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetDeviceMemoryCommitment(VkDevice device, VkDeviceMemory memory, VkDeviceSize* pCommittedMemoryInBytes) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR uint64_t VKAPI_CALL vkGetDeviceMemoryOpaqueCaptureAddress(VkDevice device, const VkDeviceMemoryOpaqueCaptureAddressInfo* pInfo) { PVK_UNIMPLEMENTED(); return 0; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetEventStatus(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetFenceStatus(VkDevice device, VkFence fence) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkGetImageMemoryRequirements(VkDevice device, VkImage image, VkMemoryRequirements* pMemoryRequirements) { PVK_UNIMPLEMENTED(); }
@@ -32139,9 +32592,6 @@ VKAPI_ATTR void VKAPI_CALL vkGetRenderAreaGranularity(VkDevice device, VkRenderP
 VKAPI_ATTR void VKAPI_CALL vkGetRenderingAreaGranularity(VkDevice device, const VkRenderingAreaInfo* pRenderingAreaInfo, VkExtent2D* pGranularity) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetSemaphoreCounterValue(VkDevice device, VkSemaphore semaphore, uint64_t* pValue) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesKHR(VkDevice device, VkSwapchainKHR swapchain, uint32_t* pSwapchainImageCount, VkImage* pSwapchainImages) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkInvalidateMappedMemoryRanges(VkDevice device, uint32_t memoryRangeCount, const VkMappedMemoryRange* pMemoryRanges) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkMapMemory(VkDevice device, VkDeviceMemory memory, VkDeviceSize offset, VkDeviceSize size, VkMemoryMapFlags flags, void** ppData) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkMapMemory2(VkDevice device, const VkMemoryMapInfo* pMemoryMapInfo, void** ppData) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkMergePipelineCaches(VkDevice device, VkPipelineCache dstCache, uint32_t srcCacheCount, const VkPipelineCache* pSrcCaches) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkQueueBindSparse(VkQueue queue, uint32_t bindInfoCount, const VkBindSparseInfo* pBindInfo, VkFence fence) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
@@ -32159,8 +32609,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkSetPrivateData(VkDevice device, VkObjectType ob
 VKAPI_ATTR VkResult VKAPI_CALL vkSignalSemaphore(VkDevice device, const VkSemaphoreSignalInfo* pSignalInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t transitionCount, const VkHostImageLayoutTransitionInfo* pTransitions) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkTrimCommandPool(VkDevice device, VkCommandPool commandPool, VkCommandPoolTrimFlags flags) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkUnmapMemory(VkDevice device, VkDeviceMemory memory) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkUnmapMemory2(VkDevice device, const VkMemoryUnmapInfo* pMemoryUnmapInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, VkDescriptorSet descriptorSet, VkDescriptorUpdateTemplate descriptorUpdateTemplate, const void* pData) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount, const VkWriteDescriptorSet* pDescriptorWrites, uint32_t descriptorCopyCount, const VkCopyDescriptorSet* pDescriptorCopies) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkWaitForFences(VkDevice device, uint32_t fenceCount, const VkFence* pFences, VkBool32 waitAll, uint64_t timeout) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
