@@ -29841,6 +29841,12 @@ static inline void pvk_release(id object)
         PVK_MSG(void, (id, SEL))(object, pvk_sel_);
 }
 
+static inline id pvk_retain(id object)
+{
+    PVK_SEL_CACHE("retain");
+    return object ? PVK_MSG(id, (id, SEL))(object, pvk_sel_) : NULL;
+}
+
 static inline const char *pvk_ns_utf8(id string)
 {
     PVK_SEL_CACHE("UTF8String");
@@ -31402,6 +31408,78 @@ static inline void pvk_MTLComputePipelineDescriptor_setMaxTotalThreadsPerThreadg
 static inline unsigned long pvk_MTLComputePipelineState_maxTotalThreadsPerThreadgroup(id self) { PVK_SEL_CACHE("maxTotalThreadsPerThreadgroup"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
 static inline pvk_MTLResourceID pvk_MTLTexture_gpuResourceID(id self) { PVK_SEL_CACHE("gpuResourceID"); return PVK_MSG(pvk_MTLResourceID, (id, SEL))(self, pvk_sel_); }
 static inline pvk_MTLResourceID pvk_MTLSamplerState_gpuResourceID(id self) { PVK_SEL_CACHE("gpuResourceID"); return PVK_MSG(pvk_MTLResourceID, (id, SEL))(self, pvk_sel_); }
+/* Images, views and samplers (section 11) and image transfers (sections 14-15) */
+static inline bool pvk_MTLDevice_supportsBCTextureCompression(id self) { PVK_SEL_CACHE("supportsBCTextureCompression"); return PVK_MSG(bool, (id, SEL))(self, pvk_sel_); }
+static inline bool pvk_MTLDevice_supports32BitFloatFiltering(id self) { PVK_SEL_CACHE("supports32BitFloatFiltering"); return PVK_MSG(bool, (id, SEL))(self, pvk_sel_); }
+static inline unsigned long pvk_MTLDevice_minimumLinearTextureAlignmentForPixelFormat(id self, pvk_MTLPixelFormat format) { PVK_SEL_CACHE("minimumLinearTextureAlignmentForPixelFormat:"); return PVK_MSG(unsigned long, (id, SEL, pvk_MTLPixelFormat))(self, pvk_sel_, format); }
+static inline pvk_MTLSizeAndAlign pvk_MTLDevice_heapTextureSizeAndAlignWithDescriptor(id self, id desc) { PVK_SEL_CACHE("heapTextureSizeAndAlignWithDescriptor:"); return PVK_MSG(pvk_MTLSizeAndAlign, (id, SEL, id))(self, pvk_sel_, desc); }
+static inline id pvk_MTLDevice_newTextureWithDescriptor(id self, id descriptor) { PVK_SEL_CACHE("newTextureWithDescriptor:"); return PVK_MSG(id, (id, SEL, id))(self, pvk_sel_, descriptor); }
+static inline id pvk_MTLDevice_newSamplerStateWithDescriptor(id self, id descriptor) { PVK_SEL_CACHE("newSamplerStateWithDescriptor:"); return PVK_MSG(id, (id, SEL, id))(self, pvk_sel_, descriptor); }
+static inline id pvk_MTLDevice_newRenderPipelineStateWithDescriptor_error(id self, id descriptor, id * error) { PVK_SEL_CACHE("newRenderPipelineStateWithDescriptor:error:"); return PVK_MSG(id, (id, SEL, id, id *))(self, pvk_sel_, descriptor, error); }
+static inline id pvk_MTLTextureDescriptor_new(void) { PVK_CLASS_CACHE("MTLTextureDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline id pvk_MTLTextureDescriptor_textureBufferDescriptorWithPixelFormat_width_resourceOptions_usage(pvk_MTLPixelFormat pixelFormat, unsigned long width, pvk_MTLResourceOptions resourceOptions, pvk_MTLTextureUsage usage) { PVK_CLASS_CACHE("MTLTextureDescriptor"); PVK_SEL_CACHE("textureBufferDescriptorWithPixelFormat:width:resourceOptions:usage:"); return PVK_MSG(id, (id, SEL, pvk_MTLPixelFormat, unsigned long, pvk_MTLResourceOptions, pvk_MTLTextureUsage))((id)pvk_cls_, pvk_sel_, pixelFormat, width, resourceOptions, usage); }
+static inline void pvk_MTLTextureDescriptor_setTextureType(id self, pvk_MTLTextureType textureType) { PVK_SEL_CACHE("setTextureType:"); PVK_MSG(void, (id, SEL, pvk_MTLTextureType))(self, pvk_sel_, textureType); }
+static inline void pvk_MTLTextureDescriptor_setPixelFormat(id self, pvk_MTLPixelFormat pixelFormat) { PVK_SEL_CACHE("setPixelFormat:"); PVK_MSG(void, (id, SEL, pvk_MTLPixelFormat))(self, pvk_sel_, pixelFormat); }
+static inline void pvk_MTLTextureDescriptor_setWidth(id self, unsigned long width) { PVK_SEL_CACHE("setWidth:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, width); }
+static inline void pvk_MTLTextureDescriptor_setHeight(id self, unsigned long height) { PVK_SEL_CACHE("setHeight:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, height); }
+static inline void pvk_MTLTextureDescriptor_setDepth(id self, unsigned long depth) { PVK_SEL_CACHE("setDepth:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, depth); }
+static inline void pvk_MTLTextureDescriptor_setMipmapLevelCount(id self, unsigned long mipmapLevelCount) { PVK_SEL_CACHE("setMipmapLevelCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, mipmapLevelCount); }
+static inline void pvk_MTLTextureDescriptor_setSampleCount(id self, unsigned long sampleCount) { PVK_SEL_CACHE("setSampleCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, sampleCount); }
+static inline void pvk_MTLTextureDescriptor_setArrayLength(id self, unsigned long arrayLength) { PVK_SEL_CACHE("setArrayLength:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, arrayLength); }
+static inline void pvk_MTLTextureDescriptor_setResourceOptions(id self, pvk_MTLResourceOptions resourceOptions) { PVK_SEL_CACHE("setResourceOptions:"); PVK_MSG(void, (id, SEL, pvk_MTLResourceOptions))(self, pvk_sel_, resourceOptions); }
+static inline void pvk_MTLTextureDescriptor_setUsage(id self, pvk_MTLTextureUsage usage) { PVK_SEL_CACHE("setUsage:"); PVK_MSG(void, (id, SEL, pvk_MTLTextureUsage))(self, pvk_sel_, usage); }
+static inline id pvk_MTLHeap_newTextureWithDescriptor_offset(id self, id descriptor, unsigned long offset) { PVK_SEL_CACHE("newTextureWithDescriptor:offset:"); return PVK_MSG(id, (id, SEL, id, unsigned long))(self, pvk_sel_, descriptor, offset); }
+static inline id pvk_MTLBuffer_newTextureWithDescriptor_offset_bytesPerRow(id self, id descriptor, unsigned long offset, unsigned long bytesPerRow) { PVK_SEL_CACHE("newTextureWithDescriptor:offset:bytesPerRow:"); return PVK_MSG(id, (id, SEL, id, unsigned long, unsigned long))(self, pvk_sel_, descriptor, offset, bytesPerRow); }
+static inline id pvk_MTLTexture_newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(id self, pvk_MTLPixelFormat pixelFormat, pvk_MTLTextureType textureType, pvk_NSRange levelRange, pvk_NSRange sliceRange, pvk_MTLTextureSwizzleChannels swizzle) { PVK_SEL_CACHE("newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:"); return PVK_MSG(id, (id, SEL, pvk_MTLPixelFormat, pvk_MTLTextureType, pvk_NSRange, pvk_NSRange, pvk_MTLTextureSwizzleChannels))(self, pvk_sel_, pixelFormat, textureType, levelRange, sliceRange, swizzle); }
+static inline void pvk_MTLTexture_replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(id self, pvk_MTLRegion region, unsigned long level, unsigned long slice, const void * pixelBytes, unsigned long bytesPerRow, unsigned long bytesPerImage) { PVK_SEL_CACHE("replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:"); PVK_MSG(void, (id, SEL, pvk_MTLRegion, unsigned long, unsigned long, const void *, unsigned long, unsigned long))(self, pvk_sel_, region, level, slice, pixelBytes, bytesPerRow, bytesPerImage); }
+static inline void pvk_MTLTexture_getBytes_bytesPerRow_bytesPerImage_fromRegion_mipmapLevel_slice(id self, void * pixelBytes, unsigned long bytesPerRow, unsigned long bytesPerImage, pvk_MTLRegion region, unsigned long level, unsigned long slice) { PVK_SEL_CACHE("getBytes:bytesPerRow:bytesPerImage:fromRegion:mipmapLevel:slice:"); PVK_MSG(void, (id, SEL, void *, unsigned long, unsigned long, pvk_MTLRegion, unsigned long, unsigned long))(self, pvk_sel_, pixelBytes, bytesPerRow, bytesPerImage, region, level, slice); }
+static inline id pvk_MTLSamplerDescriptor_new(void) { PVK_CLASS_CACHE("MTLSamplerDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTLSamplerDescriptor_setMinFilter(id self, pvk_MTLSamplerMinMagFilter minFilter) { PVK_SEL_CACHE("setMinFilter:"); PVK_MSG(void, (id, SEL, pvk_MTLSamplerMinMagFilter))(self, pvk_sel_, minFilter); }
+static inline void pvk_MTLSamplerDescriptor_setMagFilter(id self, pvk_MTLSamplerMinMagFilter magFilter) { PVK_SEL_CACHE("setMagFilter:"); PVK_MSG(void, (id, SEL, pvk_MTLSamplerMinMagFilter))(self, pvk_sel_, magFilter); }
+static inline void pvk_MTLSamplerDescriptor_setMipFilter(id self, pvk_MTLSamplerMipFilter mipFilter) { PVK_SEL_CACHE("setMipFilter:"); PVK_MSG(void, (id, SEL, pvk_MTLSamplerMipFilter))(self, pvk_sel_, mipFilter); }
+static inline void pvk_MTLSamplerDescriptor_setMaxAnisotropy(id self, unsigned long maxAnisotropy) { PVK_SEL_CACHE("setMaxAnisotropy:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, maxAnisotropy); }
+static inline void pvk_MTLSamplerDescriptor_setSAddressMode(id self, pvk_MTLSamplerAddressMode sAddressMode) { PVK_SEL_CACHE("setSAddressMode:"); PVK_MSG(void, (id, SEL, pvk_MTLSamplerAddressMode))(self, pvk_sel_, sAddressMode); }
+static inline void pvk_MTLSamplerDescriptor_setTAddressMode(id self, pvk_MTLSamplerAddressMode tAddressMode) { PVK_SEL_CACHE("setTAddressMode:"); PVK_MSG(void, (id, SEL, pvk_MTLSamplerAddressMode))(self, pvk_sel_, tAddressMode); }
+static inline void pvk_MTLSamplerDescriptor_setRAddressMode(id self, pvk_MTLSamplerAddressMode rAddressMode) { PVK_SEL_CACHE("setRAddressMode:"); PVK_MSG(void, (id, SEL, pvk_MTLSamplerAddressMode))(self, pvk_sel_, rAddressMode); }
+static inline void pvk_MTLSamplerDescriptor_setBorderColor(id self, pvk_MTLSamplerBorderColor borderColor) { PVK_SEL_CACHE("setBorderColor:"); PVK_MSG(void, (id, SEL, pvk_MTLSamplerBorderColor))(self, pvk_sel_, borderColor); }
+static inline void pvk_MTLSamplerDescriptor_setReductionMode(id self, pvk_MTLSamplerReductionMode reductionMode) { PVK_SEL_CACHE("setReductionMode:"); PVK_MSG(void, (id, SEL, pvk_MTLSamplerReductionMode))(self, pvk_sel_, reductionMode); }
+static inline void pvk_MTLSamplerDescriptor_setNormalizedCoordinates(id self, bool normalizedCoordinates) { PVK_SEL_CACHE("setNormalizedCoordinates:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, normalizedCoordinates); }
+static inline void pvk_MTLSamplerDescriptor_setLodMinClamp(id self, float lodMinClamp) { PVK_SEL_CACHE("setLodMinClamp:"); PVK_MSG(void, (id, SEL, float))(self, pvk_sel_, lodMinClamp); }
+static inline void pvk_MTLSamplerDescriptor_setLodMaxClamp(id self, float lodMaxClamp) { PVK_SEL_CACHE("setLodMaxClamp:"); PVK_MSG(void, (id, SEL, float))(self, pvk_sel_, lodMaxClamp); }
+static inline void pvk_MTLSamplerDescriptor_setLodBias(id self, float lodBias) { PVK_SEL_CACHE("setLodBias:"); PVK_MSG(void, (id, SEL, float))(self, pvk_sel_, lodBias); }
+static inline void pvk_MTLSamplerDescriptor_setCompareFunction(id self, pvk_MTLCompareFunction compareFunction) { PVK_SEL_CACHE("setCompareFunction:"); PVK_MSG(void, (id, SEL, pvk_MTLCompareFunction))(self, pvk_sel_, compareFunction); }
+static inline void pvk_MTLSamplerDescriptor_setSupportArgumentBuffers(id self, bool supportArgumentBuffers) { PVK_SEL_CACHE("setSupportArgumentBuffers:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, supportArgumentBuffers); }
+static inline void pvk_MTL4ComputeCommandEncoder_copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(id self, id sourceTexture, unsigned long sourceSlice, unsigned long sourceLevel, pvk_MTLOrigin sourceOrigin, pvk_MTLSize sourceSize, id destinationTexture, unsigned long destinationSlice, unsigned long destinationLevel, pvk_MTLOrigin destinationOrigin) { PVK_SEL_CACHE("copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:"); PVK_MSG(void, (id, SEL, id, unsigned long, unsigned long, pvk_MTLOrigin, pvk_MTLSize, id, unsigned long, unsigned long, pvk_MTLOrigin))(self, pvk_sel_, sourceTexture, sourceSlice, sourceLevel, sourceOrigin, sourceSize, destinationTexture, destinationSlice, destinationLevel, destinationOrigin); }
+static inline void pvk_MTL4ComputeCommandEncoder_copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(id self, id sourceTexture, unsigned long sourceSlice, unsigned long sourceLevel, pvk_MTLOrigin sourceOrigin, pvk_MTLSize sourceSize, id destinationBuffer, unsigned long destinationOffset, unsigned long destinationBytesPerRow, unsigned long destinationBytesPerImage, pvk_MTLBlitOption options) { PVK_SEL_CACHE("copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:options:"); PVK_MSG(void, (id, SEL, id, unsigned long, unsigned long, pvk_MTLOrigin, pvk_MTLSize, id, unsigned long, unsigned long, unsigned long, pvk_MTLBlitOption))(self, pvk_sel_, sourceTexture, sourceSlice, sourceLevel, sourceOrigin, sourceSize, destinationBuffer, destinationOffset, destinationBytesPerRow, destinationBytesPerImage, options); }
+static inline void pvk_MTL4ComputeCommandEncoder_copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin_options(id self, id sourceBuffer, unsigned long sourceOffset, unsigned long sourceBytesPerRow, unsigned long sourceBytesPerImage, pvk_MTLSize sourceSize, id destinationTexture, unsigned long destinationSlice, unsigned long destinationLevel, pvk_MTLOrigin destinationOrigin, pvk_MTLBlitOption options) { PVK_SEL_CACHE("copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:"); PVK_MSG(void, (id, SEL, id, unsigned long, unsigned long, unsigned long, pvk_MTLSize, id, unsigned long, unsigned long, pvk_MTLOrigin, pvk_MTLBlitOption))(self, pvk_sel_, sourceBuffer, sourceOffset, sourceBytesPerRow, sourceBytesPerImage, sourceSize, destinationTexture, destinationSlice, destinationLevel, destinationOrigin, options); }
+static inline id pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(id self, id descriptor) { PVK_SEL_CACHE("renderCommandEncoderWithDescriptor:"); return PVK_MSG(id, (id, SEL, id))(self, pvk_sel_, descriptor); }
+static inline id pvk_MTL4RenderPassDescriptor_new(void) { PVK_CLASS_CACHE("MTL4RenderPassDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline id pvk_MTL4RenderPassDescriptor_colorAttachments(id self) { PVK_SEL_CACHE("colorAttachments"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_MTL4RenderPassDescriptor_depthAttachment(id self) { PVK_SEL_CACHE("depthAttachment"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_MTL4RenderPassDescriptor_stencilAttachment(id self) { PVK_SEL_CACHE("stencilAttachment"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(id self, unsigned long renderTargetArrayLength) { PVK_SEL_CACHE("setRenderTargetArrayLength:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, renderTargetArrayLength); }
+static inline id pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(id self, unsigned long attachmentIndex) { PVK_SEL_CACHE("objectAtIndexedSubscript:"); return PVK_MSG(id, (id, SEL, unsigned long))(self, pvk_sel_, attachmentIndex); }
+static inline void pvk_MTLRenderPassAttachmentDescriptor_setTexture(id self, id texture) { PVK_SEL_CACHE("setTexture:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, texture); }
+static inline void pvk_MTLRenderPassAttachmentDescriptor_setLevel(id self, unsigned long level) { PVK_SEL_CACHE("setLevel:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, level); }
+static inline void pvk_MTLRenderPassAttachmentDescriptor_setSlice(id self, unsigned long slice) { PVK_SEL_CACHE("setSlice:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, slice); }
+static inline void pvk_MTLRenderPassAttachmentDescriptor_setDepthPlane(id self, unsigned long depthPlane) { PVK_SEL_CACHE("setDepthPlane:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, depthPlane); }
+static inline void pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(id self, pvk_MTLLoadAction loadAction) { PVK_SEL_CACHE("setLoadAction:"); PVK_MSG(void, (id, SEL, pvk_MTLLoadAction))(self, pvk_sel_, loadAction); }
+static inline void pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(id self, pvk_MTLStoreAction storeAction) { PVK_SEL_CACHE("setStoreAction:"); PVK_MSG(void, (id, SEL, pvk_MTLStoreAction))(self, pvk_sel_, storeAction); }
+static inline void pvk_MTLRenderPassColorAttachmentDescriptor_setClearColor(id self, pvk_MTLClearColor clearColor) { PVK_SEL_CACHE("setClearColor:"); PVK_MSG(void, (id, SEL, pvk_MTLClearColor))(self, pvk_sel_, clearColor); }
+static inline void pvk_MTLRenderPassDepthAttachmentDescriptor_setClearDepth(id self, double clearDepth) { PVK_SEL_CACHE("setClearDepth:"); PVK_MSG(void, (id, SEL, double))(self, pvk_sel_, clearDepth); }
+static inline void pvk_MTLRenderPassStencilAttachmentDescriptor_setClearStencil(id self, uint32_t clearStencil) { PVK_SEL_CACHE("setClearStencil:"); PVK_MSG(void, (id, SEL, uint32_t))(self, pvk_sel_, clearStencil); }
+static inline void pvk_MTL4RenderCommandEncoder_setRenderPipelineState(id self, id pipelineState) { PVK_SEL_CACHE("setRenderPipelineState:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, pipelineState); }
+static inline void pvk_MTL4RenderCommandEncoder_setViewport(id self, pvk_MTLViewport viewport) { PVK_SEL_CACHE("setViewport:"); PVK_MSG(void, (id, SEL, pvk_MTLViewport))(self, pvk_sel_, viewport); }
+static inline void pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(id self, id argumentTable, pvk_MTLRenderStages stages) { PVK_SEL_CACHE("setArgumentTable:atStages:"); PVK_MSG(void, (id, SEL, id, pvk_MTLRenderStages))(self, pvk_sel_, argumentTable, stages); }
+static inline void pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount(id self, pvk_MTLPrimitiveType primitiveType, unsigned long vertexStart, unsigned long vertexCount) { PVK_SEL_CACHE("drawPrimitives:vertexStart:vertexCount:"); PVK_MSG(void, (id, SEL, pvk_MTLPrimitiveType, unsigned long, unsigned long))(self, pvk_sel_, primitiveType, vertexStart, vertexCount); }
+static inline void pvk_MTL4ArgumentTableDescriptor_setMaxTextureBindCount(id self, unsigned long maxTextureBindCount) { PVK_SEL_CACHE("setMaxTextureBindCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, maxTextureBindCount); }
+static inline void pvk_MTL4ArgumentTable_setTexture_atIndex(id self, pvk_MTLResourceID resourceID, unsigned long bindingIndex) { PVK_SEL_CACHE("setTexture:atIndex:"); PVK_MSG(void, (id, SEL, pvk_MTLResourceID, unsigned long))(self, pvk_sel_, resourceID, bindingIndex); }
+static inline id pvk_MTLRenderPipelineDescriptor_new(void) { PVK_CLASS_CACHE("MTLRenderPipelineDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTLRenderPipelineDescriptor_setVertexFunction(id self, id vertexFunction) { PVK_SEL_CACHE("setVertexFunction:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, vertexFunction); }
+static inline void pvk_MTLRenderPipelineDescriptor_setFragmentFunction(id self, id fragmentFunction) { PVK_SEL_CACHE("setFragmentFunction:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, fragmentFunction); }
+static inline id pvk_MTLRenderPipelineDescriptor_colorAttachments(id self) { PVK_SEL_CACHE("colorAttachments"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_MTLRenderPipelineColorAttachmentDescriptorArray_objectAtIndexedSubscript(id self, unsigned long attachmentIndex) { PVK_SEL_CACHE("objectAtIndexedSubscript:"); return PVK_MSG(id, (id, SEL, unsigned long))(self, pvk_sel_, attachmentIndex); }
+static inline void pvk_MTLRenderPipelineColorAttachmentDescriptor_setPixelFormat(id self, pvk_MTLPixelFormat pixelFormat) { PVK_SEL_CACHE("setPixelFormat:"); PVK_MSG(void, (id, SEL, pvk_MTLPixelFormat))(self, pvk_sel_, pixelFormat); }
 
 /* ==========================================================================
  * 5. Internals
@@ -31551,12 +31629,16 @@ static const VkExtensionProperties pvk_instance_extensions[] = {
 enum pvk_device_extension {
     PVK_DEVICE_EXT_KHR_swapchain,
     PVK_DEVICE_EXT_KHR_maintenance5, /* core in 1.4; offered so apiVersion 1.3 apps can enable it */
+    /* Core in 1.2 but optional: offered (with samplerFilterMinmax) only where
+     * Metal samplers reduce (pvk_device_extension_available, section 7). */
+    PVK_DEVICE_EXT_EXT_sampler_filter_minmax,
     PVK_DEVICE_EXTENSION_COUNT
 };
 
 static const VkExtensionProperties pvk_device_extensions[] = {
     { VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_SWAPCHAIN_SPEC_VERSION },
     { VK_KHR_MAINTENANCE_5_EXTENSION_NAME, VK_KHR_MAINTENANCE_5_SPEC_VERSION },
+    { VK_EXT_SAMPLER_FILTER_MINMAX_EXTENSION_NAME, VK_EXT_SAMPLER_FILTER_MINMAX_SPEC_VERSION },
 };
 
 /* The instance extension each device extension depends on (-1: none), from
@@ -31568,6 +31650,7 @@ static const VkExtensionProperties pvk_device_extensions[] = {
 static const int pvk_device_extension_needs[PVK_DEVICE_EXTENSION_COUNT] = {
     PVK_INSTANCE_EXT_KHR_surface, /* VK_KHR_swapchain */
     -1,                           /* VK_KHR_maintenance5 */
+    -1,                           /* VK_EXT_sampler_filter_minmax */
 };
 
 /* ==========================================================================
@@ -31612,6 +31695,10 @@ struct pvk_physical_device {
     struct pvk_properties_1x properties_1x;
     struct pvk_features features; /* supported */
     VkPhysicalDeviceMemoryProperties memory_properties;
+    /* Texture capabilities that vary within the Metal 4 families (section 7) */
+    bool bc_formats;      /* supportsBCTextureCompression */
+    bool filter_32bit;    /* supports32BitFloatFiltering: filter and resolve 32-bit floats */
+    bool filter_minmax;   /* sampler min/max reduction (FST: Apple10) */
 };
 
 struct pvk_submission;
@@ -31642,6 +31729,9 @@ struct pvk_queue {
     pthread_t thread;
     struct pvk_deferred *deferred, *deferred_tail; /* to do; the head is in progress */
     struct pvk_deferred *done;                     /* done, freed by vkQueueSubmit */
+    /* Image transfers (section 15): */
+    id render_table;   /* MTL4ArgumentTable of internal blit/resolve draws */
+    bool ordered;      /* a barrier was recorded: each new encoder waits for earlier work */
 };
 
 struct pvk_device {
@@ -31658,6 +31748,12 @@ struct pvk_device {
     int lost;              /* a command buffer failed: VK_ERROR_DEVICE_LOST (atomic) */
     long feedback_pending; /* commit feedback handlers still to run (atomic) */
     id fill_pipeline;      /* internal kernel of vkCmdFillBuffer, made on first use */
+    /* Images (sections 11, 14 and 15) */
+    struct pvk_sampler_state *sampler_states; /* MTLSamplerStates shared by equal VkSamplers */
+    id blit_library;                          /* internal blit/resolve shaders, made on first use */
+    struct pvk_blit_pipeline *blit_pipelines; /* render pipelines made from it, by function and format */
+    id host_queue, host_event;                /* MTL4CommandQueue, MTLSharedEvent: host copies' blits */
+    uint64_t host_serial;
 };
 
 /* Section 13: a queue's submission state, and waiting for the GPU before
@@ -32052,7 +32148,7 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
     p12->supportedStencilResolveModes = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
     p12->independentResolveNone = VK_TRUE;
     p12->independentResolve = VK_TRUE;
-    /* filterMinmax*: samplerFilterMinmax is not reported. */
+    /* filterMinmax*: with samplerFilterMinmax (pvk_physical_device_init_texture_features). */
     p12->maxTimelineSemaphoreValueDifference = UINT64_MAX; /* MTLSharedEvent values are 64-bit */
     p12->framebufferIntegerColorSampleCounts = VK_SAMPLE_COUNT_1_BIT; /* as sampledImageIntegerSampleCounts */
 
@@ -32113,8 +32209,9 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
  * PlasmaVK claims Vulkan 1.4, so it reports exactly the features Vulkan 1.4
  * requires (Features > Feature Requirements: the <require> lists of vk.xml's
  * VK_VERSION_1_0..1_4), plus hostImageCopy, which a 1.4 device must support
- * when its only transfer-capable queue family supports graphics, as here. No
- * optional feature is reported.
+ * when its only transfer-capable queue family supports graphics, as here.
+ * The only optional features reported are those of the formats and samplers
+ * the GPU has (pvk_physical_device_init_texture_features).
  *
  * Most of these have no implementation yet (their commands are stubs in
  * section 17): reporting them follows from claiming 1.4, and each subsystem
@@ -32196,6 +32293,35 @@ static void pvk_physical_device_init_features(struct pvk_features *f)
     f->v14.hostImageCopy = VK_TRUE; /* one queue family, graphics and transfer */
 }
 
+/* Texture features that depend on the GPU. FST "Metal feature availability":
+ * EAC/ETC and ASTC (LDR and, from Apple6, HDR) pixel formats on every Metal 4
+ * GPU; BC from Apple9, and on Apple7/8 where supportsBCTextureCompression
+ * (all Apple7/8 Macs); 32-bit float filtering from Apple9, and on Apple7/8
+ * where supports32BitFloatFiltering. Sampler min/max reduction is an Apple10
+ * feature: on Apple9 (M4 Max, macOS 27.2) MTLSamplerDescriptor.reductionMode
+ * is accepted and ignored (minimum, maximum and weighted average sample
+ * alike), so samplerFilterMinmax and VK_EXT_sampler_filter_minmax are only
+ * offered from Apple10. Shaders cannot emulate it: a sampler descriptor is
+ * only its MTLResourceID (section 11). */
+static void pvk_physical_device_init_texture_features(struct pvk_physical_device *pd)
+{
+    id mtl = pd->mtl_device;
+    pd->bc_formats = pvk_MTLDevice_supportsFamily(mtl, PVK_MTLGPUFamilyApple9) ||
+                     pvk_MTLDevice_supportsBCTextureCompression(mtl);
+    pd->filter_32bit = pvk_MTLDevice_supportsFamily(mtl, PVK_MTLGPUFamilyApple9) ||
+                       pvk_MTLDevice_supports32BitFloatFiltering(mtl);
+    pd->filter_minmax = pvk_MTLDevice_supportsFamily(mtl, PVK_MTLGPUFamilyApple10);
+    pd->features.core.textureCompressionETC2 = VK_TRUE;
+    pd->features.core.textureCompressionASTC_LDR = VK_TRUE;
+    pd->features.core.textureCompressionBC = pd->bc_formats;
+    pd->features.v13.textureCompressionASTC_HDR = VK_TRUE;
+    pd->features.v12.samplerFilterMinmax = pd->filter_minmax;
+    /* Reduction applies to R, G, B and A alike; whether Metal applies a view's
+     * swizzle before reducing is unverified, so only R is promised. */
+    pd->properties_1x.v12.filterMinmaxSingleComponentFormats = pd->filter_minmax;
+    pd->properties_1x.v12.filterMinmaxImageComponentMapping = VK_FALSE;
+}
+
 static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
 {
     VkPhysicalDeviceProperties *p = &pd->properties;
@@ -32213,6 +32339,7 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     pvk_physical_device_init_memory_limits(pd);
     pvk_physical_device_init_properties_1x(pd);
     pvk_physical_device_init_features(&pd->features);
+    pvk_physical_device_init_texture_features(pd);
 
     /* Apple GPUs have unified memory: one heap; private, shared (twice) and
      * lazily allocated (memoryless tile memory) types. The order follows the
@@ -32664,12 +32791,626 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceMemoryProperties2(VkPhysicalDevice
     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &pMemoryProperties->memoryProperties);
 }
 
+/* ---- Formats ----
+ *
+ * Every VkFormat PlasmaVK supports, with the Metal pixel format behind it and
+ * that pixel format's capabilities from FST "Texture capabilities by pixel
+ * format" (Apple7 column, which every Metal 4 GPU has) and "Texture buffer
+ * pixel formats". Format features are derived from these
+ * (pvk_format_image_features, pvk_format_buffer_features); images, views,
+ * buffer views and transfers (sections 11, 14, 15) use the same table.
+ *
+ * Packed 16-bit formats Metal lacks but whose bits match a Metal format with
+ * the components in another order (B4G4R4A4, B5G6R5, B5G5R5A1, A1B5G5R5 and
+ * the two 4444 formats of Vulkan 1.3) use that format with a swizzle that
+ * views apply when sampling; they offer sampling and transfers only, as
+ * rendering or storing would need the inverse swizzle. BC1_RGB is BC1_RGBA
+ * with alpha forced to one. Formats with a Metal vertex format but no pixel
+ * format (R8G8B8, R16G16B16, R32G32B32, A2B10G10R10_SNORM) are vertex buffer
+ * formats only. Metal's own 3-component pixel formats need macOS/iOS 27.
+ *
+ * Checked against Formats > Required Format Support: every feature the
+ * tables require is reported, given what the tables make conditional:
+ * DEPTH_STENCIL_ATTACHMENT is required on one of X8_D24_UNORM_PACK32 and
+ * D32_SFLOAT and on one of D24_UNORM_S8_UINT and D32_SFLOAT_S8_UINT (Apple
+ * silicon has no 24-bit depth: the 32-bit formats), and of the BC, ETC2/EAC
+ * and ASTC LDR tables one must be supported (all three are on Macs; ETC2 and
+ * ASTC everywhere). Bits the tables leave optional follow Metal: e.g. linear
+ * filtering of 32-bit floats where the GPU filters them.
+ *
+ * Storage: Metal shaders read and write textures of any format without
+ * declaring it, so every storage format also reports
+ * STORAGE_READ/WRITE_WITHOUT_FORMAT (Formats > Formats Without Shader Storage
+ * Format then allows storage on formats SPIR-V has no Format token for, such
+ * as B8G8R8A8_UNORM). sRGB formats are not offered for storage. */
+
+/* Metal pixel format capabilities (FST) */
+#define PVK_FC_FILTER 0x0001u
+#define PVK_FC_WRITE 0x0002u
+#define PVK_FC_COLOR 0x0004u
+#define PVK_FC_BLEND 0x0008u
+#define PVK_FC_MSAA 0x0010u
+#define PVK_FC_RESOLVE 0x0020u
+#define PVK_FC_ATOMIC 0x0040u
+#define PVK_FC_FILTER32 0x0080u  /* Filter and Resolve where filter_32bit (FST footnote 6) */
+#define PVK_FC_BC 0x0100u        /* only where bc_formats */
+#define PVK_FC_TB_READ 0x0200u   /* texture buffer: read */
+#define PVK_FC_TB_WRITE 0x0400u  /* texture buffer: write */
+#define PVK_FC_TB_ATOMIC 0x0800u /* texture buffer: atomics (FST footnote 2) */
+#define PVK_FC_ALL (PVK_FC_FILTER | PVK_FC_WRITE | PVK_FC_COLOR | PVK_FC_BLEND | PVK_FC_MSAA | PVK_FC_RESOLVE)
+#define PVK_FC_INT (PVK_FC_WRITE | PVK_FC_COLOR | PVK_FC_MSAA)
+#define PVK_FC_P16 (PVK_FC_FILTER | PVK_FC_COLOR | PVK_FC_BLEND | PVK_FC_MSAA | PVK_FC_RESOLVE)
+#define PVK_FC_F32 (PVK_FC_WRITE | PVK_FC_COLOR | PVK_FC_BLEND | PVK_FC_MSAA | PVK_FC_FILTER32)
+#define PVK_FC_TB (PVK_FC_TB_READ | PVK_FC_TB_WRITE)
+
+/* What a texel is: Vulkan's numeric format classes. */
+enum pvk_format_kind {
+    PVK_FK_FLOAT,   /* UNORM, SNORM, SFLOAT, UFLOAT, SRGB: floating- or fixed-point */
+    PVK_FK_UINT,
+    PVK_FK_SINT,
+    PVK_FK_DEPTH,
+    PVK_FK_STENCIL,
+    PVK_FK_DEPTH_STENCIL
+};
+
+#define PVK_FF_SRGB 0x01u    /* sRGB: no storage */
+#define PVK_FF_SWIZZLE 0x02u /* the Vulkan components are `swizzle` of the Metal ones */
+#define PVK_FF_NO_3D 0x04u   /* compressed format Metal has no 3D textures of (ETC2/EAC) */
+
+struct pvk_format {
+    pvk_MTLPixelFormat mtl;    /* Invalid: a vertex format only */
+    pvk_MTLVertexFormat vertex; /* Invalid: not a vertex buffer format */
+    uint16_t caps;             /* PVK_FC_* */
+    uint8_t kind;              /* enum pvk_format_kind */
+    uint8_t flags;             /* PVK_FF_* */
+    uint8_t bytes;             /* per texel block */
+    uint8_t block_w, block_h;
+    uint8_t int_bits;          /* integer formats: bits per component (10: 10/10/10/2) */
+    pvk_MTLTextureSwizzleChannels swizzle; /* PVK_FF_SWIZZLE */
+};
+
+#define PVK_FMT_(mtl, vtx, caps, kind, flags, bytes, bw, bh, bits, r, g, b, a)                                    \
+    { PVK_MTLPixelFormat##mtl, PVK_MTLVertexFormat##vtx, caps, kind, flags, bytes, bw, bh, bits,                \
+      { PVK_MTLTextureSwizzle##r, PVK_MTLTextureSwizzle##g, PVK_MTLTextureSwizzle##b, PVK_MTLTextureSwizzle##a } }
+#define PVK_NORM(mtl, caps, bytes, vtx) PVK_FMT_(mtl, vtx, caps, PVK_FK_FLOAT, 0, bytes, 1, 1, 0, Red, Green, Blue, Alpha)
+#define PVK_UINT(mtl, caps, bytes, bits, vtx) PVK_FMT_(mtl, vtx, caps, PVK_FK_UINT, 0, bytes, 1, 1, bits, Red, Green, Blue, Alpha)
+#define PVK_SINT(mtl, caps, bytes, bits, vtx) PVK_FMT_(mtl, vtx, caps, PVK_FK_SINT, 0, bytes, 1, 1, bits, Red, Green, Blue, Alpha)
+#define PVK_SRGB(mtl, bytes) PVK_FMT_(mtl, Invalid, PVK_FC_ALL, PVK_FK_FLOAT, PVK_FF_SRGB, bytes, 1, 1, 0, Red, Green, Blue, Alpha)
+#define PVK_SWZ(mtl, r, g, b, a) PVK_FMT_(mtl, Invalid, PVK_FC_P16, PVK_FK_FLOAT, PVK_FF_SWIZZLE, 2, 1, 1, 0, r, g, b, a)
+#define PVK_VTX(vtx, kind, bytes) PVK_FMT_(Invalid, vtx, 0, kind, 0, bytes, 1, 1, 0, Red, Green, Blue, Alpha)
+#define PVK_DS(mtl, kind, caps, bytes) PVK_FMT_(mtl, Invalid, caps, kind, 0, bytes, 1, 1, 0, Red, Green, Blue, Alpha)
+#define PVK_BC(mtl, bytes) PVK_FMT_(mtl, Invalid, PVK_FC_FILTER | PVK_FC_BC, PVK_FK_FLOAT, 0, bytes, 4, 4, 0, Red, Green, Blue, Alpha)
+#define PVK_BC_SRGB(mtl, bytes) PVK_FMT_(mtl, Invalid, PVK_FC_FILTER | PVK_FC_BC, PVK_FK_FLOAT, PVK_FF_SRGB, bytes, 4, 4, 0, Red, Green, Blue, Alpha)
+#define PVK_BC_RGB(mtl, srgb) PVK_FMT_(mtl, Invalid, PVK_FC_FILTER | PVK_FC_BC, PVK_FK_FLOAT, PVK_FF_SWIZZLE | (srgb), 8, 4, 4, 0, Red, Green, Blue, One)
+#define PVK_ETC(mtl, flags, bytes) PVK_FMT_(mtl, Invalid, PVK_FC_FILTER, PVK_FK_FLOAT, PVK_FF_NO_3D | (flags), bytes, 4, 4, 0, Red, Green, Blue, Alpha)
+#define PVK_ASTC(mtl, flags, w, h) PVK_FMT_(mtl, Invalid, PVK_FC_FILTER, PVK_FK_FLOAT, flags, 16, w, h, 0, Red, Green, Blue, Alpha)
+
+static const struct pvk_format pvk_core_formats[VK_FORMAT_ASTC_12x12_SRGB_BLOCK + 1] = {
+    [VK_FORMAT_R4G4B4A4_UNORM_PACK16] = PVK_NORM(ABGR4Unorm, PVK_FC_P16, 2, Invalid),
+    [VK_FORMAT_B4G4R4A4_UNORM_PACK16] = PVK_SWZ(ABGR4Unorm, Blue, Green, Red, Alpha),
+    [VK_FORMAT_R5G6B5_UNORM_PACK16] = PVK_NORM(B5G6R5Unorm, PVK_FC_P16, 2, Invalid),
+    [VK_FORMAT_B5G6R5_UNORM_PACK16] = PVK_SWZ(B5G6R5Unorm, Blue, Green, Red, Alpha),
+    [VK_FORMAT_R5G5B5A1_UNORM_PACK16] = PVK_NORM(A1BGR5Unorm, PVK_FC_P16, 2, Invalid),
+    [VK_FORMAT_B5G5R5A1_UNORM_PACK16] = PVK_SWZ(A1BGR5Unorm, Blue, Green, Red, Alpha),
+    [VK_FORMAT_A1R5G5B5_UNORM_PACK16] = PVK_NORM(BGR5A1Unorm, PVK_FC_P16, 2, Invalid),
+    [VK_FORMAT_R8_UNORM] = PVK_NORM(R8Unorm, PVK_FC_ALL | PVK_FC_TB, 1, UCharNormalized),
+    [VK_FORMAT_R8_SNORM] = PVK_NORM(R8Snorm, PVK_FC_ALL | PVK_FC_TB, 1, CharNormalized),
+    [VK_FORMAT_R8_UINT] = PVK_UINT(R8Uint, PVK_FC_INT | PVK_FC_TB, 1, 8, UChar),
+    [VK_FORMAT_R8_SINT] = PVK_SINT(R8Sint, PVK_FC_INT | PVK_FC_TB, 1, 8, Char),
+    [VK_FORMAT_R8_SRGB] = PVK_SRGB(R8Unorm_sRGB, 1),
+    [VK_FORMAT_R8G8_UNORM] = PVK_NORM(RG8Unorm, PVK_FC_ALL | PVK_FC_TB, 2, UChar2Normalized),
+    [VK_FORMAT_R8G8_SNORM] = PVK_NORM(RG8Snorm, PVK_FC_ALL | PVK_FC_TB, 2, Char2Normalized),
+    [VK_FORMAT_R8G8_UINT] = PVK_UINT(RG8Uint, PVK_FC_INT | PVK_FC_TB, 2, 8, UChar2),
+    [VK_FORMAT_R8G8_SINT] = PVK_SINT(RG8Sint, PVK_FC_INT | PVK_FC_TB, 2, 8, Char2),
+    [VK_FORMAT_R8G8_SRGB] = PVK_SRGB(RG8Unorm_sRGB, 2),
+    [VK_FORMAT_R8G8B8_UNORM] = PVK_VTX(UChar3Normalized, PVK_FK_FLOAT, 3),
+    [VK_FORMAT_R8G8B8_SNORM] = PVK_VTX(Char3Normalized, PVK_FK_FLOAT, 3),
+    [VK_FORMAT_R8G8B8_UINT] = PVK_VTX(UChar3, PVK_FK_UINT, 3),
+    [VK_FORMAT_R8G8B8_SINT] = PVK_VTX(Char3, PVK_FK_SINT, 3),
+    [VK_FORMAT_R8G8B8A8_UNORM] = PVK_NORM(RGBA8Unorm, PVK_FC_ALL | PVK_FC_TB, 4, UChar4Normalized),
+    [VK_FORMAT_R8G8B8A8_SNORM] = PVK_NORM(RGBA8Snorm, PVK_FC_ALL | PVK_FC_TB, 4, Char4Normalized),
+    [VK_FORMAT_R8G8B8A8_UINT] = PVK_UINT(RGBA8Uint, PVK_FC_INT | PVK_FC_TB, 4, 8, UChar4),
+    [VK_FORMAT_R8G8B8A8_SINT] = PVK_SINT(RGBA8Sint, PVK_FC_INT | PVK_FC_TB, 4, 8, Char4),
+    [VK_FORMAT_R8G8B8A8_SRGB] = PVK_SRGB(RGBA8Unorm_sRGB, 4),
+    [VK_FORMAT_B8G8R8A8_UNORM] = PVK_NORM(BGRA8Unorm, PVK_FC_ALL | PVK_FC_TB_READ, 4, UChar4Normalized_BGRA),
+    [VK_FORMAT_B8G8R8A8_SRGB] = PVK_SRGB(BGRA8Unorm_sRGB, 4),
+    /* A8B8G8R8_*_PACK32 are R8G8B8A8_* in little-endian memory. */
+    [VK_FORMAT_A8B8G8R8_UNORM_PACK32] = PVK_NORM(RGBA8Unorm, PVK_FC_ALL | PVK_FC_TB, 4, UChar4Normalized),
+    [VK_FORMAT_A8B8G8R8_SNORM_PACK32] = PVK_NORM(RGBA8Snorm, PVK_FC_ALL | PVK_FC_TB, 4, Char4Normalized),
+    [VK_FORMAT_A8B8G8R8_UINT_PACK32] = PVK_UINT(RGBA8Uint, PVK_FC_INT | PVK_FC_TB, 4, 8, UChar4),
+    [VK_FORMAT_A8B8G8R8_SINT_PACK32] = PVK_SINT(RGBA8Sint, PVK_FC_INT | PVK_FC_TB, 4, 8, Char4),
+    [VK_FORMAT_A8B8G8R8_SRGB_PACK32] = PVK_SRGB(RGBA8Unorm_sRGB, 4),
+    [VK_FORMAT_A2R10G10B10_UNORM_PACK32] = PVK_NORM(BGR10A2Unorm, PVK_FC_ALL, 4, Invalid),
+    [VK_FORMAT_A2B10G10R10_UNORM_PACK32] = PVK_NORM(RGB10A2Unorm, PVK_FC_ALL | PVK_FC_TB, 4, UInt1010102Normalized),
+    [VK_FORMAT_A2B10G10R10_SNORM_PACK32] = PVK_VTX(Int1010102Normalized, PVK_FK_FLOAT, 4),
+    [VK_FORMAT_A2B10G10R10_UINT_PACK32] = PVK_UINT(RGB10A2Uint, PVK_FC_INT | PVK_FC_TB, 4, 10, Invalid),
+    [VK_FORMAT_R16_UNORM] = PVK_NORM(R16Unorm, PVK_FC_ALL | PVK_FC_TB, 2, UShortNormalized),
+    [VK_FORMAT_R16_SNORM] = PVK_NORM(R16Snorm, PVK_FC_ALL | PVK_FC_TB, 2, ShortNormalized),
+    [VK_FORMAT_R16_UINT] = PVK_UINT(R16Uint, PVK_FC_INT | PVK_FC_TB, 2, 16, UShort),
+    [VK_FORMAT_R16_SINT] = PVK_SINT(R16Sint, PVK_FC_INT | PVK_FC_TB, 2, 16, Short),
+    [VK_FORMAT_R16_SFLOAT] = PVK_NORM(R16Float, PVK_FC_ALL | PVK_FC_TB, 2, Half),
+    [VK_FORMAT_R16G16_UNORM] = PVK_NORM(RG16Unorm, PVK_FC_ALL | PVK_FC_TB, 4, UShort2Normalized),
+    [VK_FORMAT_R16G16_SNORM] = PVK_NORM(RG16Snorm, PVK_FC_ALL | PVK_FC_TB, 4, Short2Normalized),
+    [VK_FORMAT_R16G16_UINT] = PVK_UINT(RG16Uint, PVK_FC_INT | PVK_FC_TB, 4, 16, UShort2),
+    [VK_FORMAT_R16G16_SINT] = PVK_SINT(RG16Sint, PVK_FC_INT | PVK_FC_TB, 4, 16, Short2),
+    [VK_FORMAT_R16G16_SFLOAT] = PVK_NORM(RG16Float, PVK_FC_ALL | PVK_FC_TB, 4, Half2),
+    [VK_FORMAT_R16G16B16_UNORM] = PVK_VTX(UShort3Normalized, PVK_FK_FLOAT, 6),
+    [VK_FORMAT_R16G16B16_SNORM] = PVK_VTX(Short3Normalized, PVK_FK_FLOAT, 6),
+    [VK_FORMAT_R16G16B16_UINT] = PVK_VTX(UShort3, PVK_FK_UINT, 6),
+    [VK_FORMAT_R16G16B16_SINT] = PVK_VTX(Short3, PVK_FK_SINT, 6),
+    [VK_FORMAT_R16G16B16_SFLOAT] = PVK_VTX(Half3, PVK_FK_FLOAT, 6),
+    [VK_FORMAT_R16G16B16A16_UNORM] = PVK_NORM(RGBA16Unorm, PVK_FC_ALL | PVK_FC_TB, 8, UShort4Normalized),
+    [VK_FORMAT_R16G16B16A16_SNORM] = PVK_NORM(RGBA16Snorm, PVK_FC_ALL | PVK_FC_TB, 8, Short4Normalized),
+    [VK_FORMAT_R16G16B16A16_UINT] = PVK_UINT(RGBA16Uint, PVK_FC_INT | PVK_FC_TB, 8, 16, UShort4),
+    [VK_FORMAT_R16G16B16A16_SINT] = PVK_SINT(RGBA16Sint, PVK_FC_INT | PVK_FC_TB, 8, 16, Short4),
+    [VK_FORMAT_R16G16B16A16_SFLOAT] = PVK_NORM(RGBA16Float, PVK_FC_ALL | PVK_FC_TB, 8, Half4),
+    [VK_FORMAT_R32_UINT] = PVK_UINT(R32Uint, PVK_FC_INT | PVK_FC_ATOMIC | PVK_FC_TB | PVK_FC_TB_ATOMIC, 4, 32, UInt),
+    [VK_FORMAT_R32_SINT] = PVK_SINT(R32Sint, PVK_FC_INT | PVK_FC_ATOMIC | PVK_FC_TB | PVK_FC_TB_ATOMIC, 4, 32, Int),
+    [VK_FORMAT_R32_SFLOAT] = PVK_NORM(R32Float, PVK_FC_F32 | PVK_FC_TB, 4, Float),
+    [VK_FORMAT_R32G32_UINT] = PVK_UINT(RG32Uint, PVK_FC_INT | PVK_FC_TB, 8, 32, UInt2),
+    [VK_FORMAT_R32G32_SINT] = PVK_SINT(RG32Sint, PVK_FC_INT | PVK_FC_TB, 8, 32, Int2),
+    [VK_FORMAT_R32G32_SFLOAT] = PVK_NORM(RG32Float, PVK_FC_F32 | PVK_FC_TB, 8, Float2),
+    [VK_FORMAT_R32G32B32_UINT] = PVK_VTX(UInt3, PVK_FK_UINT, 12),
+    [VK_FORMAT_R32G32B32_SINT] = PVK_VTX(Int3, PVK_FK_SINT, 12),
+    [VK_FORMAT_R32G32B32_SFLOAT] = PVK_VTX(Float3, PVK_FK_FLOAT, 12),
+    [VK_FORMAT_R32G32B32A32_UINT] = PVK_UINT(RGBA32Uint, PVK_FC_INT | PVK_FC_TB, 16, 32, UInt4),
+    [VK_FORMAT_R32G32B32A32_SINT] = PVK_SINT(RGBA32Sint, PVK_FC_INT | PVK_FC_TB, 16, 32, Int4),
+    [VK_FORMAT_R32G32B32A32_SFLOAT] = PVK_NORM(RGBA32Float, PVK_FC_F32 | PVK_FC_TB, 16, Float4),
+    [VK_FORMAT_B10G11R11_UFLOAT_PACK32] = PVK_NORM(RG11B10Float, PVK_FC_ALL | PVK_FC_TB, 4, FloatRG11B10),
+    [VK_FORMAT_E5B9G9R9_UFLOAT_PACK32] = PVK_NORM(RGB9E5Float, PVK_FC_ALL, 4, FloatRGB9E5),
+    [VK_FORMAT_D16_UNORM] = PVK_DS(Depth16Unorm, PVK_FK_DEPTH, PVK_FC_FILTER | PVK_FC_MSAA | PVK_FC_RESOLVE, 2),
+    [VK_FORMAT_D32_SFLOAT] = PVK_DS(Depth32Float, PVK_FK_DEPTH, PVK_FC_MSAA | PVK_FC_RESOLVE | PVK_FC_FILTER32, 4),
+    [VK_FORMAT_S8_UINT] = PVK_DS(Stencil8, PVK_FK_STENCIL, PVK_FC_MSAA | PVK_FC_RESOLVE, 1),
+    [VK_FORMAT_D32_SFLOAT_S8_UINT] = PVK_DS(Depth32Float_Stencil8, PVK_FK_DEPTH_STENCIL,
+                                            PVK_FC_MSAA | PVK_FC_RESOLVE | PVK_FC_FILTER32, 8),
+    [VK_FORMAT_BC1_RGB_UNORM_BLOCK] = PVK_BC_RGB(BC1_RGBA, 0),
+    [VK_FORMAT_BC1_RGB_SRGB_BLOCK] = PVK_BC_RGB(BC1_RGBA_sRGB, PVK_FF_SRGB),
+    [VK_FORMAT_BC1_RGBA_UNORM_BLOCK] = PVK_BC(BC1_RGBA, 8),
+    [VK_FORMAT_BC1_RGBA_SRGB_BLOCK] = PVK_BC_SRGB(BC1_RGBA_sRGB, 8),
+    [VK_FORMAT_BC2_UNORM_BLOCK] = PVK_BC(BC2_RGBA, 16),
+    [VK_FORMAT_BC2_SRGB_BLOCK] = PVK_BC_SRGB(BC2_RGBA_sRGB, 16),
+    [VK_FORMAT_BC3_UNORM_BLOCK] = PVK_BC(BC3_RGBA, 16),
+    [VK_FORMAT_BC3_SRGB_BLOCK] = PVK_BC_SRGB(BC3_RGBA_sRGB, 16),
+    [VK_FORMAT_BC4_UNORM_BLOCK] = PVK_BC(BC4_RUnorm, 8),
+    [VK_FORMAT_BC4_SNORM_BLOCK] = PVK_BC(BC4_RSnorm, 8),
+    [VK_FORMAT_BC5_UNORM_BLOCK] = PVK_BC(BC5_RGUnorm, 16),
+    [VK_FORMAT_BC5_SNORM_BLOCK] = PVK_BC(BC5_RGSnorm, 16),
+    [VK_FORMAT_BC6H_UFLOAT_BLOCK] = PVK_BC(BC6H_RGBUfloat, 16),
+    [VK_FORMAT_BC6H_SFLOAT_BLOCK] = PVK_BC(BC6H_RGBFloat, 16),
+    [VK_FORMAT_BC7_UNORM_BLOCK] = PVK_BC(BC7_RGBAUnorm, 16),
+    [VK_FORMAT_BC7_SRGB_BLOCK] = PVK_BC_SRGB(BC7_RGBAUnorm_sRGB, 16),
+    [VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK] = PVK_ETC(ETC2_RGB8, 0, 8),
+    [VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK] = PVK_ETC(ETC2_RGB8_sRGB, PVK_FF_SRGB, 8),
+    [VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK] = PVK_ETC(ETC2_RGB8A1, 0, 8),
+    [VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK] = PVK_ETC(ETC2_RGB8A1_sRGB, PVK_FF_SRGB, 8),
+    [VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK] = PVK_ETC(EAC_RGBA8, 0, 16),
+    [VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK] = PVK_ETC(EAC_RGBA8_sRGB, PVK_FF_SRGB, 16),
+    [VK_FORMAT_EAC_R11_UNORM_BLOCK] = PVK_ETC(EAC_R11Unorm, 0, 8),
+    [VK_FORMAT_EAC_R11_SNORM_BLOCK] = PVK_ETC(EAC_R11Snorm, 0, 8),
+    [VK_FORMAT_EAC_R11G11_UNORM_BLOCK] = PVK_ETC(EAC_RG11Unorm, 0, 16),
+    [VK_FORMAT_EAC_R11G11_SNORM_BLOCK] = PVK_ETC(EAC_RG11Snorm, 0, 16),
+    [VK_FORMAT_ASTC_4x4_UNORM_BLOCK] = PVK_ASTC(ASTC_4x4_LDR, 0, 4, 4),
+    [VK_FORMAT_ASTC_4x4_SRGB_BLOCK] = PVK_ASTC(ASTC_4x4_sRGB, PVK_FF_SRGB, 4, 4),
+    [VK_FORMAT_ASTC_5x4_UNORM_BLOCK] = PVK_ASTC(ASTC_5x4_LDR, 0, 5, 4),
+    [VK_FORMAT_ASTC_5x4_SRGB_BLOCK] = PVK_ASTC(ASTC_5x4_sRGB, PVK_FF_SRGB, 5, 4),
+    [VK_FORMAT_ASTC_5x5_UNORM_BLOCK] = PVK_ASTC(ASTC_5x5_LDR, 0, 5, 5),
+    [VK_FORMAT_ASTC_5x5_SRGB_BLOCK] = PVK_ASTC(ASTC_5x5_sRGB, PVK_FF_SRGB, 5, 5),
+    [VK_FORMAT_ASTC_6x5_UNORM_BLOCK] = PVK_ASTC(ASTC_6x5_LDR, 0, 6, 5),
+    [VK_FORMAT_ASTC_6x5_SRGB_BLOCK] = PVK_ASTC(ASTC_6x5_sRGB, PVK_FF_SRGB, 6, 5),
+    [VK_FORMAT_ASTC_6x6_UNORM_BLOCK] = PVK_ASTC(ASTC_6x6_LDR, 0, 6, 6),
+    [VK_FORMAT_ASTC_6x6_SRGB_BLOCK] = PVK_ASTC(ASTC_6x6_sRGB, PVK_FF_SRGB, 6, 6),
+    [VK_FORMAT_ASTC_8x5_UNORM_BLOCK] = PVK_ASTC(ASTC_8x5_LDR, 0, 8, 5),
+    [VK_FORMAT_ASTC_8x5_SRGB_BLOCK] = PVK_ASTC(ASTC_8x5_sRGB, PVK_FF_SRGB, 8, 5),
+    [VK_FORMAT_ASTC_8x6_UNORM_BLOCK] = PVK_ASTC(ASTC_8x6_LDR, 0, 8, 6),
+    [VK_FORMAT_ASTC_8x6_SRGB_BLOCK] = PVK_ASTC(ASTC_8x6_sRGB, PVK_FF_SRGB, 8, 6),
+    [VK_FORMAT_ASTC_8x8_UNORM_BLOCK] = PVK_ASTC(ASTC_8x8_LDR, 0, 8, 8),
+    [VK_FORMAT_ASTC_8x8_SRGB_BLOCK] = PVK_ASTC(ASTC_8x8_sRGB, PVK_FF_SRGB, 8, 8),
+    [VK_FORMAT_ASTC_10x5_UNORM_BLOCK] = PVK_ASTC(ASTC_10x5_LDR, 0, 10, 5),
+    [VK_FORMAT_ASTC_10x5_SRGB_BLOCK] = PVK_ASTC(ASTC_10x5_sRGB, PVK_FF_SRGB, 10, 5),
+    [VK_FORMAT_ASTC_10x6_UNORM_BLOCK] = PVK_ASTC(ASTC_10x6_LDR, 0, 10, 6),
+    [VK_FORMAT_ASTC_10x6_SRGB_BLOCK] = PVK_ASTC(ASTC_10x6_sRGB, PVK_FF_SRGB, 10, 6),
+    [VK_FORMAT_ASTC_10x8_UNORM_BLOCK] = PVK_ASTC(ASTC_10x8_LDR, 0, 10, 8),
+    [VK_FORMAT_ASTC_10x8_SRGB_BLOCK] = PVK_ASTC(ASTC_10x8_sRGB, PVK_FF_SRGB, 10, 8),
+    [VK_FORMAT_ASTC_10x10_UNORM_BLOCK] = PVK_ASTC(ASTC_10x10_LDR, 0, 10, 10),
+    [VK_FORMAT_ASTC_10x10_SRGB_BLOCK] = PVK_ASTC(ASTC_10x10_sRGB, PVK_FF_SRGB, 10, 10),
+    [VK_FORMAT_ASTC_12x10_UNORM_BLOCK] = PVK_ASTC(ASTC_12x10_LDR, 0, 12, 10),
+    [VK_FORMAT_ASTC_12x10_SRGB_BLOCK] = PVK_ASTC(ASTC_12x10_sRGB, PVK_FF_SRGB, 12, 10),
+    [VK_FORMAT_ASTC_12x12_UNORM_BLOCK] = PVK_ASTC(ASTC_12x12_LDR, 0, 12, 12),
+    [VK_FORMAT_ASTC_12x12_SRGB_BLOCK] = PVK_ASTC(ASTC_12x12_sRGB, PVK_FF_SRGB, 12, 12),
+};
+
+/* Formats added to the core after Vulkan 1.0 (values outside the 1.0 range). */
+static const struct {
+    VkFormat format;
+    struct pvk_format info;
+} pvk_later_formats[] = {
+    { VK_FORMAT_A4R4G4B4_UNORM_PACK16, PVK_SWZ(ABGR4Unorm, Green, Blue, Alpha, Red) },
+    { VK_FORMAT_A4B4G4R4_UNORM_PACK16, PVK_SWZ(ABGR4Unorm, Alpha, Blue, Green, Red) },
+    { VK_FORMAT_A1B5G5R5_UNORM_PACK16, PVK_SWZ(BGR5A1Unorm, Blue, Green, Red, Alpha) },
+    { VK_FORMAT_A8_UNORM, PVK_NORM(A8Unorm, PVK_FC_ALL | PVK_FC_TB, 1, Invalid) },
+    /* textureCompressionASTC_HDR: Metal's HDR ASTC formats (FST: Apple6) */
+    { VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK, PVK_ASTC(ASTC_4x4_HDR, 0, 4, 4) },
+    { VK_FORMAT_ASTC_5x4_SFLOAT_BLOCK, PVK_ASTC(ASTC_5x4_HDR, 0, 5, 4) },
+    { VK_FORMAT_ASTC_5x5_SFLOAT_BLOCK, PVK_ASTC(ASTC_5x5_HDR, 0, 5, 5) },
+    { VK_FORMAT_ASTC_6x5_SFLOAT_BLOCK, PVK_ASTC(ASTC_6x5_HDR, 0, 6, 5) },
+    { VK_FORMAT_ASTC_6x6_SFLOAT_BLOCK, PVK_ASTC(ASTC_6x6_HDR, 0, 6, 6) },
+    { VK_FORMAT_ASTC_8x5_SFLOAT_BLOCK, PVK_ASTC(ASTC_8x5_HDR, 0, 8, 5) },
+    { VK_FORMAT_ASTC_8x6_SFLOAT_BLOCK, PVK_ASTC(ASTC_8x6_HDR, 0, 8, 6) },
+    { VK_FORMAT_ASTC_8x8_SFLOAT_BLOCK, PVK_ASTC(ASTC_8x8_HDR, 0, 8, 8) },
+    { VK_FORMAT_ASTC_10x5_SFLOAT_BLOCK, PVK_ASTC(ASTC_10x5_HDR, 0, 10, 5) },
+    { VK_FORMAT_ASTC_10x6_SFLOAT_BLOCK, PVK_ASTC(ASTC_10x6_HDR, 0, 10, 6) },
+    { VK_FORMAT_ASTC_10x8_SFLOAT_BLOCK, PVK_ASTC(ASTC_10x8_HDR, 0, 10, 8) },
+    { VK_FORMAT_ASTC_10x10_SFLOAT_BLOCK, PVK_ASTC(ASTC_10x10_HDR, 0, 10, 10) },
+    { VK_FORMAT_ASTC_12x10_SFLOAT_BLOCK, PVK_ASTC(ASTC_12x10_HDR, 0, 12, 10) },
+    { VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK, PVK_ASTC(ASTC_12x12_HDR, 0, 12, 12) },
+};
+
+/* The table entry of a format PlasmaVK supports in some way, else NULL. */
+static const struct pvk_format *pvk_format(VkFormat format)
+{
+    const struct pvk_format *f = NULL;
+    size_t i;
+    if ((unsigned)format < PVK_ARRAY_SIZE(pvk_core_formats))
+        f = &pvk_core_formats[format];
+    for (i = 0; !f && i < PVK_ARRAY_SIZE(pvk_later_formats); i++)
+        if (pvk_later_formats[i].format == format)
+            f = &pvk_later_formats[i].info;
+    return f && (f->mtl || f->vertex) ? f : NULL;
+}
+
+static bool pvk_format_has_depth(const struct pvk_format *f)
+{
+    return f->kind == PVK_FK_DEPTH || f->kind == PVK_FK_DEPTH_STENCIL;
+}
+
+static bool pvk_format_has_stencil(const struct pvk_format *f)
+{
+    return f->kind == PVK_FK_STENCIL || f->kind == PVK_FK_DEPTH_STENCIL;
+}
+
+static bool pvk_format_is_color(const struct pvk_format *f)
+{
+    return f->kind <= PVK_FK_SINT;
+}
+
+static bool pvk_format_filterable(const struct pvk_physical_device *pd, const struct pvk_format *f)
+{
+    return (f->caps & PVK_FC_FILTER) || ((f->caps & PVK_FC_FILTER32) && pd->filter_32bit);
+}
+
+/* optimalTilingFeatures (or linearTilingFeatures) of an image format.
+ * Linear images are textures over the memory's MTLBuffer, which Metal allows
+ * for uncompressed color formats only. Every format may be sampled, so every
+ * one supports host image copies: hostImageCopy then requires
+ * vkGetPhysicalDeviceImageFormatProperties to accept HOST_TRANSFER wherever
+ * it accepts SAMPLED (Capabilities > vkGetPhysicalDeviceImageFormatProperties). */
+static VkFormatFeatureFlags2 pvk_format_image_features(const struct pvk_physical_device *pd,
+                                                       const struct pvk_format *f, bool linear)
+{
+    VkFormatFeatureFlags2 r;
+
+    if (!f || !f->mtl || ((f->caps & PVK_FC_BC) && !pd->bc_formats))
+        return 0;
+    if (linear && (!pvk_format_is_color(f) || f->block_w > 1))
+        return 0;
+    r = VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_2_BLIT_SRC_BIT |
+        VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT |
+        VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT;
+    if (pvk_format_filterable(pd, f)) {
+        r |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+        if (pd->filter_minmax)
+            r |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT;
+    }
+    if (!pvk_format_is_color(f)) {
+        /* Formats > Depth Comparison Format Support */
+        r |= VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT;
+        if (pvk_format_has_depth(f))
+            r |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_DEPTH_COMPARISON_BIT;
+        return r;
+    }
+    if (f->flags & PVK_FF_SWIZZLE)
+        return r;
+    if ((f->caps & PVK_FC_WRITE) && !(f->flags & PVK_FF_SRGB))
+        r |= VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT |
+             VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
+    if (f->caps & PVK_FC_ATOMIC)
+        r |= VK_FORMAT_FEATURE_2_STORAGE_IMAGE_ATOMIC_BIT;
+    /* Blits draw into the destination (section 15). */
+    if (f->caps & PVK_FC_COLOR)
+        r |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_2_BLIT_DST_BIT;
+    if (f->caps & PVK_FC_BLEND)
+        r |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BLEND_BIT;
+    return r;
+}
+
+/* bufferFeatures: vertex formats and texture buffer formats (FST). */
+static VkFormatFeatureFlags2 pvk_format_buffer_features(const struct pvk_format *f)
+{
+    VkFormatFeatureFlags2 r = 0;
+    if (!f)
+        return 0;
+    if (f->vertex)
+        r |= VK_FORMAT_FEATURE_2_VERTEX_BUFFER_BIT;
+    if (f->caps & PVK_FC_TB_READ)
+        r |= VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT;
+    if (f->caps & PVK_FC_TB_WRITE)
+        r |= VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT | VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT |
+             VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
+    if (f->caps & PVK_FC_TB_ATOMIC)
+        r |= VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_ATOMIC_BIT;
+    return r;
+}
+
+/* VkFormatFeatureFlags is the low 31 bits of VkFormatFeatureFlags2. */
+#define PVK_FORMAT_FEATURES_1 0x7FFFFFFFull
+
+VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice, VkFormat format,
+                                                                VkFormatProperties2 *pFormatProperties)
+{
+    const struct pvk_physical_device *pd = (const struct pvk_physical_device *)physicalDevice;
+    const struct pvk_format *f = pvk_format(format);
+    VkFormatFeatureFlags2 optimal = pvk_format_image_features(pd, f, false);
+    VkFormatFeatureFlags2 linear = pvk_format_image_features(pd, f, true);
+    VkFormatFeatureFlags2 buffer = pvk_format_buffer_features(f);
+    VkBaseOutStructure *s;
+
+    pFormatProperties->formatProperties.optimalTilingFeatures = (VkFormatFeatureFlags)(optimal & PVK_FORMAT_FEATURES_1);
+    pFormatProperties->formatProperties.linearTilingFeatures = (VkFormatFeatureFlags)(linear & PVK_FORMAT_FEATURES_1);
+    pFormatProperties->formatProperties.bufferFeatures = (VkFormatFeatureFlags)(buffer & PVK_FORMAT_FEATURES_1);
+    for (s = pFormatProperties->pNext; s; s = s->pNext) {
+        if (s->sType == VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3) {
+            VkFormatProperties3 *p = (VkFormatProperties3 *)(void *)s;
+            p->optimalTilingFeatures = optimal;
+            p->linearTilingFeatures = linear;
+            p->bufferFeatures = buffer;
+        }
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceFormatProperties(VkPhysicalDevice physicalDevice, VkFormat format,
+                                                               VkFormatProperties *pFormatProperties)
+{
+    VkFormatProperties2 p;
+    memset(&p, 0, sizeof(p));
+    p.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
+    vkGetPhysicalDeviceFormatProperties2(physicalDevice, format, &p);
+    *pFormatProperties = p.formatProperties;
+}
+
+/* Whether usage (every bit) is allowed by the format features, as Formats >
+ * Format Feature Dependent Usage Flags requires. Other usages (shading rate,
+ * video, ...) are not supported. */
+static bool pvk_image_usage_supported(VkImageUsageFlags usage, VkFormatFeatureFlags2 features)
+{
+    static const struct {
+        VkImageUsageFlags usage;
+        VkFormatFeatureFlags2 features; /* any of */
+    } map[] = {
+        { VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT },
+        { VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT },
+        { VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT },
+        { VK_IMAGE_USAGE_STORAGE_BIT, VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT },
+        { VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT },
+        { VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT },
+        { VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT, ~(VkFormatFeatureFlags2)0 },
+        { VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
+          VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT },
+        { VK_IMAGE_USAGE_HOST_TRANSFER_BIT, VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT },
+    };
+    size_t i;
+    for (i = 0; i < PVK_ARRAY_SIZE(map); i++) {
+        if (!(usage & map[i].usage))
+            continue;
+        if (!(features & map[i].features))
+            return false;
+        usage &= ~map[i].usage;
+    }
+    return usage == 0;
+}
+
+/* Capabilities > Supported Sample Counts, with Metal's per-format MSAA
+ * capability (FST) and the sample counts of section 7's limits. */
+static VkSampleCountFlags pvk_image_sample_counts(const struct pvk_physical_device *pd, const struct pvk_format *f,
+                                                  VkImageType type, VkImageTiling tiling, VkImageCreateFlags flags,
+                                                  VkImageUsageFlags usage, VkFormatFeatureFlags2 optimal)
+{
+    const VkPhysicalDeviceLimits *l = &pd->properties.limits;
+    bool integer = f->kind == PVK_FK_UINT || f->kind == PVK_FK_SINT;
+    VkSampleCountFlags counts;
+
+    if (tiling == VK_IMAGE_TILING_LINEAR || type != VK_IMAGE_TYPE_2D || (flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) ||
+        !(optimal & (VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT)) ||
+        !(f->caps & PVK_FC_MSAA))
+        return VK_SAMPLE_COUNT_1_BIT;
+    counts = pvk_sample_counts(pd->mtl_device);
+    if (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+        counts &= integer ? pd->properties_1x.v12.framebufferIntegerColorSampleCounts : l->framebufferColorSampleCounts;
+    if ((usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) && pvk_format_has_depth(f))
+        counts &= l->framebufferDepthSampleCounts;
+    if ((usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) && pvk_format_has_stencil(f))
+        counts &= l->framebufferStencilSampleCounts;
+    if (usage & VK_IMAGE_USAGE_SAMPLED_BIT) {
+        if (pvk_format_is_color(f))
+            counts &= integer ? l->sampledImageIntegerSampleCounts : l->sampledImageColorSampleCounts;
+        if (pvk_format_has_depth(f))
+            counts &= l->sampledImageDepthSampleCounts;
+        if (pvk_format_has_stencil(f))
+            counts &= l->sampledImageStencilSampleCounts;
+    }
+    if (usage & VK_IMAGE_USAGE_STORAGE_BIT)
+        counts &= l->storageImageSampleCounts;
+    return counts | VK_SAMPLE_COUNT_1_BIT;
+}
+
+static uint32_t pvk_mip_levels(uint32_t w, uint32_t h, uint32_t d)
+{
+    uint32_t m = w > h ? w : h, n = 1;
+    if (d > m)
+        m = d;
+    while (m > 1) {
+        m >>= 1;
+        n++;
+    }
+    return n;
+}
+
+/* Image creation flags PlasmaVK supports. Sparse images, protected memory,
+ * device-group split binding and block-texel views (Metal cannot view a
+ * compressed texture with an uncompressed format) are not supported. */
+#define PVK_IMAGE_CREATE_FLAGS                                                                                    \
+    (VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT | VK_IMAGE_CREATE_ALIAS_BIT |      \
+     VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT)
+
+/* Capabilities > vkGetPhysicalDeviceImageFormatProperties. Metal limits:
+ * 1D images are 2D textures of height 1 (section 11), so they get mipmaps;
+ * depth/stencil textures cannot be 3D; ETC2/EAC textures cannot be 3D (BC and
+ * ASTC can); linear textures are 2D, one level, one layer, one sample. */
+static VkResult pvk_image_format_properties(const struct pvk_physical_device *pd,
+                                            const VkPhysicalDeviceImageFormatInfo2 *info,
+                                            VkImageFormatProperties *props)
+{
+    const VkPhysicalDeviceLimits *l = &pd->properties.limits;
+    const struct pvk_format *f = pvk_format(info->format);
+    VkImageUsageFlags usage = info->usage;
+    VkFormatFeatureFlags2 features, optimal;
+    const VkBaseInStructure *s;
+    bool linear = info->tiling == VK_IMAGE_TILING_LINEAR;
+    unsigned long max_size;
+
+    memset(props, 0, sizeof(*props));
+    for (s = info->pNext; s; s = s->pNext) {
+        if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO &&
+            ((const VkPhysicalDeviceExternalImageFormatInfo *)s)->handleType)
+            return VK_ERROR_FORMAT_NOT_SUPPORTED; /* no external memory handle types */
+        if (s->sType == VK_STRUCTURE_TYPE_IMAGE_STENCIL_USAGE_CREATE_INFO)
+            usage |= ((const VkImageStencilUsageCreateInfo *)s)->stencilUsage;
+    }
+    if (!f || !f->mtl || (info->tiling != VK_IMAGE_TILING_OPTIMAL && !linear))
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    optimal = pvk_format_image_features(pd, f, false);
+    features = linear ? pvk_format_image_features(pd, f, true) : optimal;
+    if (!features || (info->flags & ~(VkImageCreateFlags)PVK_IMAGE_CREATE_FLAGS))
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    if (!(info->flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT) && !pvk_image_usage_supported(usage, features))
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    switch (info->type) {
+    case VK_IMAGE_TYPE_1D:
+        if (f->block_w > 1 || linear)
+            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+        props->maxExtent.width = l->maxImageDimension1D;
+        props->maxExtent.height = props->maxExtent.depth = 1;
+        break;
+    case VK_IMAGE_TYPE_2D:
+        if (linear && (info->flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT))
+            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+        props->maxExtent.width = props->maxExtent.height =
+            (info->flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) ? l->maxImageDimensionCube : l->maxImageDimension2D;
+        props->maxExtent.depth = 1;
+        break;
+    case VK_IMAGE_TYPE_3D:
+        if (!pvk_format_is_color(f) || (f->flags & PVK_FF_NO_3D) || linear)
+            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+        props->maxExtent.width = props->maxExtent.height = props->maxExtent.depth = l->maxImageDimension3D;
+        break;
+    default:
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    }
+    props->maxMipLevels = linear ? 1 : pvk_mip_levels(props->maxExtent.width, props->maxExtent.height,
+                                                     props->maxExtent.depth);
+    props->maxArrayLayers = linear || info->type == VK_IMAGE_TYPE_3D ? 1 : l->maxImageArrayLayers;
+    props->sampleCounts = pvk_image_sample_counts(pd, f, info->type, info->tiling, info->flags, usage, optimal);
+    /* A texture is placed in one MTLHeap, at most maxBufferLength long. */
+    max_size = pvk_MTLDevice_maxBufferLength(pd->mtl_device);
+    props->maxResourceSize = max_size < (1ul << 31) ? (1ul << 31) : max_size;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice,
+                                                                         const VkPhysicalDeviceImageFormatInfo2 *pImageFormatInfo,
+                                                                         VkImageFormatProperties2 *pImageFormatProperties)
+{
+    const struct pvk_physical_device *pd = (const struct pvk_physical_device *)physicalDevice;
+    const struct pvk_format *f = pvk_format(pImageFormatInfo->format);
+    VkResult result = pvk_image_format_properties(pd, pImageFormatInfo, &pImageFormatProperties->imageFormatProperties);
+    VkBaseOutStructure *s;
+
+    for (s = pImageFormatProperties->pNext; s; s = s->pNext) {
+        if (s->sType == VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES) {
+            VkExternalImageFormatProperties *p = (VkExternalImageFormatProperties *)(void *)s;
+            memset(&p->externalMemoryProperties, 0, sizeof(p->externalMemoryProperties));
+        } else if (s->sType == VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_IMAGE_FORMAT_PROPERTIES) {
+            ((VkSamplerYcbcrConversionImageFormatProperties *)(void *)s)->combinedImageSamplerDescriptorCount = 1;
+        } else if (s->sType == VK_STRUCTURE_TYPE_HOST_IMAGE_COPY_DEVICE_PERFORMANCE_QUERY) {
+            /* HOST_TRANSFER images live in shared memory (section 11), which
+             * Metal never compresses losslessly; block-compressed formats
+             * lose nothing. Whether the layouts are identical is unverified. */
+            VkHostImageCopyDevicePerformanceQuery *p = (VkHostImageCopyDevicePerformanceQuery *)(void *)s;
+            p->optimalDeviceAccess = f && f->block_w > 1 ? VK_TRUE : VK_FALSE;
+            p->identicalMemoryLayout = VK_FALSE;
+        }
+    }
+    return result;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceImageFormatProperties(VkPhysicalDevice physicalDevice, VkFormat format,
+                                                                        VkImageType type, VkImageTiling tiling,
+                                                                        VkImageUsageFlags usage, VkImageCreateFlags flags,
+                                                                        VkImageFormatProperties *pImageFormatProperties)
+{
+    VkPhysicalDeviceImageFormatInfo2 info;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
+    info.format = format;
+    info.type = type;
+    info.tiling = tiling;
+    info.usage = usage;
+    info.flags = flags;
+    return pvk_image_format_properties((const struct pvk_physical_device *)physicalDevice, &info,
+                                       pImageFormatProperties);
+}
+
+/* Sparse images are not supported: no format has sparse properties. */
+VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceSparseImageFormatProperties(VkPhysicalDevice physicalDevice, VkFormat format,
+                                                                          VkImageType type, VkSampleCountFlagBits samples,
+                                                                          VkImageUsageFlags usage, VkImageTiling tiling,
+                                                                          uint32_t *pPropertyCount,
+                                                                          VkSparseImageFormatProperties *pProperties)
+{
+    (void)physicalDevice;
+    (void)format;
+    (void)type;
+    (void)samples;
+    (void)usage;
+    (void)tiling;
+    (void)pProperties;
+    *pPropertyCount = 0;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceSparseImageFormatProperties2(VkPhysicalDevice physicalDevice,
+                                                                           const VkPhysicalDeviceSparseImageFormatInfo2 *pFormatInfo,
+                                                                           uint32_t *pPropertyCount,
+                                                                           VkSparseImageFormatProperties2 *pProperties)
+{
+    (void)physicalDevice;
+    (void)pFormatInfo;
+    (void)pProperties;
+    *pPropertyCount = 0;
+}
+
 /* Whether a device extension is supported on physical devices of this
  * instance: its instance extension dependency, if any, is enabled. */
 static bool pvk_device_extension_supported(const struct pvk_instance *instance, unsigned ext)
 {
     int needs = pvk_device_extension_needs[ext];
     return needs < 0 || instance->extensions[needs];
+}
+
+/* ... and the physical device has what the extension needs. */
+static bool pvk_device_extension_available(const struct pvk_physical_device *pd, unsigned ext)
+{
+    if (ext == PVK_DEVICE_EXT_EXT_sampler_filter_minmax && !pd->filter_minmax)
+        return false;
+    return pvk_device_extension_supported(pd->instance, ext);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice,
@@ -32684,7 +33425,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceExtensionProperties(VkPhysicalDe
     if (pLayerName)
         return VK_ERROR_LAYER_NOT_PRESENT;
     for (i = 0; i < PVK_DEVICE_EXTENSION_COUNT; i++)
-        if (pvk_device_extension_supported(pd->instance, i))
+        if (pvk_device_extension_available(pd, i))
             supported[count++] = pvk_device_extensions[i];
     return pvk_enumerate(supported, sizeof(supported[0]), count, pPropertyCount, pProperties);
 }
@@ -32970,7 +33711,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
     for (i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
         const char *name = pCreateInfo->ppEnabledExtensionNames[i];
         int index = pvk_find_extension(pvk_device_extensions, PVK_DEVICE_EXTENSION_COUNT, name);
-        if (index < 0 || !pvk_device_extension_supported(pd->instance, (unsigned)index)) {
+        if (index < 0 || !pvk_device_extension_available(pd, (unsigned)index)) {
             pvk_log(PVK_LOG_WARN, "unsupported device extension %s", name);
             pvk_device_free(device);
             return VK_ERROR_EXTENSION_NOT_PRESENT;
@@ -33398,11 +34139,67 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
 /* ==========================================================================
  * 11. Images, views and samplers
  *
- * Formats, VkImage, VkImageView, VkBufferView, VkSampler and host image copy.
+ * VkImage, VkImageView, VkBufferView, VkSampler and host image copy. Formats
+ * are in section 7 (pvk_format), image transfer commands in sections 14-15.
+ *
+ * IMAGES
+ *   A VkImage keeps its creation parameters until memory is bound; then it
+ *   becomes one MTLTexture (pvk_image_bind):
+ *     optimal tiling  placed in the memory's placement MTLHeap at the bind
+ *                     offset (-[MTLHeap newTextureWithDescriptor:offset:]),
+ *                     with the memory type's storage mode;
+ *     linear tiling   over the memory's MTLBuffer at the bind offset
+ *                     (-[MTLBuffer newTextureWithDescriptor:offset:bytesPerRow:]),
+ *                     rows aligned to minimumLinearTextureAlignmentForPixelFormat:;
+ *     lazily allocated memory   a memoryless texture (tile memory only).
+ *   The heap and its buffer are in the device's residency set (section 10),
+ *   which makes placed and linear textures resident. Memoryless textures own
+ *   no memory, and Metal's validation layer rejects them in residency sets.
+ *   Memory requirements come from heapTextureSizeAndAlignWithDescriptor:, the
+ *   largest over the storage modes the image may be bound to. Images Metal
+ *   must make in shared storage (linear tiling, host image copies) may only
+ *   be bound to host-visible memory; only transient attachments may be bound
+ *   to lazily allocated memory.
+ *
+ *   Texture types: Metal's 1D textures cannot have mipmaps, so 1D images are
+ *   2D textures of height 1 and 1D arrays are 2D arrays. Single-sample 2D
+ *   images with one layer are 2D textures, with more 2D arrays, also when
+ *   cube-compatible (Metal views 2D arrays as cubes); multisampled ones are
+ *   2D multisample (array) textures. 3D images are 3D textures.
+ *
+ *   Usage: shader read always; shader write for storage; atomics for storage
+ *   images of atomic formats; render target for attachments and for transfer
+ *   destinations Metal can render to, as clears, blits and resolves draw
+ *   (section 15); pixel-format views for mutable formats whose views change
+ *   more than sRGB-ness, and for depth/stencil formats (stencil views).
+ *
+ *   Image layouts have no Metal equivalent: transitions are barriers only
+ *   (section 15), and vkTransitionImageLayout does nothing.
+ *
+ * HOST IMAGE COPY
+ *   Images with VK_IMAGE_USAGE_HOST_TRANSFER_BIT are shared-storage textures
+ *   (their memory types are host-visible), which -[MTLTexture replaceRegion:]
+ *   and -getBytes: access directly. Metal cannot address one aspect of a
+ *   combined depth/stencil texture that way, so those go through a staging
+ *   buffer and a blit on an internal queue, waited for. VK_HOST_IMAGE_COPY_MEMCPY
+ *   data is the subresource's texels, tightly packed.
  * ========================================================================== */
 
 /* The Metal objects descriptors refer to. Descriptor writes (section 12)
  * read these fields; the rest of each struct belongs to this section.
+ *
+ * Texture types shaders see (section 13): views of type 1D and 1D_ARRAY are
+ * 2D and 2D-array textures of height 1 (Metal 1D textures have no mipmaps),
+ * so shaders access them as texture2d / texture2d_array with y = 0. Every
+ * other view type is the matching Metal type (2D, 2D array, 2D multisample
+ * (array), cube, cube array, 3D). A 2D or 2D-array view of a 3D image
+ * (VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) can only be an attachment and
+ * has no texture of its own: its mtl_texture is a one-level 3D view and
+ * depth_plane selects the slice. Texel buffer views are texture buffers.
+ * Depth and stencil views carry the swizzle (R, 0, 0, 1) (composed with the
+ * view's component mapping), so reads through color types give Vulkan's
+ * (D, 0, 0, 1) instead of Metal's (D, D, D, 1); depth2d reads and compares
+ * are unaffected.
  *
  * Descriptor memory format (sections 12, 13 and 16 rely on it): a descriptor
  * set is a table in GPU memory, bound by address at argument-table buffer
@@ -33419,15 +34216,1123 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  * applied at bind time to a copy of the table. */
 struct pvk_image_view {
     id mtl_texture; /* MTLTexture view of the image */
+    /* section 11: */
+    struct pvk_image *image;
+    VkFormat format;
+    VkImageViewType view_type;
+    VkImageAspectFlags aspects;
+    uint32_t base_level, levels, base_layer, layers;
+    uint32_t depth_plane; /* 2D views of 3D images: first slice */
 };
 
 struct pvk_buffer_view {
     id mtl_texture; /* texture buffer over the bound memory's MTLBuffer */
+    /* section 11: */
+    VkFormat format;
+    VkDeviceSize offset, elements;
 };
 
 struct pvk_sampler {
     id mtl_sampler; /* MTLSamplerState created with supportArgumentBuffers */
+    /* section 11: */
+    struct pvk_sampler_state *state; /* the shared state mtl_sampler belongs to */
 };
+
+/* ---- Images ---- */
+
+struct pvk_image {
+    VkFormat format;
+    const struct pvk_format *fmt;
+    VkImageType type;
+    VkExtent3D extent;
+    uint32_t levels, layers, samples;
+    VkImageTiling tiling;
+    VkImageCreateFlags flags;
+    VkImageUsageFlags usage; /* of every aspect (VkImageStencilUsageCreateInfo included) */
+    pvk_MTLTextureType mtl_type;
+    pvk_MTLTextureUsage mtl_usage;
+    VkDeviceSize row_pitch;  /* linear tiling: bytes from row to row */
+    id mtl_texture;          /* NULL until bound */
+    struct pvk_device_memory *memory;
+    VkDeviceSize offset;
+    bool memoryless;
+};
+
+/* Whether a view format makes Metal reinterpret the image's pixels (beyond
+ * sRGB-ness, which needs no pixel-format view: checked on M4 Max). */
+static bool pvk_format_reinterprets(const struct pvk_format *image, VkFormat view)
+{
+    static const pvk_MTLPixelFormat srgb_pairs[][2] = {
+        { PVK_MTLPixelFormatR8Unorm, PVK_MTLPixelFormatR8Unorm_sRGB },
+        { PVK_MTLPixelFormatRG8Unorm, PVK_MTLPixelFormatRG8Unorm_sRGB },
+        { PVK_MTLPixelFormatRGBA8Unorm, PVK_MTLPixelFormatRGBA8Unorm_sRGB },
+        { PVK_MTLPixelFormatBGRA8Unorm, PVK_MTLPixelFormatBGRA8Unorm_sRGB },
+        { PVK_MTLPixelFormatBC1_RGBA, PVK_MTLPixelFormatBC1_RGBA_sRGB },
+        { PVK_MTLPixelFormatBC2_RGBA, PVK_MTLPixelFormatBC2_RGBA_sRGB },
+        { PVK_MTLPixelFormatBC3_RGBA, PVK_MTLPixelFormatBC3_RGBA_sRGB },
+        { PVK_MTLPixelFormatBC7_RGBAUnorm, PVK_MTLPixelFormatBC7_RGBAUnorm_sRGB },
+        { PVK_MTLPixelFormatETC2_RGB8, PVK_MTLPixelFormatETC2_RGB8_sRGB },
+        { PVK_MTLPixelFormatETC2_RGB8A1, PVK_MTLPixelFormatETC2_RGB8A1_sRGB },
+        { PVK_MTLPixelFormatEAC_RGBA8, PVK_MTLPixelFormatEAC_RGBA8_sRGB },
+    };
+    const struct pvk_format *f = pvk_format(view);
+    size_t i;
+    if (!f || f->mtl == image->mtl)
+        return false;
+    for (i = 0; i < PVK_ARRAY_SIZE(srgb_pairs); i++)
+        if ((image->mtl == srgb_pairs[i][0] && f->mtl == srgb_pairs[i][1]) ||
+            (image->mtl == srgb_pairs[i][1] && f->mtl == srgb_pairs[i][0]))
+            return false;
+    return true;
+}
+
+/* Fills an image from its creation parameters; no Metal object is made. */
+static void pvk_image_init(const struct pvk_physical_device *pd, struct pvk_image *image, const VkImageCreateInfo *info)
+{
+    const VkBaseInStructure *s;
+    const struct pvk_format *f = pvk_format(info->format);
+    bool views = (info->flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0, listed = false, reinterprets = false;
+    uint32_t i;
+
+    memset(image, 0, sizeof(*image));
+    image->format = info->format;
+    image->fmt = f;
+    image->type = info->imageType;
+    image->extent = info->extent;
+    image->levels = info->mipLevels;
+    image->layers = info->arrayLayers;
+    image->samples = (uint32_t)info->samples;
+    image->tiling = info->tiling;
+    image->flags = info->flags;
+    image->usage = info->usage;
+    for (s = info->pNext; s; s = s->pNext) {
+        if (s->sType == VK_STRUCTURE_TYPE_IMAGE_STENCIL_USAGE_CREATE_INFO) {
+            image->usage |= ((const VkImageStencilUsageCreateInfo *)s)->stencilUsage;
+        } else if (s->sType == VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO && views) {
+            const VkImageFormatListCreateInfo *list = (const VkImageFormatListCreateInfo *)s;
+            listed = list->viewFormatCount > 0;
+            for (i = 0; i < list->viewFormatCount; i++)
+                if (pvk_format_reinterprets(f, list->pViewFormats[i]))
+                    reinterprets = true;
+        }
+    }
+
+    if (image->type == VK_IMAGE_TYPE_3D)
+        image->mtl_type = PVK_MTLTextureType3D;
+    else if (image->samples > 1)
+        image->mtl_type = image->layers > 1 ? PVK_MTLTextureType2DMultisampleArray : PVK_MTLTextureType2DMultisample;
+    else
+        image->mtl_type = image->layers > 1 ? PVK_MTLTextureType2DArray : PVK_MTLTextureType2D;
+
+    image->mtl_usage = PVK_MTLTextureUsageShaderRead;
+    if (image->usage & VK_IMAGE_USAGE_STORAGE_BIT) {
+        image->mtl_usage |= PVK_MTLTextureUsageShaderWrite;
+        if (f && (f->caps & PVK_FC_ATOMIC))
+            image->mtl_usage |= PVK_MTLTextureUsageShaderAtomic;
+    }
+    if ((image->usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                         VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)) ||
+        ((image->usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) && f && ((f->caps & PVK_FC_COLOR) || !pvk_format_is_color(f))))
+        image->mtl_usage |= PVK_MTLTextureUsageRenderTarget;
+    if ((views && (!listed || reinterprets)) || (f && f->kind == PVK_FK_DEPTH_STENCIL))
+        image->mtl_usage |= PVK_MTLTextureUsagePixelFormatView;
+
+    if (image->tiling == VK_IMAGE_TILING_LINEAR && f) {
+        VkDeviceSize align = pvk_MTLDevice_minimumLinearTextureAlignmentForPixelFormat(pd->mtl_device, f->mtl);
+        image->row_pitch = ((VkDeviceSize)image->extent.width * f->bytes + align - 1) / align * align;
+    }
+}
+
+/* A new (retained) texture descriptor of the image, with resource options. */
+static id pvk_image_descriptor(const struct pvk_image *image, pvk_MTLResourceOptions options)
+{
+    id desc = pvk_MTLTextureDescriptor_new();
+    if (!desc)
+        return NULL;
+    pvk_MTLTextureDescriptor_setTextureType(desc, image->mtl_type);
+    pvk_MTLTextureDescriptor_setPixelFormat(desc, image->fmt->mtl);
+    pvk_MTLTextureDescriptor_setWidth(desc, image->extent.width);
+    pvk_MTLTextureDescriptor_setHeight(desc, image->type == VK_IMAGE_TYPE_1D ? 1 : image->extent.height);
+    pvk_MTLTextureDescriptor_setDepth(desc, image->type == VK_IMAGE_TYPE_3D ? image->extent.depth : 1);
+    pvk_MTLTextureDescriptor_setMipmapLevelCount(desc, image->levels);
+    pvk_MTLTextureDescriptor_setSampleCount(desc, image->samples);
+    pvk_MTLTextureDescriptor_setArrayLength(desc, image->type == VK_IMAGE_TYPE_3D ? 1 : image->layers);
+    pvk_MTLTextureDescriptor_setResourceOptions(desc, options);
+    pvk_MTLTextureDescriptor_setUsage(desc, image->mtl_usage);
+    return desc;
+}
+
+/* Images Metal must create in shared storage. */
+static bool pvk_image_needs_shared(const struct pvk_image *image)
+{
+    return image->tiling == VK_IMAGE_TILING_LINEAR || (image->usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT);
+}
+
+/* Resources > Resource Memory Association: the memory types an image may be
+ * bound to depend only on its tiling, HOST_TRANSFER and TRANSIENT usage
+ * (identicalMemoryTypeRequirements is VK_FALSE). */
+static uint32_t pvk_image_memory_type_bits(const struct pvk_physical_device *pd, const struct pvk_image *image)
+{
+    uint32_t i, bits = 0;
+    for (i = 0; i < pd->memory_properties.memoryTypeCount; i++) {
+        VkMemoryPropertyFlags flags = pd->memory_properties.memoryTypes[i].propertyFlags;
+        if (flags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) {
+            if ((image->usage & VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT) && image->tiling == VK_IMAGE_TILING_OPTIMAL)
+                bits |= 1u << i;
+        } else if (!pvk_image_needs_shared(image) || (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+            bits |= 1u << i;
+        }
+    }
+    return bits;
+}
+
+static void pvk_image_memory_requirements(const struct pvk_device *device, const struct pvk_image *image,
+                                          VkMemoryRequirements2 *pMemoryRequirements)
+{
+    const struct pvk_physical_device *pd = device->physical_device;
+    VkMemoryRequirements *req = &pMemoryRequirements->memoryRequirements;
+    VkDeviceSize size = 0, align = 16;
+    VkBaseOutStructure *ext;
+
+    req->memoryTypeBits = pvk_image_memory_type_bits(pd, image);
+    if (image->tiling == VK_IMAGE_TILING_LINEAR) {
+        VkDeviceSize a = pvk_MTLDevice_minimumLinearTextureAlignmentForPixelFormat(pd->mtl_device, image->fmt->mtl);
+        if (a > align)
+            align = a;
+        size = image->row_pitch * image->extent.height;
+    } else {
+        /* Private and shared storage: what the image may be bound to. */
+        static const pvk_MTLResourceOptions modes[] = {
+            PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked,
+            PVK_MTLResourceStorageModeShared | PVK_MTLResourceHazardTrackingModeUntracked,
+        };
+        void *pool = objc_autoreleasePoolPush();
+        unsigned m;
+        for (m = pvk_image_needs_shared(image) ? 1 : 0; m < PVK_ARRAY_SIZE(modes); m++) {
+            id desc = pvk_image_descriptor(image, modes[m]);
+            pvk_MTLSizeAndAlign sa;
+            if (!desc)
+                continue;
+            sa = pvk_MTLDevice_heapTextureSizeAndAlignWithDescriptor(pd->mtl_device, desc);
+            pvk_release(desc);
+            if (sa.size > size)
+                size = sa.size;
+            if (sa.align > align)
+                align = sa.align;
+        }
+        objc_autoreleasePoolPop(pool);
+    }
+    req->alignment = align;
+    req->size = (size + align - 1) / align * align;
+    for (ext = pMemoryRequirements->pNext; ext; ext = ext->pNext) {
+        if (ext->sType == VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS) {
+            VkMemoryDedicatedRequirements *dedicated = (VkMemoryDedicatedRequirements *)ext;
+            dedicated->prefersDedicatedAllocation = VK_FALSE;
+            dedicated->requiresDedicatedAllocation = VK_FALSE;
+        }
+    }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateImage(VkDevice _device, const VkImageCreateInfo *pCreateInfo,
+                                             const VkAllocationCallbacks *pAllocator, VkImage *pImage)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    struct pvk_image *image;
+
+    if (!pvk_format(pCreateInfo->format) || !pvk_format(pCreateInfo->format)->mtl)
+        return VK_ERROR_FORMAT_NOT_SUPPORTED; /* invalid usage: not a supported image format */
+    image = pvk_alloc(alloc, sizeof(*image), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!image)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    pvk_image_init(device->physical_device, image, pCreateInfo);
+    *pImage = (VkImage)image;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyImage(VkDevice device, VkImage _image, const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_image *image = (struct pvk_image *)_image;
+    if (!image)
+        return;
+    pvk_release(image->mtl_texture);
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), image);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetImageMemoryRequirements2(VkDevice device, const VkImageMemoryRequirementsInfo2 *pInfo,
+                                                         VkMemoryRequirements2 *pMemoryRequirements)
+{
+    pvk_image_memory_requirements((struct pvk_device *)device, (const struct pvk_image *)pInfo->image,
+                                  pMemoryRequirements);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetImageMemoryRequirements(VkDevice device, VkImage image,
+                                                        VkMemoryRequirements *pMemoryRequirements)
+{
+    VkMemoryRequirements2 req;
+    memset(&req, 0, sizeof(req));
+    req.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+    pvk_image_memory_requirements((struct pvk_device *)device, (const struct pvk_image *)image, &req);
+    *pMemoryRequirements = req.memoryRequirements;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageMemoryRequirements(VkDevice _device, const VkDeviceImageMemoryRequirements *pInfo,
+                                                              VkMemoryRequirements2 *pMemoryRequirements)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    struct pvk_image image;
+    pvk_image_init(device->physical_device, &image, pInfo->pCreateInfo);
+    if (!image.fmt || !image.fmt->mtl) {
+        memset(&pMemoryRequirements->memoryRequirements, 0, sizeof(pMemoryRequirements->memoryRequirements));
+        return;
+    }
+    pvk_image_memory_requirements(device, &image, pMemoryRequirements);
+}
+
+/* Sparse images are not supported: no image has sparse requirements. */
+VKAPI_ATTR void VKAPI_CALL vkGetImageSparseMemoryRequirements(VkDevice device, VkImage image,
+                                                              uint32_t *pSparseMemoryRequirementCount,
+                                                              VkSparseImageMemoryRequirements *pSparseMemoryRequirements)
+{
+    (void)device;
+    (void)image;
+    (void)pSparseMemoryRequirements;
+    *pSparseMemoryRequirementCount = 0;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetImageSparseMemoryRequirements2(VkDevice device, const VkImageSparseMemoryRequirementsInfo2 *pInfo,
+                                                               uint32_t *pSparseMemoryRequirementCount,
+                                                               VkSparseImageMemoryRequirements2 *pSparseMemoryRequirements)
+{
+    (void)device;
+    (void)pInfo;
+    (void)pSparseMemoryRequirements;
+    *pSparseMemoryRequirementCount = 0;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageSparseMemoryRequirements(VkDevice device, const VkDeviceImageMemoryRequirements *pInfo,
+                                                                    uint32_t *pSparseMemoryRequirementCount,
+                                                                    VkSparseImageMemoryRequirements2 *pSparseMemoryRequirements)
+{
+    (void)device;
+    (void)pInfo;
+    (void)pSparseMemoryRequirements;
+    *pSparseMemoryRequirementCount = 0;
+}
+
+static VkResult pvk_image_bind(struct pvk_device *device, struct pvk_image *image, struct pvk_device_memory *memory,
+                               VkDeviceSize offset)
+{
+    id mtl = device->physical_device->mtl_device, desc, texture = NULL;
+    void *pool = objc_autoreleasePoolPush();
+
+    if (!memory->mtl_heap) {
+        /* Lazily allocated: tile memory only, so only a render target. */
+        image->mtl_usage = PVK_MTLTextureUsageRenderTarget;
+        desc = pvk_image_descriptor(image, PVK_MTLResourceStorageModeMemoryless | PVK_MTLResourceHazardTrackingModeUntracked);
+        if (desc)
+            texture = pvk_MTLDevice_newTextureWithDescriptor(mtl, desc);
+        image->memoryless = true;
+    } else {
+        desc = pvk_image_descriptor(image, pvk_memory_type_options[memory->type_index]);
+        if (desc && image->tiling == VK_IMAGE_TILING_LINEAR)
+            texture = pvk_MTLBuffer_newTextureWithDescriptor_offset_bytesPerRow(memory->mtl_buffer, desc, offset,
+                                                                                image->row_pitch);
+        else if (desc)
+            texture = pvk_MTLHeap_newTextureWithDescriptor_offset(memory->mtl_heap, desc, offset);
+    }
+    pvk_release(desc);
+    objc_autoreleasePoolPop(pool);
+    if (!texture)
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    pvk_release(image->mtl_texture);
+    image->mtl_texture = texture;
+    image->memory = memory;
+    image->offset = offset;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory2(VkDevice device, uint32_t bindInfoCount,
+                                                  const VkBindImageMemoryInfo *pBindInfos)
+{
+    VkResult result = VK_SUCCESS;
+    uint32_t i;
+    for (i = 0; i < bindInfoCount; i++) {
+        const VkBindImageMemoryInfo *info = &pBindInfos[i];
+        const VkBaseInStructure *ext;
+        VkResult r = pvk_image_bind((struct pvk_device *)device, (struct pvk_image *)info->image,
+                                    (struct pvk_device_memory *)info->memory, info->memoryOffset);
+        for (ext = info->pNext; ext; ext = ext->pNext)
+            if (ext->sType == VK_STRUCTURE_TYPE_BIND_MEMORY_STATUS)
+                *((const VkBindMemoryStatus *)ext)->pResult = r;
+        if (r != VK_SUCCESS && result == VK_SUCCESS)
+            result = r;
+    }
+    return result;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory(VkDevice device, VkImage image, VkDeviceMemory memory,
+                                                 VkDeviceSize memoryOffset)
+{
+    VkBindImageMemoryInfo info;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO;
+    info.image = image;
+    info.memory = memory;
+    info.memoryOffset = memoryOffset;
+    return vkBindImageMemory2(device, 1, &info);
+}
+
+/* Bytes of one texel block of an aspect, as buffer copies lay it out
+ * (Formats > Depth/Stencil Formats and the copy commands: depth 2 or 4 B,
+ * stencil 1 B). */
+static uint32_t pvk_aspect_bytes(const struct pvk_format *f, VkImageAspectFlags aspect)
+{
+    if (aspect == VK_IMAGE_ASPECT_STENCIL_BIT)
+        return 1;
+    if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT)
+        return f->mtl == PVK_MTLPixelFormatDepth16Unorm ? 2 : 4;
+    return f->bytes;
+}
+
+static uint32_t pvk_mip_extent(uint32_t extent, uint32_t level)
+{
+    extent >>= level;
+    return extent ? extent : 1;
+}
+
+/* The layout of a subresource: linear images' rows in memory, otherwise the
+ * tightly packed texels of VK_HOST_IMAGE_COPY_MEMCPY (VkSubresourceHostMemcpySize). */
+static void pvk_image_subresource_layout(const struct pvk_image *image, const VkImageSubresource *sub,
+                                         VkSubresourceLayout2 *pLayout)
+{
+    VkSubresourceLayout *l = &pLayout->subresourceLayout;
+    const struct pvk_format *f = image->fmt;
+    uint32_t w = pvk_mip_extent(image->extent.width, sub->mipLevel);
+    uint32_t h = image->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(image->extent.height, sub->mipLevel);
+    uint32_t d = image->type == VK_IMAGE_TYPE_3D ? pvk_mip_extent(image->extent.depth, sub->mipLevel) : 1;
+    VkDeviceSize memcpy_size, row = (VkDeviceSize)((w + f->block_w - 1) / f->block_w) * pvk_aspect_bytes(f, sub->aspectMask);
+    VkBaseOutStructure *ext;
+
+    memset(l, 0, sizeof(*l));
+    memcpy_size = row * ((h + f->block_h - 1) / f->block_h) * d;
+    if (image->tiling == VK_IMAGE_TILING_LINEAR) {
+        l->rowPitch = image->row_pitch;
+        l->size = image->row_pitch * h;
+    } else {
+        l->rowPitch = row;
+        l->size = memcpy_size;
+    }
+    l->depthPitch = d > 1 ? l->size / d : l->size;
+    l->arrayPitch = l->size;
+    for (ext = pLayout->pNext; ext; ext = ext->pNext)
+        if (ext->sType == VK_STRUCTURE_TYPE_SUBRESOURCE_HOST_MEMCPY_SIZE)
+            ((VkSubresourceHostMemcpySize *)ext)->size = memcpy_size;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetImageSubresourceLayout2(VkDevice device, VkImage image,
+                                                        const VkImageSubresource2 *pSubresource,
+                                                        VkSubresourceLayout2 *pLayout)
+{
+    (void)device;
+    pvk_image_subresource_layout((const struct pvk_image *)image, &pSubresource->imageSubresource, pLayout);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetImageSubresourceLayout(VkDevice device, VkImage image,
+                                                       const VkImageSubresource *pSubresource,
+                                                       VkSubresourceLayout *pLayout)
+{
+    VkSubresourceLayout2 layout;
+    memset(&layout, 0, sizeof(layout));
+    layout.sType = VK_STRUCTURE_TYPE_SUBRESOURCE_LAYOUT_2;
+    (void)device;
+    pvk_image_subresource_layout((const struct pvk_image *)image, pSubresource, &layout);
+    *pLayout = layout.subresourceLayout;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageSubresourceLayout(VkDevice device, const VkDeviceImageSubresourceInfo *pInfo,
+                                                             VkSubresourceLayout2 *pLayout)
+{
+    struct pvk_image image;
+    pvk_image_init(((struct pvk_device *)device)->physical_device, &image, pInfo->pCreateInfo);
+    if (!image.fmt || !image.fmt->mtl) {
+        memset(&pLayout->subresourceLayout, 0, sizeof(pLayout->subresourceLayout));
+        return;
+    }
+    pvk_image_subresource_layout(&image, &pInfo->pSubresource->imageSubresource, pLayout);
+}
+
+/* ---- Image views ---- */
+
+/* The Metal channel a view reads for one component: the view's component
+ * mapping, then the format's own swizzle (section 7). */
+static pvk_MTLTextureSwizzle pvk_view_swizzle(const struct pvk_format *f, VkComponentSwizzle c, unsigned identity)
+{
+    unsigned channel;
+    switch (c) {
+    case VK_COMPONENT_SWIZZLE_ZERO:
+        return PVK_MTLTextureSwizzleZero;
+    case VK_COMPONENT_SWIZZLE_ONE:
+        return PVK_MTLTextureSwizzleOne;
+    case VK_COMPONENT_SWIZZLE_R:
+        channel = 0;
+        break;
+    case VK_COMPONENT_SWIZZLE_G:
+        channel = 1;
+        break;
+    case VK_COMPONENT_SWIZZLE_B:
+        channel = 2;
+        break;
+    case VK_COMPONENT_SWIZZLE_A:
+        channel = 3;
+        break;
+    default: /* VK_COMPONENT_SWIZZLE_IDENTITY */
+        channel = identity;
+        break;
+    }
+    if (f->flags & PVK_FF_SWIZZLE) {
+        const pvk_MTLTextureSwizzle s[4] = { f->swizzle.red, f->swizzle.green, f->swizzle.blue, f->swizzle.alpha };
+        return s[channel];
+    }
+    if (!pvk_format_is_color(f)) {
+        /* Textures > Conversion to RGBA: a depth or stencil value reads as
+         * (D, 0, 0, 1); Metal's color reads of depth give (D, D, D, 1). */
+        static const pvk_MTLTextureSwizzle ds[4] = { PVK_MTLTextureSwizzleRed, PVK_MTLTextureSwizzleZero,
+                                                     PVK_MTLTextureSwizzleZero, PVK_MTLTextureSwizzleOne };
+        return ds[channel];
+    }
+    return (pvk_MTLTextureSwizzle)(PVK_MTLTextureSwizzleRed + channel);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImageViewCreateInfo *pCreateInfo,
+                                                 const VkAllocationCallbacks *pAllocator, VkImageView *pView)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    struct pvk_image *image = (struct pvk_image *)pCreateInfo->image;
+    const VkImageSubresourceRange *range = &pCreateInfo->subresourceRange;
+    const struct pvk_format *f = pvk_format(pCreateInfo->format);
+    struct pvk_image_view *view;
+    pvk_MTLPixelFormat format;
+    pvk_MTLTextureType type;
+    pvk_MTLTextureSwizzleChannels swizzle;
+    pvk_NSRange levels, slices;
+    uint32_t depth;
+    void *pool;
+
+    if (!f || !f->mtl || !image->mtl_texture)
+        return VK_ERROR_FORMAT_NOT_SUPPORTED; /* invalid usage */
+    view = pvk_alloc(alloc, sizeof(*view), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!view)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    view->image = image;
+    view->format = pCreateInfo->format;
+    view->view_type = pCreateInfo->viewType;
+    view->aspects = range->aspectMask;
+    view->base_level = range->baseMipLevel;
+    view->levels = range->levelCount == VK_REMAINING_MIP_LEVELS ? image->levels - range->baseMipLevel : range->levelCount;
+    depth = image->type == VK_IMAGE_TYPE_3D ? pvk_mip_extent(image->extent.depth, range->baseMipLevel) : image->layers;
+    view->base_layer = range->baseArrayLayer;
+    view->layers = range->layerCount == VK_REMAINING_ARRAY_LAYERS ? depth - range->baseArrayLayer : range->layerCount;
+
+    format = f->mtl;
+    if (f->kind == PVK_FK_DEPTH_STENCIL && range->aspectMask == VK_IMAGE_ASPECT_STENCIL_BIT)
+        format = PVK_MTLPixelFormatX32_Stencil8;
+    levels.location = view->base_level;
+    levels.length = view->levels;
+    slices.location = view->base_layer;
+    slices.length = view->layers;
+    switch (pCreateInfo->viewType) {
+    case VK_IMAGE_VIEW_TYPE_1D:
+    case VK_IMAGE_VIEW_TYPE_2D:
+        type = image->samples > 1 ? PVK_MTLTextureType2DMultisample : PVK_MTLTextureType2D;
+        break;
+    case VK_IMAGE_VIEW_TYPE_1D_ARRAY:
+    case VK_IMAGE_VIEW_TYPE_2D_ARRAY:
+        type = image->samples > 1 ? PVK_MTLTextureType2DMultisampleArray : PVK_MTLTextureType2DArray;
+        break;
+    case VK_IMAGE_VIEW_TYPE_CUBE:
+        type = PVK_MTLTextureTypeCube;
+        break;
+    case VK_IMAGE_VIEW_TYPE_CUBE_ARRAY:
+        type = PVK_MTLTextureTypeCubeArray;
+        break;
+    default:
+        type = PVK_MTLTextureType3D;
+        break;
+    }
+    if (image->type == VK_IMAGE_TYPE_3D) {
+        /* Metal has no 2D views of 3D textures: attachments use depthPlane. */
+        if (pCreateInfo->viewType != VK_IMAGE_VIEW_TYPE_3D) {
+            view->depth_plane = view->base_layer;
+            levels.length = 1;
+        }
+        type = PVK_MTLTextureType3D;
+        slices.location = 0;
+        slices.length = 1;
+    }
+    swizzle.red = pvk_view_swizzle(f, pCreateInfo->components.r, 0);
+    swizzle.green = pvk_view_swizzle(f, pCreateInfo->components.g, 1);
+    swizzle.blue = pvk_view_swizzle(f, pCreateInfo->components.b, 2);
+    swizzle.alpha = pvk_view_swizzle(f, pCreateInfo->components.a, 3);
+
+    if (image->memoryless) {
+        /* Metal makes no views of memoryless textures; attachments of
+         * transient images use the texture with the view's level and layer. */
+        view->mtl_texture = pvk_retain(image->mtl_texture);
+    } else {
+        pool = objc_autoreleasePoolPush();
+        view->mtl_texture = pvk_MTLTexture_newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(
+            image->mtl_texture, format, type, levels, slices, swizzle);
+        objc_autoreleasePoolPop(pool);
+    }
+    if (!view->mtl_texture) {
+        pvk_free(alloc, view);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    *pView = (VkImageView)view;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyImageView(VkDevice device, VkImageView imageView, const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_image_view *view = (struct pvk_image_view *)imageView;
+    if (!view)
+        return;
+    pvk_release(view->mtl_texture);
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), view);
+}
+
+/* ---- Buffer views ----
+ *
+ * A texture buffer over the memory's MTLBuffer at the buffer's offset plus
+ * the view's (section 7's minTexelBufferOffsetAlignment covers
+ * minimumTextureBufferAlignmentForPixelFormat:). */
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
+                                                  const VkAllocationCallbacks *pAllocator, VkBufferView *pView)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    const struct pvk_buffer *buffer = (const struct pvk_buffer *)pCreateInfo->buffer;
+    const struct pvk_format *f = pvk_format(pCreateInfo->format);
+    VkBufferUsageFlags2 usage = buffer->usage;
+    pvk_MTLTextureUsage mtl_usage = 0;
+    const VkBaseInStructure *ext;
+    struct pvk_buffer_view *view;
+    VkDeviceSize range;
+    id desc;
+    void *pool;
+
+    if (!f || !(f->caps & PVK_FC_TB_READ) || !buffer->memory)
+        return VK_ERROR_FORMAT_NOT_SUPPORTED; /* invalid usage */
+    for (ext = pCreateInfo->pNext; ext; ext = ext->pNext)
+        if (ext->sType == VK_STRUCTURE_TYPE_BUFFER_USAGE_FLAGS_2_CREATE_INFO)
+            usage = ((const VkBufferUsageFlags2CreateInfo *)ext)->usage;
+    if (usage & VK_BUFFER_USAGE_2_UNIFORM_TEXEL_BUFFER_BIT)
+        mtl_usage |= PVK_MTLTextureUsageShaderRead;
+    if ((usage & VK_BUFFER_USAGE_2_STORAGE_TEXEL_BUFFER_BIT) && (f->caps & PVK_FC_TB_WRITE)) {
+        mtl_usage |= PVK_MTLTextureUsageShaderRead | PVK_MTLTextureUsageShaderWrite;
+        if (f->caps & PVK_FC_TB_ATOMIC)
+            mtl_usage |= PVK_MTLTextureUsageShaderAtomic;
+    }
+    range = pCreateInfo->range == VK_WHOLE_SIZE ? buffer->size - pCreateInfo->offset : pCreateInfo->range;
+    view = pvk_alloc(alloc, sizeof(*view), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!view)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    view->format = pCreateInfo->format;
+    view->offset = pCreateInfo->offset;
+    view->elements = range / f->bytes;
+    pool = objc_autoreleasePoolPush();
+    desc = pvk_MTLTextureDescriptor_textureBufferDescriptorWithPixelFormat_width_resourceOptions_usage(
+        f->mtl, view->elements, pvk_memory_type_options[buffer->memory->type_index], mtl_usage);
+    if (desc && view->elements)
+        view->mtl_texture = pvk_MTLBuffer_newTextureWithDescriptor_offset_bytesPerRow(
+            buffer->memory->mtl_buffer, desc, buffer->offset + pCreateInfo->offset, view->elements * f->bytes);
+    objc_autoreleasePoolPop(pool);
+    if (!view->mtl_texture) {
+        pvk_free(alloc, view);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    *pView = (VkBufferView)view;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyBufferView(VkDevice device, VkBufferView bufferView, const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_buffer_view *view = (struct pvk_buffer_view *)bufferView;
+    if (!view)
+        return;
+    pvk_release(view->mtl_texture);
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), view);
+}
+
+/* ---- Samplers ----
+ *
+ * VkSamplers with equal parameters share one MTLSamplerState (refcounted, in
+ * a per-device list), so Metal's cap on unique samplers in argument buffers
+ * (maxArgumentBufferSamplerCount, section 7's maxSamplerAllocationCount)
+ * counts distinct states only. Mapping:
+ *   filters, mipmap mode      min/mag filter, mip filter (nearest/linear)
+ *   address modes             all five, mirror-clamp-to-edge included
+ *   mipLodBias                lodBias (Metal 26), S4.6 in [-16, 15.98]; it
+ *                             also applies to explicit LODs, as in Vulkan
+ *                             (checked on M4 Max, which FST does not list)
+ *   anisotropy                maxAnisotropy, rounded, 1 to 16
+ *   compare                   compareFunction (Never when disabled)
+ *   min/maxLod                lodMinClamp / lodMaxClamp
+ *   border colors             the three Metal has (float and int alike;
+ *                             FST: A1BGR5/ABGR4 textures cannot use opaque black)
+ *   unnormalizedCoordinates   normalizedCoordinates = NO
+ *   reduction mode            reductionMode (offered only from Apple10, section 7)
+ * Custom border colors and Y'CbCr conversion are not supported. */
+
+struct pvk_sampler_key {
+    uint32_t min, mag, mip, s, t, r, border, compare, reduction, anisotropy, normalized;
+    float lod_min, lod_max, lod_bias;
+};
+
+struct pvk_sampler_state {
+    struct pvk_sampler_state *next;
+    struct pvk_sampler_key key;
+    id mtl_sampler;
+    uint32_t refs;
+};
+
+static pthread_mutex_t pvk_sampler_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static pvk_MTLSamplerAddressMode pvk_address_mode(VkSamplerAddressMode mode)
+{
+    switch (mode) {
+    case VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT:
+        return PVK_MTLSamplerAddressModeMirrorRepeat;
+    case VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE:
+        return PVK_MTLSamplerAddressModeClampToEdge;
+    case VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER:
+        return PVK_MTLSamplerAddressModeClampToBorderColor;
+    case VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE:
+        return PVK_MTLSamplerAddressModeMirrorClampToEdge;
+    default:
+        return PVK_MTLSamplerAddressModeRepeat;
+    }
+}
+
+static pvk_MTLCompareFunction pvk_compare_function(VkCompareOp op)
+{
+    switch (op) {
+    case VK_COMPARE_OP_LESS:
+        return PVK_MTLCompareFunctionLess;
+    case VK_COMPARE_OP_EQUAL:
+        return PVK_MTLCompareFunctionEqual;
+    case VK_COMPARE_OP_LESS_OR_EQUAL:
+        return PVK_MTLCompareFunctionLessEqual;
+    case VK_COMPARE_OP_GREATER:
+        return PVK_MTLCompareFunctionGreater;
+    case VK_COMPARE_OP_NOT_EQUAL:
+        return PVK_MTLCompareFunctionNotEqual;
+    case VK_COMPARE_OP_GREATER_OR_EQUAL:
+        return PVK_MTLCompareFunctionGreaterEqual;
+    case VK_COMPARE_OP_ALWAYS:
+        return PVK_MTLCompareFunctionAlways;
+    default:
+        return PVK_MTLCompareFunctionNever;
+    }
+}
+
+static void pvk_sampler_key(const struct pvk_device *device, const VkSamplerCreateInfo *info, struct pvk_sampler_key *k)
+{
+    const VkBaseInStructure *ext;
+    float bias = info->mipLodBias, max_bias = device->physical_device->properties.limits.maxSamplerLodBias;
+
+    memset(k, 0, sizeof(*k)); /* the key is compared bytewise */
+    k->min = info->minFilter == VK_FILTER_LINEAR ? PVK_MTLSamplerMinMagFilterLinear : PVK_MTLSamplerMinMagFilterNearest;
+    k->mag = info->magFilter == VK_FILTER_LINEAR ? PVK_MTLSamplerMinMagFilterLinear : PVK_MTLSamplerMinMagFilterNearest;
+    k->mip = info->mipmapMode == VK_SAMPLER_MIPMAP_MODE_LINEAR ? PVK_MTLSamplerMipFilterLinear : PVK_MTLSamplerMipFilterNearest;
+    k->s = (uint32_t)pvk_address_mode(info->addressModeU);
+    k->t = (uint32_t)pvk_address_mode(info->addressModeV);
+    k->r = (uint32_t)pvk_address_mode(info->addressModeW);
+    switch (info->borderColor) {
+    case VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK:
+    case VK_BORDER_COLOR_INT_OPAQUE_BLACK:
+        k->border = PVK_MTLSamplerBorderColorOpaqueBlack;
+        break;
+    case VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE:
+    case VK_BORDER_COLOR_INT_OPAQUE_WHITE:
+        k->border = PVK_MTLSamplerBorderColorOpaqueWhite;
+        break;
+    default:
+        k->border = PVK_MTLSamplerBorderColorTransparentBlack;
+        break;
+    }
+    k->compare = info->compareEnable ? (uint32_t)pvk_compare_function(info->compareOp) : PVK_MTLCompareFunctionNever;
+    k->anisotropy = 1;
+    if (info->anisotropyEnable) {
+        float a = info->maxAnisotropy < 1.0f ? 1.0f : info->maxAnisotropy > 16.0f ? 16.0f : info->maxAnisotropy;
+        k->anisotropy = (uint32_t)(a + 0.5f);
+    }
+    k->normalized = !info->unnormalizedCoordinates;
+    if (info->unnormalizedCoordinates) /* Metal requires it; Vulkan samples level 0 only (lod 0) */
+        k->mip = PVK_MTLSamplerMipFilterNotMipmapped;
+    k->lod_min = info->minLod;
+    k->lod_max = info->maxLod;
+    k->lod_bias = bias > max_bias ? max_bias : bias < -16.0f ? -16.0f : bias;
+    k->reduction = PVK_MTLSamplerReductionModeWeightedAverage;
+    for (ext = info->pNext; ext; ext = ext->pNext) {
+        if (ext->sType == VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO) {
+            VkSamplerReductionMode mode = ((const VkSamplerReductionModeCreateInfo *)ext)->reductionMode;
+            k->reduction = mode == VK_SAMPLER_REDUCTION_MODE_MIN   ? PVK_MTLSamplerReductionModeMinimum
+                           : mode == VK_SAMPLER_REDUCTION_MODE_MAX ? PVK_MTLSamplerReductionModeMaximum
+                                                                   : PVK_MTLSamplerReductionModeWeightedAverage;
+        }
+    }
+}
+
+static id pvk_sampler_state_create(struct pvk_device *device, const struct pvk_sampler_key *k)
+{
+    void *pool = objc_autoreleasePoolPush();
+    id desc = pvk_MTLSamplerDescriptor_new(), sampler = NULL;
+    if (desc) {
+        pvk_MTLSamplerDescriptor_setMinFilter(desc, k->min);
+        pvk_MTLSamplerDescriptor_setMagFilter(desc, k->mag);
+        pvk_MTLSamplerDescriptor_setMipFilter(desc, k->mip);
+        pvk_MTLSamplerDescriptor_setMaxAnisotropy(desc, k->anisotropy);
+        pvk_MTLSamplerDescriptor_setSAddressMode(desc, k->s);
+        pvk_MTLSamplerDescriptor_setTAddressMode(desc, k->t);
+        pvk_MTLSamplerDescriptor_setRAddressMode(desc, k->r);
+        pvk_MTLSamplerDescriptor_setBorderColor(desc, k->border);
+        pvk_MTLSamplerDescriptor_setReductionMode(desc, k->reduction);
+        pvk_MTLSamplerDescriptor_setNormalizedCoordinates(desc, k->normalized != 0);
+        pvk_MTLSamplerDescriptor_setLodMinClamp(desc, k->lod_min);
+        pvk_MTLSamplerDescriptor_setLodMaxClamp(desc, k->lod_max);
+        pvk_MTLSamplerDescriptor_setLodBias(desc, k->lod_bias);
+        pvk_MTLSamplerDescriptor_setCompareFunction(desc, k->compare);
+        pvk_MTLSamplerDescriptor_setSupportArgumentBuffers(desc, true);
+        sampler = pvk_MTLDevice_newSamplerStateWithDescriptor(device->physical_device->mtl_device, desc);
+        pvk_release(desc);
+    }
+    objc_autoreleasePoolPop(pool);
+    return sampler;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateSampler(VkDevice _device, const VkSamplerCreateInfo *pCreateInfo,
+                                               const VkAllocationCallbacks *pAllocator, VkSampler *pSampler)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    struct pvk_sampler *sampler = pvk_alloc(alloc, sizeof(*sampler), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    struct pvk_sampler_state *state;
+    struct pvk_sampler_key key;
+
+    if (!sampler)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    pvk_sampler_key(device, pCreateInfo, &key);
+    pthread_mutex_lock(&pvk_sampler_lock);
+    for (state = device->sampler_states; state; state = state->next)
+        if (memcmp(&state->key, &key, sizeof(key)) == 0)
+            break;
+    if (state) {
+        state->refs++;
+    } else {
+        /* Device scope: the state outlives this sampler if another shares it. */
+        state = pvk_alloc(pvk_device_alloc(device), sizeof(*state), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+        if (state)
+            state->mtl_sampler = pvk_sampler_state_create(device, &key);
+        if (!state || !state->mtl_sampler) {
+            pthread_mutex_unlock(&pvk_sampler_lock);
+            pvk_free(pvk_device_alloc(device), state);
+            pvk_free(alloc, sampler);
+            return state ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
+        state->key = key;
+        state->refs = 1;
+        state->next = device->sampler_states;
+        device->sampler_states = state;
+    }
+    pthread_mutex_unlock(&pvk_sampler_lock);
+    sampler->state = state;
+    sampler->mtl_sampler = state->mtl_sampler;
+    *pSampler = (VkSampler)sampler;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroySampler(VkDevice _device, VkSampler _sampler, const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    struct pvk_sampler *sampler = (struct pvk_sampler *)_sampler;
+    struct pvk_sampler_state **p, *state = NULL;
+
+    if (!sampler)
+        return;
+    pthread_mutex_lock(&pvk_sampler_lock);
+    if (--sampler->state->refs == 0) {
+        for (p = &device->sampler_states; *p; p = &(*p)->next) {
+            if (*p == sampler->state) {
+                state = *p;
+                *p = state->next;
+                break;
+            }
+        }
+    }
+    pthread_mutex_unlock(&pvk_sampler_lock);
+    if (state) {
+        pvk_release(state->mtl_sampler);
+        pvk_free(pvk_device_alloc(device), state);
+    }
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc(device), sampler);
+}
+
+/* At vkDestroyDevice: states of samplers the application did not destroy. */
+static void pvk_device_free_sampler_states(struct pvk_device *device)
+{
+    struct pvk_sampler_state *s = device->sampler_states, *next;
+    for (; s; s = next) {
+        next = s->next;
+        pvk_release(s->mtl_sampler);
+        pvk_free(pvk_device_alloc(device), s);
+    }
+    device->sampler_states = NULL;
+}
+
+/* ---- Host image copy ---- */
+
+/* One region of a host copy, in the terms of VkMemoryToImageCopy. */
+struct pvk_host_region {
+    void *host;
+    uint32_t row_length, image_height; /* texels; 0: tightly packed */
+    VkImageSubresourceLayers sub;
+    VkOffset3D offset;
+    VkExtent3D extent;
+};
+
+/* The internal queue that blits combined depth/stencil host copies. */
+static pthread_mutex_t pvk_host_copy_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static VkResult pvk_host_copy_blit(struct pvk_device *device, struct pvk_image *image, const struct pvk_host_region *r,
+                                   VkDeviceSize row_bytes, VkDeviceSize image_bytes, uint32_t layers, bool to_image)
+{
+    id mtl = device->physical_device->mtl_device, staging, allocator = NULL, cb = NULL, enc;
+    pvk_MTLBlitOption option = r->sub.aspectMask == VK_IMAGE_ASPECT_STENCIL_BIT ? PVK_MTLBlitOptionStencilFromDepthStencil
+                                                                                 : PVK_MTLBlitOptionDepthFromDepthStencil;
+    VkDeviceSize size = image_bytes * layers * (r->extent.depth ? r->extent.depth : 1);
+    VkResult result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    pvk_MTLOrigin origin;
+    pvk_MTLSize extent;
+    uint32_t i;
+    void *pool;
+
+    pthread_mutex_lock(&pvk_host_copy_lock);
+    pool = objc_autoreleasePoolPush();
+    if (!device->host_queue) {
+        device->host_queue = pvk_MTLDevice_newMTL4CommandQueue(mtl);
+        device->host_event = pvk_MTLDevice_newSharedEvent(mtl);
+        if (device->host_queue)
+            pvk_MTL4CommandQueue_addResidencySet(device->host_queue, device->residency_set);
+    }
+    staging = pvk_MTLDevice_newBufferWithLength_options(mtl, size ? size : 16,
+                                                        PVK_MTLResourceStorageModeShared |
+                                                            PVK_MTLResourceHazardTrackingModeUntracked);
+    if (device->host_queue && device->host_event && staging) {
+        allocator = pvk_MTLDevice_newCommandAllocator(mtl);
+        cb = pvk_MTLDevice_newCommandBuffer(mtl);
+    }
+    if (allocator && cb) {
+        pvk_device_make_resident(device, staging);
+        if (to_image)
+            memcpy(pvk_MTLBuffer_contents(staging), r->host, (size_t)size);
+        pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(cb, allocator);
+        enc = pvk_MTL4CommandBuffer_computeCommandEncoder(cb);
+        origin.x = (unsigned long)r->offset.x;
+        origin.y = (unsigned long)r->offset.y;
+        origin.z = 0;
+        extent.width = r->extent.width;
+        extent.height = r->extent.height;
+        extent.depth = 1;
+        for (i = 0; enc && i < layers; i++) {
+            if (to_image)
+                pvk_MTL4ComputeCommandEncoder_copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin_options(
+                    enc, staging, image_bytes * i, row_bytes, 0, extent, image->mtl_texture, r->sub.baseArrayLayer + i,
+                    r->sub.mipLevel, origin, option);
+            else
+                pvk_MTL4ComputeCommandEncoder_copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
+                    enc, image->mtl_texture, r->sub.baseArrayLayer + i, r->sub.mipLevel, origin, extent, staging,
+                    image_bytes * i, row_bytes, 0, option);
+        }
+        if (enc)
+            pvk_MTL4CommandEncoder_endEncoding(enc);
+        pvk_MTL4CommandBuffer_endCommandBuffer(cb);
+        pvk_MTL4CommandQueue_commit_count(device->host_queue, &cb, 1);
+        pvk_MTL4CommandQueue_signalEvent_value(device->host_queue, device->host_event, ++device->host_serial);
+        while (!pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(device->host_event, device->host_serial, 1000))
+            ;
+        if (!to_image)
+            memcpy(r->host, pvk_MTLBuffer_contents(staging), (size_t)size);
+        pvk_device_evict(device, staging);
+        result = enc ? VK_SUCCESS : VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    pvk_release(cb);
+    pvk_release(allocator);
+    pvk_release(staging);
+    objc_autoreleasePoolPop(pool);
+    pthread_mutex_unlock(&pvk_host_copy_lock);
+    return result;
+}
+
+/* Copies one region between host memory and a single-sample image. */
+static VkResult pvk_host_copy(struct pvk_device *device, struct pvk_image *image, const struct pvk_host_region *r,
+                              bool memcpy_layout, bool to_image)
+{
+    const struct pvk_format *f = image->fmt;
+    struct pvk_host_region region = *r;
+    VkDeviceSize row_bytes, image_bytes;
+    uint32_t bytes = pvk_aspect_bytes(f, r->sub.aspectMask), layers, i;
+    pvk_MTLRegion mr;
+
+    if (memcpy_layout) { /* the whole subresource, tightly packed */
+        region.row_length = region.image_height = 0;
+        region.offset.x = region.offset.y = region.offset.z = 0;
+        region.extent.width = pvk_mip_extent(image->extent.width, r->sub.mipLevel);
+        region.extent.height = image->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(image->extent.height, r->sub.mipLevel);
+        region.extent.depth = image->type == VK_IMAGE_TYPE_3D ? pvk_mip_extent(image->extent.depth, r->sub.mipLevel) : 1;
+    }
+    layers = region.sub.layerCount == VK_REMAINING_ARRAY_LAYERS ? image->layers - region.sub.baseArrayLayer
+                                                                : region.sub.layerCount;
+    row_bytes = (VkDeviceSize)(((region.row_length ? region.row_length : region.extent.width) + f->block_w - 1) / f->block_w) * bytes;
+    image_bytes = (VkDeviceSize)(((region.image_height ? region.image_height : region.extent.height) + f->block_h - 1) /
+                                 f->block_h) * row_bytes;
+    if (f->kind == PVK_FK_DEPTH_STENCIL)
+        return pvk_host_copy_blit(device, image, &region, row_bytes, image_bytes, layers, to_image);
+    mr.origin.x = (unsigned long)region.offset.x;
+    mr.origin.y = (unsigned long)region.offset.y;
+    mr.origin.z = (unsigned long)region.offset.z;
+    mr.size.width = region.extent.width;
+    mr.size.height = region.extent.height;
+    mr.size.depth = region.extent.depth;
+    for (i = 0; i < layers; i++) {
+        char *p = (char *)region.host + image_bytes * region.extent.depth * i;
+        unsigned long per_image = image->type == VK_IMAGE_TYPE_3D ? image_bytes : 0;
+        if (to_image)
+            pvk_MTLTexture_replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(
+                image->mtl_texture, mr, region.sub.mipLevel, region.sub.baseArrayLayer + i, p, row_bytes, per_image);
+        else
+            pvk_MTLTexture_getBytes_bytesPerRow_bytesPerImage_fromRegion_mipmapLevel_slice(
+                image->mtl_texture, p, row_bytes, per_image, mr, region.sub.mipLevel, region.sub.baseArrayLayer + i);
+    }
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCopyMemoryToImage(VkDevice device, const VkCopyMemoryToImageInfo *pCopyMemoryToImageInfo)
+{
+    const VkCopyMemoryToImageInfo *info = pCopyMemoryToImageInfo;
+    VkResult result = VK_SUCCESS;
+    uint32_t i;
+    for (i = 0; i < info->regionCount && result == VK_SUCCESS; i++) {
+        const VkMemoryToImageCopy *c = &info->pRegions[i];
+        struct pvk_host_region r;
+        r.host = (void *)(uintptr_t)c->pHostPointer;
+        r.row_length = c->memoryRowLength;
+        r.image_height = c->memoryImageHeight;
+        r.sub = c->imageSubresource;
+        r.offset = c->imageOffset;
+        r.extent = c->imageExtent;
+        result = pvk_host_copy((struct pvk_device *)device, (struct pvk_image *)info->dstImage, &r,
+                               (info->flags & VK_HOST_IMAGE_COPY_MEMCPY_BIT) != 0, true);
+    }
+    return result;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToMemory(VkDevice device, const VkCopyImageToMemoryInfo *pCopyImageToMemoryInfo)
+{
+    const VkCopyImageToMemoryInfo *info = pCopyImageToMemoryInfo;
+    VkResult result = VK_SUCCESS;
+    uint32_t i;
+    for (i = 0; i < info->regionCount && result == VK_SUCCESS; i++) {
+        const VkImageToMemoryCopy *c = &info->pRegions[i];
+        struct pvk_host_region r;
+        r.host = c->pHostPointer;
+        r.row_length = c->memoryRowLength;
+        r.image_height = c->memoryImageHeight;
+        r.sub = c->imageSubresource;
+        r.offset = c->imageOffset;
+        r.extent = c->imageExtent;
+        result = pvk_host_copy((struct pvk_device *)device, (struct pvk_image *)info->srcImage, &r,
+                               (info->flags & VK_HOST_IMAGE_COPY_MEMCPY_BIT) != 0, false);
+    }
+    return result;
+}
+
+/* Through host memory: read the source region tightly packed, write it to
+ * the destination. Compatible formats share the texel block size, so the
+ * destination extent is the source's in blocks. */
+VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToImage(VkDevice _device, const VkCopyImageToImageInfo *pCopyImageToImageInfo)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkCopyImageToImageInfo *info = pCopyImageToImageInfo;
+    struct pvk_image *src = (struct pvk_image *)info->srcImage, *dst = (struct pvk_image *)info->dstImage;
+    bool whole = (info->flags & VK_HOST_IMAGE_COPY_MEMCPY_BIT) != 0;
+    VkResult result = VK_SUCCESS;
+    uint32_t i;
+
+    for (i = 0; i < info->regionCount && result == VK_SUCCESS; i++) {
+        const VkImageCopy2 *c = &info->pRegions[i];
+        const struct pvk_format *sf = src->fmt, *df = dst->fmt;
+        struct pvk_host_region r;
+        VkDeviceSize size;
+        uint32_t layers = c->srcSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS
+                              ? src->layers - c->srcSubresource.baseArrayLayer
+                              : c->srcSubresource.layerCount;
+        uint32_t w = whole ? pvk_mip_extent(src->extent.width, c->srcSubresource.mipLevel) : c->extent.width;
+        uint32_t h = whole ? (src->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(src->extent.height, c->srcSubresource.mipLevel))
+                           : c->extent.height;
+        uint32_t d = whole ? (src->type == VK_IMAGE_TYPE_3D ? pvk_mip_extent(src->extent.depth, c->srcSubresource.mipLevel) : 1)
+                           : c->extent.depth;
+
+        size = (VkDeviceSize)((w + sf->block_w - 1) / sf->block_w) * ((h + sf->block_h - 1) / sf->block_h) * d * layers *
+               pvk_aspect_bytes(sf, c->srcSubresource.aspectMask);
+        memset(&r, 0, sizeof(r));
+        r.host = pvk_alloc(pvk_device_alloc(device), (size_t)size, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+        if (!r.host)
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        r.sub = c->srcSubresource;
+        r.sub.layerCount = layers;
+        r.offset = c->srcOffset;
+        r.extent.width = w;
+        r.extent.height = h;
+        r.extent.depth = d;
+        result = pvk_host_copy(device, src, &r, false, false);
+        if (result == VK_SUCCESS) {
+            r.sub = c->dstSubresource;
+            r.sub.layerCount = layers;
+            r.offset = c->dstOffset;
+            /* in destination texels: the same number of blocks */
+            r.extent.width = (w + sf->block_w - 1) / sf->block_w * df->block_w;
+            r.extent.height = (h + sf->block_h - 1) / sf->block_h * df->block_h;
+            if (whole) {
+                r.extent.width = pvk_mip_extent(dst->extent.width, c->dstSubresource.mipLevel);
+                r.extent.height = dst->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(dst->extent.height, c->dstSubresource.mipLevel);
+            } else {
+                if (r.extent.width > pvk_mip_extent(dst->extent.width, c->dstSubresource.mipLevel) - (uint32_t)c->dstOffset.x)
+                    r.extent.width = pvk_mip_extent(dst->extent.width, c->dstSubresource.mipLevel) - (uint32_t)c->dstOffset.x;
+                if (r.extent.height > pvk_mip_extent(dst->extent.height, c->dstSubresource.mipLevel) - (uint32_t)c->dstOffset.y)
+                    r.extent.height = pvk_mip_extent(dst->extent.height, c->dstSubresource.mipLevel) - (uint32_t)c->dstOffset.y;
+            }
+            r.row_length = (w + sf->block_w - 1) / sf->block_w * df->block_w;
+            r.image_height = (h + sf->block_h - 1) / sf->block_h * df->block_h;
+            result = pvk_host_copy(device, dst, &r, false, true);
+        }
+        pvk_free(pvk_device_alloc(device), r.host);
+    }
+    return result;
+}
+
+/* Metal textures have no layouts. */
+VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t transitionCount,
+                                                       const VkHostImageLayoutTransitionInfo *pTransitions)
+{
+    (void)device;
+    (void)transitionCount;
+    (void)pTransitions;
+    return VK_SUCCESS;
+}
 
 /* ==========================================================================
  * 12. Descriptor sets
@@ -39061,7 +40966,12 @@ enum pvk_cmd_op {
     PVK_CMD_PUSH_CONSTANTS,    /* struct pvk_cmd_push, then the data */
     PVK_CMD_DISPATCH,          /* struct pvk_cmd_dispatch */
     PVK_CMD_DISPATCH_INDIRECT, /* struct pvk_cmd_dispatch_indirect */
-    PVK_CMD_EXECUTE_COMMANDS   /* struct pvk_cmd_execute, then the command buffers */
+    PVK_CMD_EXECUTE_COMMANDS,  /* struct pvk_cmd_execute, then the command buffers */
+    /* Image transfers (end of this section) */
+    PVK_CMD_COPY_BUFFER_IMAGE, /* struct pvk_cmd_buffer_image */
+    PVK_CMD_COPY_IMAGE,        /* struct pvk_cmd_copy_image */
+    PVK_CMD_BLIT_IMAGE,        /* struct pvk_cmd_blit (blits and resolves) */
+    PVK_CMD_CLEAR_IMAGE        /* struct pvk_cmd_clear */
 };
 
 struct pvk_cmd {
@@ -39392,6 +41302,551 @@ VKAPI_ATTR void VKAPI_CALL vkCmdExecuteCommands(VkCommandBuffer commandBuffer, u
     memcpy(c + 1, pCommandBuffers, sizeof(VkCommandBuffer) * (size_t)commandBufferCount);
 }
 
+/* ---- Image transfer commands ----
+ *
+ * Images are resolved to their MTLTexture when recorded (Vulkan requires
+ * them bound by then). Encoding is in section 15:
+ *   buffer <-> image, image -> image   blit copies of the compute encoder
+ *                                      (Metal copies between any formats
+ *                                      of equal block size, compressed and
+ *                                      uncompressed alike, checked on M4 Max);
+ *   clears                             a render pass whose load action clears;
+ *   blits, resolves                    a draw into the destination that reads
+ *                                      the source (internal shaders, section 15).
+ * Image layouts change nothing. */
+
+/* One region of a buffer <-> image copy. */
+struct pvk_cmd_buffer_image {
+    struct pvk_cmd hdr;
+    id texture, buffer;
+    VkDeviceSize offset;      /* in the buffer, of the region's first texel block */
+    VkDeviceSize row_bytes;   /* from block row to block row */
+    VkDeviceSize image_bytes; /* from slice to slice of a 3D image, or layer to layer */
+    uint32_t level, layer, layers;
+    uint32_t x, y, z, w, h, d; /* texels */
+    uint32_t block_h;          /* texel rows per block row */
+    uint32_t tight_row;        /* bytes of one block row of the region */
+    uint32_t max_row;          /* Metal's largest bytesPerRow for the texture */
+    uint32_t options;          /* pvk_MTLBlitOption: the aspect of a depth/stencil format */
+    uint32_t to_image;
+};
+
+/* One region of an image -> image copy: `count` Metal copies of depth `d`,
+ * stepping the layer, or the z of a 3D image copied to or from layers.
+ * Metal copies texture to texture only between equal pixel formats (other
+ * formats are tiled differently: an ETC2 -> RG32Uint copy of private
+ * textures scrambles the blocks on M4 Max), and only whole depth/stencil
+ * texels, so other copies go through upload memory ("staged"). */
+struct pvk_cmd_copy_image {
+    struct pvk_cmd hdr;
+    id src, dst;
+    uint32_t src_level, dst_level, src_layer, dst_layer, count;
+    uint32_t src_3d, dst_3d; /* step z instead of the layer */
+    uint32_t sx, sy, sz, dx, dy, dz, w, h, d;
+    uint32_t staged;
+    uint32_t src_options, dst_options; /* pvk_MTLBlitOption: the aspect of a depth/stencil format */
+    uint32_t bytes;                    /* staged: bytes per texel block of the aspect */
+    uint32_t sbw, sbh, dbw, dbh;       /* staged: block sizes */
+    uint32_t dst_w, dst_h;             /* staged: destination level extent */
+};
+
+/* Packets are not zeroed by pvk_cmd_append. */
+static void pvk_cmd_zero(void *packet, size_t size)
+{
+    memset((char *)packet + sizeof(struct pvk_cmd), 0, size - sizeof(struct pvk_cmd));
+}
+
+/* Internal fragment functions of blits and resolves (section 15). */
+enum pvk_blit_function {
+    PVK_BLIT_F_2D, PVK_BLIT_F_2DARRAY, PVK_BLIT_F_3D,    /* nearest, float */
+    PVK_BLIT_U_2D, PVK_BLIT_U_2DARRAY, PVK_BLIT_U_3D,    /* nearest, uint */
+    PVK_BLIT_I_2D, PVK_BLIT_I_2DARRAY, PVK_BLIT_I_3D,    /* nearest, int */
+    PVK_BLIT_FL_2D, PVK_BLIT_FL_2DARRAY, PVK_BLIT_FL_3D, /* linear, float */
+    PVK_RESOLVE_F_MS, PVK_RESOLVE_F_MSARRAY,             /* average */
+    PVK_RESOLVE_U_MS, PVK_RESOLVE_U_MSARRAY,             /* sample 0 */
+    PVK_RESOLVE_I_MS, PVK_RESOLVE_I_MSARRAY,
+    PVK_BLIT_FUNCTION_COUNT
+};
+
+/* One region of a blit or a resolve: draws into dst, one pass per layer (or
+ * per slice of a 3D destination). */
+struct pvk_cmd_blit {
+    struct pvk_cmd hdr;
+    id src, dst;
+    pvk_MTLPixelFormat dst_format;
+    uint32_t function; /* enum pvk_blit_function */
+    uint32_t src_level, dst_level, src_layer, dst_layer, layers;
+    uint32_t src_w, src_h, src_d; /* source level extent */
+    uint32_t src_3d, dst_3d;
+    int32_t src0[3], src1[3], dst0[3], dst1[3]; /* resolves: src0 and dst0 are offsets, dst1 - dst0 the extent */
+    uint32_t swizzle[4];                        /* source format's component swizzle (pvk_MTLTextureSwizzle) */
+};
+
+/* One subresource range of a clear: one render pass per level and slice
+ * plane (3D) or per level (layered). */
+struct pvk_cmd_clear {
+    struct pvk_cmd hdr;
+    id texture;
+    uint32_t level, levels, layer, layers;
+    uint32_t depth; /* 3D: level 0 depth; 0 otherwise */
+    uint32_t color; /* a color image (else depth/stencil) */
+    uint32_t clear_depth, clear_stencil, has_depth, has_stencil;
+    pvk_MTLClearColor value;
+    double depth_value;
+    uint32_t stencil;
+};
+
+static uint32_t pvk_layer_count(const VkImageSubresourceLayers *sub, const struct pvk_image *image)
+{
+    return sub->layerCount == VK_REMAINING_ARRAY_LAYERS ? image->layers - sub->baseArrayLayer : sub->layerCount;
+}
+
+static void pvk_cmd_buffer_image_copy(struct pvk_command_buffer *cb, const struct pvk_buffer *buffer,
+                                      const struct pvk_image *image, const VkBufferImageCopy2 *r, bool to_image)
+{
+    const struct pvk_format *f = image->fmt;
+    const VkPhysicalDeviceLimits *l = &cb->pool->device->physical_device->properties.limits;
+    struct pvk_cmd_buffer_image *c;
+    uint32_t bytes = pvk_aspect_bytes(f, r->imageSubresource.aspectMask);
+    uint32_t rl = r->bufferRowLength ? r->bufferRowLength : r->imageExtent.width;
+    uint32_t ih = r->bufferImageHeight ? r->bufferImageHeight : r->imageExtent.height;
+    uint32_t max_width = image->type == VK_IMAGE_TYPE_3D ? l->maxImageDimension3D : l->maxImageDimension2D;
+
+    if (!buffer->memory || !image->mtl_texture || !r->imageExtent.width || !r->imageExtent.height ||
+        !r->imageExtent.depth)
+        return;
+    c = pvk_cmd_append(cb, PVK_CMD_COPY_BUFFER_IMAGE, sizeof(*c));
+    if (!c)
+        return;
+    pvk_cmd_zero(c, sizeof(*c));
+    c->texture = image->mtl_texture;
+    c->buffer = buffer->memory->mtl_buffer;
+    c->offset = buffer->offset + r->bufferOffset;
+    c->row_bytes = (VkDeviceSize)((rl + f->block_w - 1) / f->block_w) * bytes;
+    c->image_bytes = (VkDeviceSize)((ih + f->block_h - 1) / f->block_h) * c->row_bytes;
+    c->level = r->imageSubresource.mipLevel;
+    c->layer = image->type == VK_IMAGE_TYPE_3D ? 0 : r->imageSubresource.baseArrayLayer;
+    c->layers = image->type == VK_IMAGE_TYPE_3D ? 1 : pvk_layer_count(&r->imageSubresource, image);
+    c->x = (uint32_t)r->imageOffset.x;
+    c->y = image->type == VK_IMAGE_TYPE_1D ? 0 : (uint32_t)r->imageOffset.y;
+    c->z = image->type == VK_IMAGE_TYPE_3D ? (uint32_t)r->imageOffset.z : 0;
+    c->w = r->imageExtent.width;
+    c->h = image->type == VK_IMAGE_TYPE_1D ? 1 : r->imageExtent.height;
+    c->d = image->type == VK_IMAGE_TYPE_3D ? r->imageExtent.depth : 1;
+    c->block_h = f->block_h;
+    c->tight_row = (c->w + f->block_w - 1) / f->block_w * bytes;
+    c->max_row = max_width / f->block_w * bytes;
+    c->options = PVK_MTLBlitOptionNone;
+    if (f->kind == PVK_FK_DEPTH_STENCIL)
+        c->options = r->imageSubresource.aspectMask == VK_IMAGE_ASPECT_STENCIL_BIT ? PVK_MTLBlitOptionStencilFromDepthStencil
+                                                                                    : PVK_MTLBlitOptionDepthFromDepthStencil;
+    c->to_image = to_image;
+}
+
+/* VkBufferImageCopy and VkBufferImageCopy2 share their members after pNext. */
+static void pvk_buffer_image_copy2(const VkBufferImageCopy *in, VkBufferImageCopy2 *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2;
+    out->bufferOffset = in->bufferOffset;
+    out->bufferRowLength = in->bufferRowLength;
+    out->bufferImageHeight = in->bufferImageHeight;
+    out->imageSubresource = in->imageSubresource;
+    out->imageOffset = in->imageOffset;
+    out->imageExtent = in->imageExtent;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdCopyBufferToImage2(VkCommandBuffer commandBuffer,
+                                                   const VkCopyBufferToImageInfo2 *pCopyBufferToImageInfo)
+{
+    const VkCopyBufferToImageInfo2 *info = pCopyBufferToImageInfo;
+    uint32_t i;
+    for (i = 0; i < info->regionCount; i++)
+        pvk_cmd_buffer_image_copy((struct pvk_command_buffer *)commandBuffer, (const struct pvk_buffer *)info->srcBuffer,
+                                  (const struct pvk_image *)info->dstImage, &info->pRegions[i], true);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdCopyBufferToImage(VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkImage dstImage,
+                                                  VkImageLayout dstImageLayout, uint32_t regionCount,
+                                                  const VkBufferImageCopy *pRegions)
+{
+    uint32_t i;
+    (void)dstImageLayout;
+    for (i = 0; i < regionCount; i++) {
+        VkBufferImageCopy2 r;
+        pvk_buffer_image_copy2(&pRegions[i], &r);
+        pvk_cmd_buffer_image_copy((struct pvk_command_buffer *)commandBuffer, (const struct pvk_buffer *)srcBuffer,
+                                  (const struct pvk_image *)dstImage, &r, true);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdCopyImageToBuffer2(VkCommandBuffer commandBuffer,
+                                                   const VkCopyImageToBufferInfo2 *pCopyImageToBufferInfo)
+{
+    const VkCopyImageToBufferInfo2 *info = pCopyImageToBufferInfo;
+    uint32_t i;
+    for (i = 0; i < info->regionCount; i++)
+        pvk_cmd_buffer_image_copy((struct pvk_command_buffer *)commandBuffer, (const struct pvk_buffer *)info->dstBuffer,
+                                  (const struct pvk_image *)info->srcImage, &info->pRegions[i], false);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdCopyImageToBuffer(VkCommandBuffer commandBuffer, VkImage srcImage,
+                                                  VkImageLayout srcImageLayout, VkBuffer dstBuffer, uint32_t regionCount,
+                                                  const VkBufferImageCopy *pRegions)
+{
+    uint32_t i;
+    (void)srcImageLayout;
+    for (i = 0; i < regionCount; i++) {
+        VkBufferImageCopy2 r;
+        pvk_buffer_image_copy2(&pRegions[i], &r);
+        pvk_cmd_buffer_image_copy((struct pvk_command_buffer *)commandBuffer, (const struct pvk_buffer *)dstBuffer,
+                                  (const struct pvk_image *)srcImage, &r, false);
+    }
+}
+
+static void pvk_cmd_image_copy(struct pvk_command_buffer *cb, const struct pvk_image *src, const struct pvk_image *dst,
+                               const VkImageCopy2 *r)
+{
+    struct pvk_cmd_copy_image *c;
+    bool src_3d = src->type == VK_IMAGE_TYPE_3D, dst_3d = dst->type == VK_IMAGE_TYPE_3D;
+
+    if (!src->mtl_texture || !dst->mtl_texture || !r->extent.width || !r->extent.height || !r->extent.depth)
+        return;
+    c = pvk_cmd_append(cb, PVK_CMD_COPY_IMAGE, sizeof(*c));
+    if (!c)
+        return;
+    pvk_cmd_zero(c, sizeof(*c));
+    c->src = src->mtl_texture;
+    c->dst = dst->mtl_texture;
+    c->src_level = r->srcSubresource.mipLevel;
+    c->dst_level = r->dstSubresource.mipLevel;
+    c->src_layer = src_3d ? 0 : r->srcSubresource.baseArrayLayer;
+    c->dst_layer = dst_3d ? 0 : r->dstSubresource.baseArrayLayer;
+    c->sx = (uint32_t)r->srcOffset.x;
+    c->sy = (uint32_t)r->srcOffset.y;
+    c->sz = src_3d ? (uint32_t)r->srcOffset.z : 0;
+    c->dx = (uint32_t)r->dstOffset.x;
+    c->dy = (uint32_t)r->dstOffset.y;
+    c->dz = dst_3d ? (uint32_t)r->dstOffset.z : 0;
+    c->w = r->extent.width;
+    c->h = src->type == VK_IMAGE_TYPE_1D ? 1 : r->extent.height;
+    /* Copies between layers and the slices of a 3D image (maintenance1)
+     * step z on the 3D side, one slice per copy. */
+    if (src_3d && dst_3d) {
+        c->count = 1;
+        c->d = r->extent.depth;
+    } else {
+        c->count = src_3d ? r->extent.depth : pvk_layer_count(&r->srcSubresource, src);
+        c->d = 1;
+    }
+    c->src_3d = src_3d && !dst_3d;
+    c->dst_3d = dst_3d && !src_3d;
+    if (src->fmt->kind == PVK_FK_DEPTH_STENCIL &&
+        (r->srcSubresource.aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) !=
+            (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
+        c->staged = 1;
+        c->src_options = c->dst_options = r->srcSubresource.aspectMask == VK_IMAGE_ASPECT_STENCIL_BIT
+                                              ? PVK_MTLBlitOptionStencilFromDepthStencil
+                                              : PVK_MTLBlitOptionDepthFromDepthStencil;
+    }
+    if (src->fmt->mtl != dst->fmt->mtl && src->samples == 1) /* multisampled: no buffer copies */
+        c->staged = 1;
+    c->bytes = pvk_aspect_bytes(src->fmt, r->srcSubresource.aspectMask);
+    c->sbw = src->fmt->block_w;
+    c->sbh = src->fmt->block_h;
+    c->dbw = dst->fmt->block_w;
+    c->dbh = dst->fmt->block_h;
+    c->dst_w = pvk_mip_extent(dst->extent.width, c->dst_level);
+    c->dst_h = dst->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(dst->extent.height, c->dst_level);
+}
+
+static void pvk_image_copy2(const VkImageCopy *in, VkImageCopy2 *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->sType = VK_STRUCTURE_TYPE_IMAGE_COPY_2;
+    out->srcSubresource = in->srcSubresource;
+    out->srcOffset = in->srcOffset;
+    out->dstSubresource = in->dstSubresource;
+    out->dstOffset = in->dstOffset;
+    out->extent = in->extent;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdCopyImage2(VkCommandBuffer commandBuffer, const VkCopyImageInfo2 *pCopyImageInfo)
+{
+    uint32_t i;
+    for (i = 0; i < pCopyImageInfo->regionCount; i++)
+        pvk_cmd_image_copy((struct pvk_command_buffer *)commandBuffer, (const struct pvk_image *)pCopyImageInfo->srcImage,
+                           (const struct pvk_image *)pCopyImageInfo->dstImage, &pCopyImageInfo->pRegions[i]);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdCopyImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
+                                          VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount,
+                                          const VkImageCopy *pRegions)
+{
+    uint32_t i;
+    (void)srcImageLayout;
+    (void)dstImageLayout;
+    for (i = 0; i < regionCount; i++) {
+        VkImageCopy2 r;
+        pvk_image_copy2(&pRegions[i], &r);
+        pvk_cmd_image_copy((struct pvk_command_buffer *)commandBuffer, (const struct pvk_image *)srcImage,
+                           (const struct pvk_image *)dstImage, &r);
+    }
+}
+
+/* The source swizzle a blit applies: the format's (B4G4R4A4 and the other
+ * swizzled formats of section 7), as (index 0-3: channel, 4: zero, 5: one). */
+static void pvk_blit_swizzle(const struct pvk_format *f, uint32_t out[4])
+{
+    const pvk_MTLTextureSwizzle s[4] = { f->swizzle.red, f->swizzle.green, f->swizzle.blue, f->swizzle.alpha };
+    unsigned i;
+    for (i = 0; i < 4; i++) {
+        if (!(f->flags & PVK_FF_SWIZZLE))
+            out[i] = i;
+        else if (s[i] == PVK_MTLTextureSwizzleZero)
+            out[i] = 4;
+        else if (s[i] == PVK_MTLTextureSwizzleOne)
+            out[i] = 5;
+        else
+            out[i] = (uint32_t)(s[i] - PVK_MTLTextureSwizzleRed);
+    }
+}
+
+static void pvk_cmd_blit(struct pvk_command_buffer *cb, const struct pvk_image *src, const struct pvk_image *dst,
+                         const VkImageBlit2 *r, VkFilter filter)
+{
+    const struct pvk_format *f = src->fmt;
+    struct pvk_cmd_blit *c;
+    uint32_t dim = src->mtl_type == PVK_MTLTextureType3D ? 2 : src->mtl_type == PVK_MTLTextureType2DArray ? 1 : 0;
+    unsigned i;
+
+    if (!src->mtl_texture || !dst->mtl_texture || !pvk_format_is_color(f) || !pvk_format_is_color(dst->fmt))
+        return; /* depth/stencil formats have no BLIT_DST (section 7) */
+    c = pvk_cmd_append(cb, PVK_CMD_BLIT_IMAGE, sizeof(*c));
+    if (!c)
+        return;
+    pvk_cmd_zero(c, sizeof(*c));
+    c->src = src->mtl_texture;
+    c->dst = dst->mtl_texture;
+    c->dst_format = dst->fmt->mtl;
+    if (f->kind == PVK_FK_UINT)
+        c->function = PVK_BLIT_U_2D + dim;
+    else if (f->kind == PVK_FK_SINT)
+        c->function = PVK_BLIT_I_2D + dim;
+    else
+        c->function = (filter == VK_FILTER_LINEAR ? PVK_BLIT_FL_2D : PVK_BLIT_F_2D) + dim;
+    c->src_level = r->srcSubresource.mipLevel;
+    c->dst_level = r->dstSubresource.mipLevel;
+    c->src_layer = r->srcSubresource.baseArrayLayer;
+    c->dst_layer = r->dstSubresource.baseArrayLayer;
+    c->layers = pvk_layer_count(&r->srcSubresource, src);
+    c->src_w = pvk_mip_extent(src->extent.width, c->src_level);
+    c->src_h = src->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(src->extent.height, c->src_level);
+    c->src_d = src->type == VK_IMAGE_TYPE_3D ? pvk_mip_extent(src->extent.depth, c->src_level) : 1;
+    c->src_3d = src->type == VK_IMAGE_TYPE_3D;
+    c->dst_3d = dst->type == VK_IMAGE_TYPE_3D;
+    for (i = 0; i < 3; i++) {
+        c->src0[i] = (&r->srcOffsets[0].x)[i];
+        c->src1[i] = (&r->srcOffsets[1].x)[i];
+        c->dst0[i] = (&r->dstOffsets[0].x)[i];
+        c->dst1[i] = (&r->dstOffsets[1].x)[i];
+    }
+    pvk_blit_swizzle(f, c->swizzle);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdBlitImage2(VkCommandBuffer commandBuffer, const VkBlitImageInfo2 *pBlitImageInfo)
+{
+    uint32_t i;
+    for (i = 0; i < pBlitImageInfo->regionCount; i++)
+        pvk_cmd_blit((struct pvk_command_buffer *)commandBuffer, (const struct pvk_image *)pBlitImageInfo->srcImage,
+                     (const struct pvk_image *)pBlitImageInfo->dstImage, &pBlitImageInfo->pRegions[i],
+                     pBlitImageInfo->filter);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdBlitImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
+                                          VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount,
+                                          const VkImageBlit *pRegions, VkFilter filter)
+{
+    uint32_t i;
+    (void)srcImageLayout;
+    (void)dstImageLayout;
+    for (i = 0; i < regionCount; i++) {
+        VkImageBlit2 r;
+        memset(&r, 0, sizeof(r));
+        r.sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2;
+        r.srcSubresource = pRegions[i].srcSubresource;
+        r.srcOffsets[0] = pRegions[i].srcOffsets[0];
+        r.srcOffsets[1] = pRegions[i].srcOffsets[1];
+        r.dstSubresource = pRegions[i].dstSubresource;
+        r.dstOffsets[0] = pRegions[i].dstOffsets[0];
+        r.dstOffsets[1] = pRegions[i].dstOffsets[1];
+        pvk_cmd_blit((struct pvk_command_buffer *)commandBuffer, (const struct pvk_image *)srcImage,
+                     (const struct pvk_image *)dstImage, &r, filter);
+    }
+}
+
+/* Resolves average the samples of float formats and take sample 0 of
+ * integer ones (Copy Commands > Resolving Multisample Images leaves the
+ * method to the implementation). */
+static void pvk_cmd_resolve(struct pvk_command_buffer *cb, const struct pvk_image *src, const struct pvk_image *dst,
+                            const VkImageResolve2 *r)
+{
+    const struct pvk_format *f = src->fmt;
+    struct pvk_cmd_blit *c;
+    uint32_t array = src->mtl_type == PVK_MTLTextureType2DMultisampleArray;
+
+    if (!src->mtl_texture || !dst->mtl_texture || !pvk_format_is_color(f) || !r->extent.width || !r->extent.height)
+        return;
+    c = pvk_cmd_append(cb, PVK_CMD_BLIT_IMAGE, sizeof(*c));
+    if (!c)
+        return;
+    pvk_cmd_zero(c, sizeof(*c));
+    c->src = src->mtl_texture;
+    c->dst = dst->mtl_texture;
+    c->dst_format = dst->fmt->mtl;
+    c->function = (f->kind == PVK_FK_UINT ? PVK_RESOLVE_U_MS : f->kind == PVK_FK_SINT ? PVK_RESOLVE_I_MS : PVK_RESOLVE_F_MS) + array;
+    c->dst_level = r->dstSubresource.mipLevel;
+    c->src_layer = r->srcSubresource.baseArrayLayer;
+    c->dst_layer = r->dstSubresource.baseArrayLayer;
+    c->layers = pvk_layer_count(&r->srcSubresource, src);
+    c->src0[0] = r->srcOffset.x;
+    c->src0[1] = r->srcOffset.y;
+    c->dst0[0] = r->dstOffset.x;
+    c->dst0[1] = r->dstOffset.y;
+    c->dst1[0] = r->dstOffset.x + (int32_t)r->extent.width;
+    c->dst1[1] = r->dstOffset.y + (int32_t)r->extent.height;
+    c->dst0[2] = 0;
+    c->dst1[2] = 1;
+    pvk_blit_swizzle(f, c->swizzle);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdResolveImage2(VkCommandBuffer commandBuffer, const VkResolveImageInfo2 *pResolveImageInfo)
+{
+    uint32_t i;
+    for (i = 0; i < pResolveImageInfo->regionCount; i++)
+        pvk_cmd_resolve((struct pvk_command_buffer *)commandBuffer, (const struct pvk_image *)pResolveImageInfo->srcImage,
+                        (const struct pvk_image *)pResolveImageInfo->dstImage, &pResolveImageInfo->pRegions[i]);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdResolveImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
+                                             VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount,
+                                             const VkImageResolve *pRegions)
+{
+    uint32_t i;
+    (void)srcImageLayout;
+    (void)dstImageLayout;
+    for (i = 0; i < regionCount; i++) {
+        VkImageResolve2 r;
+        memset(&r, 0, sizeof(r));
+        r.sType = VK_STRUCTURE_TYPE_IMAGE_RESOLVE_2;
+        r.srcSubresource = pRegions[i].srcSubresource;
+        r.srcOffset = pRegions[i].srcOffset;
+        r.dstSubresource = pRegions[i].dstSubresource;
+        r.dstOffset = pRegions[i].dstOffset;
+        r.extent = pRegions[i].extent;
+        pvk_cmd_resolve((struct pvk_command_buffer *)commandBuffer, (const struct pvk_image *)srcImage,
+                        (const struct pvk_image *)dstImage, &r);
+    }
+}
+
+/* Integer clear values are converted by keeping the low bits (Clear
+ * Commands > Clear Values: "converted ... by casting to the integer type
+ * with fewer bits"); the clear color is given per Metal channel. */
+static pvk_MTLClearColor pvk_clear_color(const struct pvk_format *f, const VkClearColorValue *v)
+{
+    double vk[4], mtl[4];
+    unsigned i;
+    for (i = 0; i < 4; i++) {
+        uint32_t bits = f->int_bits == 10 ? (i == 3 ? 2 : 10) : f->int_bits;
+        if (f->kind == PVK_FK_UINT) {
+            uint32_t u = v->uint32[i];
+            if (bits < 32)
+                u &= (1u << bits) - 1;
+            vk[i] = (double)u;
+        } else if (f->kind == PVK_FK_SINT) {
+            int32_t s = v->int32[i];
+            if (bits < 32) {
+                uint32_t u = (uint32_t)s & ((1u << bits) - 1);
+                s = (u & (1u << (bits - 1))) ? (int32_t)(u | ~((1u << bits) - 1)) : (int32_t)u;
+            }
+            vk[i] = (double)s;
+        } else {
+            vk[i] = (double)v->float32[i];
+        }
+        mtl[i] = vk[i];
+    }
+    if (f->flags & PVK_FF_SWIZZLE) { /* Vulkan component i is read from Metal channel swizzle[i] */
+        const pvk_MTLTextureSwizzle s[4] = { f->swizzle.red, f->swizzle.green, f->swizzle.blue, f->swizzle.alpha };
+        for (i = 0; i < 4; i++)
+            if (s[i] >= PVK_MTLTextureSwizzleRed)
+                mtl[s[i] - PVK_MTLTextureSwizzleRed] = vk[i];
+    }
+    {
+        pvk_MTLClearColor c;
+        c.red = mtl[0];
+        c.green = mtl[1];
+        c.blue = mtl[2];
+        c.alpha = mtl[3];
+        return c;
+    }
+}
+
+static struct pvk_cmd_clear *pvk_cmd_clear_range(struct pvk_command_buffer *cb, const struct pvk_image *image,
+                                                 const VkImageSubresourceRange *range)
+{
+    struct pvk_cmd_clear *c;
+    if (!image->mtl_texture)
+        return NULL;
+    c = pvk_cmd_append(cb, PVK_CMD_CLEAR_IMAGE, sizeof(*c));
+    if (!c)
+        return NULL;
+    pvk_cmd_zero(c, sizeof(*c));
+    c->texture = image->mtl_texture;
+    c->level = range->baseMipLevel;
+    c->levels = range->levelCount == VK_REMAINING_MIP_LEVELS ? image->levels - range->baseMipLevel : range->levelCount;
+    c->layer = range->baseArrayLayer;
+    c->layers = range->layerCount == VK_REMAINING_ARRAY_LAYERS ? image->layers - range->baseArrayLayer : range->layerCount;
+    c->depth = image->type == VK_IMAGE_TYPE_3D ? image->extent.depth : 0;
+    c->has_depth = pvk_format_has_depth(image->fmt);
+    c->has_stencil = pvk_format_has_stencil(image->fmt);
+    return c;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdClearColorImage(VkCommandBuffer commandBuffer, VkImage _image, VkImageLayout imageLayout,
+                                                const VkClearColorValue *pColor, uint32_t rangeCount,
+                                                const VkImageSubresourceRange *pRanges)
+{
+    const struct pvk_image *image = (const struct pvk_image *)_image;
+    uint32_t i;
+    (void)imageLayout;
+    for (i = 0; i < rangeCount; i++) {
+        struct pvk_cmd_clear *c = pvk_cmd_clear_range((struct pvk_command_buffer *)commandBuffer, image, &pRanges[i]);
+        if (!c)
+            return;
+        c->color = 1;
+        c->value = pvk_clear_color(image->fmt, pColor);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBuffer, VkImage _image,
+                                                       VkImageLayout imageLayout,
+                                                       const VkClearDepthStencilValue *pDepthStencil, uint32_t rangeCount,
+                                                       const VkImageSubresourceRange *pRanges)
+{
+    const struct pvk_image *image = (const struct pvk_image *)_image;
+    uint32_t i;
+    (void)imageLayout;
+    for (i = 0; i < rangeCount; i++) {
+        struct pvk_cmd_clear *c = pvk_cmd_clear_range((struct pvk_command_buffer *)commandBuffer, image, &pRanges[i]);
+        if (!c)
+            return;
+        c->clear_depth = (pRanges[i].aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) != 0;
+        c->clear_stencil = (pRanges[i].aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT) != 0;
+        c->depth_value = pDepthStencil->depth;
+        c->stencil = pDepthStencil->stencil & 0xffu;
+    }
+}
+
 /* ==========================================================================
  * 15. Queue submission and synchronization
  *
@@ -39427,13 +41882,19 @@ VKAPI_ATTR void VKAPI_CALL vkCmdExecuteCommands(VkCommandBuffer commandBuffer, u
  *
  * BARRIERS
  *   Metal 4 does not track resources: commands in an encoder and across
- *   encoders run concurrently unless barriers say otherwise. A Vulkan barrier
- *   orders everything before it in submission order against everything
- *   after, so it becomes (pvk_encode_barrier): an encoder barrier for the
- *   commands around it, a consumer barrier against earlier encoders (once per
- *   encoder) and a producer barrier towards later ones (once, at the end of
- *   the encoder). Stages are conservative for now (pvk_barrier_stages): any
- *   device stage is all the work a compute encoder runs.
+ *   encoders run concurrently unless barriers say otherwise. A batch is a
+ *   compute encoder, interrupted by a render encoder for each clear, blit or
+ *   resolve (they draw). A Vulkan barrier orders everything before it in
+ *   submission order against everything after, so it becomes
+ *   (pvk_encode_barrier) an encoder barrier for the commands around it and a
+ *   consumer barrier against all earlier encoders on the queue (once per
+ *   encoder); and once a queue has seen a barrier, every encoder it starts
+ *   later begins with such a consumer barrier, as the barrier's second scope
+ *   reaches every later command (queue->ordered). Waiting for all earlier
+ *   encoders also covers what a barrier ordered before them, which a
+ *   producer barrier at the end of an encoder would not when no command of
+ *   that encoder follows the barrier. Stages are conservative
+ *   (pvk_barrier_stages): any device stage is all the work an encoder runs.
  *
  * WAITS
  *   Fences and semaphores are (MTLSharedEvent, value) pairs, waited for with
@@ -39497,6 +41958,10 @@ static VkResult pvk_queue_init(struct pvk_queue *queue)
     if (desc) {
         pvk_MTL4ArgumentTableDescriptor_setMaxBufferBindCount(desc, 31);
         queue->argument_table = pvk_MTLDevice_newArgumentTableWithDescriptor_error(mtl, desc, NULL);
+        /* Internal draws (blits, resolves): arguments and one texture. */
+        pvk_MTL4ArgumentTableDescriptor_setMaxBufferBindCount(desc, 1);
+        pvk_MTL4ArgumentTableDescriptor_setMaxTextureBindCount(desc, 1);
+        queue->render_table = pvk_MTLDevice_newArgumentTableWithDescriptor_error(mtl, desc, NULL);
         pvk_release(desc);
     }
     objc_autoreleasePoolPop(pool);
@@ -39506,7 +41971,9 @@ static VkResult pvk_queue_init(struct pvk_queue *queue)
         else
             pthread_mutex_destroy(&queue->lock);
     }
-    return queue->timeline && queue->argument_table && queue->lock_ready ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
+    return queue->timeline && queue->argument_table && queue->render_table && queue->lock_ready
+               ? VK_SUCCESS
+               : VK_ERROR_INITIALIZATION_FAILED;
 }
 
 static void pvk_deferred_free(struct pvk_device *device, struct pvk_deferred *d)
@@ -39551,6 +42018,7 @@ static void pvk_queue_finish(struct pvk_queue *queue)
     pvk_upload_chunks_free(device, queue->retired);
     pvk_upload_chunks_free(device, queue->free_chunks);
     pvk_release(queue->argument_table);
+    pvk_release(queue->render_table);
     pvk_release(queue->timeline);
     pvk_deferred_free(device, queue->deferred);
     pvk_deferred_free(device, queue->done);
@@ -39560,7 +42028,7 @@ static void pvk_queue_finish(struct pvk_queue *queue)
     }
     queue->pending = queue->pending_tail = queue->free_submissions = NULL;
     queue->upload = queue->retired = queue->retired_tail = queue->free_chunks = NULL;
-    queue->argument_table = queue->timeline = NULL;
+    queue->argument_table = queue->render_table = queue->timeline = NULL;
     queue->deferred = queue->deferred_tail = queue->done = NULL;
     queue->lock_ready = false;
     objc_autoreleasePoolPop(pool);
@@ -39649,9 +42117,8 @@ struct pvk_encoder {
     id cb;            /* MTL4CommandBuffer */
     id enc;           /* MTL4ComputeCommandEncoder, made by the first command that needs it */
     VkResult result;
-    bool waits;                                 /* the batch waits for semaphores */
-    bool consumer_barrier;                      /* against earlier encoders: issued */
-    pvk_MTLStages producer_after, producer_before; /* towards later encoders: at the end */
+    bool waits;            /* the batch waits for semaphores */
+    bool consumer_barrier; /* against earlier encoders: issued */
     struct pvk_pipeline *pipeline;
     bool pipeline_dirty; /* setComputePipelineState: owed */
     bool push_dirty;     /* push constants changed since they were bound */
@@ -39718,6 +42185,12 @@ static void *pvk_upload(struct pvk_encoder *e, size_t size, size_t align, id *bu
     return c->contents + at;
 }
 
+/* The Metal stages of compute encoders (dispatches and blits), of render
+ * encoders (draws, attachment loads and stores), and of both. */
+#define PVK_STAGES_COMPUTE (PVK_MTLStageDispatch | PVK_MTLStageBlit)
+#define PVK_STAGES_RENDER (PVK_MTLStageVertex | PVK_MTLStageFragment | PVK_MTLStageTile)
+#define PVK_STAGES_ALL (PVK_STAGES_COMPUTE | PVK_STAGES_RENDER)
+
 static id pvk_encoder_get(struct pvk_encoder *e)
 {
     if (!e->enc && e->result == VK_SUCCESS) {
@@ -39730,12 +42203,11 @@ static id pvk_encoder_get(struct pvk_encoder *e)
         e->consumer_barrier = false;
         e->pipeline_dirty = true;
         e->push_bound = 0;
-        if (e->waits) {
-            /* A semaphore signalled earlier on this queue is waited for by
-             * waiting for all earlier work (pvk_queue_submit). */
+        if (e->waits || e->queue->ordered) {
+            /* After a barrier, and for semaphores signalled earlier on this
+             * queue (pvk_queue_submit): wait for all earlier work. */
             pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-                e->enc, PVK_MTLStageDispatch | PVK_MTLStageBlit, PVK_MTLStageDispatch | PVK_MTLStageBlit,
-                PVK_MTL4VisibilityOptionDevice);
+                e->enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, PVK_MTL4VisibilityOptionDevice);
             e->consumer_barrier = true;
         }
     }
@@ -39746,9 +42218,6 @@ static void pvk_encoder_end(struct pvk_encoder *e)
 {
     if (!e->enc)
         return;
-    if (e->producer_after)
-        pvk_MTL4CommandEncoder_barrierAfterStages_beforeQueueStages_visibilityOptions(
-            e->enc, e->producer_after, e->producer_before, PVK_MTL4VisibilityOptionDevice);
     pvk_MTL4CommandEncoder_endEncoding(e->enc);
     e->enc = NULL;
 }
@@ -39770,19 +42239,18 @@ static pvk_MTLStages pvk_barrier_stages(VkPipelineStageFlags2 stages, bool src)
 
 static void pvk_encode_barrier(struct pvk_encoder *e, const struct pvk_cmd_barrier *c)
 {
-    pvk_MTLStages after = pvk_barrier_stages(c->src_stages, true), before = pvk_barrier_stages(c->dst_stages, false);
-    id enc;
-    if (!after || !before || !(enc = pvk_encoder_get(e)))
+    if (!pvk_barrier_stages(c->src_stages, true) || !pvk_barrier_stages(c->dst_stages, false))
+        return;
+    e->queue->ordered = true;
+    if (!e->enc) /* the next encoder waits for everything before it */
         return;
     if (!e->consumer_barrier) {
-        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(enc, after, before,
-                                                                                    PVK_MTL4VisibilityOptionDevice);
+        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
+            e->enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, PVK_MTL4VisibilityOptionDevice);
         e->consumer_barrier = true;
     }
-    pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(enc, after, before,
-                                                                                        PVK_MTL4VisibilityOptionDevice);
-    e->producer_after |= after;
-    e->producer_before |= before;
+    pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
+        e->enc, PVK_STAGES_COMPUTE, PVK_STAGES_COMPUTE, PVK_MTL4VisibilityOptionDevice);
 }
 
 static id pvk_device_fill_pipeline(struct pvk_device *device);
@@ -39879,6 +42347,506 @@ static id pvk_encode_compute_state(struct pvk_encoder *e, const uint32_t base[3]
     return enc;
 }
 
+/* ---- Image transfers ----
+ *
+ * The packets of section 14's image transfer commands. Copies are blits of
+ * the compute encoder. Clears, blits and resolves draw, each in a render
+ * encoder of its own between compute encoders (pvk_encoder_render): a clear
+ * is a render pass whose load action clears (all layers of a level at once,
+ * with renderTargetArrayLength); blits and resolves draw a triangle covering
+ * the destination rectangle (the viewport) with an internal fragment shader
+ * that reads the source: nearest texels with read(), linear filtering with
+ * a sampler, resolves average the samples (float) or take sample 0. Render
+ * pipelines are made on first use per function and destination format. */
+
+/* Arguments of the internal draws, at buffer index 0 (pvk_blit_args in
+ * pvk_blit_msl). */
+struct pvk_blit_args {
+    float src[4];        /* blits: source rectangle x0, y0, x1, y1 (texels) */
+    float dst[4];        /* blits: destination rectangle x0, y0, x1, y1 (pixels) */
+    float size[4];       /* source level width, height, depth; source level */
+    float layer[4];      /* .x: source layer, or z (texels) in a 3D source */
+    uint32_t swizzle[4]; /* source components: 0-3 a channel, 4 zero, 5 one */
+    int32_t offset[4];   /* resolves: source - destination x, y; source layer */
+};
+
+#define PVK_MSL_BLIT_NEAREST(T, P)                                                                              \
+    "fragment vec<" T ", 4> pvk_blit_" P "_2d(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n" \
+    "    texture2d<" T "> t [[texture(0)]])\n"                                                                  \
+    "{\n"                                                                                                       \
+    "    return pvk_swizzle(t.read(pvk_texel(pos, a), uint(a.size.w)), a.swizzle);\n"                          \
+    "}\n"                                                                                                       \
+    "fragment vec<" T ", 4> pvk_blit_" P "_2darray(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n" \
+    "    texture2d_array<" T "> t [[texture(0)]])\n"                                                            \
+    "{\n"                                                                                                       \
+    "    return pvk_swizzle(t.read(pvk_texel(pos, a), uint(a.layer.x), uint(a.size.w)), a.swizzle);\n"         \
+    "}\n"                                                                                                       \
+    "fragment vec<" T ", 4> pvk_blit_" P "_3d(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n" \
+    "    texture3d<" T "> t [[texture(0)]])\n"                                                                  \
+    "{\n"                                                                                                       \
+    "    uint3 i = uint3(pvk_texel(pos, a), uint(clamp(floor(a.layer.x), 0.0, a.size.z - 1.0)));\n"             \
+    "    return pvk_swizzle(t.read(i, uint(a.size.w)), a.swizzle);\n"                                           \
+    "}\n"
+#define PVK_MSL_RESOLVE(T, P, SUM, ARRAY_ARG)                                                                   \
+    "fragment vec<" T ", 4> pvk_resolve_" P "_ms(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n" \
+    "    texture2d_ms<" T "> t [[texture(0)]])\n"                                                               \
+    "{\n"                                                                                                       \
+    "    uint2 i = uint2(int2(pos.xy) + a.offset.xy);\n" SUM("")                                               \
+    "}\n"                                                                                                       \
+    "fragment vec<" T ", 4> pvk_resolve_" P "_msarray(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n" \
+    "    texture2d_ms_array<" T "> t [[texture(0)]])\n"                                                         \
+    "{\n"                                                                                                       \
+    "    uint2 i = uint2(int2(pos.xy) + a.offset.xy);\n" SUM(ARRAY_ARG)                                        \
+    "}\n"
+#define PVK_MSL_AVERAGE(L)                                                                                      \
+    "    float4 s = 0.0;\n"                                                                                     \
+    "    uint n = t.get_num_samples();\n"                                                                       \
+    "    for (uint k = 0; k < n; k++)\n"                                                                        \
+    "        s += t.read(i, " L "k);\n"                                                                         \
+    "    return s / float(n);\n"
+#define PVK_MSL_SAMPLE0(L) "    return t.read(i, " L "0);\n"
+
+/* In parts: C99 compilers need not take string literals over 4095 bytes. */
+static const char *const pvk_blit_msl[] = {
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct pvk_blit_args { float4 src; float4 dst; float4 size; float4 layer; uint4 swizzle; int4 offset; };\n"
+    "vertex float4 pvk_blit_vs(uint vid [[vertex_id]])\n"
+    "{\n"
+    "    float2 p = float2((vid << 1) & 2, vid & 2);\n"
+    "    return float4(p * 2.0 - 1.0, 0.0, 1.0);\n"
+    "}\n"
+    "template <typename T> vec<T, 4> pvk_swizzle(vec<T, 4> c, uint4 s)\n"
+    "{\n"
+    "    T v[6] = { c.x, c.y, c.z, c.w, T(0), T(1) };\n"
+    "    return vec<T, 4>(v[s.x], v[s.y], v[s.z], v[s.w]);\n"
+    "}\n"
+    "static float2 pvk_coord(float4 pos, constant pvk_blit_args &a)\n"
+    "{\n"
+    "    return a.src.xy + (pos.xy - a.dst.xy) * (a.src.zw - a.src.xy) / (a.dst.zw - a.dst.xy);\n"
+    "}\n"
+    "static uint2 pvk_texel(float4 pos, constant pvk_blit_args &a)\n"
+    "{\n"
+    "    return uint2(clamp(floor(pvk_coord(pos, a)), float2(0.0), a.size.xy - 1.0));\n"
+    "}\n"
+    PVK_MSL_BLIT_NEAREST("float", "f"),
+    PVK_MSL_BLIT_NEAREST("uint", "u")
+    PVK_MSL_BLIT_NEAREST("int", "i"),
+    "constexpr sampler pvk_linear(filter::linear, mip_filter::nearest, address::clamp_to_edge);\n"
+    "fragment float4 pvk_blit_fl_2d(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n"
+    "    texture2d<float> t [[texture(0)]])\n"
+    "{\n"
+    "    return pvk_swizzle(t.sample(pvk_linear, pvk_coord(pos, a) / a.size.xy, level(a.size.w)), a.swizzle);\n"
+    "}\n"
+    "fragment float4 pvk_blit_fl_2darray(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n"
+    "    texture2d_array<float> t [[texture(0)]])\n"
+    "{\n"
+    "    return pvk_swizzle(t.sample(pvk_linear, pvk_coord(pos, a) / a.size.xy, uint(a.layer.x), level(a.size.w)),\n"
+    "                       a.swizzle);\n"
+    "}\n"
+    "fragment float4 pvk_blit_fl_3d(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n"
+    "    texture3d<float> t [[texture(0)]])\n"
+    "{\n"
+    "    float3 c = float3(pvk_coord(pos, a) / a.size.xy, a.layer.x / a.size.z);\n"
+    "    return pvk_swizzle(t.sample(pvk_linear, c, level(a.size.w)), a.swizzle);\n"
+    "}\n"
+    PVK_MSL_RESOLVE("float", "f", PVK_MSL_AVERAGE, "uint(a.offset.z), "),
+    PVK_MSL_RESOLVE("uint", "u", PVK_MSL_SAMPLE0, "uint(a.offset.z), ")
+    PVK_MSL_RESOLVE("int", "i", PVK_MSL_SAMPLE0, "uint(a.offset.z), "),
+};
+
+static const char *const pvk_blit_function_names[PVK_BLIT_FUNCTION_COUNT] = {
+    "pvk_blit_f_2d",    "pvk_blit_f_2darray",  "pvk_blit_f_3d",    "pvk_blit_u_2d",       "pvk_blit_u_2darray",
+    "pvk_blit_u_3d",    "pvk_blit_i_2d",       "pvk_blit_i_2darray", "pvk_blit_i_3d",     "pvk_blit_fl_2d",
+    "pvk_blit_fl_2darray", "pvk_blit_fl_3d",   "pvk_resolve_f_ms", "pvk_resolve_f_msarray", "pvk_resolve_u_ms",
+    "pvk_resolve_u_msarray", "pvk_resolve_i_ms", "pvk_resolve_i_msarray",
+};
+
+struct pvk_blit_pipeline {
+    struct pvk_blit_pipeline *next;
+    uint32_t function;
+    pvk_MTLPixelFormat format;
+    id pso; /* MTLRenderPipelineState */
+};
+
+static pthread_mutex_t pvk_blit_lock = PTHREAD_MUTEX_INITIALIZER; /* queues of a device encode concurrently */
+
+/* The render pipeline of an internal function drawing into a format. */
+static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MTLPixelFormat format)
+{
+    id mtl = device->physical_device->mtl_device, pso = NULL;
+    struct pvk_blit_pipeline *p;
+    void *pool;
+
+    pthread_mutex_lock(&pvk_blit_lock);
+    for (p = device->blit_pipelines; p; p = p->next)
+        if (p->function == function && p->format == format)
+            break;
+    if (p) {
+        pso = p->pso;
+        pthread_mutex_unlock(&pvk_blit_lock);
+        return pso;
+    }
+    pool = objc_autoreleasePoolPush();
+    if (!device->blit_library) {
+        id options = pvk_MTLCompileOptions_new(), err = NULL;
+        size_t i, n = 1;
+        char *msl;
+        for (i = 0; i < PVK_ARRAY_SIZE(pvk_blit_msl); i++)
+            n += strlen(pvk_blit_msl[i]);
+        msl = pvk_alloc(pvk_device_alloc(device), n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+        if (options && msl) {
+            for (i = 0; i < PVK_ARRAY_SIZE(pvk_blit_msl); i++)
+                strcat(msl, pvk_blit_msl[i]);
+            pvk_MTLCompileOptions_setMathMode(options, PVK_MTLMathModeSafe);
+            pvk_MTLCompileOptions_setLanguageVersion(options, PVK_MTLLanguageVersion3_2);
+            device->blit_library = pvk_MTLDevice_newLibraryWithSource_options_error(
+                mtl, pvk_NSString_stringWithUTF8String(msl), options, &err);
+        }
+        pvk_release(options);
+        pvk_free(pvk_device_alloc(device), msl);
+        if (!device->blit_library)
+            pvk_log(PVK_LOG_ERROR, "internal blit shaders: %s",
+                    err ? pvk_ns_utf8(pvk_NSError_localizedDescription(err)) : "Metal could not compile them");
+    }
+    if (device->blit_library) {
+        id desc = pvk_MTLRenderPipelineDescriptor_new(), err = NULL;
+        id vs = pvk_MTLLibrary_newFunctionWithName(device->blit_library, pvk_NSString_stringWithUTF8String("pvk_blit_vs"));
+        id fs = pvk_MTLLibrary_newFunctionWithName(device->blit_library,
+                                                   pvk_NSString_stringWithUTF8String(pvk_blit_function_names[function]));
+        if (desc && vs && fs) {
+            pvk_MTLRenderPipelineDescriptor_setVertexFunction(desc, vs);
+            pvk_MTLRenderPipelineDescriptor_setFragmentFunction(desc, fs);
+            pvk_MTLRenderPipelineColorAttachmentDescriptor_setPixelFormat(
+                pvk_MTLRenderPipelineColorAttachmentDescriptorArray_objectAtIndexedSubscript(
+                    pvk_MTLRenderPipelineDescriptor_colorAttachments(desc), 0),
+                format);
+            pso = pvk_MTLDevice_newRenderPipelineStateWithDescriptor_error(mtl, desc, &err);
+            if (!pso)
+                pvk_log(PVK_LOG_ERROR, "internal blit pipeline %s, pixel format %lu: %s", pvk_blit_function_names[function],
+                        format, err ? pvk_ns_utf8(pvk_NSError_localizedDescription(err)) : "failed");
+        }
+        pvk_release(fs);
+        pvk_release(vs);
+        pvk_release(desc);
+    }
+    objc_autoreleasePoolPop(pool);
+    if (pso) {
+        p = pvk_alloc(pvk_device_alloc(device), sizeof(*p), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+        if (p) {
+            p->function = function;
+            p->format = format;
+            p->pso = pso;
+            p->next = device->blit_pipelines;
+            device->blit_pipelines = p;
+        } else {
+            pvk_release(pso);
+            pso = NULL;
+        }
+    }
+    pthread_mutex_unlock(&pvk_blit_lock);
+    return pso;
+}
+
+/* At vkDestroyDevice (pvk_device_finish), after the GPU is done. */
+static void pvk_device_finish_images(struct pvk_device *device)
+{
+    struct pvk_blit_pipeline *p = device->blit_pipelines, *next;
+    for (; p; p = next) {
+        next = p->next;
+        pvk_release(p->pso);
+        pvk_free(pvk_device_alloc(device), p);
+    }
+    device->blit_pipelines = NULL;
+    pvk_release(device->blit_library);
+    device->blit_library = NULL;
+    pvk_device_free_sampler_states(device);
+    pvk_release(device->host_queue);
+    pvk_release(device->host_event);
+    device->host_queue = device->host_event = NULL;
+}
+
+/* A render encoder for one internal pass, after the compute encoder (ended
+ * here; the next compute command starts a new one). The caller ends it. */
+static id pvk_encoder_render(struct pvk_encoder *e, id pass)
+{
+    id enc;
+    if (e->result != VK_SUCCESS)
+        return NULL;
+    pvk_encoder_end(e);
+    enc = pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass);
+    if (!enc) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return NULL;
+    }
+    if (e->waits || e->queue->ordered)
+        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
+            enc, PVK_STAGES_ALL, PVK_STAGES_RENDER, PVK_MTL4VisibilityOptionDevice);
+    return enc;
+}
+
+static void pvk_encode_buffer_image(struct pvk_encoder *e, const struct pvk_cmd_buffer_image *c)
+{
+    id enc = pvk_encoder_get(e);
+    uint32_t i, z, row;
+    pvk_MTLOrigin o;
+    pvk_MTLSize s;
+
+    if (!enc)
+        return;
+    for (i = 0; i < c->layers; i++) {
+        VkDeviceSize base = c->offset + c->image_bytes * i;
+        if (c->row_bytes <= c->max_row) {
+            o.x = c->x;
+            o.y = c->y;
+            o.z = c->z;
+            s.width = c->w;
+            s.height = c->h;
+            s.depth = c->d;
+            if (c->to_image)
+                pvk_MTL4ComputeCommandEncoder_copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin_options(
+                    enc, c->buffer, base, c->row_bytes, c->d > 1 ? c->image_bytes : 0, s, c->texture, c->layer + i,
+                    c->level, o, c->options);
+            else
+                pvk_MTL4ComputeCommandEncoder_copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
+                    enc, c->texture, c->layer + i, c->level, o, s, c->buffer, base, c->row_bytes,
+                    c->d > 1 ? c->image_bytes : 0, c->options);
+            continue;
+        }
+        /* Rows further apart than Metal's bytesPerRow allows: block row by
+         * block row. */
+        for (z = 0; z < c->d; z++) {
+            for (row = 0; row < c->h; row += c->block_h) {
+                VkDeviceSize at = base + c->image_bytes * z + c->row_bytes * (row / c->block_h);
+                o.x = c->x;
+                o.y = c->y + row;
+                o.z = c->z + z;
+                s.width = c->w;
+                s.height = c->h - row < c->block_h ? c->h - row : c->block_h;
+                s.depth = 1;
+                if (c->to_image)
+                    pvk_MTL4ComputeCommandEncoder_copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin_options(
+                        enc, c->buffer, at, c->tight_row, 0, s, c->texture, c->layer + i, c->level, o, c->options);
+                else
+                    pvk_MTL4ComputeCommandEncoder_copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
+                        enc, c->texture, c->layer + i, c->level, o, s, c->buffer, at, c->tight_row, 0, c->options);
+            }
+        }
+    }
+}
+
+/* A staged copy of one slice: in bands of block rows through upload memory,
+ * texture -> buffer -> texture. */
+static void pvk_encode_copy_staged(struct pvk_encoder *e, id enc, const struct pvk_cmd_copy_image *c, uint32_t ss,
+                                   pvk_MTLOrigin so, uint32_t ds, pvk_MTLOrigin dO)
+{
+    uint32_t blocks_w = (c->w + c->sbw - 1) / c->sbw, rows = (c->h + c->sbh - 1) / c->sbh;
+    uint32_t row_bytes = blocks_w * c->bytes, band = (uint32_t)(PVK_UPLOAD_CHUNK_SIZE / row_bytes), r, n;
+    for (r = 0; r < rows; r += n) {
+        VkDeviceSize offset;
+        pvk_MTLGPUAddress address;
+        pvk_MTLOrigin o1 = so, o2 = dO;
+        pvk_MTLSize s1, s2;
+        id buffer;
+        n = rows - r < band ? rows - r : band;
+        o1.y = so.y + r * c->sbh;
+        s1.width = c->w;
+        s1.height = c->h - r * c->sbh < n * c->sbh ? c->h - r * c->sbh : n * c->sbh;
+        s1.depth = 1;
+        o2.y = dO.y + r * c->dbh;
+        s2.width = blocks_w * c->dbw;
+        s2.height = n * c->dbh;
+        s2.depth = 1;
+        if (o2.x + s2.width > c->dst_w) /* a partial block at the destination's edge */
+            s2.width = c->dst_w - o2.x;
+        if (o2.y + s2.height > c->dst_h)
+            s2.height = c->dst_h - o2.y;
+        if (!pvk_upload(e, (size_t)row_bytes * n, 16, &buffer, &offset, &address))
+            return;
+        pvk_MTL4ComputeCommandEncoder_copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
+            enc, c->src, ss, c->src_level, o1, s1, buffer, offset, row_bytes, 0, c->src_options);
+        pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
+            enc, PVK_MTLStageBlit, PVK_MTLStageBlit, PVK_MTL4VisibilityOptionDevice);
+        pvk_MTL4ComputeCommandEncoder_copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin_options(
+            enc, buffer, offset, row_bytes, 0, s2, c->dst, ds, c->dst_level, o2, c->dst_options);
+    }
+}
+
+static void pvk_encode_copy_image(struct pvk_encoder *e, const struct pvk_cmd_copy_image *c)
+{
+    id enc = pvk_encoder_get(e);
+    uint32_t i, z;
+    pvk_MTLOrigin so, dO;
+    pvk_MTLSize s;
+
+    if (!enc)
+        return;
+    for (i = 0; i < c->count; i++) {
+        uint32_t ss = c->src_3d ? 0 : c->src_layer + i, ds = c->dst_3d ? 0 : c->dst_layer + i;
+        so.x = c->sx;
+        so.y = c->sy;
+        so.z = c->sz + (c->src_3d ? i : 0);
+        dO.x = c->dx;
+        dO.y = c->dy;
+        dO.z = c->dz + (c->dst_3d ? i : 0);
+        if (!c->staged) {
+            s.width = c->w;
+            s.height = c->h;
+            s.depth = c->d;
+            pvk_MTL4ComputeCommandEncoder_copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
+                enc, c->src, ss, c->src_level, so, s, c->dst, ds, c->dst_level, dO);
+            continue;
+        }
+        for (z = 0; z < c->d; z++) {
+            pvk_MTLOrigin a = so, b = dO;
+            a.z += z;
+            b.z += z;
+            pvk_encode_copy_staged(e, enc, c, ss, a, ds, b);
+        }
+    }
+}
+
+static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
+{
+    bool resolve = c->function >= PVK_RESOLVE_F_MS;
+    int32_t z0 = c->dst0[2] < c->dst1[2] ? c->dst0[2] : c->dst1[2];
+    uint32_t passes = c->dst_3d ? (uint32_t)(c->dst1[2] > c->dst0[2] ? c->dst1[2] - c->dst0[2] : c->dst0[2] - c->dst1[2])
+                                : c->layers;
+    float dz = (float)(c->dst1[2] - c->dst0[2]);
+    id pso = pvk_blit_pipeline(e->device, c->function, c->dst_format);
+    pvk_MTLViewport vp;
+    uint32_t p, i;
+
+    if (!pso) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return;
+    }
+    vp.originX = c->dst0[0] < c->dst1[0] ? c->dst0[0] : c->dst1[0];
+    vp.originY = c->dst0[1] < c->dst1[1] ? c->dst0[1] : c->dst1[1];
+    vp.width = c->dst1[0] > c->dst0[0] ? c->dst1[0] - c->dst0[0] : c->dst0[0] - c->dst1[0];
+    vp.height = c->dst1[1] > c->dst0[1] ? c->dst1[1] - c->dst0[1] : c->dst0[1] - c->dst1[1];
+    vp.znear = 0.0;
+    vp.zfar = 1.0;
+    if (vp.width <= 0.0 || vp.height <= 0.0)
+        return;
+    for (p = 0; p < passes && e->result == VK_SUCCESS; p++) {
+        uint32_t plane = c->dst_3d ? (uint32_t)z0 + p : 0;
+        id pass = pvk_MTL4RenderPassDescriptor_new(), att, enc;
+        struct pvk_blit_args *args;
+        pvk_MTLGPUAddress address;
+        void *pool = objc_autoreleasePoolPush();
+
+        if (!pass) {
+            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+            objc_autoreleasePoolPop(pool);
+            return;
+        }
+        att = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
+            pvk_MTL4RenderPassDescriptor_colorAttachments(pass), 0);
+        pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, c->dst);
+        pvk_MTLRenderPassAttachmentDescriptor_setLevel(att, c->dst_level);
+        pvk_MTLRenderPassAttachmentDescriptor_setSlice(att, c->dst_3d ? 0 : c->dst_layer + p);
+        pvk_MTLRenderPassAttachmentDescriptor_setDepthPlane(att, plane);
+        pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, PVK_MTLLoadActionLoad);
+        pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
+        enc = pvk_encoder_render(e, pass);
+        pvk_release(pass);
+        args = enc ? pvk_upload(e, sizeof(*args), 16, NULL, NULL, &address) : NULL;
+        if (args) {
+            memset(args, 0, sizeof(*args));
+            if (resolve) {
+                args->offset[0] = c->src0[0] - c->dst0[0];
+                args->offset[1] = c->src0[1] - c->dst0[1];
+                args->offset[2] = (int32_t)(c->src_layer + p);
+            } else {
+                for (i = 0; i < 2; i++) {
+                    args->src[i] = (float)c->src0[i];
+                    args->src[2 + i] = (float)c->src1[i];
+                    args->dst[i] = (float)c->dst0[i];
+                    args->dst[2 + i] = (float)c->dst1[i];
+                }
+                args->size[0] = (float)c->src_w;
+                args->size[1] = (float)c->src_h;
+                args->size[2] = (float)c->src_d;
+                args->size[3] = (float)c->src_level;
+                if (c->src_3d) /* the source z of this destination slice's center */
+                    args->layer[0] = (float)c->src0[2] +
+                                     ((float)(c->dst_3d ? (int32_t)plane : c->dst0[2]) + 0.5f - (float)c->dst0[2]) *
+                                         (float)(c->src1[2] - c->src0[2]) / (dz != 0.0f ? dz : 1.0f);
+                else
+                    args->layer[0] = (float)(c->src_layer + (c->dst_3d ? 0 : p));
+            }
+            for (i = 0; i < 4; i++)
+                args->swizzle[i] = c->swizzle[i];
+            pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
+            pvk_MTL4RenderCommandEncoder_setViewport(enc, vp);
+            pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->render_table,
+                                                                   PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
+            pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->render_table, address, 0);
+            pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->render_table, pvk_MTLTexture_gpuResourceID(c->src), 0);
+            pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount(enc, PVK_MTLPrimitiveTypeTriangle, 0, 3);
+        }
+        if (enc)
+            pvk_MTL4CommandEncoder_endEncoding(enc);
+        objc_autoreleasePoolPop(pool);
+    }
+}
+
+static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *c)
+{
+    uint32_t l, p;
+    for (l = c->level; l < c->level + c->levels && e->result == VK_SUCCESS; l++) {
+        uint32_t planes = c->depth ? pvk_mip_extent(c->depth, l) : 1;
+        for (p = 0; p < planes && e->result == VK_SUCCESS; p++) {
+            void *pool = objc_autoreleasePoolPush();
+            id pass = pvk_MTL4RenderPassDescriptor_new(), att, enc;
+            if (!pass) {
+                e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+                objc_autoreleasePoolPop(pool);
+                return;
+            }
+            if (c->color) {
+                att = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
+                    pvk_MTL4RenderPassDescriptor_colorAttachments(pass), 0);
+                pvk_MTLRenderPassColorAttachmentDescriptor_setClearColor(att, c->value);
+                pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, c->texture);
+                pvk_MTLRenderPassAttachmentDescriptor_setLevel(att, l);
+                pvk_MTLRenderPassAttachmentDescriptor_setSlice(att, c->depth ? 0 : c->layer);
+                pvk_MTLRenderPassAttachmentDescriptor_setDepthPlane(att, c->depth ? p : 0);
+                pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, PVK_MTLLoadActionClear);
+                pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
+            }
+            if (!c->color && c->has_depth) {
+                att = pvk_MTL4RenderPassDescriptor_depthAttachment(pass);
+                pvk_MTLRenderPassDepthAttachmentDescriptor_setClearDepth(att, c->depth_value);
+                pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, c->texture);
+                pvk_MTLRenderPassAttachmentDescriptor_setLevel(att, l);
+                pvk_MTLRenderPassAttachmentDescriptor_setSlice(att, c->layer);
+                pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, c->clear_depth ? PVK_MTLLoadActionClear
+                                                                                        : PVK_MTLLoadActionLoad);
+                pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
+            }
+            if (!c->color && c->has_stencil) {
+                att = pvk_MTL4RenderPassDescriptor_stencilAttachment(pass);
+                pvk_MTLRenderPassStencilAttachmentDescriptor_setClearStencil(att, c->stencil);
+                pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, c->texture);
+                pvk_MTLRenderPassAttachmentDescriptor_setLevel(att, l);
+                pvk_MTLRenderPassAttachmentDescriptor_setSlice(att, c->layer);
+                pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, c->clear_stencil ? PVK_MTLLoadActionClear
+                                                                                          : PVK_MTLLoadActionLoad);
+                pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
+            }
+            if (!c->depth && c->layers > 1)
+                pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, c->layers);
+            enc = pvk_encoder_render(e, pass);
+            pvk_release(pass);
+            if (enc)
+                pvk_MTL4CommandEncoder_endEncoding(enc);
+            objc_autoreleasePoolPop(pool);
+        }
+    }
+}
+
 static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_buffer *cb, uint32_t depth)
 {
     static const uint32_t zero[3] = { 0, 0, 0 };
@@ -39944,6 +42912,18 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
                 e->pipeline_dirty = true; /* the state after it is undefined */
                 break;
             }
+            case PVK_CMD_COPY_BUFFER_IMAGE:
+                pvk_encode_buffer_image(e, (const struct pvk_cmd_buffer_image *)c);
+                break;
+            case PVK_CMD_COPY_IMAGE:
+                pvk_encode_copy_image(e, (const struct pvk_cmd_copy_image *)c);
+                break;
+            case PVK_CMD_BLIT_IMAGE:
+                pvk_encode_blit(e, (const struct pvk_cmd_blit *)c);
+                break;
+            case PVK_CMD_CLEAR_IMAGE:
+                pvk_encode_clear(e, (const struct pvk_cmd_clear *)c);
+                break;
             }
         }
     }
@@ -40470,6 +43450,7 @@ static void pvk_device_finish(struct pvk_device *device)
     }
     pvk_release(device->fill_pipeline);
     device->fill_pipeline = NULL;
+    pvk_device_finish_images(device);
 }
 
 /* ---- Fences ---- */
@@ -40885,8 +43866,6 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
 VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImage2KHR(VkDevice device, const VkAcquireNextImageInfoKHR* pAcquireInfo, uint32_t* pImageIndex) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImageKHR(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t* pImageIndex) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkAllocateDescriptorSets(VkDevice device, const VkDescriptorSetAllocateInfo* pAllocateInfo, VkDescriptorSet* pDescriptorSets) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory(VkDevice device, VkImage image, VkDeviceMemory memory, VkDeviceSize memoryOffset) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory2(VkDevice device, uint32_t bindInfoCount, const VkBindImageMemoryInfo* pBindInfos) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t query, VkQueryControlFlags flags) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo* pRenderPassBegin, VkSubpassContents contents) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass2(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo* pRenderPassBegin, const VkSubpassBeginInfo* pSubpassBeginInfo) { PVK_UNIMPLEMENTED(); }
@@ -40897,17 +43876,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer(VkCommandBuffer commandBuffer, V
 VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer2(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size, VkIndexType indexType) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers(VkCommandBuffer commandBuffer, uint32_t firstBinding, uint32_t bindingCount, const VkBuffer* pBuffers, const VkDeviceSize* pOffsets) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers2(VkCommandBuffer commandBuffer, uint32_t firstBinding, uint32_t bindingCount, const VkBuffer* pBuffers, const VkDeviceSize* pOffsets, const VkDeviceSize* pSizes, const VkDeviceSize* pStrides) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdBlitImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout, VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount, const VkImageBlit* pRegions, VkFilter filter) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdBlitImage2(VkCommandBuffer commandBuffer, const VkBlitImageInfo2* pBlitImageInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdClearAttachments(VkCommandBuffer commandBuffer, uint32_t attachmentCount, const VkClearAttachment* pAttachments, uint32_t rectCount, const VkClearRect* pRects) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdClearColorImage(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout imageLayout, const VkClearColorValue* pColor, uint32_t rangeCount, const VkImageSubresourceRange* pRanges) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout imageLayout, const VkClearDepthStencilValue* pDepthStencil, uint32_t rangeCount, const VkImageSubresourceRange* pRanges) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdCopyBufferToImage(VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount, const VkBufferImageCopy* pRegions) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdCopyBufferToImage2(VkCommandBuffer commandBuffer, const VkCopyBufferToImageInfo2* pCopyBufferToImageInfo) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdCopyImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout, VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount, const VkImageCopy* pRegions) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdCopyImage2(VkCommandBuffer commandBuffer, const VkCopyImageInfo2* pCopyImageInfo) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdCopyImageToBuffer(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout, VkBuffer dstBuffer, uint32_t regionCount, const VkBufferImageCopy* pRegions) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdCopyImageToBuffer2(VkCommandBuffer commandBuffer, const VkCopyImageToBufferInfo2* pCopyImageToBufferInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyQueryPoolResults(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount, VkBuffer dstBuffer, VkDeviceSize dstOffset, VkDeviceSize stride, VkQueryResultFlags flags) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdDraw(VkCommandBuffer commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexed(VkCommandBuffer commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance) { PVK_UNIMPLEMENTED(); }
@@ -40928,8 +43897,6 @@ VKAPI_ATTR void VKAPI_CALL vkCmdPushDescriptorSetWithTemplate2(VkCommandBuffer c
 VKAPI_ATTR void VKAPI_CALL vkCmdResetEvent(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags stageMask) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdResetEvent2(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags2 stageMask) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdResetQueryPool(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdResolveImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout, VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount, const VkImageResolve* pRegions) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdResolveImage2(VkCommandBuffer commandBuffer, const VkResolveImageInfo2* pResolveImageInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetBlendConstants(VkCommandBuffer commandBuffer, const float blendConstants[4]) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetCullMode(VkCommandBuffer commandBuffer, VkCullModeFlags cullMode) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthBias(VkCommandBuffer commandBuffer, float depthBiasConstantFactor, float depthBiasClamp, float depthBiasSlopeFactor) { PVK_UNIMPLEMENTED(); }
@@ -40963,40 +43930,29 @@ VKAPI_ATTR void VKAPI_CALL vkCmdWaitEvents(VkCommandBuffer commandBuffer, uint32
 VKAPI_ATTR void VKAPI_CALL vkCmdWaitEvents2(VkCommandBuffer commandBuffer, uint32_t eventCount, const VkEvent* pEvents, const VkDependencyInfo* pDependencyInfos) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp(VkCommandBuffer commandBuffer, VkPipelineStageFlagBits pipelineStage, VkQueryPool queryPool, uint32_t query) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp2(VkCommandBuffer commandBuffer, VkPipelineStageFlags2 stage, VkQueryPool queryPool, uint32_t query) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToImage(VkDevice device, const VkCopyImageToImageInfo* pCopyImageToImageInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToMemory(VkDevice device, const VkCopyImageToMemoryInfo* pCopyImageToMemoryInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCopyMemoryToImage(VkDevice device, const VkCopyMemoryToImageInfo* pCopyMemoryToImageInfo) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateBufferView(VkDevice device, const VkBufferViewCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkBufferView* pView) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorPool(VkDevice device, const VkDescriptorPoolCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDescriptorPool* pDescriptorPool) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice device, const VkDescriptorSetLayoutCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDescriptorSetLayout* pSetLayout) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorUpdateTemplate(VkDevice device, const VkDescriptorUpdateTemplateCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDescriptorUpdateTemplate* pDescriptorUpdateTemplate) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateEvent(VkDevice device, const VkEventCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkEvent* pEvent) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateFramebuffer(VkDevice device, const VkFramebufferCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkFramebuffer* pFramebuffer) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateGraphicsPipelines(VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount, const VkGraphicsPipelineCreateInfo* pCreateInfos, const VkAllocationCallbacks* pAllocator, VkPipeline* pPipelines) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateImage(VkDevice device, const VkImageCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkImage* pImage) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice device, const VkImageViewCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkImageView* pView) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateMetalSurfaceEXT(VkInstance instance, const VkMetalSurfaceCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineCache(VkDevice device, const VkPipelineCacheCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkPipelineCache* pPipelineCache) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreatePrivateDataSlot(VkDevice device, const VkPrivateDataSlotCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkPrivateDataSlot* pPrivateDataSlot) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkQueryPool* pQueryPool) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRenderPassCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkRenderPass* pRenderPass) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass2(VkDevice device, const VkRenderPassCreateInfo2* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkRenderPass* pRenderPass) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateSampler(VkDevice device, const VkSamplerCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSampler* pSampler) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSamplerYcbcrConversion(VkDevice device, const VkSamplerYcbcrConversionCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSamplerYcbcrConversion* pYcbcrConversion) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSwapchainKHR* pSwapchain) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkDestroyBufferView(VkDevice device, VkBufferView bufferView, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorSetLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorUpdateTemplate(VkDevice device, VkDescriptorUpdateTemplate descriptorUpdateTemplate, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyEvent(VkDevice device, VkEvent event, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyFramebuffer(VkDevice device, VkFramebuffer framebuffer, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyImage(VkDevice device, VkImage image, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyImageView(VkDevice device, VkImageView imageView, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineCache(VkDevice device, VkPipelineCache pipelineCache, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyPrivateDataSlot(VkDevice device, VkPrivateDataSlot privateDataSlot, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyQueryPool(VkDevice device, VkQueryPool queryPool, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyRenderPass(VkDevice device, VkRenderPass renderPass, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroySampler(VkDevice device, VkSampler sampler, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySamplerYcbcrConversion(VkDevice device, VkSamplerYcbcrConversion ycbcrConversion, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
@@ -41005,26 +43961,11 @@ VKAPI_ATTR void VKAPI_CALL vkGetDescriptorSetLayoutSupport(VkDevice device, cons
 VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, uint32_t heapIndex, uint32_t localDeviceIndex, uint32_t remoteDeviceIndex, VkPeerMemoryFeatureFlags* pPeerMemoryFeatures) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetDeviceGroupPresentCapabilitiesKHR(VkDevice device, VkDeviceGroupPresentCapabilitiesKHR* pDeviceGroupPresentCapabilities) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetDeviceGroupSurfacePresentModesKHR(VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR* pModes) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageMemoryRequirements(VkDevice device, const VkDeviceImageMemoryRequirements* pInfo, VkMemoryRequirements2* pMemoryRequirements) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageSparseMemoryRequirements(VkDevice device, const VkDeviceImageMemoryRequirements* pInfo, uint32_t* pSparseMemoryRequirementCount, VkSparseImageMemoryRequirements2* pSparseMemoryRequirements) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageSubresourceLayout(VkDevice device, const VkDeviceImageSubresourceInfo* pInfo, VkSubresourceLayout2* pLayout) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetEventStatus(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkGetImageMemoryRequirements(VkDevice device, VkImage image, VkMemoryRequirements* pMemoryRequirements) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetImageMemoryRequirements2(VkDevice device, const VkImageMemoryRequirementsInfo2* pInfo, VkMemoryRequirements2* pMemoryRequirements) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetImageSparseMemoryRequirements(VkDevice device, VkImage image, uint32_t* pSparseMemoryRequirementCount, VkSparseImageMemoryRequirements* pSparseMemoryRequirements) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetImageSparseMemoryRequirements2(VkDevice device, const VkImageSparseMemoryRequirementsInfo2* pInfo, uint32_t* pSparseMemoryRequirementCount, VkSparseImageMemoryRequirements2* pSparseMemoryRequirements) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetImageSubresourceLayout(VkDevice device, VkImage image, const VkImageSubresource* pSubresource, VkSubresourceLayout* pLayout) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetImageSubresourceLayout2(VkDevice device, VkImage image, const VkImageSubresource2* pSubresource, VkSubresourceLayout2* pLayout) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceExternalBufferProperties(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalBufferInfo* pExternalBufferInfo, VkExternalBufferProperties* pExternalBufferProperties) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceExternalFenceProperties(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalFenceInfo* pExternalFenceInfo, VkExternalFenceProperties* pExternalFenceProperties) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceExternalSemaphoreProperties(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalSemaphoreInfo* pExternalSemaphoreInfo, VkExternalSemaphoreProperties* pExternalSemaphoreProperties) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceFormatProperties(VkPhysicalDevice physicalDevice, VkFormat format, VkFormatProperties* pFormatProperties) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice, VkFormat format, VkFormatProperties2* pFormatProperties) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceImageFormatProperties(VkPhysicalDevice physicalDevice, VkFormat format, VkImageType type, VkImageTiling tiling, VkImageUsageFlags usage, VkImageCreateFlags flags, VkImageFormatProperties* pImageFormatProperties) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceImageFormatInfo2* pImageFormatInfo, VkImageFormatProperties2* pImageFormatProperties) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDevicePresentRectanglesKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pRectCount, VkRect2D* pRects) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceSparseImageFormatProperties(VkPhysicalDevice physicalDevice, VkFormat format, VkImageType type, VkSampleCountFlagBits samples, VkImageUsageFlags usage, VkImageTiling tiling, uint32_t* pPropertyCount, VkSparseImageFormatProperties* pProperties) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceSparseImageFormatProperties2(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSparseImageFormatInfo2* pFormatInfo, uint32_t* pPropertyCount, VkSparseImageFormatProperties2* pProperties) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceCapabilitiesKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, VkSurfaceCapabilitiesKHR* pSurfaceCapabilities) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pSurfaceFormatCount, VkSurfaceFormatKHR* pSurfaceFormats) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfacePresentModesKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pPresentModeCount, VkPresentModeKHR* pPresentModes) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
@@ -41044,7 +43985,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkResetEvent(VkDevice device, VkEvent event) { PV
 VKAPI_ATTR void VKAPI_CALL vkResetQueryPool(VkDevice device, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkSetEvent(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkSetPrivateData(VkDevice device, VkObjectType objectType, uint64_t objectHandle, VkPrivateDataSlot privateDataSlot, uint64_t data) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t transitionCount, const VkHostImageLayoutTransitionInfo* pTransitions) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, VkDescriptorSet descriptorSet, VkDescriptorUpdateTemplate descriptorUpdateTemplate, const void* pData) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount, const VkWriteDescriptorSet* pDescriptorWrites, uint32_t descriptorCopyCount, const VkCopyDescriptorSet* pDescriptorCopies) { PVK_UNIMPLEMENTED(); }
 
@@ -41373,7 +44313,7 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance _insta
     if (iext >= 0 && !instance->extensions[iext])
         return NULL;
     dext = PVK_KIND_DEXT(e->kind);
-    if (dext >= 0 && !(instance->physical_device && pvk_device_extension_supported(instance, (unsigned)dext)))
+    if (dext >= 0 && !(instance->physical_device && pvk_device_extension_available(instance->physical_device, (unsigned)dext)))
         return NULL;
     return e->fn;
 }
