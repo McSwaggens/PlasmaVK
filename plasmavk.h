@@ -32906,6 +32906,7 @@ enum pvk_format_kind {
 #define PVK_FF_SRGB 0x01u    /* sRGB: no storage */
 #define PVK_FF_SWIZZLE 0x02u /* the Vulkan components are `swizzle` of the Metal ones */
 #define PVK_FF_NO_3D 0x04u   /* compressed format Metal has no 3D textures of (ETC2/EAC) */
+#define PVK_FF_YCBCR 0x08u   /* requires a sampler Y'CbCr conversion: pvk_ycbcr_formats[ycbcr - 1] */
 
 struct pvk_format {
     pvk_MTLPixelFormat mtl;    /* Invalid: a vertex format only */
@@ -32917,11 +32918,14 @@ struct pvk_format {
     uint8_t block_w, block_h;
     uint8_t int_bits;          /* integer formats: bits per component (10: 10/10/10/2) */
     pvk_MTLTextureSwizzleChannels swizzle; /* PVK_FF_SWIZZLE */
+    uint8_t ycbcr;             /* PVK_FF_YCBCR: 1 + index in pvk_ycbcr_formats */
 };
 
-#define PVK_FMT_(mtl, vtx, caps, kind, flags, bytes, bw, bh, bits, r, g, b, a)                                    \
+#define PVK_FMTY_(mtl, vtx, caps, kind, flags, bytes, bw, bh, bits, r, g, b, a, y)                                \
     { PVK_MTLPixelFormat##mtl, PVK_MTLVertexFormat##vtx, caps, kind, flags, bytes, bw, bh, bits,                \
-      { PVK_MTLTextureSwizzle##r, PVK_MTLTextureSwizzle##g, PVK_MTLTextureSwizzle##b, PVK_MTLTextureSwizzle##a } }
+      { PVK_MTLTextureSwizzle##r, PVK_MTLTextureSwizzle##g, PVK_MTLTextureSwizzle##b, PVK_MTLTextureSwizzle##a }, y }
+#define PVK_FMT_(mtl, vtx, caps, kind, flags, bytes, bw, bh, bits, r, g, b, a)                                    \
+    PVK_FMTY_(mtl, vtx, caps, kind, flags, bytes, bw, bh, bits, r, g, b, a, 0)
 #define PVK_NORM(mtl, caps, bytes, vtx) PVK_FMT_(mtl, vtx, caps, PVK_FK_FLOAT, 0, bytes, 1, 1, 0, Red, Green, Blue, Alpha)
 #define PVK_UINT(mtl, caps, bytes, bits, vtx) PVK_FMT_(mtl, vtx, caps, PVK_FK_UINT, 0, bytes, 1, 1, bits, Red, Green, Blue, Alpha)
 #define PVK_SINT(mtl, caps, bytes, bits, vtx) PVK_FMT_(mtl, vtx, caps, PVK_FK_SINT, 0, bytes, 1, 1, bits, Red, Green, Blue, Alpha)
@@ -32934,6 +32938,9 @@ struct pvk_format {
 #define PVK_BC_RGB(mtl, srgb) PVK_FMT_(mtl, Invalid, PVK_FC_FILTER | PVK_FC_BC, PVK_FK_FLOAT, PVK_FF_SWIZZLE | (srgb), 8, 4, 4, 0, Red, Green, Blue, One)
 #define PVK_ETC(mtl, flags, bytes) PVK_FMT_(mtl, Invalid, PVK_FC_FILTER, PVK_FK_FLOAT, PVK_FF_NO_3D | (flags), bytes, 4, 4, 0, Red, Green, Blue, Alpha)
 #define PVK_ASTC(mtl, flags, w, h) PVK_FMT_(mtl, Invalid, PVK_FC_FILTER, PVK_FK_FLOAT, flags, 16, w, h, 0, Red, Green, Blue, Alpha)
+/* Formats requiring a sampler Y'CbCr conversion: mtl is the Metal format of
+ * the (first) plane, bytes and block the texel block of a packed format. */
+#define PVK_YCBCR(mtl, bytes, bw, y) PVK_FMTY_(mtl, Invalid, 0, PVK_FK_FLOAT, PVK_FF_YCBCR, bytes, bw, 1, 0, Red, Green, Blue, Alpha, y)
 
 static const struct pvk_format pvk_core_formats[VK_FORMAT_ASTC_12x12_SRGB_BLOCK + 1] = {
     [VK_FORMAT_R4G4B4A4_UNORM_PACK16] = PVK_NORM(ABGR4Unorm, PVK_FC_P16, 2, Invalid),
@@ -33093,6 +33100,49 @@ static const struct {
     { VK_FORMAT_ASTC_10x10_SFLOAT_BLOCK, PVK_ASTC(ASTC_10x10_HDR, 0, 10, 10) },
     { VK_FORMAT_ASTC_12x10_SFLOAT_BLOCK, PVK_ASTC(ASTC_12x10_HDR, 0, 12, 10) },
     { VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK, PVK_ASTC(ASTC_12x12_HDR, 0, 12, 12) },
+    /* samplerYcbcrConversion (pvk_ycbcr_formats, in the same order) */
+    { VK_FORMAT_G8B8G8R8_422_UNORM, PVK_YCBCR(RG8Unorm, 4, 2, 1) },
+    { VK_FORMAT_B8G8R8G8_422_UNORM, PVK_YCBCR(RG8Unorm, 4, 2, 2) },
+    { VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM, PVK_YCBCR(R8Unorm, 1, 1, 3) },
+    { VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, PVK_YCBCR(R8Unorm, 1, 1, 4) },
+    { VK_FORMAT_G8_B8_R8_3PLANE_422_UNORM, PVK_YCBCR(R8Unorm, 1, 1, 5) },
+    { VK_FORMAT_G8_B8R8_2PLANE_422_UNORM, PVK_YCBCR(R8Unorm, 1, 1, 6) },
+    { VK_FORMAT_G8_B8_R8_3PLANE_444_UNORM, PVK_YCBCR(R8Unorm, 1, 1, 7) },
+    { VK_FORMAT_G8_B8R8_2PLANE_444_UNORM, PVK_YCBCR(R8Unorm, 1, 1, 8) },
+};
+
+/* ---- Y'CbCr formats ----
+ *
+ * The formats that require a sampler Y'CbCr conversion (Formats > Formats
+ * Requiring Sampler Y'CbCr Conversion) PlasmaVK supports: the 8-bit 4:2:0,
+ * 4:2:2 and 4:4:4 multi-planar formats and the two packed 4:2:2 formats.
+ * Images of them are a Metal texture per plane (section 11); packed 4:2:2
+ * images are one RG8Unorm texture, each texel its Y and one chroma value
+ * (Cb at even x, Cr at odd x). Shaders reconstruct, range-expand and convert
+ * (section 13), so every chroma location and filter is offered, with
+ * separate reconstruction filters and forceable explicit reconstruction;
+ * for the packed formats reconstruction is always explicit (one texel holds
+ * only half the chroma, so the sampler cannot filter it). Formats > Required
+ * Format Support asks for G8_B8_R8_3PLANE_420 and G8_B8R8_2PLANE_420 with
+ * SAMPLED_IMAGE, TRANSFER_SRC, TRANSFER_DST and a chroma location. */
+struct pvk_ycbcr_format {
+    VkFormat format;
+    uint8_t planes;           /* Metal textures: 1 (packed), 2 or 3 */
+    uint8_t packed;           /* planes 1: 1 G8B8G8R8 (Y in .r), 2 B8G8R8G8 (Y in .g) */
+    uint8_t x_shift, y_shift; /* chroma subsampling: 1 halves the width / height */
+    uint8_t bits;             /* per component */
+    VkFormat plane_formats[3]; /* Formats > Plane Format Compatibility; the RG8 texture of packed formats */
+};
+
+static const struct pvk_ycbcr_format pvk_ycbcr_formats[] = {
+    { VK_FORMAT_G8B8G8R8_422_UNORM, 1, 1, 1, 0, 8, { VK_FORMAT_R8G8_UNORM } },
+    { VK_FORMAT_B8G8R8G8_422_UNORM, 1, 2, 1, 0, 8, { VK_FORMAT_R8G8_UNORM } },
+    { VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM, 3, 0, 1, 1, 8, { VK_FORMAT_R8_UNORM, VK_FORMAT_R8_UNORM, VK_FORMAT_R8_UNORM } },
+    { VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, 2, 0, 1, 1, 8, { VK_FORMAT_R8_UNORM, VK_FORMAT_R8G8_UNORM } },
+    { VK_FORMAT_G8_B8_R8_3PLANE_422_UNORM, 3, 0, 1, 0, 8, { VK_FORMAT_R8_UNORM, VK_FORMAT_R8_UNORM, VK_FORMAT_R8_UNORM } },
+    { VK_FORMAT_G8_B8R8_2PLANE_422_UNORM, 2, 0, 1, 0, 8, { VK_FORMAT_R8_UNORM, VK_FORMAT_R8G8_UNORM } },
+    { VK_FORMAT_G8_B8_R8_3PLANE_444_UNORM, 3, 0, 0, 0, 8, { VK_FORMAT_R8_UNORM, VK_FORMAT_R8_UNORM, VK_FORMAT_R8_UNORM } },
+    { VK_FORMAT_G8_B8R8_2PLANE_444_UNORM, 2, 0, 0, 0, 8, { VK_FORMAT_R8_UNORM, VK_FORMAT_R8G8_UNORM } },
 };
 
 /* The table entry of a format PlasmaVK supports in some way, else NULL. */
@@ -33106,6 +33156,12 @@ static const struct pvk_format *pvk_format(VkFormat format)
         if (pvk_later_formats[i].format == format)
             f = &pvk_later_formats[i].info;
     return f && (f->mtl || f->vertex) ? f : NULL;
+}
+
+/* The Y'CbCr layout of a format requiring a sampler Y'CbCr conversion, else NULL. */
+static const struct pvk_ycbcr_format *pvk_ycbcr_format(const struct pvk_format *f)
+{
+    return f && (f->flags & PVK_FF_YCBCR) ? &pvk_ycbcr_formats[f->ycbcr - 1] : NULL;
 }
 
 static bool pvk_format_has_depth(const struct pvk_format *f)
@@ -33141,6 +33197,22 @@ static VkFormatFeatureFlags2 pvk_format_image_features(const struct pvk_physical
 
     if (!f || !f->mtl || ((f->caps & PVK_FC_BC) && !pd->bc_formats))
         return 0;
+    if (f->flags & PVK_FF_YCBCR) {
+        /* Optimal and linear alike (Y'CbCr formats, above). No blits, clears
+         * or attachments: Vulkan forbids them on these formats. */
+        r = VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT |
+            VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT | VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT |
+            VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT | VK_FORMAT_FEATURE_2_MIDPOINT_CHROMA_SAMPLES_BIT |
+            VK_FORMAT_FEATURE_2_COSITED_CHROMA_SAMPLES_BIT |
+            VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT |
+            VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_SEPARATE_RECONSTRUCTION_FILTER_BIT;
+        if (pvk_ycbcr_format(f)->planes > 1)
+            r |= VK_FORMAT_FEATURE_2_DISJOINT_BIT |
+                 VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_FORCEABLE_BIT;
+        else
+            r |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_BIT;
+        return r;
+    }
     if (linear && (!pvk_format_is_color(f) || f->block_w > 1))
         return 0;
     r = VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_2_BLIT_SRC_BIT |
@@ -33314,7 +33386,10 @@ static uint32_t pvk_mip_levels(uint32_t w, uint32_t h, uint32_t d)
 /* Capabilities > vkGetPhysicalDeviceImageFormatProperties. Metal limits:
  * 1D images are 2D textures of height 1 (section 11), so they get mipmaps;
  * depth/stencil textures cannot be 3D; ETC2/EAC textures cannot be 3D (BC and
- * ASTC can); linear textures are 2D, one level, one layer, one sample. */
+ * ASTC can); linear textures are 2D, one level, one layer, one sample.
+ * Formats requiring a sampler Y'CbCr conversion: 2D images of one level, one
+ * layer and one sample (the limits of their VkImageCreateInfo valid usage;
+ * ycbcrImageArrays is not offered), disjoint when multi-planar. */
 static VkResult pvk_image_format_properties(const struct pvk_physical_device *pd,
                                             const VkPhysicalDeviceImageFormatInfo2 *info,
                                             VkImageFormatProperties *props)
@@ -33339,6 +33414,23 @@ static VkResult pvk_image_format_properties(const struct pvk_physical_device *pd
         return VK_ERROR_FORMAT_NOT_SUPPORTED;
     optimal = pvk_format_image_features(pd, f, false);
     features = linear ? pvk_format_image_features(pd, f, true) : optimal;
+    if (pvk_ycbcr_format(f)) {
+        VkImageCreateFlags allowed = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_ALIAS_BIT |
+                                     VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
+        if (features & VK_FORMAT_FEATURE_2_DISJOINT_BIT)
+            allowed |= VK_IMAGE_CREATE_DISJOINT_BIT;
+        if (info->type != VK_IMAGE_TYPE_2D || (info->flags & ~allowed) ||
+            (!(info->flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT) && !pvk_image_usage_supported(usage, features)))
+            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+        props->maxExtent.width = props->maxExtent.height = l->maxImageDimension2D;
+        props->maxExtent.depth = 1;
+        props->maxMipLevels = 1;
+        props->maxArrayLayers = 1;
+        props->sampleCounts = VK_SAMPLE_COUNT_1_BIT;
+        max_size = pvk_MTLDevice_maxBufferLength(pd->mtl_device);
+        props->maxResourceSize = max_size < (1ul << 31) ? (1ul << 31) : max_size;
+        return VK_SUCCESS;
+    }
     if (!features || (info->flags & ~(VkImageCreateFlags)PVK_IMAGE_CREATE_FLAGS))
         return VK_ERROR_FORMAT_NOT_SUPPORTED;
     if (!(info->flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT) && !pvk_image_usage_supported(usage, features))
@@ -33389,13 +33481,17 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceImageFormatProperties2(VkPhysi
             VkExternalImageFormatProperties *p = (VkExternalImageFormatProperties *)(void *)s;
             memset(&p->externalMemoryProperties, 0, sizeof(p->externalMemoryProperties));
         } else if (s->sType == VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_IMAGE_FORMAT_PROPERTIES) {
-            ((VkSamplerYcbcrConversionImageFormatProperties *)(void *)s)->combinedImageSamplerDescriptorCount = 1;
+            /* A combined image sampler descriptor of a multi-planar image
+             * takes 32 bytes (section 11), at least two pool descriptors'
+             * worth: one per plane. */
+            ((VkSamplerYcbcrConversionImageFormatProperties *)(void *)s)->combinedImageSamplerDescriptorCount =
+                pvk_ycbcr_format(f) ? pvk_ycbcr_format(f)->planes : 1;
         } else if (s->sType == VK_STRUCTURE_TYPE_HOST_IMAGE_COPY_DEVICE_PERFORMANCE_QUERY) {
             /* HOST_TRANSFER images live in shared memory (section 11), which
              * Metal never compresses losslessly; block-compressed formats
              * lose nothing. Whether the layouts are identical is unverified. */
             VkHostImageCopyDevicePerformanceQuery *p = (VkHostImageCopyDevicePerformanceQuery *)(void *)s;
-            p->optimalDeviceAccess = f && f->block_w > 1 ? VK_TRUE : VK_FALSE;
+            p->optimalDeviceAccess = f && f->block_w > 1 && !pvk_ycbcr_format(f) ? VK_TRUE : VK_FALSE;
             p->identicalMemoryLayout = VK_FALSE;
         }
     }
@@ -34228,6 +34324,35 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  *   Image layouts have no Metal equivalent: transitions are barriers only
  *   (section 16), and vkTransitionImageLayout does nothing.
  *
+ * Y'CBCR IMAGES (formats requiring a sampler Y'CbCr conversion, section 7)
+ *   A multi-planar image is one texture per plane (R8Unorm or RG8Unorm, at
+ *   the plane's extent: chroma planes are subsampled), struct
+ *   pvk_image_plane. Planes follow each other in the image's memory, each at
+ *   an offset aligned for it; the image's requirements cover them all. With
+ *   VK_IMAGE_CREATE_DISJOINT_BIT each plane has its own requirements
+ *   (VkImagePlaneMemoryRequirementsInfo) and binding
+ *   (VkBindImagePlaneMemoryInfo). image->mtl_texture is plane 0. Linear
+ *   multi-planar images are linear textures per plane, each with its row
+ *   pitch (vkGetImageSubresourceLayout of the plane's aspect). Copies, host
+ *   copies and subresource layouts address a plane by its aspect, in the
+ *   plane's texels (pvk_image_aspect).
+ *   A packed 4:2:2 image (G8B8G8R8_422, B8G8R8G8_422) is one RG8Unorm texture
+ *   of the image's width: the same bytes, texel x holding Y and either Cb (x
+ *   even) or Cr (x odd). Metal's GBGR422/BGRG422 formats are not used: their
+ *   textures reconstruct chroma in hardware, always as Vulkan's explicit
+ *   midpoint reconstruction with a linear chroma filter (checked on M4 Max),
+ *   and Metal makes no other view of them, so other chroma locations and
+ *   filters could not be honoured.
+ *   Such images are 2D, with one level, layer and sample (section 7).
+ *   A view with a VkSamplerYcbcrConversionInfo is a texture view per plane
+ *   (planes 1 and 2 in pvk_image_view.planes); a plane view
+ *   (VK_IMAGE_ASPECT_PLANE_n_BIT, MUTABLE_FORMAT images) is a view of that
+ *   plane in the view's format. Sampling is the shader's work (section 13),
+ *   described by struct pvk_ycbcr: the conversion, its format's layout and
+ *   the sampler's filters. A sampler made with a conversion carries one, set
+ *   layouts copy those of their immutable samplers and pipelines hand them to
+ *   the translator (section 17).
+ *
  * HOST IMAGE COPY
  *   Images with VK_IMAGE_USAGE_HOST_TRANSFER_BIT are shared-storage textures
  *   (their memory types are host-visible), which -[MTLTexture replaceRegion:]
@@ -34263,11 +34388,40 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  *   uniform/storage texel buffer         8 B: MTLResourceID of mtl_texture
  *   sampler                              8 B: MTLResourceID of mtl_sampler
  *   combined image sampler              16 B: { texture MTLResourceID, sampler MTLResourceID }
+ *     a binding whose immutable samplers have a Y'CbCr conversion of a
+ *     multi-planar format (pvk_ycbcr_stride)
+ *                                       32 B: { plane 0, sampler, plane 1, plane 2 }, MTLResourceIDs
+ *                                             of mtl_texture and planes[] (plane 2: 0 for two planes)
  *   inline uniform block                the block's bytes (descriptorCount bytes)
  * A variable-count binding is the set's last binding. Dynamic offsets are
  * applied at bind time to a copy of the table. */
+
+/* How a combined image sampler with a sampler Y'CbCr conversion samples:
+ * the conversion (VkSamplerYcbcrConversionCreateInfo, resolved), the layout
+ * of its format (section 7) and the sampler's filters. A
+ * VkSamplerYcbcrConversion is one of these without the sampler part; a
+ * VkSampler made with it carries a complete copy, set layouts copy those of
+ * their immutable samplers (section 12), and the translator generates the
+ * sampling code from it (section 13). Compared bytewise: zero it first. */
+struct pvk_ycbcr {
+    uint8_t planes;             /* 1 (packed 4:2:2), 2 or 3; 0: no conversion */
+    uint8_t packed;             /* pvk_ycbcr_format.packed */
+    uint8_t x_shift, y_shift;   /* chroma subsampling */
+    uint8_t bits;               /* per component */
+    uint8_t model;              /* VkSamplerYcbcrModelConversion */
+    uint8_t range;              /* VkSamplerYcbcrRange */
+    uint8_t swizzle[4];         /* components r, g, b, a: VkComponentSwizzle, never IDENTITY */
+    uint8_t x_chroma, y_chroma; /* VkChromaLocation */
+    uint8_t chroma_filter;      /* VkFilter */
+    uint8_t explicit_reconstruction; /* forceExplicitReconstruction, or a packed format */
+    /* the sampler's */
+    uint8_t min_filter, mag_filter; /* VkFilter */
+    float min_lod, max_lod, lod_bias;
+};
+
 struct pvk_image_view {
     id mtl_texture; /* MTLTexture view of the image */
+    id planes[2];   /* views with a Y'CbCr conversion of multi-planar images: planes 1 and 2 */
     /* section 11: */
     struct pvk_image *image;
     VkFormat format;
@@ -34288,11 +34442,23 @@ struct pvk_buffer_view {
 
 struct pvk_sampler {
     id mtl_sampler; /* MTLSamplerState created with supportArgumentBuffers */
+    struct pvk_ycbcr ycbcr; /* VkSamplerYcbcrConversionInfo (planes 0: none) */
     /* section 11: */
     struct pvk_sampler_state *state; /* the shared state mtl_sampler belongs to */
 };
 
 /* ---- Images ---- */
+
+/* One plane of a multi-planar image (Y'CBCR IMAGES). */
+struct pvk_image_plane {
+    const struct pvk_format *fmt; /* the plane's compatible format */
+    uint32_t width, height;
+    VkDeviceSize offset;    /* from the image's memory offset (disjoint: 0) */
+    VkDeviceSize size, align, row_pitch; /* memory requirements; linear tiling: bytes from row to row */
+    id mtl_texture;         /* NULL until bound */
+    struct pvk_device_memory *memory;
+    VkDeviceSize memory_offset; /* of the texture in memory */
+};
 
 struct pvk_image {
     VkFormat format;
@@ -34306,10 +34472,13 @@ struct pvk_image {
     pvk_MTLTextureType mtl_type;
     pvk_MTLTextureUsage mtl_usage;
     VkDeviceSize row_pitch;  /* linear tiling: bytes from row to row */
-    id mtl_texture;          /* NULL until bound */
+    id mtl_texture;          /* NULL until bound (multi-planar: plane 0's, not retained again) */
     struct pvk_device_memory *memory;
     VkDeviceSize offset;
     bool memoryless;
+    const struct pvk_ycbcr_format *ycbcr; /* a format requiring a sampler Y'CbCr conversion */
+    uint32_t plane_count;                 /* multi-planar formats: 2 or 3 planes[], else 0 */
+    struct pvk_image_plane planes[3];
 };
 
 /* Whether a view format makes Metal reinterpret the image's pixels (beyond
@@ -34339,6 +34508,8 @@ static bool pvk_format_reinterprets(const struct pvk_format *image, VkFormat vie
             return false;
     return true;
 }
+
+static void pvk_image_init_planes(const struct pvk_physical_device *pd, struct pvk_image *image);
 
 /* Fills an image from its creation parameters; no Metal object is made. */
 static void pvk_image_init(const struct pvk_physical_device *pd, struct pvk_image *image, const VkImageCreateInfo *info)
@@ -34388,25 +34559,32 @@ static void pvk_image_init(const struct pvk_physical_device *pd, struct pvk_imag
                          VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)) ||
         ((image->usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) && f && ((f->caps & PVK_FC_COLOR) || !pvk_format_is_color(f))))
         image->mtl_usage |= PVK_MTLTextureUsageRenderTarget;
-    if ((views && (!listed || reinterprets)) || (f && f->kind == PVK_FK_DEPTH_STENCIL))
+    if ((views && (!listed || reinterprets)) || (f && f->kind == PVK_FK_DEPTH_STENCIL) ||
+        (views && pvk_ycbcr_format(f))) /* plane views */
         image->mtl_usage |= PVK_MTLTextureUsagePixelFormatView;
 
     if (image->tiling == VK_IMAGE_TILING_LINEAR && f) {
         VkDeviceSize align = pvk_MTLDevice_minimumLinearTextureAlignmentForPixelFormat(pd->mtl_device, f->mtl);
-        image->row_pitch = ((VkDeviceSize)image->extent.width * f->bytes + align - 1) / align * align;
+        VkDeviceSize row = (VkDeviceSize)(image->extent.width + f->block_w - 1) / f->block_w * f->bytes;
+        image->row_pitch = (row + align - 1) / align * align;
     }
+    image->ycbcr = pvk_ycbcr_format(f);
+    if (image->ycbcr && image->ycbcr->planes > 1)
+        pvk_image_init_planes(pd, image);
 }
 
-/* A new (retained) texture descriptor of the image, with resource options. */
-static id pvk_image_descriptor(const struct pvk_image *image, pvk_MTLResourceOptions options)
+/* A new (retained) descriptor of a texture of the image in a pixel format at
+ * an extent (a plane's), with resource options. */
+static id pvk_texture_descriptor(const struct pvk_image *image, pvk_MTLPixelFormat format, uint32_t width,
+                                 uint32_t height, pvk_MTLResourceOptions options)
 {
     id desc = pvk_MTLTextureDescriptor_new();
     if (!desc)
         return NULL;
     pvk_MTLTextureDescriptor_setTextureType(desc, image->mtl_type);
-    pvk_MTLTextureDescriptor_setPixelFormat(desc, image->fmt->mtl);
-    pvk_MTLTextureDescriptor_setWidth(desc, image->extent.width);
-    pvk_MTLTextureDescriptor_setHeight(desc, image->type == VK_IMAGE_TYPE_1D ? 1 : image->extent.height);
+    pvk_MTLTextureDescriptor_setPixelFormat(desc, format);
+    pvk_MTLTextureDescriptor_setWidth(desc, width);
+    pvk_MTLTextureDescriptor_setHeight(desc, image->type == VK_IMAGE_TYPE_1D ? 1 : height);
     pvk_MTLTextureDescriptor_setDepth(desc, image->type == VK_IMAGE_TYPE_3D ? image->extent.depth : 1);
     pvk_MTLTextureDescriptor_setMipmapLevelCount(desc, image->levels);
     pvk_MTLTextureDescriptor_setSampleCount(desc, image->samples);
@@ -34416,10 +34594,114 @@ static id pvk_image_descriptor(const struct pvk_image *image, pvk_MTLResourceOpt
     return desc;
 }
 
+/* A new (retained) texture descriptor of the image, with resource options. */
+static id pvk_image_descriptor(const struct pvk_image *image, pvk_MTLResourceOptions options)
+{
+    return pvk_texture_descriptor(image, image->fmt->mtl, image->extent.width, image->extent.height, options);
+}
+
 /* Images Metal must create in shared storage. */
 static bool pvk_image_needs_shared(const struct pvk_image *image)
 {
     return image->tiling == VK_IMAGE_TILING_LINEAR || (image->usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT);
+}
+
+/* Memory one texture of the image needs (the image, or one plane): size and
+ * alignment from heapTextureSizeAndAlignWithDescriptor:, the largest over
+ * the storage modes the image may be bound to; linear textures are rows of
+ * row_pitch bytes, aligned for the pixel format. */
+static void pvk_texture_requirements(const struct pvk_physical_device *pd, const struct pvk_image *image,
+                                     pvk_MTLPixelFormat format, uint32_t width, uint32_t height, VkDeviceSize row_pitch,
+                                     VkDeviceSize *size_out, VkDeviceSize *align_out)
+{
+    VkDeviceSize size = 0, align = 16;
+    if (image->tiling == VK_IMAGE_TILING_LINEAR) {
+        VkDeviceSize a = pvk_MTLDevice_minimumLinearTextureAlignmentForPixelFormat(pd->mtl_device, format);
+        if (a > align)
+            align = a;
+        size = row_pitch * height;
+    } else {
+        /* Private and shared storage: what the image may be bound to. */
+        static const pvk_MTLResourceOptions modes[] = {
+            PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked,
+            PVK_MTLResourceStorageModeShared | PVK_MTLResourceHazardTrackingModeUntracked,
+        };
+        void *pool = objc_autoreleasePoolPush();
+        unsigned m;
+        for (m = pvk_image_needs_shared(image) ? 1 : 0; m < PVK_ARRAY_SIZE(modes); m++) {
+            id desc = pvk_texture_descriptor(image, format, width, height, modes[m]);
+            pvk_MTLSizeAndAlign sa;
+            if (!desc)
+                continue;
+            sa = pvk_MTLDevice_heapTextureSizeAndAlignWithDescriptor(pd->mtl_device, desc);
+            pvk_release(desc);
+            if (sa.size > size)
+                size = sa.size;
+            if (sa.align > align)
+                align = sa.align;
+        }
+        objc_autoreleasePoolPop(pool);
+    }
+    *size_out = (size + align - 1) / align * align;
+    *align_out = align;
+}
+
+/* The planes of a multi-planar image: formats, extents, requirements and,
+ * unless disjoint, where each sits in the image's memory (Y'CBCR IMAGES). */
+static void pvk_image_init_planes(const struct pvk_physical_device *pd, struct pvk_image *image)
+{
+    const struct pvk_ycbcr_format *y = image->ycbcr;
+    VkDeviceSize end = 0;
+    uint32_t p;
+
+    image->plane_count = y->planes;
+    for (p = 0; p < y->planes; p++) {
+        struct pvk_image_plane *pl = &image->planes[p];
+        pl->fmt = pvk_format(y->plane_formats[p]);
+        pl->width = p ? image->extent.width >> y->x_shift : image->extent.width;
+        pl->height = p ? image->extent.height >> y->y_shift : image->extent.height;
+        if (image->tiling == VK_IMAGE_TILING_LINEAR) {
+            VkDeviceSize a = pvk_MTLDevice_minimumLinearTextureAlignmentForPixelFormat(pd->mtl_device, pl->fmt->mtl);
+            pl->row_pitch = ((VkDeviceSize)pl->width * pl->fmt->bytes + a - 1) / a * a;
+        }
+        pvk_texture_requirements(pd, image, pl->fmt->mtl, pl->width, pl->height, pl->row_pitch, &pl->size, &pl->align);
+        if (!(image->flags & VK_IMAGE_CREATE_DISJOINT_BIT)) {
+            pl->offset = (end + pl->align - 1) / pl->align * pl->align;
+            end = pl->offset + pl->size;
+        }
+    }
+}
+
+/* The plane an aspect names: VK_IMAGE_ASPECT_PLANE_n_BIT of a multi-planar
+ * image (COLOR: plane 0), else -1, the image itself. */
+static int pvk_aspect_plane(const struct pvk_image *image, VkImageAspectFlags aspect)
+{
+    if (!image->plane_count)
+        return -1;
+    if (aspect & VK_IMAGE_ASPECT_PLANE_2_BIT)
+        return 2;
+    if (aspect & VK_IMAGE_ASPECT_PLANE_1_BIT)
+        return 1;
+    return 0;
+}
+
+/* The texture an aspect of an image is in (NULL until bound), with its
+ * format and level 0 extent: a plane's for the plane aspects of a
+ * multi-planar image, else the image's. */
+static id pvk_image_aspect(const struct pvk_image *image, VkImageAspectFlags aspect, const struct pvk_format **fmt,
+                           uint32_t *width, uint32_t *height)
+{
+    int p = pvk_aspect_plane(image, aspect);
+    if (p < 0) {
+        *fmt = image->fmt;
+        *width = image->extent.width;
+        *height = image->extent.height;
+        return image->mtl_texture;
+    }
+    *fmt = image->planes[p].fmt;
+    *width = image->planes[p].width;
+    *height = image->planes[p].height;
+    return image->planes[p].mtl_texture;
 }
 
 /* Resources > Resource Memory Association: the memory types an image may be
@@ -34440,41 +34722,32 @@ static uint32_t pvk_image_memory_type_bits(const struct pvk_physical_device *pd,
     return bits;
 }
 
+/* plane_aspect: the plane of a disjoint image (VkImagePlaneMemoryRequirementsInfo), else 0. */
 static void pvk_image_memory_requirements(const struct pvk_device *device, const struct pvk_image *image,
-                                          VkMemoryRequirements2 *pMemoryRequirements)
+                                          VkImageAspectFlags plane_aspect, VkMemoryRequirements2 *pMemoryRequirements)
 {
     const struct pvk_physical_device *pd = device->physical_device;
     VkMemoryRequirements *req = &pMemoryRequirements->memoryRequirements;
     VkDeviceSize size = 0, align = 16;
     VkBaseOutStructure *ext;
+    uint32_t p;
 
     req->memoryTypeBits = pvk_image_memory_type_bits(pd, image);
-    if (image->tiling == VK_IMAGE_TILING_LINEAR) {
-        VkDeviceSize a = pvk_MTLDevice_minimumLinearTextureAlignmentForPixelFormat(pd->mtl_device, image->fmt->mtl);
-        if (a > align)
-            align = a;
-        size = image->row_pitch * image->extent.height;
-    } else {
-        /* Private and shared storage: what the image may be bound to. */
-        static const pvk_MTLResourceOptions modes[] = {
-            PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked,
-            PVK_MTLResourceStorageModeShared | PVK_MTLResourceHazardTrackingModeUntracked,
-        };
-        void *pool = objc_autoreleasePoolPush();
-        unsigned m;
-        for (m = pvk_image_needs_shared(image) ? 1 : 0; m < PVK_ARRAY_SIZE(modes); m++) {
-            id desc = pvk_image_descriptor(image, modes[m]);
-            pvk_MTLSizeAndAlign sa;
-            if (!desc)
-                continue;
-            sa = pvk_MTLDevice_heapTextureSizeAndAlignWithDescriptor(pd->mtl_device, desc);
-            pvk_release(desc);
-            if (sa.size > size)
-                size = sa.size;
-            if (sa.align > align)
-                align = sa.align;
+    if (image->plane_count && plane_aspect && (image->flags & VK_IMAGE_CREATE_DISJOINT_BIT)) {
+        const struct pvk_image_plane *pl = &image->planes[pvk_aspect_plane(image, plane_aspect)];
+        size = pl->size;
+        align = pl->align;
+    } else if (image->plane_count) {
+        /* All planes, one after the other (pvk_image_init_planes). */
+        for (p = 0; p < image->plane_count; p++) {
+            const struct pvk_image_plane *pl = &image->planes[p];
+            size = ((size + pl->align - 1) / pl->align * pl->align) + pl->size;
+            if (pl->align > align)
+                align = pl->align;
         }
-        objc_autoreleasePoolPop(pool);
+    } else {
+        pvk_texture_requirements(pd, image, image->fmt->mtl, image->extent.width, image->extent.height,
+                                 image->row_pitch, &size, &align);
     }
     req->alignment = align;
     req->size = (size + align - 1) / align * align;
@@ -34507,16 +34780,26 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImage(VkDevice _device, const VkImageCrea
 VKAPI_ATTR void VKAPI_CALL vkDestroyImage(VkDevice device, VkImage _image, const VkAllocationCallbacks *pAllocator)
 {
     struct pvk_image *image = (struct pvk_image *)_image;
+    uint32_t p;
     if (!image)
         return;
-    pvk_release(image->mtl_texture);
+    if (image->plane_count)
+        for (p = 0; p < image->plane_count; p++)
+            pvk_release(image->planes[p].mtl_texture);
+    else
+        pvk_release(image->mtl_texture);
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), image);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkGetImageMemoryRequirements2(VkDevice device, const VkImageMemoryRequirementsInfo2 *pInfo,
                                                          VkMemoryRequirements2 *pMemoryRequirements)
 {
-    pvk_image_memory_requirements((struct pvk_device *)device, (const struct pvk_image *)pInfo->image,
+    const VkBaseInStructure *ext;
+    VkImageAspectFlags plane = 0;
+    for (ext = pInfo->pNext; ext; ext = ext->pNext)
+        if (ext->sType == VK_STRUCTURE_TYPE_IMAGE_PLANE_MEMORY_REQUIREMENTS_INFO)
+            plane = ((const VkImagePlaneMemoryRequirementsInfo *)ext)->planeAspect;
+    pvk_image_memory_requirements((struct pvk_device *)device, (const struct pvk_image *)pInfo->image, plane,
                                   pMemoryRequirements);
 }
 
@@ -34526,7 +34809,7 @@ VKAPI_ATTR void VKAPI_CALL vkGetImageMemoryRequirements(VkDevice device, VkImage
     VkMemoryRequirements2 req;
     memset(&req, 0, sizeof(req));
     req.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
-    pvk_image_memory_requirements((struct pvk_device *)device, (const struct pvk_image *)image, &req);
+    pvk_image_memory_requirements((struct pvk_device *)device, (const struct pvk_image *)image, 0, &req);
     *pMemoryRequirements = req.memoryRequirements;
 }
 
@@ -34540,7 +34823,7 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageMemoryRequirements(VkDevice _device, 
         memset(&pMemoryRequirements->memoryRequirements, 0, sizeof(pMemoryRequirements->memoryRequirements));
         return;
     }
-    pvk_image_memory_requirements(device, &image, pMemoryRequirements);
+    pvk_image_memory_requirements(device, &image, pInfo->planeAspect, pMemoryRequirements);
 }
 
 /* Sparse images are not supported: no image has sparse requirements. */
@@ -34574,12 +34857,56 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageSparseMemoryRequirements(VkDevice dev
     *pSparseMemoryRequirementCount = 0;
 }
 
+/* Binds the planes of a multi-planar image: every plane, at its offset, or
+ * the one plane_aspect names (disjoint images). */
+static VkResult pvk_image_bind_planes(struct pvk_image *image, struct pvk_device_memory *memory, VkDeviceSize offset,
+                                      VkImageAspectFlags plane_aspect)
+{
+    void *pool = objc_autoreleasePoolPush();
+    VkResult result = VK_SUCCESS;
+    uint32_t p, first = 0, end = image->plane_count;
+
+    if (plane_aspect && (image->flags & VK_IMAGE_CREATE_DISJOINT_BIT)) {
+        first = (uint32_t)pvk_aspect_plane(image, plane_aspect);
+        end = first + 1;
+    }
+    for (p = first; p < end && result == VK_SUCCESS; p++) {
+        struct pvk_image_plane *pl = &image->planes[p];
+        VkDeviceSize at = offset + pl->offset;
+        id desc = pvk_texture_descriptor(image, pl->fmt->mtl, pl->width, pl->height,
+                                         pvk_memory_type_options[memory->type_index]),
+           texture = NULL;
+        if (desc && image->tiling == VK_IMAGE_TILING_LINEAR)
+            texture = pvk_MTLBuffer_newTextureWithDescriptor_offset_bytesPerRow(memory->mtl_buffer, desc, at,
+                                                                                pl->row_pitch);
+        else if (desc && memory->mtl_heap)
+            texture = pvk_MTLHeap_newTextureWithDescriptor_offset(memory->mtl_heap, desc, at);
+        pvk_release(desc);
+        if (!texture) {
+            result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+            break;
+        }
+        pvk_release(pl->mtl_texture);
+        pl->mtl_texture = texture;
+        pl->memory = memory;
+        pl->memory_offset = at;
+    }
+    objc_autoreleasePoolPop(pool);
+    image->mtl_texture = image->planes[0].mtl_texture;
+    image->memory = image->planes[0].memory;
+    image->offset = image->planes[0].memory_offset;
+    return result;
+}
+
 static VkResult pvk_image_bind(struct pvk_device *device, struct pvk_image *image, struct pvk_device_memory *memory,
-                               VkDeviceSize offset)
+                               VkDeviceSize offset, VkImageAspectFlags plane_aspect)
 {
     id mtl = device->physical_device->mtl_device, desc, texture = NULL;
-    void *pool = objc_autoreleasePoolPush();
+    void *pool;
 
+    if (image->plane_count)
+        return pvk_image_bind_planes(image, memory, offset, plane_aspect);
+    pool = objc_autoreleasePoolPush();
     if (!memory->mtl_heap) {
         /* Lazily allocated: tile memory only, so only a render target. */
         image->mtl_usage = PVK_MTLTextureUsageRenderTarget;
@@ -34614,8 +34941,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory2(VkDevice device, uint32_t bind
     for (i = 0; i < bindInfoCount; i++) {
         const VkBindImageMemoryInfo *info = &pBindInfos[i];
         const VkBaseInStructure *ext;
-        VkResult r = pvk_image_bind((struct pvk_device *)device, (struct pvk_image *)info->image,
-                                    (struct pvk_device_memory *)info->memory, info->memoryOffset);
+        VkImageAspectFlags plane = 0;
+        VkResult r;
+        for (ext = info->pNext; ext; ext = ext->pNext)
+            if (ext->sType == VK_STRUCTURE_TYPE_BIND_IMAGE_PLANE_MEMORY_INFO)
+                plane = ((const VkBindImagePlaneMemoryInfo *)ext)->planeAspect;
+        r = pvk_image_bind((struct pvk_device *)device, (struct pvk_image *)info->image,
+                           (struct pvk_device_memory *)info->memory, info->memoryOffset, plane);
         for (ext = info->pNext; ext; ext = ext->pNext)
             if (ext->sType == VK_STRUCTURE_TYPE_BIND_MEMORY_STATUS)
                 *((const VkBindMemoryStatus *)ext)->pResult = r;
@@ -34661,16 +34993,24 @@ static void pvk_image_subresource_layout(const struct pvk_image *image, const Vk
                                          VkSubresourceLayout2 *pLayout)
 {
     VkSubresourceLayout *l = &pLayout->subresourceLayout;
-    const struct pvk_format *f = image->fmt;
-    uint32_t w = pvk_mip_extent(image->extent.width, sub->mipLevel);
-    uint32_t h = image->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(image->extent.height, sub->mipLevel);
-    uint32_t d = image->type == VK_IMAGE_TYPE_3D ? pvk_mip_extent(image->extent.depth, sub->mipLevel) : 1;
-    VkDeviceSize memcpy_size, row = (VkDeviceSize)((w + f->block_w - 1) / f->block_w) * pvk_aspect_bytes(f, sub->aspectMask);
+    const struct pvk_format *f;
+    uint32_t w, h, d = image->type == VK_IMAGE_TYPE_3D ? pvk_mip_extent(image->extent.depth, sub->mipLevel) : 1;
+    int plane = pvk_aspect_plane(image, sub->aspectMask);
+    VkDeviceSize memcpy_size, row;
     VkBaseOutStructure *ext;
 
+    pvk_image_aspect(image, sub->aspectMask, &f, &w, &h); /* a plane's format and extent */
+    w = pvk_mip_extent(w, sub->mipLevel);
+    h = image->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(h, sub->mipLevel);
+    row = (VkDeviceSize)((w + f->block_w - 1) / f->block_w) * pvk_aspect_bytes(f, sub->aspectMask);
     memset(l, 0, sizeof(*l));
     memcpy_size = row * ((h + f->block_h - 1) / f->block_h) * d;
-    if (image->tiling == VK_IMAGE_TILING_LINEAR) {
+    if (image->tiling == VK_IMAGE_TILING_LINEAR && plane >= 0) {
+        /* From the image's start, or a disjoint plane's (its offset is 0). */
+        l->offset = image->planes[plane].offset;
+        l->rowPitch = image->planes[plane].row_pitch;
+        l->size = l->rowPitch * h;
+    } else if (image->tiling == VK_IMAGE_TILING_LINEAR) {
         l->rowPitch = image->row_pitch;
         l->size = image->row_pitch * h;
     } else {
@@ -34771,11 +35111,17 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
     pvk_MTLTextureType type;
     pvk_MTLTextureSwizzleChannels swizzle;
     pvk_NSRange levels, slices;
-    uint32_t depth;
+    uint32_t depth, p;
+    int plane = pvk_aspect_plane(image, range->aspectMask);
+    bool planes = image->plane_count && range->aspectMask == VK_IMAGE_ASPECT_COLOR_BIT; /* every plane */
+    id base = plane >= 0 ? image->planes[plane].mtl_texture : image->mtl_texture;
     void *pool;
 
-    if (!f || !f->mtl || !image->mtl_texture)
+    if (!f || !f->mtl || !base)
         return VK_ERROR_FORMAT_NOT_SUPPORTED; /* invalid usage */
+    for (p = 0; planes && p < image->plane_count; p++)
+        if (!image->planes[p].mtl_texture)
+            return VK_ERROR_FORMAT_NOT_SUPPORTED; /* a disjoint plane is not bound: invalid usage */
     view = pvk_alloc(alloc, sizeof(*view), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (!view)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -34789,7 +35135,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
     view->base_layer = range->baseArrayLayer;
     view->layers = range->layerCount == VK_REMAINING_ARRAY_LAYERS ? depth - range->baseArrayLayer : range->layerCount;
 
-    format = f->mtl;
+    format = planes ? image->planes[0].fmt->mtl : f->mtl; /* plane views: f is the plane's format */
     if (f->kind == PVK_FK_DEPTH_STENCIL && range->aspectMask == VK_IMAGE_ASPECT_STENCIL_BIT)
         format = PVK_MTLPixelFormatX32_Stencil8;
     levels.location = view->base_level;
@@ -34837,10 +35183,24 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
     } else {
         pool = objc_autoreleasePoolPush();
         view->mtl_texture = pvk_MTLTexture_newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(
-            image->mtl_texture, format, type, levels, slices, swizzle);
+            base, format, type, levels, slices, swizzle);
+        /* The other planes of a multi-planar image, for Y'CbCr sampling
+         * (their components are the identity, as a conversion requires). */
+        for (p = 1; planes && p < image->plane_count; p++) {
+            pvk_MTLTextureSwizzleChannels identity = { PVK_MTLTextureSwizzleRed, PVK_MTLTextureSwizzleGreen,
+                                                       PVK_MTLTextureSwizzleBlue, PVK_MTLTextureSwizzleAlpha };
+            view->planes[p - 1] = pvk_MTLTexture_newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(
+                image->planes[p].mtl_texture, image->planes[p].fmt->mtl, type, levels, slices, identity);
+            if (!view->planes[p - 1]) {
+                pvk_release(view->mtl_texture);
+                view->mtl_texture = NULL;
+            }
+        }
         objc_autoreleasePoolPop(pool);
     }
     if (!view->mtl_texture) {
+        pvk_release(view->planes[0]);
+        pvk_release(view->planes[1]);
         pvk_free(alloc, view);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -34849,6 +35209,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
      * object itself resident. Memoryless textures can't join a set. */
     if (!image->memoryless) {
         pvk_device_make_resident(device, view->mtl_texture);
+        for (p = 0; p < 2; p++)
+            if (view->planes[p])
+                pvk_device_make_resident(device, view->planes[p]);
         view->resident = true;
     }
     *pView = (VkImageView)view;
@@ -34858,8 +35221,14 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
 VKAPI_ATTR void VKAPI_CALL vkDestroyImageView(VkDevice device, VkImageView imageView, const VkAllocationCallbacks *pAllocator)
 {
     struct pvk_image_view *view = (struct pvk_image_view *)imageView;
+    uint32_t p;
     if (!view)
         return;
+    for (p = 0; p < 2; p++) {
+        if (view->planes[p] && view->resident)
+            pvk_device_evict((struct pvk_device *)device, view->planes[p]);
+        pvk_release(view->planes[p]);
+    }
     if (view->resident)
         pvk_device_evict((struct pvk_device *)device, view->mtl_texture);
     pvk_release(view->mtl_texture);
@@ -34952,7 +35321,9 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyBufferView(VkDevice device, VkBufferView buf
  *                             FST: A1BGR5/ABGR4 textures cannot use opaque black)
  *   unnormalizedCoordinates   normalizedCoordinates = NO
  *   reduction mode            reductionMode (offered only from Apple10, section 7)
- * Custom border colors and Y'CbCr conversion are not supported. */
+ * Custom border colors are not supported. A sampler Y'CbCr conversion only
+ * adds struct pvk_ycbcr to the sampler: the shader does the conversion
+ * (Y'CBCR IMAGES), sampling the luma with the sampler's state. */
 
 struct pvk_sampler_key {
     uint32_t min, mag, mip, s, t, r, border, compare, reduction, anisotropy, normalized;
@@ -35081,6 +35452,52 @@ static id pvk_sampler_state_create(struct pvk_device *device, const struct pvk_s
     return sampler;
 }
 
+/* ---- Sampler Y'CbCr conversions ----
+ *
+ * A VkSamplerYcbcrConversion is a struct pvk_ycbcr: the create info with the
+ * component mapping resolved and the layout of its format. The conversion of
+ * a format that does not require one (none offers a chroma location, so
+ * valid usage excludes it) converts nothing (planes 0). */
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateSamplerYcbcrConversion(VkDevice device,
+                                                              const VkSamplerYcbcrConversionCreateInfo *pCreateInfo,
+                                                              const VkAllocationCallbacks *pAllocator,
+                                                              VkSamplerYcbcrConversion *pYcbcrConversion)
+{
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
+    const struct pvk_ycbcr_format *yf = pvk_ycbcr_format(pvk_format(pCreateInfo->format));
+    const VkComponentSwizzle c[4] = { pCreateInfo->components.r, pCreateInfo->components.g, pCreateInfo->components.b,
+                                      pCreateInfo->components.a };
+    struct pvk_ycbcr *y = pvk_alloc(alloc, sizeof(*y), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT); /* zeroed */
+    unsigned i;
+
+    if (!y)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    if (yf) {
+        y->planes = yf->planes;
+        y->packed = yf->packed;
+        y->x_shift = yf->x_shift;
+        y->y_shift = yf->y_shift;
+        y->bits = yf->bits;
+        y->model = (uint8_t)pCreateInfo->ycbcrModel;
+        y->range = (uint8_t)pCreateInfo->ycbcrRange;
+        for (i = 0; i < 4; i++)
+            y->swizzle[i] = (uint8_t)(c[i] == VK_COMPONENT_SWIZZLE_IDENTITY ? VK_COMPONENT_SWIZZLE_R + i : c[i]);
+        y->x_chroma = (uint8_t)pCreateInfo->xChromaOffset;
+        y->y_chroma = (uint8_t)pCreateInfo->yChromaOffset;
+        y->chroma_filter = (uint8_t)pCreateInfo->chromaFilter;
+        y->explicit_reconstruction = pCreateInfo->forceExplicitReconstruction || yf->packed;
+    }
+    *pYcbcrConversion = (VkSamplerYcbcrConversion)y;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroySamplerYcbcrConversion(VkDevice device, VkSamplerYcbcrConversion ycbcrConversion,
+                                                           const VkAllocationCallbacks *pAllocator)
+{
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), (void *)ycbcrConversion);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSampler(VkDevice _device, const VkSamplerCreateInfo *pCreateInfo,
                                                const VkAllocationCallbacks *pAllocator, VkSampler *pSampler)
 {
@@ -35089,9 +35506,24 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSampler(VkDevice _device, const VkSampler
     struct pvk_sampler *sampler = pvk_alloc(alloc, sizeof(*sampler), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     struct pvk_sampler_state *state;
     struct pvk_sampler_key key;
+    const VkBaseInStructure *ext;
 
     if (!sampler)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
+    for (ext = pCreateInfo->pNext; ext; ext = ext->pNext) {
+        const struct pvk_ycbcr *y;
+        if (ext->sType != VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO)
+            continue;
+        y = (const struct pvk_ycbcr *)((const VkSamplerYcbcrConversionInfo *)ext)->conversion;
+        if (!y || !y->planes)
+            continue;
+        sampler->ycbcr = *y;
+        sampler->ycbcr.min_filter = (uint8_t)pCreateInfo->minFilter;
+        sampler->ycbcr.mag_filter = (uint8_t)pCreateInfo->magFilter;
+        sampler->ycbcr.min_lod = pCreateInfo->minLod;
+        sampler->ycbcr.max_lod = pCreateInfo->maxLod;
+        sampler->ycbcr.lod_bias = pCreateInfo->mipLodBias;
+    }
     pvk_sampler_key(device, pCreateInfo, &key);
     pthread_mutex_lock(&pvk_sampler_lock);
     for (state = device->sampler_states; state; state = state->next)
@@ -35248,17 +35680,19 @@ static VkResult pvk_host_copy_blit(struct pvk_device *device, struct pvk_image *
 static VkResult pvk_host_copy(struct pvk_device *device, struct pvk_image *image, const struct pvk_host_region *r,
                               bool memcpy_layout, bool to_image)
 {
-    const struct pvk_format *f = image->fmt;
+    const struct pvk_format *f;
     struct pvk_host_region region = *r;
     VkDeviceSize row_bytes, image_bytes;
-    uint32_t bytes = pvk_aspect_bytes(f, r->sub.aspectMask), layers, i;
+    uint32_t bytes, layers, i, width, height;
+    id texture = pvk_image_aspect(image, r->sub.aspectMask, &f, &width, &height); /* a plane, or the image */
     pvk_MTLRegion mr;
 
+    bytes = pvk_aspect_bytes(f, r->sub.aspectMask);
     if (memcpy_layout) { /* the whole subresource, tightly packed */
         region.row_length = region.image_height = 0;
         region.offset.x = region.offset.y = region.offset.z = 0;
-        region.extent.width = pvk_mip_extent(image->extent.width, r->sub.mipLevel);
-        region.extent.height = image->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(image->extent.height, r->sub.mipLevel);
+        region.extent.width = pvk_mip_extent(width, r->sub.mipLevel);
+        region.extent.height = image->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(height, r->sub.mipLevel);
         region.extent.depth = image->type == VK_IMAGE_TYPE_3D ? pvk_mip_extent(image->extent.depth, r->sub.mipLevel) : 1;
     }
     layers = region.sub.layerCount == VK_REMAINING_ARRAY_LAYERS ? image->layers - region.sub.baseArrayLayer
@@ -35279,10 +35713,10 @@ static VkResult pvk_host_copy(struct pvk_device *device, struct pvk_image *image
         unsigned long per_image = image->type == VK_IMAGE_TYPE_3D ? image_bytes : 0;
         if (to_image)
             pvk_MTLTexture_replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(
-                image->mtl_texture, mr, region.sub.mipLevel, region.sub.baseArrayLayer + i, p, row_bytes, per_image);
+                texture, mr, region.sub.mipLevel, region.sub.baseArrayLayer + i, p, row_bytes, per_image);
         else
             pvk_MTLTexture_getBytes_bytesPerRow_bytesPerImage_fromRegion_mipmapLevel_slice(
-                image->mtl_texture, p, row_bytes, per_image, mr, region.sub.mipLevel, region.sub.baseArrayLayer + i);
+                texture, p, row_bytes, per_image, mr, region.sub.mipLevel, region.sub.baseArrayLayer + i);
     }
     return VK_SUCCESS;
 }
@@ -35341,17 +35775,20 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToImage(VkDevice _device, const VkCopy
 
     for (i = 0; i < info->regionCount && result == VK_SUCCESS; i++) {
         const VkImageCopy2 *c = &info->pRegions[i];
-        const struct pvk_format *sf = src->fmt, *df = dst->fmt;
+        const struct pvk_format *sf, *df;
         struct pvk_host_region r;
         VkDeviceSize size;
+        uint32_t sw, sh, dw, dh; /* level 0 extents of the aspects (planes) */
         uint32_t layers = c->srcSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS
                               ? src->layers - c->srcSubresource.baseArrayLayer
                               : c->srcSubresource.layerCount;
-        uint32_t w = whole ? pvk_mip_extent(src->extent.width, c->srcSubresource.mipLevel) : c->extent.width;
-        uint32_t h = whole ? (src->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(src->extent.height, c->srcSubresource.mipLevel))
-                           : c->extent.height;
-        uint32_t d = whole ? (src->type == VK_IMAGE_TYPE_3D ? pvk_mip_extent(src->extent.depth, c->srcSubresource.mipLevel) : 1)
-                           : c->extent.depth;
+        uint32_t w, h, d = whole ? (src->type == VK_IMAGE_TYPE_3D ? pvk_mip_extent(src->extent.depth, c->srcSubresource.mipLevel) : 1)
+                                 : c->extent.depth;
+
+        pvk_image_aspect(src, c->srcSubresource.aspectMask, &sf, &sw, &sh);
+        pvk_image_aspect(dst, c->dstSubresource.aspectMask, &df, &dw, &dh);
+        w = whole ? pvk_mip_extent(sw, c->srcSubresource.mipLevel) : c->extent.width;
+        h = whole ? (src->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(sh, c->srcSubresource.mipLevel)) : c->extent.height;
 
         size = (VkDeviceSize)((w + sf->block_w - 1) / sf->block_w) * ((h + sf->block_h - 1) / sf->block_h) * d * layers *
                pvk_aspect_bytes(sf, c->srcSubresource.aspectMask);
@@ -35374,13 +35811,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToImage(VkDevice _device, const VkCopy
             r.extent.width = (w + sf->block_w - 1) / sf->block_w * df->block_w;
             r.extent.height = (h + sf->block_h - 1) / sf->block_h * df->block_h;
             if (whole) {
-                r.extent.width = pvk_mip_extent(dst->extent.width, c->dstSubresource.mipLevel);
-                r.extent.height = dst->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(dst->extent.height, c->dstSubresource.mipLevel);
+                r.extent.width = pvk_mip_extent(dw, c->dstSubresource.mipLevel);
+                r.extent.height = dst->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(dh, c->dstSubresource.mipLevel);
             } else {
-                if (r.extent.width > pvk_mip_extent(dst->extent.width, c->dstSubresource.mipLevel) - (uint32_t)c->dstOffset.x)
-                    r.extent.width = pvk_mip_extent(dst->extent.width, c->dstSubresource.mipLevel) - (uint32_t)c->dstOffset.x;
-                if (r.extent.height > pvk_mip_extent(dst->extent.height, c->dstSubresource.mipLevel) - (uint32_t)c->dstOffset.y)
-                    r.extent.height = pvk_mip_extent(dst->extent.height, c->dstSubresource.mipLevel) - (uint32_t)c->dstOffset.y;
+                if (r.extent.width > pvk_mip_extent(dw, c->dstSubresource.mipLevel) - (uint32_t)c->dstOffset.x)
+                    r.extent.width = pvk_mip_extent(dw, c->dstSubresource.mipLevel) - (uint32_t)c->dstOffset.x;
+                if (r.extent.height > pvk_mip_extent(dh, c->dstSubresource.mipLevel) - (uint32_t)c->dstOffset.y)
+                    r.extent.height = pvk_mip_extent(dh, c->dstSubresource.mipLevel) - (uint32_t)c->dstOffset.y;
             }
             r.row_length = (w + sf->block_w - 1) / sf->block_w * df->block_w;
             r.image_height = (h + sf->block_h - 1) / sf->block_h * df->block_h;
@@ -35417,7 +35854,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  *
  * LAYOUTS
  *   A layout orders its bindings by binding number and gives each a
- *   16-byte-aligned offset and its type's stride (pvk_descriptor_stride);
+ *   16-byte-aligned offset and its type's stride (pvk_binding_stride: 32
+ *   bytes for combined image samplers with multi-planar Y'CbCr conversions);
  *   section 17 hands exactly that to the translator (struct
  *   pvk_msl_binding). The variable-count binding is the last one, so a
  *   set's table is the layout's fixed size plus that binding's descriptors.
@@ -35430,8 +35868,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  *   A pool owns one shared, cached, untracked MTLBuffer in the device's
  *   residency set, large enough for the worst case of its pool sizes: 16
  *   bytes per descriptor (an 8-byte descriptor alone in its binding still
- *   takes 16 with the padding to the next binding) and, for inline uniform
- *   blocks, their bytes plus 16 per binding (maxInlineUniformBlockBindings).
+ *   takes 16 with the padding to the next binding), 32 per combined image
+ *   sampler (the size with a multi-planar Y'CbCr conversion, whether or not
+ *   the application counted combinedImageSamplerDescriptorCount for it) and,
+ *   for inline uniform blocks, their bytes plus 16 per binding
+ *   (maxInlineUniformBlockBindings).
  *   So any allocation within the pool sizes and maxSets fits. Sets are
  *   ranges of the buffer in a list ordered by offset: allocation appends
  *   after the last set or else takes the first gap that fits; freeing
@@ -35484,6 +35925,19 @@ static uint32_t pvk_descriptor_stride(VkDescriptorType type)
     }
 }
 
+/* The stride of a layout binding: its type's, or 32 bytes for combined
+ * image samplers whose immutable samplers have a Y'CbCr conversion of a
+ * multi-planar format (section 11). */
+static uint32_t pvk_binding_stride(const VkDescriptorSetLayoutBinding *b)
+{
+    uint32_t i;
+    if (b->descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && b->pImmutableSamplers)
+        for (i = 0; i < b->descriptorCount; i++)
+            if (b->pImmutableSamplers[i] && ((const struct pvk_sampler *)b->pImmutableSamplers[i])->ycbcr.planes > 1)
+                return 32;
+    return pvk_descriptor_stride(b->descriptorType);
+}
+
 static bool pvk_descriptor_is_dynamic(VkDescriptorType type)
 {
     return type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC || type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
@@ -35524,6 +35978,7 @@ struct pvk_set_binding {
     VkShaderStageFlags stages;
     uint32_t dynamic_index;             /* of its first descriptor among the set's dynamic offsets */
     const pvk_MTLResourceID *immutable; /* count sampler IDs, or NULL */
+    const struct pvk_ycbcr *ycbcr;      /* the immutable samplers' Y'CbCr conversions (count), or NULL */
 };
 
 struct pvk_descriptor_set_layout {
@@ -35608,7 +36063,7 @@ static uint64_t pvk_layout_bindings(const VkDescriptorSetLayoutCreateInfo *info,
         qsort(sorted, n, sizeof(*sorted), pvk_binding_info_cmp);
     for (i = 0; i < n; i++) {
         const VkDescriptorSetLayoutBinding *b = sorted[i].b;
-        uint32_t stride = pvk_descriptor_stride(b->descriptorType);
+        uint32_t stride = pvk_binding_stride(b);
         uint64_t offset = pvk_align16(cur);
         if (!stride) /* not offered: room for the largest descriptor */
             stride = 16;
@@ -35636,6 +36091,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
     struct pvk_descriptor_set_layout *layout;
     struct pvk_binding_info *sorted = NULL;
     pvk_MTLResourceID *ids;
+    struct pvk_ycbcr *ycbcr;
     uint64_t total;
 
     (void)pAllocator;
@@ -35643,8 +36099,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
         if (pCreateInfo->pBindings[i].pImmutableSamplers &&
             pvk_descriptor_has_sampler(pCreateInfo->pBindings[i].descriptorType))
             immutable += pCreateInfo->pBindings[i].descriptorCount;
+    /* After the bindings: the immutable samplers' IDs, then their Y'CbCr
+     * conversions (room for one per immutable sampler). */
     layout = pvk_alloc(alloc,
-                       sizeof(*layout) + sizeof(struct pvk_set_binding) * n + sizeof(pvk_MTLResourceID) * immutable,
+                       sizeof(*layout) + sizeof(struct pvk_set_binding) * n +
+                           (sizeof(pvk_MTLResourceID) + sizeof(struct pvk_ycbcr)) * immutable,
                        VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (n)
         sorted = pvk_alloc(alloc, sizeof(*sorted) * n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
@@ -35659,6 +36118,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
     layout->binding_count = n;
     layout->bindings = (struct pvk_set_binding *)(layout + 1);
     ids = (pvk_MTLResourceID *)(layout->bindings + n);
+    ycbcr = (struct pvk_ycbcr *)(ids + immutable);
     total = pvk_layout_bindings(pCreateInfo, sorted, layout->bindings);
     for (i = 0; i < n; i++) {
         const VkDescriptorSetLayoutBinding *b = sorted[i].b;
@@ -35669,9 +36129,20 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
         if (lb->type != VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
             layout->descriptor_count += lb->count;
         if (b->pImmutableSamplers && pvk_descriptor_has_sampler(lb->type) && lb->count) {
+            bool converts = false;
             lb->immutable = ids;
-            for (j = 0; j < lb->count; j++)
+            for (j = 0; j < lb->count; j++) {
+                const struct pvk_sampler *s = (const struct pvk_sampler *)b->pImmutableSamplers[j];
                 *ids++ = pvk_sampler_id(b->pImmutableSamplers[j]);
+                if (s) {
+                    ycbcr[j] = s->ycbcr;
+                    converts |= s->ycbcr.planes != 0;
+                }
+            }
+            if (converts && lb->type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) {
+                lb->ycbcr = ycbcr;
+                ycbcr += lb->count;
+            }
         }
     }
     layout->dynamic_count = dynamic;
@@ -35790,7 +36261,9 @@ static VkDeviceSize pvk_descriptor_pool_bytes(const VkDescriptorPoolCreateInfo *
             bytes += 16 * (VkDeviceSize)((const VkDescriptorPoolInlineUniformBlockCreateInfo *)ext)
                               ->maxInlineUniformBlockBindings;
     for (i = 0; i < info->poolSizeCount; i++)
-        bytes += (info->pPoolSizes[i].type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK ? 1 : 16) *
+        bytes += (info->pPoolSizes[i].type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK     ? 1
+                  : info->pPoolSizes[i].type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ? 32
+                                                                                          : 16) *
                  (VkDeviceSize)info->pPoolSizes[i].descriptorCount;
     return bytes;
 }
@@ -36013,8 +36486,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkFreeDescriptorSets(VkDevice device, VkDescripto
 
 /* Writes one descriptor at dst from info: a VkDescriptorBufferInfo,
  * VkDescriptorImageInfo or VkBufferView, as the type says. A binding with
- * immutable samplers keeps them. */
-static void pvk_descriptor_write(char *dst, VkDescriptorType type, const void *info, bool immutable)
+ * immutable samplers keeps them. stride: the binding's (32: room for the
+ * planes of a Y'CbCr view). */
+static void pvk_descriptor_write(char *dst, VkDescriptorType type, const void *info, bool immutable, uint32_t stride)
 {
     switch (type) {
     case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
@@ -36042,6 +36516,12 @@ static void pvk_descriptor_write(char *dst, VkDescriptorType type, const void *i
         if (type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && !immutable) {
             pvk_MTLResourceID sampler = pvk_sampler_id(ii->sampler);
             memcpy(dst + 8, &sampler, 8);
+        }
+        if (type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && stride >= 32) {
+            pvk_MTLResourceID planes[2];
+            planes[0] = pvk_texture_id(view ? view->planes[0] : NULL);
+            planes[1] = pvk_texture_id(view ? view->planes[1] : NULL);
+            memcpy(dst + 16, planes, 16);
         }
         break;
     }
@@ -36086,7 +36566,8 @@ static void pvk_table_write(char *table, const struct pvk_descriptor_set_layout 
             memcpy(dst, data + k, n);
         else
             for (j = 0; j < n; j++)
-                pvk_descriptor_write(dst + (size_t)j * b->stride, type, data + (k + j) * stride, b->immutable != NULL);
+                pvk_descriptor_write(dst + (size_t)j * b->stride, type, data + (k + j) * stride, b->immutable != NULL,
+                                     b->stride);
         k += n;
         element = 0;
     }
@@ -36156,10 +36637,13 @@ static void pvk_descriptor_copy(const VkCopyDescriptorSet *c)
             n = dhave - de;
         from = src->contents + sb->offset + (size_t)se * sb->stride;
         to = dst->contents + db->offset + (size_t)de * db->stride;
-        if (db->immutable) /* the destination keeps its samplers: copy the images only */
-            for (j = 0; db->type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && j < n; j++)
+        if (db->immutable) { /* the destination keeps its samplers: copy the images (and planes) only */
+            for (j = 0; db->type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && j < n; j++) {
                 memmove(to + (size_t)j * db->stride, from + (size_t)j * sb->stride, 8);
-        else
+                if (db->stride >= 32 && sb->stride >= 32)
+                    memmove(to + (size_t)j * db->stride + 16, from + (size_t)j * sb->stride + 16, db->stride - 16);
+            }
+        } else
             memmove(to, from, (size_t)n * db->stride);
         se += n;
         de += n;
@@ -36422,6 +36906,34 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   (0, 0, 0, 1) for attributes past the binding's size. An input location
  *   without an attribute reads (0, 0, 0, 1).
  *
+ * Y'CBCR SAMPLING (pvk_spv_ycbcr_*)
+ *   A combined image sampler binding with Y'CbCr conversions
+ *   (options->ycbcr_bindings: struct pvk_ycbcr, section 11) holds, per
+ *   descriptor of a multi-planar image, pvk_ycbcr_d { t (plane 0), s, t1,
+ *   t2 } (32 bytes, section 11), and for packed 4:2:2 images the usual
+ *   pvk_sampled (one RG8 texture: Y, and Cb or Cr in alternate texels).
+ *   Sampling one (OpImageSample(Proj)Implicit/ExplicitLod, Lod, Grad, Bias,
+ *   MinLod; 2D, not arrayed) calls pvk_ycbcr_<k>, generated for its
+ *   conversion after Textures > Sampler Y'CbCr Conversion:
+ *     implicit reconstruction: the luma plane is sampled with the
+ *       descriptor's sampler and the instruction's LOD operands, the chroma
+ *       planes with a constexpr sampler of the chroma filter (clamped to the
+ *       edge) at the coordinate the chroma location gives;
+ *     explicit reconstruction (forceExplicitReconstruction; always for the
+ *       packed formats): texels are read, each luma texel gets its chroma
+ *       reconstructed (nearest or linear, from the chroma location), and the
+ *       sampler's min or mag filter, by Vulkan's LOD (the Lod operand, or
+ *       log2 of the largest scaled derivative, plus the biases, clamped),
+ *       filters them by hand (nearest or bilinear, clamped to the edge);
+ *   then the component mapping, range expansion (ITU full or narrow, the
+ *   format's bits) and model conversion (RGB or YCbCr identity, BT.709,
+ *   BT.601, BT.2020). Filtering comes first: the expansion and conversion
+ *   are affine, so they commute with it. Gathers, fetches, offsets and depth
+ *   comparisons are not supported with a conversion (Vulkan forbids them),
+ *   nor passing such samplers to functions or through phis. An array of them
+ *   is indexed dynamically if its conversions are all equal, else only by
+ *   constants. OpImage of one is plane 0 (queries see the image's size).
+ *
  * COMPILING THE OUTPUT
  *   Needs MSL 3.2 or newer (atomic_thread_fence, texture atomics). Compile with
  *   MTLCompileOptions.mathMode = MTLMathModeSafe: fast math breaks the NaN,
@@ -36548,6 +37060,13 @@ struct pvk_msl_set_layout {
     uint32_t binding_count;
 };
 
+/* A combined image sampler binding of a set layout whose immutable samplers
+ * have Y'CbCr conversions (Y'CBCR SAMPLING). */
+struct pvk_msl_ycbcr_binding {
+    uint32_t set, binding;
+    const struct pvk_ycbcr *conversions; /* one per descriptor of the binding (planes 0: none) */
+};
+
 enum pvk_msl_scalar_type {
     PVK_MSL_SCALAR_BOOL,
     PVK_MSL_SCALAR_INT,
@@ -36625,6 +37144,11 @@ struct pvk_msl_options {
     uint32_t color_attachments;
     enum pvk_msl_scalar_type color_attachment_types[8];
     bool sample_shading; /* sampleShadingEnable: run once per sample */
+
+    /* Combined image sampler bindings of set_layouts with Y'CbCr
+     * conversions; the others have none. */
+    const struct pvk_msl_ycbcr_binding *ycbcr_bindings;
+    uint32_t ycbcr_binding_count;
 };
 
 struct pvk_msl_resource {
@@ -37229,6 +37753,12 @@ struct pvk_spv_ptr {
     const char *texel_args;
     uint32_t texel_type; /* image type */
     bool value; /* an input attachment variable: a value like an Input, not a descriptor */
+    /* Combined image samplers with Y'CbCr conversions (Y'CBCR SAMPLING): the
+     * conversion of the descriptor reached, or of each element of the array
+     * (ycbcr_count > 1: they differ); ycbcr_desc: descriptors are pvk_ycbcr_d. */
+    const struct pvk_ycbcr *ycbcr;
+    uint32_t ycbcr_count;
+    bool ycbcr_desc;
 };
 
 struct pvk_spv_id {
@@ -37247,6 +37777,7 @@ struct pvk_spv_id {
     struct pvk_spv_type *t;
     struct pvk_spv_const *c;
     struct pvk_spv_ptr *p;
+    const struct pvk_ycbcr *ycbcr; /* a loaded combined image sampler with this Y'CbCr conversion */
 };
 
 struct pvk_spv_block {
@@ -37306,7 +37837,11 @@ struct pvk_spv_binding {
     const char *wrap; /* descriptor type without padding */
     const char *elem; /* element type of the member */
     const char *tex;  /* combined: texture type of the t half */
+    const struct pvk_ycbcr *ycbcr; /* combined: options->ycbcr_bindings' conversions (layout.count), or NULL */
+    uint32_t ycbcr_planes; /* combined: most planes of its Y'CbCr conversions (2, 3: pvk_ycbcr_d), 0: none */
 };
+
+#define PVK_SPV_MAX_YCBCR 64u /* distinct Y'CbCr conversions a shader samples with */
 
 struct pvk_spv {
     jmp_buf fail;
@@ -37358,6 +37893,10 @@ struct pvk_spv {
     uint32_t indent;
     bool use_array, use_padded; /* emit the pvk_array / pvk_padded templates */
     bool use_sampled, use_cast; /* emit pvk_sampled / pvk_tex_cast */
+    bool use_ycbcr;             /* emit pvk_ycbcr_d (Y'CBCR SAMPLING) */
+    const struct pvk_ycbcr *ycbcr_fns[PVK_SPV_MAX_YCBCR]; /* conversions with a pvk_ycbcr_<k> function */
+    uint32_t nycbcr;
+    struct pvk_sb ycbcr_text; /* those functions */
     bool types_ready;           /* structs are declared: buffer descriptor types may follow */
     bool inline_consts;         /* pvk_spv_const_expr writes constants out (program-scope initializers) */
     uint32_t const_budget;      /* constituents left to write out that way */
@@ -40078,6 +40617,24 @@ static void pvk_spv_given_layout(struct pvk_spv *ctx, struct pvk_spv_binding *b)
     if (i == sl->binding_count)
         pvk_spv_fail(ctx, "set %u binding %u is not in the set layout", b->set, b->layout.binding);
     b->layout = sl->bindings[i];
+    for (i = 0; i < o->ycbcr_binding_count; i++) /* Y'CBCR SAMPLING */
+        if (o->ycbcr_bindings[i].set == b->set && o->ycbcr_bindings[i].binding == b->layout.binding &&
+            b->layout.type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+            b->ycbcr = o->ycbcr_bindings[i].conversions;
+}
+
+/* Most planes among a combined binding's Y'CbCr conversions (0: none), whose
+ * descriptors are 2D float textures (Y'CBCR SAMPLING). */
+static uint32_t pvk_spv_ycbcr_planes(struct pvk_spv *ctx, const struct pvk_spv_binding *b)
+{
+    uint32_t i, planes = 0;
+    for (i = 0; b->ycbcr && i < b->layout.count; i++)
+        if (b->ycbcr[i].planes > planes)
+            planes = b->ycbcr[i].planes;
+    if (planes && strcmp(b->tex, "texture2d<float>") != 0)
+        pvk_spv_fail(ctx, "set %u binding %u: Y'CbCr conversion on a %s (only 2D float images)", b->set,
+                     b->layout.binding, b->tex);
+    return planes;
 }
 
 /* The set struct member of each binding, checked against the shader's
@@ -40128,6 +40685,12 @@ static void pvk_spv_binding_members(struct pvk_spv *ctx)
             b->tex = tex ? pvk_spv_type(ctx, tex)->msl : "texture2d<float>";
             b->wrap = pvk_spv_fmt(ctx, "pvk_sampled<%s>", b->tex);
             ctx->use_sampled = true;
+            b->ycbcr_planes = pvk_spv_ycbcr_planes(ctx, b);
+            if (b->ycbcr_planes > 1) { /* { plane 0, sampler, plane 1, plane 2 } */
+                b->wrap = "pvk_ycbcr_d";
+                b->size = 32;
+                ctx->use_ycbcr = true;
+            }
             break;
         default: /* images, samplers, inline uniform blocks: the object itself */
             b->wrap = pvk_spv_type(ctx, obj0)->msl;
@@ -40329,8 +40892,23 @@ static void pvk_spv_resource_view(struct pvk_spv *ctx, uint32_t var)
     bool is_array, buffer = pvk_spv_is_buffer_type(b->layout.type), cast;
 
     pvk_spv_desc_count(ctx, var, &is_array);
+    if (b->ycbcr_planes) {
+        /* Y'CBCR SAMPLING: the conversion of the descriptor, or of each one
+         * when they differ (the access chain picks one). */
+        uint32_t i, n = b->layout.count;
+        if (kind != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+            pvk_spv_fail(ctx, "set %u binding %u has Y'CbCr conversions: it must be sampled as a combined image "
+                              "sampler", x->set, x->binding);
+        for (i = 1; i < n && memcmp(&b->ycbcr[i], &b->ycbcr[0], sizeof(struct pvk_ycbcr)) == 0; i++)
+            ;
+        p->ycbcr = b->ycbcr;
+        p->ycbcr_count = i < n ? n : 1;
+        p->ycbcr_desc = b->ycbcr_planes > 1;
+    }
     if (buffer) {
         wrap = pvk_spv_buffer_desc_type(ctx, obj, pvk_spv_is_storage_block(ctx, var));
+    } else if (b->ycbcr_planes > 1) {
+        wrap = b->wrap; /* pvk_ycbcr_d */
     } else if (b->layout.type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && kind == VK_DESCRIPTOR_TYPE_SAMPLER) {
         wrap = b->wrap;
         part = ".s";
@@ -40364,7 +40942,8 @@ static void pvk_spv_resource_view(struct pvk_spv *ctx, uint32_t var)
         p->decl = pvk_spv_fmt(ctx, "%s %s& %s = *%s.p;", pvk_spv_is_storage_block(ctx, var) ? "device" : "constant",
                               bt->msl, x->msl, member);
     } else {
-        p->decl = pvk_spv_fmt(ctx, "constant %s& %s = %s;", pvk_spv_type(ctx, obj)->msl, x->msl, member);
+        p->decl = pvk_spv_fmt(ctx, "constant %s& %s = %s;", p->ycbcr_desc ? wrap : pvk_spv_type(ctx, obj)->msl,
+                              x->msl, member);
     }
 }
 
@@ -40609,6 +41188,13 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
             p->desc_index = idx;
             return;
         }
+        if (p->ycbcr_count > 1) { /* Y'CbCr conversions differ: a constant index picks one */
+            if (cidx < 0 || (uint64_t)cidx >= p->ycbcr_count || p->desc_index)
+                pvk_spv_fail(ctx, "an array of combined image samplers with different Y'CbCr conversions must be "
+                                  "indexed by a constant");
+            p->ycbcr += cidx;
+            p->ycbcr_count = 1;
+        }
         p->desc_array = false;
         p->desc_index = NULL;
         if (p->desc_buffer) {
@@ -40667,6 +41253,34 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
     }
 }
 
+/* A combined image sampler loaded from a binding with Y'CbCr conversions
+ * (Y'CBCR SAMPLING). With a conversion, the value remembers it; when the
+ * descriptors are pvk_ycbcr_d it is one, declared as such where it is
+ * defined (a value used across blocks names the descriptor itself). Without
+ * one (an element of an array that mixes), it is the descriptor's first
+ * half, an ordinary pvk_sampled. */
+static void pvk_spv_ycbcr_load(struct pvk_spv *ctx, uint32_t rid, const struct pvk_spv_ptr *p)
+{
+    struct pvk_spv_id *x = pvk_spv_get(ctx, rid);
+    const char *type = pvk_spv_data_type(ctx, x->type)->msl;
+
+    if (!p->ycbcr->planes) {
+        pvk_spv_set(ctx, rid, p->ycbcr_desc ? pvk_spv_fmt(ctx, "%s{%s.t, %s.s}", type, p->expr, p->expr) : p->expr);
+        return;
+    }
+    x->ycbcr = p->ycbcr;
+    if (!p->ycbcr_desc) { /* packed 4:2:2: an ordinary pvk_sampled */
+        pvk_spv_set(ctx, rid, p->expr);
+        return;
+    }
+    if (x->kind != PVK_SPV_K_VALUE || !x->msl)
+        pvk_spv_fail(ctx, "id %u is not a value", rid);
+    if (pvk_spv_local(x))
+        pvk_spv_line(ctx, "pvk_ycbcr_d %s = %s;", x->msl, p->expr);
+    else
+        x->msl = pvk_spv_fmt(ctx, "(%s)", p->expr);
+}
+
 /* Value of what p points at, as result rid. */
 static void pvk_spv_load(struct pvk_spv *ctx, uint32_t rid, const struct pvk_spv_ptr *p)
 {
@@ -40686,6 +41300,8 @@ static void pvk_spv_load(struct pvk_spv *ctx, uint32_t rid, const struct pvk_spv
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s)", e));
     } else if (p->node) {
         pvk_spv_copy(ctx, pvk_spv_result(ctx, rid), NULL, p->type, p->expr, p->node, p->type, 0);
+    } else if (p->ycbcr && !p->desc_array) {
+        pvk_spv_ycbcr_load(ctx, rid, p);
     } else {
         pvk_spv_set(ctx, rid, p->expr);
     }
@@ -41435,10 +42051,16 @@ static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
             if (p->node || p->rm_col || p->desc_array || p->type != pt->elem || p->storage != pt->storage ||
                 p->storage == PVK_SPV_StorageImage)
                 pvk_spv_fail(ctx, "OpFunctionCall: unsupported pointer argument");
+            if (p->ycbcr)
+                pvk_spv_fail(ctx, "OpFunctionCall: combined image samplers with Y'CbCr conversions cannot be passed "
+                                  "to functions");
             arg = p->expr;
         } else {
             if (pvk_spv_get(ctx, in->w[4 + i])->type != ft->params[i])
                 pvk_spv_fail(ctx, "OpFunctionCall: argument %u has the wrong type", i);
+            if (pvk_spv_get(ctx, in->w[4 + i])->ycbcr)
+                pvk_spv_fail(ctx, "OpFunctionCall: combined image samplers with Y'CbCr conversions cannot be passed "
+                                  "to functions");
             arg = pvk_spv_val(ctx, in->w[4 + i]);
         }
         list[n++] = arg;
@@ -41670,6 +42292,244 @@ static const char *pvk_spv_offset_arg(struct pvk_spv *ctx, const struct pvk_spv_
     return pvk_spv_fmt(ctx, n == 1 ? "int(%s)" : n == 2 ? "int2(%s)" : "int3(%s)", pvk_spv_val(ctx, off));
 }
 
+/* ---- Y'CbCr sampling (Y'CBCR SAMPLING) ---- */
+
+static const char *pvk_spv_ycbcr_float(struct pvk_spv *ctx, double v)
+{
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.9g", v);
+    return pvk_spv_fmt(ctx, buf[0] == '-' ? "(%sf)" : "%sf", pvk_spv_fix_decimal(ctx, buf));
+}
+
+/* A component of the conversion's mapping, of the format's (R, G, B, A) t. */
+static const char *pvk_spv_ycbcr_component(uint8_t swizzle)
+{
+    switch (swizzle) {
+    case VK_COMPONENT_SWIZZLE_ZERO: return "0.0f";
+    case VK_COMPONENT_SWIZZLE_ONE: return "1.0f";
+    case VK_COMPONENT_SWIZZLE_G: return "t.g";
+    case VK_COMPONENT_SWIZZLE_B: return "t.b";
+    case VK_COMPONENT_SWIZZLE_A: return "t.a";
+    default: return "t.r";
+    }
+}
+
+/* pvk_ycbcr_convert_<k>(t): the component mapping, range expansion and
+ * model conversion of Textures > Sampler Y'CbCr Conversion, on the filtered
+ * (R, G, B, A) of the format (G: Y', B: Cb, R: Cr). */
+static void pvk_spv_ycbcr_convert_fn(struct pvk_spv *ctx, uint32_t k, const struct pvk_ycbcr *y)
+{
+    /* R = Y' + a Cr, G = Y' - b Cb - c Cr, B = Y' + d Cb */
+    static const double models[3][4] = {
+        { 1.5748, 0.13397432 / 0.7152, 0.33480248 / 0.7152, 1.8556 },  /* BT.709 */
+        { 1.402, 0.202008 / 0.587, 0.419198 / 0.587, 1.772 },          /* BT.601 */
+        { 1.4746, 0.11156702 / 0.6780, 0.38737742 / 0.6780, 1.8814 },  /* BT.2020 */
+    };
+    struct pvk_sb *sb = &ctx->ycbcr_text;
+    double max = (double)((1u << y->bits) - 1), s = (double)(1u << (y->bits - 8));
+    const double *m;
+
+    pvk_sb_printf(ctx, sb, "inline float4 pvk_ycbcr_convert_%u(float4 t)\n{\n    float4 c = float4(%s, %s, %s, %s);\n", k,
+                  pvk_spv_ycbcr_component(y->swizzle[0]), pvk_spv_ycbcr_component(y->swizzle[1]),
+                  pvk_spv_ycbcr_component(y->swizzle[2]), pvk_spv_ycbcr_component(y->swizzle[3]));
+    if (y->model == VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY) {
+        pvk_sb_printf(ctx, sb, "    return c;\n}\n\n");
+        return;
+    }
+    if (y->range == VK_SAMPLER_YCBCR_RANGE_ITU_FULL) {
+        const char *h = pvk_spv_ycbcr_float(ctx, (double)(1u << (y->bits - 1)) / max);
+        pvk_sb_printf(ctx, sb, "    float y = c.g, cb = c.b - %s, cr = c.r - %s;\n", h, h);
+    } else {
+        const char *mx = pvk_spv_ycbcr_float(ctx, max), *c0 = pvk_spv_ycbcr_float(ctx, 128.0 * s);
+        const char *cs = pvk_spv_ycbcr_float(ctx, 224.0 * s);
+        pvk_sb_printf(ctx, sb, "    float y = (c.g * %s - %s) / %s, cb = (c.b * %s - %s) / %s, cr = (c.r * %s - %s) / %s;\n",
+                      mx, pvk_spv_ycbcr_float(ctx, 16.0 * s), pvk_spv_ycbcr_float(ctx, 219.0 * s), mx, c0, cs, mx, c0, cs);
+    }
+    if (y->model == VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_IDENTITY) {
+        pvk_sb_printf(ctx, sb, "    return float4(cr, y, cb, c.a);\n}\n\n");
+        return;
+    }
+    m = models[y->model - VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_709];
+    pvk_sb_printf(ctx, sb, "    return float4(y + %s * cr, y - %s * cb - %s * cr, y + %s * cb, c.a);\n}\n\n",
+                  pvk_spv_ycbcr_float(ctx, m[0]), pvk_spv_ycbcr_float(ctx, m[1]), pvk_spv_ycbcr_float(ctx, m[2]),
+                  pvk_spv_ycbcr_float(ctx, m[3]));
+}
+
+/* Implicit reconstruction (Textures > Chroma Reconstruction): the luma is
+ * sampled with the descriptor's sampler and the instruction's options o;
+ * the chroma with the chroma filter at the coordinate the chroma location
+ * gives: u' = 0.5 (u + 0.5) for cosited samples, 0.5 u for midpoint ones
+ * (unnormalized), which is c + 0.5 / width (or c) normalized. */
+static void pvk_spv_ycbcr_implicit_fn(struct pvk_spv *ctx, uint32_t k, const struct pvk_ycbcr *y)
+{
+    struct pvk_sb *sb = &ctx->ycbcr_text;
+    bool cx = y->x_shift && y->x_chroma == VK_CHROMA_LOCATION_COSITED_EVEN;
+    bool cy = y->y_shift && y->y_chroma == VK_CHROMA_LOCATION_COSITED_EVEN;
+
+    pvk_sb_printf(ctx, sb, "constexpr sampler pvk_ycbcr_chroma_%u(coord::normalized, address::clamp_to_edge, filter::%s);\n\n",
+                  k, y->chroma_filter == VK_FILTER_LINEAR ? "linear" : "nearest");
+    pvk_sb_printf(ctx, sb, "template <typename D, typename... O>\ninline float4 pvk_ycbcr_%u(D d, float2 c, O... o)\n{\n"
+                           "    float4 t = float4(0.0f, d.t.sample(d.s, c, o...).r, 0.0f, 1.0f);\n", k);
+    if (cx || cy)
+        pvk_sb_printf(ctx, sb, "    float2 cc = c + float2(%s, %s) / float2(float(d.t.get_width()), float(d.t.get_height()));\n",
+                      cx ? "0.5f" : "0.0f", cy ? "0.5f" : "0.0f");
+    else
+        pvk_sb_printf(ctx, sb, "    float2 cc = c;\n");
+    if (y->planes == 2)
+        pvk_sb_printf(ctx, sb, "    float2 ch = d.t1.sample(pvk_ycbcr_chroma_%u, cc, level(0.0f)).rg;\n", k);
+    else
+        pvk_sb_printf(ctx, sb, "    float2 ch = float2(d.t1.sample(pvk_ycbcr_chroma_%u, cc, level(0.0f)).r,\n"
+                               "                       d.t2.sample(pvk_ycbcr_chroma_%u, cc, level(0.0f)).r);\n", k, k);
+    pvk_sb_printf(ctx, sb, "    t.b = ch.x;\n    t.r = ch.y;\n    return pvk_ycbcr_convert_%u(t);\n}\n\n", k);
+}
+
+/* Explicit reconstruction (Textures > Chroma Reconstruction > Explicit
+ * Reconstruction): texels are read, each luma texel gets its chroma
+ * (nearest: chroma texel floor(i / 2); linear: interpolated at i' = 0.5 i
+ * for cosited samples, 0.5 (i - 0.5) for midpoint ones), then the sampler's
+ * filter for the LOD filters them, clamped to the edge (the address mode
+ * Vulkan requires). A packed 4:2:2 texture holds Cb and Cr in alternate
+ * texels. lod: the LOD before the sampler's bias and clamps; min_lod: the
+ * MinLod operand. */
+static void pvk_spv_ycbcr_explicit_fn(struct pvk_spv *ctx, uint32_t k, const struct pvk_ycbcr *y)
+{
+    struct pvk_sb *sb = &ctx->ycbcr_text;
+    const char *luma = y->packed == 2 ? "g" : "r", *chroma = y->packed == 2 ? "r" : "g";
+    bool linear = y->chroma_filter == VK_FILTER_LINEAR && (y->x_shift || y->y_shift);
+
+    pvk_sb_printf(ctx, sb, "template <typename D>\ninline float2 pvk_ycbcr_chroma_%u(D d, int2 k)\n{\n", k);
+    if (y->packed)
+        pvk_sb_printf(ctx, sb, "    k = clamp(k, int2(0), int2(int(d.t.get_width() / 2u), int(d.t.get_height())) - 1);\n"
+                               "    return float2(d.t.read(uint2(2 * k.x, k.y)).%s, d.t.read(uint2(2 * k.x + 1, k.y)).%s);\n",
+                      chroma, chroma);
+    else if (y->planes == 2)
+        pvk_sb_printf(ctx, sb, "    k = clamp(k, int2(0), int2(int(d.t1.get_width()), int(d.t1.get_height())) - 1);\n"
+                               "    return d.t1.read(uint2(k)).rg;\n");
+    else
+        pvk_sb_printf(ctx, sb, "    k = clamp(k, int2(0), int2(int(d.t1.get_width()), int(d.t1.get_height())) - 1);\n"
+                               "    return float2(d.t1.read(uint2(k)).r, d.t2.read(uint2(k)).r);\n");
+    pvk_sb_printf(ctx, sb, "}\n\ntemplate <typename D>\ninline float3 pvk_ycbcr_texel_%u(D d, int2 i)\n{\n"
+                           "    i = clamp(i, int2(0), int2(int(d.t.get_width()), int(d.t.get_height())) - 1);\n"
+                           "    float g = d.t.read(uint2(i)).%s;\n", k, luma);
+    if (!linear) {
+        pvk_sb_printf(ctx, sb, "    float2 ch = pvk_ycbcr_chroma_%u(d, int2(i.x >> %u, i.y >> %u));\n", k, y->x_shift,
+                      y->y_shift);
+    } else {
+        const char *fx = !y->x_shift ? "float(i.x)"
+                         : y->x_chroma == VK_CHROMA_LOCATION_COSITED_EVEN ? "0.5f * float(i.x)"
+                                                                          : "0.5f * float(i.x) - 0.25f";
+        const char *fy = !y->y_shift ? "float(i.y)"
+                         : y->y_chroma == VK_CHROMA_LOCATION_COSITED_EVEN ? "0.5f * float(i.y)"
+                                                                          : "0.5f * float(i.y) - 0.25f";
+        pvk_sb_printf(ctx, sb, "    float2 f = float2(%s, %s), fl = floor(f), w = f - fl;\n    int2 k = int2(fl);\n", fx, fy);
+        if (y->x_shift && y->y_shift)
+            pvk_sb_printf(ctx, sb, "    float2 ch = mix(mix(pvk_ycbcr_chroma_%u(d, k), pvk_ycbcr_chroma_%u(d, k + int2(1, 0)), w.x),\n"
+                                   "                    mix(pvk_ycbcr_chroma_%u(d, k + int2(0, 1)), pvk_ycbcr_chroma_%u(d, k + int2(1, 1)), w.x),\n"
+                                   "                    w.y);\n", k, k, k, k);
+        else if (y->x_shift)
+            pvk_sb_printf(ctx, sb, "    float2 ch = mix(pvk_ycbcr_chroma_%u(d, k), pvk_ycbcr_chroma_%u(d, k + int2(1, 0)), w.x);\n",
+                          k, k);
+        else
+            pvk_sb_printf(ctx, sb, "    float2 ch = mix(pvk_ycbcr_chroma_%u(d, k), pvk_ycbcr_chroma_%u(d, k + int2(0, 1)), w.y);\n",
+                          k, k);
+    }
+    pvk_sb_printf(ctx, sb, "    return float3(ch.y, g, ch.x);\n}\n\n"
+                           "template <typename D>\ninline float4 pvk_ycbcr_%u(D d, float2 c, float lod, float min_lod)\n{\n"
+                           "    float2 u = c * float2(float(d.t.get_width()), float(d.t.get_height()));\n", k);
+    if (y->min_filter != y->mag_filter)
+        pvk_sb_printf(ctx, sb, "    float l = min(max(lod + %s, max(%s, min_lod)), %s);\n"
+                               "    bool lin = l > 0.0f ? %s : %s; /* minified: minFilter */\n",
+                      pvk_spv_ycbcr_float(ctx, y->lod_bias), pvk_spv_ycbcr_float(ctx, y->min_lod),
+                      pvk_spv_ycbcr_float(ctx, y->max_lod), y->min_filter == VK_FILTER_LINEAR ? "true" : "false",
+                      y->mag_filter == VK_FILTER_LINEAR ? "true" : "false");
+    else
+        pvk_sb_printf(ctx, sb, "    bool lin = %s;\n    (void)lod;\n    (void)min_lod;\n",
+                      y->mag_filter == VK_FILTER_LINEAR ? "true" : "false");
+    pvk_sb_printf(ctx, sb, "    float3 rgb;\n    if (lin) {\n"
+                           "        float2 b = u - 0.5f, fl = floor(b), w = b - fl;\n        int2 i = int2(fl);\n"
+                           "        rgb = mix(mix(pvk_ycbcr_texel_%u(d, i), pvk_ycbcr_texel_%u(d, i + int2(1, 0)), w.x),\n"
+                           "                  mix(pvk_ycbcr_texel_%u(d, i + int2(0, 1)), pvk_ycbcr_texel_%u(d, i + int2(1, 1)), w.x), w.y);\n"
+                           "    } else {\n        rgb = pvk_ycbcr_texel_%u(d, int2(floor(u)));\n    }\n"
+                           "    return pvk_ycbcr_convert_%u(float4(rgb, 1.0f));\n}\n\n", k, k, k, k, k, k);
+}
+
+/* The index k of the pvk_ycbcr_<k> function of a conversion, made on first use. */
+static uint32_t pvk_spv_ycbcr_fn(struct pvk_spv *ctx, const struct pvk_ycbcr *y)
+{
+    uint32_t k, i;
+    for (k = 0; k < ctx->nycbcr; k++)
+        if (memcmp(ctx->ycbcr_fns[k], y, sizeof(*y)) == 0)
+            return k;
+    if (k == PVK_SPV_MAX_YCBCR)
+        pvk_spv_fail(ctx, "more than %u different Y'CbCr conversions", PVK_SPV_MAX_YCBCR);
+    for (i = 0; i < 4; i++)
+        if (y->swizzle[i] < VK_COMPONENT_SWIZZLE_ZERO || y->swizzle[i] > VK_COMPONENT_SWIZZLE_A)
+            break;
+    if (y->planes < 1 || y->planes > 3 || (y->packed && y->planes != 1) || (!y->packed && y->planes == 1) ||
+        y->bits < 8 || y->bits > 16 || y->model > VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_2020 ||
+        y->range > VK_SAMPLER_YCBCR_RANGE_ITU_NARROW || i < 4 || y->x_shift > 1 || y->y_shift > 1)
+        pvk_spv_fail(ctx, "invalid Y'CbCr conversion");
+    ctx->ycbcr_fns[ctx->nycbcr++] = y;
+    if (!k)
+        pvk_sb_printf(ctx, &ctx->ycbcr_text, "/* Y'CbCr sampling: one function per conversion. */\n"
+                                             "inline float pvk_ycbcr_rho(float2 dx, float2 dy)\n{\n"
+                                             "    return log2(max(length(dx), length(dy)));\n}\n\n");
+    pvk_spv_ycbcr_convert_fn(ctx, k, y);
+    if (y->explicit_reconstruction || y->planes == 1)
+        pvk_spv_ycbcr_explicit_fn(ctx, k, y);
+    else
+        pvk_spv_ycbcr_implicit_fn(ctx, k, y);
+    return k;
+}
+
+/* OpImageSample(Proj)Implicit/ExplicitLod of a combined image sampler with
+ * conversion y (coordinate c, projected): its pvk_ycbcr_<k> function. */
+static void pvk_spv_ycbcr_sample(struct pvk_spv *ctx, uint32_t rid, uint32_t si, const struct pvk_ycbcr *y,
+                                 const struct pvk_spv_type *it, const char *c, bool implicit,
+                                 const struct pvk_spv_imgops *o)
+{
+    uint32_t k = pvk_spv_ycbcr_fn(ctx, y);
+    const char *d = pvk_spv_val(ctx, si), *e;
+
+    if (!y->explicit_reconstruction && y->planes > 1) {
+        const char *opt = NULL;
+        if (implicit) {
+            if (o->bias)
+                opt = pvk_spv_fmt(ctx, "bias(%s)", pvk_spv_val(ctx, o->bias));
+            if (o->min_lod)
+                opt = pvk_spv_fmt(ctx, "%s%smin_lod_clamp(%s)", opt ? opt : "", opt ? ", " : "", pvk_spv_val(ctx, o->min_lod));
+        } else if (o->lod) {
+            const char *l = pvk_spv_val(ctx, o->lod);
+            if (o->min_lod)
+                l = pvk_spv_fmt(ctx, "max(%s, %s)", l, pvk_spv_val(ctx, o->min_lod));
+            opt = pvk_spv_fmt(ctx, "level(%s)", l);
+        } else {
+            opt = pvk_spv_fmt(ctx, "gradient2d(%s, %s)", pvk_spv_comps(ctx, o->dx, 0, 2), pvk_spv_comps(ctx, o->dy, 0, 2));
+            if (o->min_lod)
+                opt = pvk_spv_fmt(ctx, "%s, min_lod_clamp(%s)", opt, pvk_spv_val(ctx, o->min_lod));
+        }
+        e = opt ? pvk_spv_fmt(ctx, "pvk_ycbcr_%u(%s, %s, %s)", k, d, c, opt) : pvk_spv_fmt(ctx, "pvk_ycbcr_%u(%s, %s)", k, d, c);
+    } else {
+        /* Vulkan's LOD, which only chooses between the min and mag filters. */
+        const char *lod = "0.0f";
+        if (y->min_filter != y->mag_filter) {
+            const char *size = pvk_spv_fmt(ctx, "float2(float(%s.t.get_width()), float(%s.t.get_height()))", d, d);
+            if (implicit)
+                lod = pvk_spv_fmt(ctx, "pvk_ycbcr_rho(dfdx(%s) * %s, dfdy(%s) * %s)", c, size, c, size);
+            else if (o->lod)
+                lod = pvk_spv_val(ctx, o->lod);
+            else
+                lod = pvk_spv_fmt(ctx, "pvk_ycbcr_rho(%s * %s, %s * %s)", pvk_spv_comps(ctx, o->dx, 0, 2), size,
+                                  pvk_spv_comps(ctx, o->dy, 0, 2), size);
+            if (o->bias)
+                lod = pvk_spv_fmt(ctx, "(%s + %s)", lod, pvk_spv_val(ctx, o->bias));
+        }
+        e = pvk_spv_fmt(ctx, "pvk_ycbcr_%u(%s, %s, %s, %s)", k, d, c, lod,
+                        o->min_lod ? pvk_spv_val(ctx, o->min_lod) : "-3.0e38f");
+    }
+    pvk_spv_texel_result(ctx, rid, e, 4, it);
+}
+
 /* OpImageSample*Lod (Dref, Proj; implicit LOD in fragment shaders). */
 static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
@@ -41703,6 +42563,12 @@ static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn 
     if (it->img.ms)
         pvk_spv_fail(ctx, "multisampled images cannot be sampled");
     c = pvk_spv_sample_coord(ctx, it, tex, coord, proj, &layer, &q);
+    if (pvk_spv_get(ctx, si)->ycbcr) {
+        if (dref || o.const_offset || o.offset || it->img.dim != PVK_SPV_Dim2D || it->img.arrayed)
+            pvk_spv_fail(ctx, "sampling with a Y'CbCr conversion takes no depth reference or offset, on a 2D image");
+        pvk_spv_ycbcr_sample(ctx, rid, si, pvk_spv_get(ctx, si)->ycbcr, it, c, implicit, &o);
+        return;
+    }
     if (dref) {
         d = pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 5));
         if (pvk_spv_vtype(ctx, in->w[5])->op != PVK_SPV_OpTypeFloat)
@@ -41778,6 +42644,8 @@ static void pvk_spv_image_gather(struct pvk_spv *ctx, const struct pvk_spv_insn 
     pvk_spv_image_operands(ctx, in, 6, &o);
     if ((it->img.dim != PVK_SPV_Dim2D && !cube) || it->img.ms)
         pvk_spv_fail(ctx, "gather needs a 2D or cube image");
+    if (pvk_spv_get(ctx, si)->ycbcr)
+        pvk_spv_fail(ctx, "gathers with a Y'CbCr conversion are not supported (Vulkan forbids them)");
     if (o.mask & (PVK_SPV_ImgBias | PVK_SPV_ImgLod | PVK_SPV_ImgGrad | PVK_SPV_ImgSample | PVK_SPV_ImgMinLod))
         pvk_spv_fail(ctx, "unsupported image operands for gather");
     c = pvk_spv_sample_coord(ctx, it, tex, coord, false, &layer, &q);
@@ -42123,6 +42991,11 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         }
         if (pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 3))->type != rtype)
             pvk_spv_fail(ctx, "OpCopyObject: type mismatch");
+        if (pvk_spv_get(ctx, in->w[3])->ycbcr) { /* the same combined image sampler (Y'CBCR SAMPLING) */
+            pvk_spv_get(ctx, rid)->msl = pvk_spv_val(ctx, in->w[3]);
+            pvk_spv_get(ctx, rid)->ycbcr = pvk_spv_get(ctx, in->w[3])->ycbcr;
+            return;
+        }
         pvk_spv_set(ctx, rid, pvk_spv_val(ctx, in->w[3]));
         return;
     case PVK_SPV_OpCopyLogical: {
@@ -42466,6 +43339,9 @@ static void pvk_spv_phi_copies(struct pvk_spv *ctx, uint32_t from, uint32_t to)
 {
     uint32_t *phis, *vals, n = pvk_spv_phis(ctx, from, to, &phis, &vals), i, j;
     bool conflict = n > 64; /* (many phis: always copy through temporaries) */
+    for (i = 0; i < n; i++)
+        if (pvk_spv_get(ctx, vals[i])->ycbcr)
+            pvk_spv_fail(ctx, "a phi of combined image samplers with Y'CbCr conversions is not supported");
     for (i = 0; i < n && !conflict; i++)
         for (j = 0; j < n; j++)
             if (vals[i] == phis[j] && i != j)
@@ -44252,6 +45128,15 @@ static const char pvk_spv_sampled_template[] =
     "    sampler s;\n"
     "};\n\n";
 
+static const char pvk_spv_ycbcr_template[] =
+    "/* A combined image sampler of a multi-planar image with a Y'CbCr conversion. */\n"
+    "struct pvk_ycbcr_d\n"
+    "{\n"
+    "    texture2d<float> t; /* plane 0 */\n"
+    "    sampler s;\n"
+    "    texture2d<float> t1, t2;\n"
+    "};\n\n";
+
 static const char pvk_spv_cast_template[] =
     "/* The same texture as another texture type (depth and color views of one image). */\n"
     "template <typename T, typename U>\n"
@@ -44420,6 +45305,8 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         pvk_sb_append(ctx, out, pvk_spv_padded_template, sizeof(pvk_spv_padded_template) - 1);
     if (ctx->use_sampled)
         pvk_sb_append(ctx, out, pvk_spv_sampled_template, sizeof(pvk_spv_sampled_template) - 1);
+    if (ctx->use_ycbcr)
+        pvk_sb_append(ctx, out, pvk_spv_ycbcr_template, sizeof(pvk_spv_ycbcr_template) - 1);
     if (ctx->use_cast)
         pvk_sb_append(ctx, out, pvk_spv_cast_template, sizeof(pvk_spv_cast_template) - 1);
     if (ctx->types.len)
@@ -44429,6 +45316,8 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
     for (i = 0; i < PVK_ARRAY_SIZE(pvk_spv_helper_text); i++)
         if (ctx->helper_mask & (1u << i))
             pvk_sb_append(ctx, out, pvk_spv_helper_text[i], strlen(pvk_spv_helper_text[i]));
+    if (ctx->ycbcr_text.len)
+        pvk_sb_append(ctx, out, ctx->ycbcr_text.data, ctx->ycbcr_text.len);
     if (ctx->text.len)
         pvk_sb_append(ctx, out, ctx->text.data, ctx->text.len);
 
@@ -44492,6 +45381,7 @@ static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const
     free(ctx->consts.data);
     free(ctx->text.data);
     free(ctx->body.data);
+    free(ctx->ycbcr_text.data);
     free(ctx);
     if (code != VK_SUCCESS) {
         char error[sizeof(result->error)];
@@ -45464,22 +46354,23 @@ static uint32_t pvk_layer_count(const VkImageSubresourceLayers *sub, const struc
 static void pvk_cmd_buffer_image_copy(struct pvk_command_buffer *cb, const struct pvk_buffer *buffer,
                                       const struct pvk_image *image, const VkBufferImageCopy2 *r, bool to_image)
 {
-    const struct pvk_format *f = image->fmt;
+    const struct pvk_format *f;
     const VkPhysicalDeviceLimits *l = &cb->pool->device->physical_device->properties.limits;
     struct pvk_cmd_buffer_image *c;
+    uint32_t pw, ph; /* a plane's texture, format and extent for the plane aspects (section 11) */
+    id texture = pvk_image_aspect(image, r->imageSubresource.aspectMask, &f, &pw, &ph);
     uint32_t bytes = pvk_aspect_bytes(f, r->imageSubresource.aspectMask);
     uint32_t rl = r->bufferRowLength ? r->bufferRowLength : r->imageExtent.width;
     uint32_t ih = r->bufferImageHeight ? r->bufferImageHeight : r->imageExtent.height;
     uint32_t max_width = image->type == VK_IMAGE_TYPE_3D ? l->maxImageDimension3D : l->maxImageDimension2D;
 
-    if (!buffer->memory || !image->mtl_texture || !r->imageExtent.width || !r->imageExtent.height ||
-        !r->imageExtent.depth)
+    if (!buffer->memory || !texture || !r->imageExtent.width || !r->imageExtent.height || !r->imageExtent.depth)
         return;
     c = pvk_cmd_append(cb, PVK_CMD_COPY_BUFFER_IMAGE, sizeof(*c));
     if (!c)
         return;
     pvk_cmd_zero(c, sizeof(*c));
-    c->texture = image->mtl_texture;
+    c->texture = texture;
     c->buffer = buffer->memory->mtl_buffer;
     c->offset = buffer->offset + r->bufferOffset;
     c->row_bytes = (VkDeviceSize)((rl + f->block_w - 1) / f->block_w) * bytes;
@@ -45569,15 +46460,21 @@ static void pvk_cmd_image_copy(struct pvk_command_buffer *cb, const struct pvk_i
 {
     struct pvk_cmd_copy_image *c;
     bool src_3d = src->type == VK_IMAGE_TYPE_3D, dst_3d = dst->type == VK_IMAGE_TYPE_3D;
+    const struct pvk_format *sf, *df; /* planes for the plane aspects (section 11) */
+    uint32_t sw, sh, dw, dh;
+    id stex = pvk_image_aspect(src, r->srcSubresource.aspectMask, &sf, &sw, &sh);
+    id dtex = pvk_image_aspect(dst, r->dstSubresource.aspectMask, &df, &dw, &dh);
 
-    if (!src->mtl_texture || !dst->mtl_texture || !r->extent.width || !r->extent.height || !r->extent.depth)
+    (void)sw;
+    (void)sh;
+    if (!stex || !dtex || !r->extent.width || !r->extent.height || !r->extent.depth)
         return;
     c = pvk_cmd_append(cb, PVK_CMD_COPY_IMAGE, sizeof(*c));
     if (!c)
         return;
     pvk_cmd_zero(c, sizeof(*c));
-    c->src = src->mtl_texture;
-    c->dst = dst->mtl_texture;
+    c->src = stex;
+    c->dst = dtex;
     c->src_level = r->srcSubresource.mipLevel;
     c->dst_level = r->dstSubresource.mipLevel;
     c->src_layer = src_3d ? 0 : r->srcSubresource.baseArrayLayer;
@@ -45609,15 +46506,15 @@ static void pvk_cmd_image_copy(struct pvk_command_buffer *cb, const struct pvk_i
                                               ? PVK_MTLBlitOptionStencilFromDepthStencil
                                               : PVK_MTLBlitOptionDepthFromDepthStencil;
     }
-    if (src->fmt->mtl != dst->fmt->mtl && src->samples == 1) /* multisampled: no buffer copies */
+    if (sf->mtl != df->mtl && src->samples == 1) /* multisampled: no buffer copies */
         c->staged = 1;
-    c->bytes = pvk_aspect_bytes(src->fmt, r->srcSubresource.aspectMask);
-    c->sbw = src->fmt->block_w;
-    c->sbh = src->fmt->block_h;
-    c->dbw = dst->fmt->block_w;
-    c->dbh = dst->fmt->block_h;
-    c->dst_w = pvk_mip_extent(dst->extent.width, c->dst_level);
-    c->dst_h = dst->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(dst->extent.height, c->dst_level);
+    c->bytes = pvk_aspect_bytes(sf, r->srcSubresource.aspectMask);
+    c->sbw = sf->block_w;
+    c->sbh = sf->block_h;
+    c->dbw = df->block_w;
+    c->dbh = df->block_h;
+    c->dst_w = pvk_mip_extent(dw, c->dst_level);
+    c->dst_h = dst->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(dh, c->dst_level);
 }
 
 static void pvk_image_copy2(const VkImageCopy *in, VkImageCopy2 *out)
@@ -47739,7 +48636,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkWaitSemaphores(VkDevice device, const VkSemapho
  * size (so the compiler fits it). Push constants are bound by GPU address at
  * the translator's push-constant index; descriptor set N is a table
  * (section 11 format) bound at index N, laid out as the pipeline layout's
- * set layout N says (section 12). The pipeline cache is not used yet.
+ * set layout N says (section 12), with the Y'CbCr conversions of its
+ * immutable samplers, which the shader applies. The pipeline cache is not
+ * used yet.
  * ========================================================================== */
 
 struct pvk_shader_module {
@@ -47906,6 +48805,39 @@ static VkResult pvk_msl_set_layouts(const struct pvk_pipeline_layout *layout, co
     return VK_SUCCESS;
 }
 
+/* The Y'CbCr conversions of the layout's immutable samplers (section 12),
+ * which the shader applies: options->ycbcr_bindings, in one allocation (*out,
+ * free with pvk_free; NULL if there are none). */
+static VkResult pvk_msl_ycbcr_bindings(const struct pvk_pipeline_layout *layout, const VkAllocationCallbacks *alloc,
+                                       struct pvk_msl_options *options, struct pvk_msl_ycbcr_binding **out)
+{
+    struct pvk_msl_ycbcr_binding *list;
+    uint32_t i, j, n = 0;
+    *out = NULL;
+    for (i = 0; i < layout->set_count; i++)
+        for (j = 0; layout->sets[i] && j < layout->sets[i]->binding_count; j++)
+            n += layout->sets[i]->bindings[j].ycbcr != NULL;
+    if (!n)
+        return VK_SUCCESS;
+    *out = list = pvk_alloc(alloc, sizeof(*list) * n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+    if (!list)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    options->ycbcr_bindings = list;
+    options->ycbcr_binding_count = n;
+    for (i = 0; i < layout->set_count; i++) {
+        for (j = 0; layout->sets[i] && j < layout->sets[i]->binding_count; j++) {
+            const struct pvk_set_binding *b = &layout->sets[i]->bindings[j];
+            if (!b->ycbcr)
+                continue;
+            list->set = i;
+            list->binding = b->binding;
+            list->conversions = b->ycbcr;
+            list++;
+        }
+    }
+    return VK_SUCCESS;
+}
+
 /* VkPipelineCreateFlags2CreateInfo replaces the flags when chained. */
 static VkPipelineCreateFlags2 pvk_pipeline_flags(VkPipelineCreateFlags flags, const void *pNext)
 {
@@ -47927,6 +48859,7 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, const VkC
     size_t words = module ? module->word_count : 0;
     struct pvk_msl_set_layout sets[PVK_MAX_BOUND_SETS];
     struct pvk_msl_binding *bindings = NULL;
+    struct pvk_msl_ycbcr_binding *ycbcr = NULL;
     struct pvk_msl_options options;
     struct pvk_msl_result res;
     struct pvk_pipeline *pipeline;
@@ -47955,11 +48888,16 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, const VkC
     if (layout) { /* the shader's sets must be the layout's */
         if (pvk_msl_set_layouts(layout, alloc, sets, &bindings) != VK_SUCCESS)
             return VK_ERROR_OUT_OF_HOST_MEMORY;
+        if (pvk_msl_ycbcr_bindings(layout, alloc, &options, &ycbcr) != VK_SUCCESS) {
+            pvk_free(alloc, bindings);
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
         options.set_layouts = sets;
         options.set_layout_count = layout->set_count;
     }
     result = pvk_spirv_to_msl(code, words, stage->pName, &options, &res);
     pvk_free(alloc, bindings);
+    pvk_free(alloc, ycbcr);
     if (result != VK_SUCCESS) {
         pvk_log(PVK_LOG_ERROR, "vkCreateComputePipelines: cannot translate the shader: %s", res.error);
         pvk_msl_result_free(&res);
@@ -48135,7 +49073,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreatePrivateDataSlot(VkDevice device, const Vk
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkQueryPool* pQueryPool) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRenderPassCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkRenderPass* pRenderPass) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass2(VkDevice device, const VkRenderPassCreateInfo2* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkRenderPass* pRenderPass) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateSamplerYcbcrConversion(VkDevice device, const VkSamplerYcbcrConversionCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSamplerYcbcrConversion* pYcbcrConversion) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSwapchainKHR* pSwapchain) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkDestroyEvent(VkDevice device, VkEvent event, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyFramebuffer(VkDevice device, VkFramebuffer framebuffer, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
@@ -48143,7 +49080,6 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineCache(VkDevice device, VkPipelineCac
 VKAPI_ATTR void VKAPI_CALL vkDestroyPrivateDataSlot(VkDevice device, VkPrivateDataSlot privateDataSlot, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyQueryPool(VkDevice device, VkQueryPool queryPool, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyRenderPass(VkDevice device, VkRenderPass renderPass, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroySamplerYcbcrConversion(VkDevice device, VkSamplerYcbcrConversion ycbcrConversion, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, uint32_t heapIndex, uint32_t localDeviceIndex, uint32_t remoteDeviceIndex, VkPeerMemoryFeatureFlags* pPeerMemoryFeatures) { PVK_UNIMPLEMENTED(); }
