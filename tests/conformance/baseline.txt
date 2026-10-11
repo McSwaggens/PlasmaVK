@@ -10,6 +10,7 @@ initialization.gipa_null_instance_other_commands
 initialization.gipa_core_commands
 initialization.gipa_global_commands_with_instance
 initialization.gipa_unknown_names
+initialization.gdpa_beyond_requested_version
 initialization.gipa_enabled_instance_extension
 initialization.gipa_disabled_instance_extension
 initialization.gipa_available_device_extension
@@ -62,6 +63,7 @@ devsandqueues.device_allocation_callbacks
 devsandqueues.device_allocation_failure
 
 memory.memory_counts
+memory.memory_commitment
 memory.memory_heap_device_local
 memory.memory_heap_size
 memory.memory_type_heap_index
@@ -88,6 +90,7 @@ memory.coherent_device_writes
 memory.coherent_host_writes
 
 resources.create_buffer
+resources.create_buffer_concurrent
 resources.destroy_buffer_null
 resources.buffer_allocation_callbacks
 resources.buffer_allocation_failure

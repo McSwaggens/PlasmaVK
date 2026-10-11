@@ -235,16 +235,25 @@ CT_TEST(device_extensions_incomplete,
     ct_env_fini(&e);
 }
 
+/* The spec doesn't say what an absent layer name returns: with pLayerName
+ * "the device extensions provided by that layer are returned" (an absent
+ * layer provides none), and VK_ERROR_LAYER_NOT_PRESENT ("a requested layer is
+ * not present") is a listed failure code. Either answer is conformant; what
+ * is not is reporting extensions for a layer that doesn't exist. (An earlier
+ * version required VK_ERROR_LAYER_NOT_PRESENT, which no "must" supports: the
+ * Khronos loader answers VK_SUCCESS with no extensions.) */
 CT_TEST(device_extensions_missing_layer,
-        "Layers & Extensions > Device Extensions: naming a layer that is not present in pLayerName fails with "
-        "VK_ERROR_LAYER_NOT_PRESENT",
+        "Layers & Extensions > Device Extensions: naming a layer that is not present in pLayerName returns no "
+        "extensions: either VK_ERROR_LAYER_NOT_PRESENT or VK_SUCCESS with a count of zero",
         "vkEnumerateDeviceExtensionProperties")
 {
     struct ct_env e;
-    uint32_t count = 0;
+    uint32_t count = 12345;
+    VkResult r;
     ct_env_init(t, &e);
-    CT_CHECK_VK(t, vkEnumerateDeviceExtensionProperties(e.pd, "VK_LAYER_PLASMAVK_not_a_real_layer", &count, NULL),
-                VK_ERROR_LAYER_NOT_PRESENT);
+    r = vkEnumerateDeviceExtensionProperties(e.pd, "VK_LAYER_PLASMAVK_not_a_real_layer", &count, NULL);
+    CT_CHECKF(t, r == VK_ERROR_LAYER_NOT_PRESENT || (r == VK_SUCCESS && count == 0),
+              "returned %s with a count of %u", ct_result_name(r), count);
     ct_env_fini(&e);
 }
 

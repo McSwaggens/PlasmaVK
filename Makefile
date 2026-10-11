@@ -84,7 +84,8 @@ bench-mvk:
 # translation unit), and against the system loader for any driver.
 #
 #   make conformance       on PlasmaVK, against the baseline (run by make check)
-#   make conformance-mvk   on MoltenVK through the system loader
+#   make conformance-mvk   on MoltenVK through the system loader, against
+#                          baseline-moltenvk.txt (MoltenVK's known deviations excluded)
 #   make conformance-icd ICD=/path/to/driver_icd.json   on any driver
 #   CONF_ARGS='pattern -v' selects tests and passes options to the runner
 CONF_DIR      := tests/conformance
@@ -108,7 +109,7 @@ conformance: $(BUILD)/conformance/ct-plasmavk
 	./$< --baseline $(CONF_BASELINE) $(CONF_ARGS)
 
 conformance-mvk: $(BUILD)/conformance/ct-loader
-	VK_DRIVER_FILES=$(MVK_ICD) ./$< $(CONF_ARGS)
+	VK_DRIVER_FILES=$(MVK_ICD) ./$< --baseline $(CONF_DIR)/baseline-moltenvk.txt $(CONF_ARGS)
 
 conformance-icd: $(BUILD)/conformance/ct-loader
 	@test -n "$(ICD)" || { echo "usage: make conformance-icd ICD=/path/to/driver_icd.json"; exit 2; }

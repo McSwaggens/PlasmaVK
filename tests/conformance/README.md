@@ -28,13 +28,13 @@ One file per chapter of the Vulkan specification:
 Framework: `ct.h` (test macros, helpers), `ct.c` (runner, helpers),
 `commands.c` (every Vulkan 1.4 core command and the commands of PlasmaVK's
 advertised extensions, for coverage and the `vkGet*ProcAddr` tests),
-`baseline.txt` (tests PlasmaVK passes).
+`baseline.txt` (tests PlasmaVK passes), `baseline-moltenvk.txt` (tests MoltenVK passes).
 
 ## Running
 
 ```bash
 make conformance                  # PlasmaVK (ASan + UBSan), against baseline.txt; part of make check
-make conformance-mvk              # MoltenVK (Homebrew molten-vk + vulkan-loader)
+make conformance-mvk              # MoltenVK (Homebrew molten-vk + vulkan-loader), against baseline-moltenvk.txt
 make conformance-icd ICD=/path/to/driver_icd.json   # any driver, e.g. KosmicKrisp
 make conformance-mvk CONF_ARGS='memory. -v'         # select tests, show all output
 ```
@@ -159,13 +159,31 @@ against the specification; the tests are right:
   pCopySrcLayouts array, and on return the variable is overwritten with the
   number of values actually written to pCopySrcLayouts" (and the same for the
   destination list).
-- `extensions.device_extensions_missing_layer`: a loader deviation, not
-  MoltenVK's: the loader answers `vkEnumerateDeviceExtensionProperties` with a
-  `pLayerName` itself and returns `VK_SUCCESS` and no extensions for a layer
-  that does not exist, where it returns `VK_ERROR_LAYER_NOT_PRESENT` for the
-  instance query. The expectation is derived from the command's
-  `VK_ERROR_LAYER_NOT_PRESENT` result ("a requested layer is not present"),
-  not from an explicit "must".
+
+`baseline-moltenvk.txt` lists every other test, which passes on MoltenVK;
+`make conformance-mvk` fails if one of those regresses.
+
+`extensions.device_extensions_missing_layer` used to require
+`VK_ERROR_LAYER_NOT_PRESENT` for an absent layer and failed through the loader,
+which answers `VK_SUCCESS` with no extensions. No "must" supports that
+expectation (the command's page only lists the error code), so the test was
+corrected to accept either answer, as long as no extensions are reported.
+
+## Tests PlasmaVK skips
+
+Each skip below is an optional capability PlasmaVK does not offer; none hides
+a required behaviour.
+
+| Tests | Why |
+|---|---|
+| `devsandqueues.get_device_queue2_protected`, `features.pipelineProtectedAccess`, `devsandqueues.queue_families_sparse_protected` | Apple GPUs have no protected memory; sparse resources are not implemented. |
+| `resources.buffer_capture_replay` | Metal cannot place a resource at a requested GPU address, so `bufferDeviceAddressCaptureReplay` is unsupported. |
+| `memory.noncoherent_flush_invalidate_gpu` | Unified memory: every host-visible type is coherent. |
+| `extensions.instance_layer_extensions` | No layers: PlasmaVK is linked directly, without a loader. |
+| `features.shaderInt64` | Required only with 64-bit shader atomics, which Apple7/Apple8 GPUs lack. |
+| `features.descriptorIndexing` and the 12 descriptor-indexing features, the 14 update-after-bind limits | Required only with descriptor indexing, which needs descriptor sets, images and texel buffers (not implemented yet). |
+| `features.shaderDrawParameters`, `features.drawIndirectCount`, `features.shaderOutputViewportIndex`, `features.shaderOutputLayer` | Required only with their extensions, which need graphics pipelines (not implemented yet). |
+| `features.samplerFilterMinmax` | Required only with VK_EXT_sampler_filter_minmax; Metal samplers have no min/max reduction. |
 
 Running under the validation layer on MoltenVK reports no valid usage errors
 from the tests. It reports `UNASSIGNED-vkAllocateMemory-maxMemoryAllocationSize`

@@ -31409,7 +31409,9 @@ static inline unsigned long pvk_MTLComputePipelineState_maxTotalThreadsPerThread
 
 #define PVK_API_VERSION VK_MAKE_API_VERSION(0, 1, 4, VK_HEADER_VERSION)
 #define PVK_VENDOR_ID_APPLE 0x106B
-#define PVK_MAX_QUEUES 4
+#define PVK_MAX_QUEUES_PER_FAMILY 4
+#define PVK_QUEUE_FAMILY_COUNT 2 /* section 7 */
+#define PVK_MAX_QUEUES (PVK_MAX_QUEUES_PER_FAMILY * PVK_QUEUE_FAMILY_COUNT)
 #define PVK_ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 /* ---- Logging ---- */
@@ -31544,11 +31546,13 @@ static const VkExtensionProperties pvk_instance_extensions[] = {
 
 enum pvk_device_extension {
     PVK_DEVICE_EXT_KHR_swapchain,
+    PVK_DEVICE_EXT_KHR_maintenance5, /* core in 1.4; offered so apiVersion 1.3 apps can enable it */
     PVK_DEVICE_EXTENSION_COUNT
 };
 
 static const VkExtensionProperties pvk_device_extensions[] = {
     { VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_SWAPCHAIN_SPEC_VERSION },
+    { VK_KHR_MAINTENANCE_5_EXTENSION_NAME, VK_KHR_MAINTENANCE_5_SPEC_VERSION },
 };
 
 /* The instance extension each device extension depends on (-1: none), from
@@ -31559,6 +31563,7 @@ static const VkExtensionProperties pvk_device_extensions[] = {
  * its commands are not available (section 16). */
 static const int pvk_device_extension_needs[PVK_DEVICE_EXTENSION_COUNT] = {
     PVK_INSTANCE_EXT_KHR_surface, /* VK_KHR_swapchain */
+    -1,                           /* VK_KHR_maintenance5 */
 };
 
 /* ==========================================================================
@@ -32205,16 +32210,22 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     pvk_physical_device_init_properties_1x(pd);
     pvk_physical_device_init_features(&pd->features);
 
-    /* Apple GPUs have unified memory: one heap, private and shared types. */
+    /* Apple GPUs have unified memory: one heap; private, shared and lazily
+     * allocated (memoryless tile memory) types. The order follows the spec's
+     * rule: a type whose flags are a strict subset of another's comes first. */
     m->memoryHeapCount = 1;
     m->memoryHeaps[0].size = pvk_MTLDevice_recommendedMaxWorkingSetSize(pd->mtl_device);
     m->memoryHeaps[0].flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
-    m->memoryTypeCount = 2;
+    m->memoryTypeCount = 3;
     m->memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT; /* MTLStorageModePrivate */
     m->memoryTypes[1].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | /* MTLStorageModeShared */
                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
                                       VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    /* MTLStorageModeMemoryless: only transient attachments may use it (their
+     * contents live in tile memory and never reach RAM), so buffers exclude
+     * it and allocating it reserves nothing (section 10). */
+    m->memoryTypes[2].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
 }
 
 static VkResult pvk_physical_device_create(struct pvk_instance *instance)
@@ -32578,11 +32589,16 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceFeatures2(VkPhysicalDevice physica
     pvk_fill_runs(pvk_feature_runs, PVK_ARRAY_SIZE(pvk_feature_runs), &pd->features, pFeatures);
 }
 
-static const VkQueueFamilyProperties pvk_queue_family = {
-    VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT,
-    PVK_MAX_QUEUES,
-    64,         /* timestampValidBits */
-    { 1, 1, 1 } /* minImageTransferGranularity */
+/* Every queue is an MTL4CommandQueue, so families only differ in what
+ * Vulkan lets them record. Family 1 is the usual "async compute" family for
+ * engines that look for one. Compute queues support transfers implicitly;
+ * TRANSFER_BIT stays unset there, so family 0 remains the only family with
+ * graphics and the only one advertising transfer (Vulkan 1.4 then requires
+ * hostImageCopy, which section 7 reports). */
+static const VkQueueFamilyProperties pvk_queue_families[] = {
+    { VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT, PVK_MAX_QUEUES_PER_FAMILY,
+      64 /* timestampValidBits */, { 1, 1, 1 } /* minImageTransferGranularity */ },
+    { VK_QUEUE_COMPUTE_BIT, PVK_MAX_QUEUES_PER_FAMILY, 64, { 1, 1, 1 } },
 };
 
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceQueueFamilyProperties(VkPhysicalDevice physicalDevice,
@@ -32590,7 +32606,7 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceQueueFamilyProperties(VkPhysicalDe
                                                                     VkQueueFamilyProperties *pQueueFamilyProperties)
 {
     (void)physicalDevice;
-    pvk_enumerate(&pvk_queue_family, sizeof(pvk_queue_family), 1,
+    pvk_enumerate(pvk_queue_families, sizeof(pvk_queue_families[0]), PVK_ARRAY_SIZE(pvk_queue_families),
                   pQueueFamilyPropertyCount, pQueueFamilyProperties);
 }
 
@@ -32598,23 +32614,26 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceQueueFamilyProperties2(VkPhysicalD
                                                                      uint32_t *pQueueFamilyPropertyCount,
                                                                      VkQueueFamilyProperties2 *pQueueFamilyProperties)
 {
-    VkBaseOutStructure *s;
+    uint32_t i, n = PVK_ARRAY_SIZE(pvk_queue_families);
     (void)physicalDevice;
     if (!pQueueFamilyProperties) {
-        *pQueueFamilyPropertyCount = 1;
+        *pQueueFamilyPropertyCount = n;
         return;
     }
-    if (*pQueueFamilyPropertyCount == 0)
-        return;
-    *pQueueFamilyPropertyCount = 1;
-    pQueueFamilyProperties[0].queueFamilyProperties = pvk_queue_family;
-    for (s = pQueueFamilyProperties[0].pNext; s; s = s->pNext) {
-        if (s->sType == VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES) {
-            /* Metal queues have no priorities: one level, the default. */
-            VkQueueFamilyGlobalPriorityProperties *p = (VkQueueFamilyGlobalPriorityProperties *)(void *)s;
-            memset(p->priorities, 0, sizeof(p->priorities));
-            p->priorityCount = 1;
-            p->priorities[0] = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM;
+    if (*pQueueFamilyPropertyCount < n)
+        n = *pQueueFamilyPropertyCount;
+    *pQueueFamilyPropertyCount = n;
+    for (i = 0; i < n; i++) {
+        VkBaseOutStructure *s;
+        pQueueFamilyProperties[i].queueFamilyProperties = pvk_queue_families[i];
+        for (s = pQueueFamilyProperties[i].pNext; s; s = s->pNext) {
+            if (s->sType == VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES) {
+                /* Metal queues have no priorities: one level, the default. */
+                VkQueueFamilyGlobalPriorityProperties *p = (VkQueueFamilyGlobalPriorityProperties *)(void *)s;
+                memset(p->priorities, 0, sizeof(p->priorities));
+                p->priorityCount = 1;
+                p->priorities[0] = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM;
+            }
         }
     }
 }
@@ -32949,6 +32968,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
 
     for (i = 0; i < pCreateInfo->queueCreateInfoCount; i++) {
         const VkDeviceQueueCreateInfo *info = &pCreateInfo->pQueueCreateInfos[i];
+        /* Valid usage: the family exists and queueCount fits it. */
+        if (info->queueFamilyIndex >= PVK_QUEUE_FAMILY_COUNT || info->queueCount > PVK_MAX_QUEUES_PER_FAMILY) {
+            pvk_device_free(device);
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
         for (j = 0; j < info->queueCount; j++) {
             struct pvk_queue *queue;
             if (device->queue_count == PVK_MAX_QUEUES) {
@@ -33083,11 +33107,20 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemory
     /* The pNext structs PlasmaVK accepts (dedicated allocation, allocate
      * flags, capture address) need nothing: every allocation is its own heap
      * and has a GPU address. */
-    if (type >= PVK_ARRAY_SIZE(pvk_memory_type_options) || size == 0 || size > pvk_MTLDevice_maxBufferLength(mtl))
+    if (type >= types->memoryTypeCount || size == 0 || size > pvk_MTLDevice_maxBufferLength(mtl))
         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     memory = pvk_alloc(alloc, sizeof(*memory), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (!memory)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
+    memory->size = size;
+    memory->type_index = type;
+
+    /* Lazily allocated memory is a placeholder: images bound to it become
+     * memoryless textures, which own no memory, so nothing is reserved. */
+    if (types->memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) {
+        *pMemory = (VkDeviceMemory)memory;
+        return VK_SUCCESS;
+    }
     options = pvk_memory_type_options[type];
 
     pool = objc_autoreleasePoolPush();
@@ -33111,8 +33144,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemory
     memory->gpu_address = pvk_MTLBuffer_gpuAddress(memory->mtl_buffer);
     if (types->memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
         memory->contents = pvk_MTLBuffer_contents(memory->mtl_buffer);
-    memory->size = size;
-    memory->type_index = type;
     pvk_device_make_resident(device, memory->mtl_heap);
     *pMemory = (VkDeviceMemory)memory;
     return VK_SUCCESS;
@@ -33127,7 +33158,8 @@ VKAPI_ATTR void VKAPI_CALL vkFreeMemory(VkDevice _device, VkDeviceMemory _memory
     if (!memory)
         return;
     pool = objc_autoreleasePoolPush();
-    pvk_device_evict(device, memory->mtl_heap);
+    if (memory->mtl_heap) /* none for lazily allocated memory */
+        pvk_device_evict(device, memory->mtl_heap);
     pvk_release(memory->mtl_buffer);
     pvk_release(memory->mtl_heap);
     objc_autoreleasePoolPop(pool);
@@ -33187,13 +33219,14 @@ VKAPI_ATTR VkResult VKAPI_CALL vkInvalidateMappedMemoryRanges(VkDevice device, u
     return VK_SUCCESS;
 }
 
-/* Only meaningful for lazily allocated memory, which PlasmaVK does not offer:
- * everything is committed. */
-VKAPI_ATTR void VKAPI_CALL vkGetDeviceMemoryCommitment(VkDevice device, VkDeviceMemory memory,
+/* Only valid on lazily allocated memory, which commits nothing: memoryless
+ * attachments live in tile memory. */
+VKAPI_ATTR void VKAPI_CALL vkGetDeviceMemoryCommitment(VkDevice device, VkDeviceMemory _memory,
                                                        VkDeviceSize *pCommittedMemoryInBytes)
 {
+    struct pvk_device_memory *memory = (struct pvk_device_memory *)_memory;
     (void)device;
-    *pCommittedMemoryInBytes = ((struct pvk_device_memory *)memory)->size;
+    *pCommittedMemoryInBytes = memory->mtl_heap ? memory->size : 0;
 }
 
 /* Metal cannot place a resource at a requested GPU address, so capture/replay
@@ -33235,6 +33268,17 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyBuffer(VkDevice device, VkBuffer buffer, con
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), buffer);
 }
 
+/* Every memory type but the lazily allocated one, which only transient
+ * attachments may use. */
+static uint32_t pvk_buffer_memory_type_bits(const struct pvk_physical_device *pd)
+{
+    uint32_t i, bits = 0;
+    for (i = 0; i < pd->memory_properties.memoryTypeCount; i++)
+        if (!(pd->memory_properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT))
+            bits |= 1u << i;
+    return bits;
+}
+
 /* A buffer has no Metal object of its own, so only how shaders and commands
  * address it constrains placement: the largest binding alignment of section 7,
  * whatever the usage (vkGetDeviceBufferMemoryRequirements then needs no
@@ -33255,7 +33299,7 @@ static void pvk_buffer_memory_requirements(const struct pvk_device *device, VkDe
         align = limits->minTexelBufferOffsetAlignment;
     req->size = (size + align - 1) & ~(align - 1);
     req->alignment = align;
-    req->memoryTypeBits = (1u << pd->memory_properties.memoryTypeCount) - 1;
+    req->memoryTypeBits = pvk_buffer_memory_type_bits(pd);
 
     for (ext = pMemoryRequirements->pNext; ext; ext = ext->pNext) {
         if (ext->sType == VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS) {
@@ -41003,6 +41047,7 @@ static const struct pvk_entrypoint {
     { "vkCmdBindDescriptorSets2", (PFN_vkVoidFunction)vkCmdBindDescriptorSets2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkCmdBindIndexBuffer", (PFN_vkVoidFunction)vkCmdBindIndexBuffer, PVK_SCOPE_DEVICE },
     { "vkCmdBindIndexBuffer2", (PFN_vkVoidFunction)vkCmdBindIndexBuffer2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCmdBindIndexBuffer2KHR", (PFN_vkVoidFunction)vkCmdBindIndexBuffer2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance5) },
     { "vkCmdBindPipeline", (PFN_vkVoidFunction)vkCmdBindPipeline, PVK_SCOPE_DEVICE },
     { "vkCmdBindVertexBuffers", (PFN_vkVoidFunction)vkCmdBindVertexBuffers, PVK_SCOPE_DEVICE },
     { "vkCmdBindVertexBuffers2", (PFN_vkVoidFunction)vkCmdBindVertexBuffers2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
@@ -41164,6 +41209,7 @@ static const struct pvk_entrypoint {
     { "vkGetDeviceImageMemoryRequirements", (PFN_vkVoidFunction)vkGetDeviceImageMemoryRequirements, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkGetDeviceImageSparseMemoryRequirements", (PFN_vkVoidFunction)vkGetDeviceImageSparseMemoryRequirements, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkGetDeviceImageSubresourceLayout", (PFN_vkVoidFunction)vkGetDeviceImageSubresourceLayout, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkGetDeviceImageSubresourceLayoutKHR", (PFN_vkVoidFunction)vkGetDeviceImageSubresourceLayout, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance5) },
     { "vkGetDeviceMemoryCommitment", (PFN_vkVoidFunction)vkGetDeviceMemoryCommitment, PVK_SCOPE_DEVICE },
     { "vkGetDeviceMemoryOpaqueCaptureAddress", (PFN_vkVoidFunction)vkGetDeviceMemoryOpaqueCaptureAddress, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkGetDeviceProcAddr", (PFN_vkVoidFunction)vkGetDeviceProcAddr, PVK_SCOPE_DEVICE },
@@ -41177,6 +41223,7 @@ static const struct pvk_entrypoint {
     { "vkGetImageSparseMemoryRequirements2", (PFN_vkVoidFunction)vkGetImageSparseMemoryRequirements2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkGetImageSubresourceLayout", (PFN_vkVoidFunction)vkGetImageSubresourceLayout, PVK_SCOPE_DEVICE },
     { "vkGetImageSubresourceLayout2", (PFN_vkVoidFunction)vkGetImageSubresourceLayout2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkGetImageSubresourceLayout2KHR", (PFN_vkVoidFunction)vkGetImageSubresourceLayout2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance5) },
     { "vkGetInstanceProcAddr", (PFN_vkVoidFunction)vkGetInstanceProcAddr, PVK_SCOPE_GLOBAL },
     { "vkGetPhysicalDeviceExternalBufferProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalBufferProperties, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
     { "vkGetPhysicalDeviceExternalFenceProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalFenceProperties, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
@@ -41206,6 +41253,7 @@ static const struct pvk_entrypoint {
     { "vkGetQueryPoolResults", (PFN_vkVoidFunction)vkGetQueryPoolResults, PVK_SCOPE_DEVICE },
     { "vkGetRenderAreaGranularity", (PFN_vkVoidFunction)vkGetRenderAreaGranularity, PVK_SCOPE_DEVICE },
     { "vkGetRenderingAreaGranularity", (PFN_vkVoidFunction)vkGetRenderingAreaGranularity, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkGetRenderingAreaGranularityKHR", (PFN_vkVoidFunction)vkGetRenderingAreaGranularity, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance5) },
     { "vkGetSemaphoreCounterValue", (PFN_vkVoidFunction)vkGetSemaphoreCounterValue, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkGetSwapchainImagesKHR", (PFN_vkVoidFunction)vkGetSwapchainImagesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) },
     { "vkInvalidateMappedMemoryRanges", (PFN_vkVoidFunction)vkInvalidateMappedMemoryRanges, PVK_SCOPE_DEVICE },
