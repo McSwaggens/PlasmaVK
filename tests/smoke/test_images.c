@@ -715,6 +715,14 @@ static void test_copy_buffer_image(void)
                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     r = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, 64, 32, 1);
     roundtrip(&info, private_type, &r, 8, 1, 1, "2D RGBA16F");
+    /* packed float formats keep every bit (lossless compression would write
+     * their values in canonical form) */
+    info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_E5B9G9R9_UFLOAT_PACK32, 64, 64, 1, 1, 1,
+                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    r = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, 64, 64, 1);
+    roundtrip(&info, private_type, &r, 4, 1, 1, "2D RGB9E5");
+    info.format = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+    roundtrip(&info, private_type, &r, 4, 1, 1, "2D B10G11R11");
     /* 3D: slices of a level */
     info = image_info(VK_IMAGE_TYPE_3D, VK_FORMAT_R32_SFLOAT, 16, 12, 8, 3, 1,
                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);

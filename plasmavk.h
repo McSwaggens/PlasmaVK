@@ -37434,7 +37434,11 @@ static void pvk_image_init(const struct pvk_physical_device *pd, struct pvk_imag
 }
 
 /* A new (retained) descriptor of a texture of the image in a pixel format at
- * an extent (a plane's), with resource options. */
+ * an extent (a plane's), with resource options. Lossless compression
+ * (allowGPUOptimizedContents) rewrites the packed float formats' values in
+ * canonical form (RGB9E5: exponent down and mantissas doubled while their
+ * top bits are 0; checked on M4 Max with copies through buffers), where
+ * Vulkan copies must keep every bit: their textures go without it. */
 static id pvk_texture_descriptor(const struct pvk_image *image, pvk_MTLPixelFormat format, uint32_t width,
                                  uint32_t height, pvk_MTLResourceOptions options)
 {
@@ -37451,6 +37455,8 @@ static id pvk_texture_descriptor(const struct pvk_image *image, pvk_MTLPixelForm
     pvk_MTLTextureDescriptor_setArrayLength(desc, image->type == VK_IMAGE_TYPE_3D ? 1 : image->layers);
     pvk_MTLTextureDescriptor_setResourceOptions(desc, options);
     pvk_MTLTextureDescriptor_setUsage(desc, image->mtl_usage);
+    if (format == PVK_MTLPixelFormatRGB9E5Float || format == PVK_MTLPixelFormatRG11B10Float)
+        pvk_MTLTextureDescriptor_setAllowGPUOptimizedContents(desc, false);
     return desc;
 }
 
