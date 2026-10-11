@@ -1999,6 +1999,13 @@ static void test_samplers(void)
                          VK_LOD_CLAMP_NONE, VK_FALSE);
         CHECK(harness("k2d", view_texture(v), s, l, 2, out) && out[0] == 1.0f && out[4] == 2.0f);
         vkDestroySampler(device, s, NULL);
+        /* minLod/maxLod clamp explicit LODs too (Metal's header says they do
+         * not; M4 Max does, as Vulkan requires) */
+        s = make_sampler(VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK, 0, 1.0f,
+                         1.0f, VK_FALSE);
+        l[4 + 3] = 2;
+        CHECK(harness("k2d", view_texture(v), s, l, 2, out) && out[0] == 1.0f && out[4] == 1.0f);
+        vkDestroySampler(device, s, NULL);
         vkDestroyImageView(device, v, NULL);
         free_image(&a);
     }

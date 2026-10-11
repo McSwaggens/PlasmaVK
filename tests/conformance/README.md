@@ -20,10 +20,15 @@ One file per chapter of the Vulkan specification:
 | `initialization.c` | Initialization: `vkGet*ProcAddr`, instances | 25 |
 | `devsandqueues.c` | Devices and Queues: physical devices, properties, features queries, queue families, devices, queues | 34 |
 | `memory.c` | Memory Allocation: memory properties, allocation, mapping, flushing, host/device visibility | 27 |
-| `resources.c` | Resource Creation: buffers, memory requirements, binding, device addresses | 22 |
+| `resources.c` | Resource Creation: buffers, images, memory requirements, binding, device addresses, subresource layouts, image and buffer views | 29 |
 | `extensions.c` | Layers & Extensions: enumeration, extension dependencies | 12 |
 | `features.c` | Features > Feature Requirements: one test per required feature | 86 |
 | `limits.c` | Limits > Limit Requirements: one test per limit of the Required Limits table | 145 |
+| `formats.c` | Formats: one test per format of the Required Format Support tables (features, image types), and the chapter's other rules | 64 |
+| `capabilities.c` | Additional Capabilities: image format properties (extents, mip levels, layers, sample counts, monotonicity, host image copy), sparse image formats | 6 |
+| `samplers.c` | Samplers: creation with every parameter, maxSamplerAllocationCount | 6 |
+| `copies.c` | Copy Commands: buffer/image and image/image copies, blits, resolves, host image copies, texel by texel | 10 |
+| `clears.c` | Clear Commands: color and depth/stencil image clears, texel by texel | 4 |
 
 Framework: `ct.h` (test macros, helpers), `ct.c` (runner, helpers),
 `commands.c` (every Vulkan 1.4 core command and the commands of PlasmaVK's
@@ -120,7 +125,9 @@ of the file (an unlisted test is an unused static and breaks the build).
   implementation does not write), the `VK_INCOMPLETE` protocol
   (`ct_check_incomplete`), a checking allocator with failure injection
   (`ct_allocator_*`, `CT_CALL`), and GPU submission (`ct_begin_commands`,
-  `ct_submit_and_wait`, barriers).
+  `ct_submit_and_wait`, barriers), images and mapped buffers (`ct_image`,
+  `ct_host_buffer`, `ct_image_barrier` with layout transitions) and format
+  features (`ct_format_features`).
 - Table-driven chapters (`features.c`, `limits.c`) register one test per row:
   add a row.
 - A new chapter file defines `CT_SUITE(name, tests)` and gets one line in
@@ -180,12 +187,14 @@ a required behaviour.
 | `resources.buffer_capture_replay` | Metal cannot place a resource at a requested GPU address, so `bufferDeviceAddressCaptureReplay` is unsupported. |
 | `extensions.instance_layer_extensions` | No layers: PlasmaVK is linked directly, without a loader. |
 | `features.shaderInt64` | Required only with 64-bit shader atomics, which Apple7/Apple8 GPUs lack. |
-| `features.descriptorIndexing` and the 12 descriptor-indexing features, the 14 update-after-bind limits | Required only with descriptor indexing, which needs descriptor sets, images and texel buffers (not implemented yet). |
+| `features.descriptorIndexing` and the 12 descriptor-indexing features, the 14 update-after-bind limits | Required only with descriptor indexing, which needs descriptor sets (not implemented yet). |
 | `features.shaderDrawParameters`, `features.drawIndirectCount`, `features.shaderOutputViewportIndex`, `features.shaderOutputLayer` | Required only with their extensions, which need graphics pipelines (not implemented yet). |
-| `features.samplerFilterMinmax` | Required only with VK_EXT_sampler_filter_minmax; Metal samplers have no min/max reduction. |
+| `features.samplerFilterMinmax`, `formats.filter_minmax_formats`, `samplers.create_sampler_reduction` | Required only with VK_EXT_sampler_filter_minmax, which PlasmaVK offers from Apple10 (M5, A19): Metal's `MTLSamplerDescriptor.reductionMode` is an Apple10 feature (FST "Sampler minimum and maximum reduction"), and on Apple9 (M4 Max) it is accepted and ignored, minimum and maximum sampling as the weighted average. A shader cannot emulate it: a sampler descriptor is only its MTLResourceID. |
 
 Running under the validation layer on MoltenVK reports no valid usage errors
-from the tests. It reports `UNASSIGNED-vkAllocateMemory-maxMemoryAllocationSize`
+from the tests. Image view and sampler tests avoid component swizzles, format
+reinterpretation and LOD bias on devices with `VK_KHR_portability_subset`,
+whose features may forbid them (MoltenVK's do). It reports `UNASSIGNED-vkAllocateMemory-maxMemoryAllocationSize`
 for `memory.allocate_too_large`, which deliberately exceeds that limit: the
 specification allows such an allocation to succeed or to fail with
 `VK_ERROR_OUT_OF_DEVICE_MEMORY` (Limits > maxMemoryAllocationSize), and the

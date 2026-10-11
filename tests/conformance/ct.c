@@ -79,6 +79,11 @@ void ct_suite_resources(struct ct_registry *r);
 void ct_suite_extensions(struct ct_registry *r);
 void ct_suite_features(struct ct_registry *r);
 void ct_suite_limits(struct ct_registry *r);
+void ct_suite_formats(struct ct_registry *r);
+void ct_suite_capabilities(struct ct_registry *r);
+void ct_suite_samplers(struct ct_registry *r);
+void ct_suite_copies(struct ct_registry *r);
+void ct_suite_clears(struct ct_registry *r);
 
 static void ct_register_all(struct ct_registry *r)
 {
@@ -89,6 +94,11 @@ static void ct_register_all(struct ct_registry *r)
     ct_suite_extensions(r);
     ct_suite_features(r);
     ct_suite_limits(r);
+    ct_suite_formats(r);
+    ct_suite_capabilities(r);
+    ct_suite_samplers(r);
+    ct_suite_copies(r);
+    ct_suite_clears(r);
 }
 
 /* ==========================================================================
@@ -513,6 +523,147 @@ void ct_env_fini(struct ct_env *e)
     if (e->instance)
         vkDestroyInstance(e->instance, NULL);
     memset(e, 0, sizeof(*e));
+}
+
+void ct_host_buffer(struct ct *t, struct ct_env *e, VkDeviceSize size, VkBufferUsageFlags usage, struct ct_buffer *out)
+{
+    VkBufferCreateInfo info;
+    VkMemoryAllocateInfo alloc;
+    VkMemoryRequirements req;
+    uint32_t type;
+    void *p = NULL;
+
+    memset(out, 0, sizeof(*out));
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    info.size = size;
+    info.usage = usage;
+    CT_REQUIRE_VK(t, vkCreateBuffer(e->device, &info, NULL, &out->buffer));
+    vkGetBufferMemoryRequirements(e->device, out->buffer, &req);
+    type = ct_find_memory_type(e, req.memoryTypeBits,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                               VK_MEMORY_PROPERTY_PROTECTED_BIT);
+    CT_REQUIREF(t, type != UINT32_MAX, "no host-coherent memory type for a buffer");
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = type;
+    CT_REQUIRE_VK(t, vkAllocateMemory(e->device, &alloc, NULL, &out->memory));
+    CT_REQUIRE_VK(t, vkBindBufferMemory(e->device, out->buffer, out->memory, 0));
+    CT_REQUIRE_VK(t, vkMapMemory(e->device, out->memory, 0, VK_WHOLE_SIZE, 0, &p));
+    out->data = p;
+    out->size = size;
+    memset(out->data, 0, (size_t)size);
+}
+
+void ct_buffer_fini(struct ct_env *e, struct ct_buffer *b)
+{
+    if (b->buffer)
+        vkDestroyBuffer(e->device, b->buffer, NULL);
+    if (b->memory)
+        vkFreeMemory(e->device, b->memory, NULL);
+    memset(b, 0, sizeof(*b));
+}
+
+VkImageCreateInfo ct_image_info(VkImageType type, VkFormat format, uint32_t w, uint32_t h, uint32_t d, uint32_t levels,
+                                uint32_t layers, VkImageUsageFlags usage)
+{
+    VkImageCreateInfo info;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    info.imageType = type;
+    info.format = format;
+    info.extent.width = w;
+    info.extent.height = h;
+    info.extent.depth = d;
+    info.mipLevels = levels;
+    info.arrayLayers = layers;
+    info.samples = VK_SAMPLE_COUNT_1_BIT;
+    info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    info.usage = usage;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    return info;
+}
+
+void ct_image(struct ct *t, struct ct_env *e, const VkImageCreateInfo *info, VkMemoryPropertyFlags required,
+              struct ct_image *out)
+{
+    VkMemoryAllocateInfo alloc;
+    VkMemoryRequirements req;
+    uint32_t type;
+
+    memset(out, 0, sizeof(*out));
+    out->info = *info;
+    CT_REQUIRE_VK(t, vkCreateImage(e->device, info, NULL, &out->image));
+    vkGetImageMemoryRequirements(e->device, out->image, &req);
+    type = ct_find_memory_type(e, req.memoryTypeBits, required,
+                               VK_MEMORY_PROPERTY_PROTECTED_BIT | VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT);
+    CT_REQUIREF(t, type != UINT32_MAX, "no memory type with properties 0x%x for the image (bits 0x%x)", required,
+                req.memoryTypeBits);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = type;
+    CT_REQUIRE_VK(t, vkAllocateMemory(e->device, &alloc, NULL, &out->memory));
+    CT_REQUIRE_VK(t, vkBindImageMemory(e->device, out->image, out->memory, 0));
+}
+
+void ct_image_fini(struct ct_env *e, struct ct_image *m)
+{
+    if (m->image)
+        vkDestroyImage(e->device, m->image, NULL);
+    if (m->memory)
+        vkFreeMemory(e->device, m->memory, NULL);
+    memset(m, 0, sizeof(*m));
+}
+
+void ct_image_barrier(VkCommandBuffer cb, VkImage image, VkImageAspectFlags aspect, VkImageLayout from, VkImageLayout to)
+{
+    VkImageMemoryBarrier ib;
+    VkMemoryBarrier mb;
+    memset(&mb, 0, sizeof(mb));
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    memset(&ib, 0, sizeof(ib));
+    ib.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    ib.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    ib.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    ib.oldLayout = from;
+    ib.newLayout = to;
+    ib.srcQueueFamilyIndex = ib.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    ib.image = image;
+    ib.subresourceRange.aspectMask = aspect;
+    ib.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
+    ib.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+                         0, 1, &mb, 0, NULL, image ? 1 : 0, &ib);
+}
+
+VkFormatFeatureFlags2 ct_format_features(const struct ct_env *e, VkFormat format, int which)
+{
+    VkFormatProperties3 p3;
+    VkFormatProperties2 p2;
+    if (e->version < VK_API_VERSION_1_3) {
+        VkFormatProperties p;
+        vkGetPhysicalDeviceFormatProperties(e->pd, format, &p);
+        return which == 0 ? p.optimalTilingFeatures : which == 1 ? p.linearTilingFeatures : p.bufferFeatures;
+    }
+    memset(&p3, 0, sizeof(p3));
+    p3.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3;
+    memset(&p2, 0, sizeof(p2));
+    p2.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
+    p2.pNext = &p3;
+    vkGetPhysicalDeviceFormatProperties2(e->pd, format, &p2);
+    return which == 0 ? p3.optimalTilingFeatures : which == 1 ? p3.linearTilingFeatures : p3.bufferFeatures;
+}
+
+void ct_fill_pattern(unsigned char *p, size_t n, unsigned seed)
+{
+    size_t i;
+    for (i = 0; i < n; i++)
+        p[i] = (unsigned char)((i * 131u + seed * 7u + (i >> 8) * 17u) & 0xff);
 }
 
 uint32_t ct_find_memory_type(const struct ct_env *e, uint32_t type_bits, VkMemoryPropertyFlags required,

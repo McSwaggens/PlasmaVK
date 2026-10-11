@@ -31842,7 +31842,7 @@ static void pvk_physical_device_init_memory_limits(struct pvk_physical_device *p
     l->maxUniformBufferRange = max_range; /* FST lists no constant buffer size limit */
     l->minStorageBufferOffsetAlignment = PVK_BUFFER_OFFSET_ALIGNMENT;
     l->minUniformBufferOffsetAlignment = PVK_BUFFER_OFFSET_ALIGNMENT;
-    /* Buffer views will be texture buffers made at an offset into the memory's
+    /* Buffer views are texture buffers made at an offset into the memory's
      * MTLBuffer, which needs minimumTextureBufferAlignmentForPixelFormat:
      * (16 B for every format on M4 Max). */
     l->minTexelBufferOffsetAlignment = PVK_BUFFER_OFFSET_ALIGNMENT;
