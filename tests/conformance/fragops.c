@@ -1,7 +1,8 @@
 /* Chapter "Fragment Operations": the scissor test, the depth test with
  * every compare op and depth writes off, stencil operations (every op,
  * clamping and wrapping, fail and depth-fail ops, write and compare masks),
- * the depth bounds test, the sample mask and alpha to one. */
+ * the depth bounds test, the sample mask (alone and with the SampleMask
+ * built-ins) and alpha to one. */
 #include "ct.h"
 
 #include <stdio.h>
@@ -12,6 +13,57 @@
 
 #define FO_COMMANDS                                                                                                \
     CT_RENDER_COMMANDS "vkCmdBindPipeline vkCmdDraw vkCmdBeginRendering vkCmdEndRendering "
+
+/*
+ * #version 450
+ * // SampleMask: red is a quarter per sample of the input coverage, and the
+ * // output coverage is the push constants' layer.
+ * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = vec4(float(bitCount(gl_SampleMaskIn[0])) * 0.25, 0.0, 0.0, 1.0);
+ *     gl_SampleMask[0] = pc.layer;
+ * }
+ */
+static const uint32_t mask_frag[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000026, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0009000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000f, 0x0000001c,
+    0x0000001f, 0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c, 0x00060005,
+    0x0000000f, 0x535f6c67, 0x6c706d61, 0x73614d65, 0x006e496b, 0x00060005, 0x0000001c, 0x535f6c67,
+    0x6c706d61, 0x73614d65, 0x0000006b, 0x00030005, 0x0000001d, 0x00000050, 0x00050006, 0x0000001d,
+    0x00000000, 0x74636572, 0x00000000, 0x00050006, 0x0000001d, 0x00000001, 0x6f6c6f63, 0x00000072,
+    0x00050006, 0x0000001d, 0x00000002, 0x74706564, 0x00000068, 0x00050006, 0x0000001d, 0x00000003,
+    0x6579616c, 0x00000072, 0x00060006, 0x0000001d, 0x00000004, 0x77656976, 0x74726f70, 0x00000000,
+    0x00030005, 0x0000001f, 0x00006370, 0x00040047, 0x00000009, 0x0000001e, 0x00000000, 0x00040047,
+    0x0000000f, 0x0000000b, 0x00000014, 0x00030047, 0x0000000f, 0x0000000e, 0x00040047, 0x0000001c,
+    0x0000000b, 0x00000014, 0x00030047, 0x0000001d, 0x00000002, 0x00050048, 0x0000001d, 0x00000000,
+    0x00000023, 0x00000000, 0x00050048, 0x0000001d, 0x00000001, 0x00000023, 0x00000010, 0x00050048,
+    0x0000001d, 0x00000002, 0x00000023, 0x00000020, 0x00050048, 0x0000001d, 0x00000003, 0x00000023,
+    0x00000024, 0x00050048, 0x0000001d, 0x00000004, 0x00000023, 0x00000028, 0x00020013, 0x00000002,
+    0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007,
+    0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008,
+    0x00000009, 0x00000003, 0x00040015, 0x0000000a, 0x00000020, 0x00000001, 0x00040015, 0x0000000b,
+    0x00000020, 0x00000000, 0x0004002b, 0x0000000b, 0x0000000c, 0x00000001, 0x0004001c, 0x0000000d,
+    0x0000000a, 0x0000000c, 0x00040020, 0x0000000e, 0x00000001, 0x0000000d, 0x0004003b, 0x0000000e,
+    0x0000000f, 0x00000001, 0x0004002b, 0x0000000a, 0x00000010, 0x00000000, 0x00040020, 0x00000011,
+    0x00000001, 0x0000000a, 0x0004002b, 0x00000006, 0x00000016, 0x3e800000, 0x0004002b, 0x00000006,
+    0x00000018, 0x00000000, 0x0004002b, 0x00000006, 0x00000019, 0x3f800000, 0x00040020, 0x0000001b,
+    0x00000003, 0x0000000d, 0x0004003b, 0x0000001b, 0x0000001c, 0x00000003, 0x0007001e, 0x0000001d,
+    0x00000007, 0x00000007, 0x00000006, 0x0000000a, 0x0000000a, 0x00040020, 0x0000001e, 0x00000009,
+    0x0000001d, 0x0004003b, 0x0000001e, 0x0000001f, 0x00000009, 0x0004002b, 0x0000000a, 0x00000020,
+    0x00000003, 0x00040020, 0x00000021, 0x00000009, 0x0000000a, 0x00040020, 0x00000024, 0x00000003,
+    0x0000000a, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005,
+    0x00050041, 0x00000011, 0x00000012, 0x0000000f, 0x00000010, 0x0004003d, 0x0000000a, 0x00000013,
+    0x00000012, 0x000400cd, 0x0000000a, 0x00000014, 0x00000013, 0x0004006f, 0x00000006, 0x00000015,
+    0x00000014, 0x00050085, 0x00000006, 0x00000017, 0x00000015, 0x00000016, 0x00070050, 0x00000007,
+    0x0000001a, 0x00000017, 0x00000018, 0x00000018, 0x00000019, 0x0003003e, 0x00000009, 0x0000001a,
+    0x00050041, 0x00000021, 0x00000022, 0x0000001f, 0x00000020, 0x0004003d, 0x0000000a, 0x00000023,
+    0x00000022, 0x00050041, 0x00000024, 0x00000025, 0x0000001c, 0x00000010, 0x0003003e, 0x00000025,
+    0x00000023, 0x000100fd, 0x00010038,
+};
 
 /* NDC of the left edge of pixel column (or row) p. */
 static float edge(uint32_t p)
@@ -350,6 +402,69 @@ CT_TEST(sample_mask_test,
     ct_scene_fini(&s);
 }
 
+CT_TEST(sample_mask_shader_coverage,
+        "Fragment Operations > Sample Mask Test, Fragment Shading, Multisample Coverage: the sample mask test "
+        "comes before fragment shading, so the SampleMask input holds the coverage it leaves (pSampleMask 0x5 "
+        "of 4 samples: 2 bits), and the SampleMask output is ANDed with that coverage (0x3: sample 0 written)",
+        FO_COMMANDS)
+{
+    struct ct_scene s;
+    struct ct_target ms, c;
+    struct ct_gfx g;
+    struct ct_rect_pc pc;
+    VkSampleMask mask = 0x5;
+    VkShaderModule fs;
+    VkPipeline pipe;
+    VkRenderingAttachmentInfo att;
+    VkRenderingInfo info;
+    VkCommandBuffer cb;
+    uint32_t want[4] = { CT_RGBA(32, 0, 0, 255), CT_BLACK, CT_BLACK, CT_BLACK };
+
+    ct_scene_init(t, &s);
+    ct_target(t, &s.e, VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+              &ms);
+    ct_scene_color(t, &s, &c);
+    fs = ct_shader_module(t, &s.e, mask_frag, sizeof(mask_frag));
+    ct_gfx_init(&g, s.vs, fs, s.layout, W, H);
+    g.ms.rasterizationSamples = VK_SAMPLE_COUNT_4_BIT;
+    g.ms.pSampleMask = &mask;
+    pipe = ct_gfx_pipeline(t, &s.e, &g);
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = ms.view;
+    att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+    att.resolveImageView = c.view;
+    att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    memcpy(att.clearValue.color.float32, ct_black, sizeof(ct_black));
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &att;
+    memset(&pc, 0, sizeof(pc));
+    pc.rect[0] = pc.rect[1] = -1.0f; /* the top left quadrant */
+    pc.layer = 0x3;                  /* the SampleMask output */
+    cb = ct_begin_commands(t, &s.e);
+    vkCmdBeginRendering(cb, &info);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vkCmdPushConstants(cb, s.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cb, 4, 1, 0, 0);
+    vkCmdEndRendering(cb);
+    ct_scene_read(t, &s, cb, &c);
+    ct_check_rgba8(t, s.out.data, W, H, ct_expect_quadrants, want, 1,
+                   "top left: red 0.5 (2 samples of input coverage) on 1 sample of 4");
+    vkDestroyPipeline(s.e.device, pipe, NULL);
+    vkDestroyShaderModule(s.e.device, fs, NULL);
+    ct_target_fini(&s.e, &ms);
+    ct_target_fini(&s.e, &c);
+    ct_scene_fini(&s);
+}
+
 CT_TEST(alpha_to_one,
         "Fragment Operations > Multisample Coverage: with alphaToOneEnable (alphaToOne), each alpha value is "
         "replaced by the maximum representable alpha before blending: alpha 0.25 is stored as 1, and "
@@ -400,6 +515,7 @@ static const struct ct_test *const tests[] = {
     CT_REF(stencil_ops),
     CT_REF(depth_bounds_test),
     CT_REF(sample_mask_test),
+    CT_REF(sample_mask_shader_coverage),
     CT_REF(alpha_to_one),
 };
 

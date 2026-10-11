@@ -2470,6 +2470,143 @@ static const uint32_t spv_spec[] = {
 
 /*
  * #version 450
+ * #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+ * layout(local_size_x = 1) in;
+ * layout(constant_id = 0) const bool B = true;
+ * layout(constant_id = 1) const float F = 1.5;
+ * layout(constant_id = 2) const float16_t HF = float16_t(2.5);
+ * layout(constant_id = 3) const int I = -7;
+ * const float sel = B ? F : -2.0;
+ * const vec3 vsel = B ? vec3(1.0, 2.0, 3.0) : vec3(F);
+ * const float16_t h = float16_t(F);
+ * const float back = float(h);
+ * const float fh = float(HF);
+ * const vec4 comp = vec4(F, sel, fh, 4.0);
+ * const float ex = comp.z;
+ * const vec2 sw = comp.wy;
+ * const vec2 v2 = !B ? vec2(0.0) : vec2(fh, F);
+ * const float sb = v2.x;
+ * const vec4 big = vec4(vsel, sel);
+ * const vec3 ae3 = big.wzy;
+ * const float ae = ae3.x;
+ * const uint u = uint(B);
+ * const int ineg = -I;
+ * const ivec2 iv = ivec2(I, I * 2) + ivec2(1);
+ * layout(set = 0, binding = 0) buffer Out { float o[12]; int i[4]; };
+ * void main()
+ * {
+ *     o[0] = sel;
+ *     o[1] = vsel.x;
+ *     o[2] = vsel.y;
+ *     o[3] = vsel.z;
+ *     o[4] = back;
+ *     o[5] = fh;
+ *     o[6] = ex;
+ *     o[7] = sw.x;
+ *     o[8] = sw.y;
+ *     o[9] = sb;
+ *     o[10] = ae;
+ *     o[11] = float(u);
+ *     i[0] = ineg;
+ *     i[1] = iv.x;
+ *     i[2] = iv.y;
+ *     i[3] = I;
+ * }
+ */
+static const uint32_t spv_spec_ops[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000066, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000009, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
+    0x00000000, 0x00000001, 0x0006000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000f,
+    0x00060010, 0x00000004, 0x00000011, 0x00000001, 0x00000001, 0x00000001, 0x00030003, 0x00000002,
+    0x000001c2, 0x000d0004, 0x455f4c47, 0x735f5458, 0x65646168, 0x78655f72, 0x63696c70, 0x615f7469,
+    0x68746972, 0x6974656d, 0x79745f63, 0x5f736570, 0x616f6c66, 0x00363174, 0x00040005, 0x00000004,
+    0x6e69616d, 0x00000000, 0x00030005, 0x0000000d, 0x0074754f, 0x00040006, 0x0000000d, 0x00000000,
+    0x0000006f, 0x00040006, 0x0000000d, 0x00000001, 0x00000069, 0x00030005, 0x0000000f, 0x00000000,
+    0x00030005, 0x00000012, 0x00000042, 0x00030005, 0x00000013, 0x00000046, 0x00030005, 0x00000015,
+    0x006c6573, 0x00040005, 0x0000001f, 0x6c657376, 0x00000000, 0x00030005, 0x0000002d, 0x00000068,
+    0x00040005, 0x0000002e, 0x6b636162, 0x00000000, 0x00030005, 0x00000031, 0x00004648, 0x00030005,
+    0x00000032, 0x00006866, 0x00040005, 0x00000037, 0x706d6f63, 0x00000000, 0x00030005, 0x00000038,
+    0x00007865, 0x00030005, 0x0000003c, 0x00007773, 0x00030005, 0x00000047, 0x00003276, 0x00030005,
+    0x00000048, 0x00006273, 0x00030005, 0x0000004e, 0x00676962, 0x00030005, 0x0000004f, 0x00336561,
+    0x00030005, 0x00000050, 0x00006561, 0x00030005, 0x00000053, 0x00000075, 0x00030005, 0x00000056,
+    0x00000049, 0x00040005, 0x00000057, 0x67656e69, 0x00000000, 0x00030005, 0x0000005e, 0x00007669,
+    0x00040047, 0x00000009, 0x00000006, 0x00000004, 0x00040047, 0x0000000c, 0x00000006, 0x00000004,
+    0x00030047, 0x0000000d, 0x00000002, 0x00050048, 0x0000000d, 0x00000000, 0x00000023, 0x00000000,
+    0x00050048, 0x0000000d, 0x00000001, 0x00000023, 0x00000030, 0x00040047, 0x0000000f, 0x00000021,
+    0x00000000, 0x00040047, 0x0000000f, 0x00000022, 0x00000000, 0x00040047, 0x00000012, 0x00000001,
+    0x00000000, 0x00040047, 0x00000013, 0x00000001, 0x00000001, 0x00040047, 0x00000031, 0x00000001,
+    0x00000002, 0x00040047, 0x00000056, 0x00000001, 0x00000003, 0x00020013, 0x00000002, 0x00030021,
+    0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040015, 0x00000007, 0x00000020,
+    0x00000000, 0x0004002b, 0x00000007, 0x00000008, 0x0000000c, 0x0004001c, 0x00000009, 0x00000006,
+    0x00000008, 0x00040015, 0x0000000a, 0x00000020, 0x00000001, 0x0004002b, 0x00000007, 0x0000000b,
+    0x00000004, 0x0004001c, 0x0000000c, 0x0000000a, 0x0000000b, 0x0004001e, 0x0000000d, 0x00000009,
+    0x0000000c, 0x00040020, 0x0000000e, 0x0000000c, 0x0000000d, 0x0004003b, 0x0000000e, 0x0000000f,
+    0x0000000c, 0x0004002b, 0x0000000a, 0x00000010, 0x00000000, 0x00020014, 0x00000011, 0x00030030,
+    0x00000011, 0x00000012, 0x00040032, 0x00000006, 0x00000013, 0x3fc00000, 0x0004002b, 0x00000006,
+    0x00000014, 0xc0000000, 0x00070034, 0x00000006, 0x00000015, 0x000000a9, 0x00000012, 0x00000013,
+    0x00000014, 0x00040020, 0x00000016, 0x0000000c, 0x00000006, 0x0004002b, 0x0000000a, 0x00000018,
+    0x00000001, 0x00040017, 0x00000019, 0x00000006, 0x00000003, 0x0004002b, 0x00000006, 0x0000001a,
+    0x3f800000, 0x0004002b, 0x00000006, 0x0000001b, 0x40000000, 0x0004002b, 0x00000006, 0x0000001c,
+    0x40400000, 0x0006002c, 0x00000019, 0x0000001d, 0x0000001a, 0x0000001b, 0x0000001c, 0x00060033,
+    0x00000019, 0x0000001e, 0x00000013, 0x00000013, 0x00000013, 0x00070034, 0x00000019, 0x0000001f,
+    0x000000a9, 0x00000012, 0x0000001d, 0x0000001e, 0x0004002b, 0x00000007, 0x00000020, 0x00000000,
+    0x0004002b, 0x0000000a, 0x00000023, 0x00000002, 0x0004002b, 0x00000007, 0x00000024, 0x00000001,
+    0x0004002b, 0x0000000a, 0x00000027, 0x00000003, 0x0004002b, 0x00000007, 0x00000028, 0x00000002,
+    0x0004002b, 0x0000000a, 0x0000002b, 0x00000004, 0x00030016, 0x0000002c, 0x00000010, 0x00050034,
+    0x0000002c, 0x0000002d, 0x00000073, 0x00000013, 0x00050034, 0x00000006, 0x0000002e, 0x00000073,
+    0x0000002d, 0x0004002b, 0x0000000a, 0x00000030, 0x00000005, 0x00040032, 0x0000002c, 0x00000031,
+    0x00004100, 0x00050034, 0x00000006, 0x00000032, 0x00000073, 0x00000031, 0x0004002b, 0x0000000a,
+    0x00000034, 0x00000006, 0x0004002b, 0x00000006, 0x00000035, 0x40800000, 0x00040017, 0x00000036,
+    0x00000006, 0x00000004, 0x00070033, 0x00000036, 0x00000037, 0x00000013, 0x00000015, 0x00000032,
+    0x00000035, 0x00060034, 0x00000006, 0x00000038, 0x00000051, 0x00000037, 0x00000002, 0x0004002b,
+    0x0000000a, 0x0000003a, 0x00000007, 0x00040017, 0x0000003b, 0x00000006, 0x00000002, 0x00080034,
+    0x0000003b, 0x0000003c, 0x0000004f, 0x00000037, 0x00000037, 0x00000003, 0x00000001, 0x0004002b,
+    0x0000000a, 0x0000003f, 0x00000008, 0x0004002b, 0x0000000a, 0x00000042, 0x00000009, 0x00050034,
+    0x00000011, 0x00000043, 0x000000a8, 0x00000012, 0x0004002b, 0x00000006, 0x00000044, 0x00000000,
+    0x0005002c, 0x0000003b, 0x00000045, 0x00000044, 0x00000044, 0x00050033, 0x0000003b, 0x00000046,
+    0x00000032, 0x00000013, 0x00070034, 0x0000003b, 0x00000047, 0x000000a9, 0x00000043, 0x00000045,
+    0x00000046, 0x00060034, 0x00000006, 0x00000048, 0x00000051, 0x00000047, 0x00000000, 0x0004002b,
+    0x0000000a, 0x0000004a, 0x0000000a, 0x00060034, 0x00000006, 0x0000004b, 0x00000051, 0x0000001f,
+    0x00000000, 0x00060034, 0x00000006, 0x0000004c, 0x00000051, 0x0000001f, 0x00000001, 0x00060034,
+    0x00000006, 0x0000004d, 0x00000051, 0x0000001f, 0x00000002, 0x00070033, 0x00000036, 0x0000004e,
+    0x0000004b, 0x0000004c, 0x0000004d, 0x00000015, 0x00090034, 0x00000019, 0x0000004f, 0x0000004f,
+    0x0000004e, 0x0000004e, 0x00000003, 0x00000002, 0x00000001, 0x00060034, 0x00000006, 0x00000050,
+    0x00000051, 0x0000004f, 0x00000000, 0x0004002b, 0x0000000a, 0x00000052, 0x0000000b, 0x00070034,
+    0x00000007, 0x00000053, 0x000000a9, 0x00000012, 0x00000024, 0x00000020, 0x00040032, 0x0000000a,
+    0x00000056, 0xfffffff9, 0x00050034, 0x0000000a, 0x00000057, 0x0000007e, 0x00000056, 0x00040020,
+    0x00000058, 0x0000000c, 0x0000000a, 0x00060034, 0x0000000a, 0x0000005a, 0x00000084, 0x00000056,
+    0x00000023, 0x00040017, 0x0000005b, 0x0000000a, 0x00000002, 0x00050033, 0x0000005b, 0x0000005c,
+    0x00000056, 0x0000005a, 0x0005002c, 0x0000005b, 0x0000005d, 0x00000018, 0x00000018, 0x00060034,
+    0x0000005b, 0x0000005e, 0x00000080, 0x0000005c, 0x0000005d, 0x00040017, 0x00000064, 0x00000007,
+    0x00000003, 0x0006002c, 0x00000064, 0x00000065, 0x00000024, 0x00000024, 0x00000024, 0x00050036,
+    0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x00060041, 0x00000016,
+    0x00000017, 0x0000000f, 0x00000010, 0x00000010, 0x0003003e, 0x00000017, 0x00000015, 0x00050051,
+    0x00000006, 0x00000021, 0x0000001f, 0x00000000, 0x00060041, 0x00000016, 0x00000022, 0x0000000f,
+    0x00000010, 0x00000018, 0x0003003e, 0x00000022, 0x00000021, 0x00050051, 0x00000006, 0x00000025,
+    0x0000001f, 0x00000001, 0x00060041, 0x00000016, 0x00000026, 0x0000000f, 0x00000010, 0x00000023,
+    0x0003003e, 0x00000026, 0x00000025, 0x00050051, 0x00000006, 0x00000029, 0x0000001f, 0x00000002,
+    0x00060041, 0x00000016, 0x0000002a, 0x0000000f, 0x00000010, 0x00000027, 0x0003003e, 0x0000002a,
+    0x00000029, 0x00060041, 0x00000016, 0x0000002f, 0x0000000f, 0x00000010, 0x0000002b, 0x0003003e,
+    0x0000002f, 0x0000002e, 0x00060041, 0x00000016, 0x00000033, 0x0000000f, 0x00000010, 0x00000030,
+    0x0003003e, 0x00000033, 0x00000032, 0x00060041, 0x00000016, 0x00000039, 0x0000000f, 0x00000010,
+    0x00000034, 0x0003003e, 0x00000039, 0x00000038, 0x00050051, 0x00000006, 0x0000003d, 0x0000003c,
+    0x00000000, 0x00060041, 0x00000016, 0x0000003e, 0x0000000f, 0x00000010, 0x0000003a, 0x0003003e,
+    0x0000003e, 0x0000003d, 0x00050051, 0x00000006, 0x00000040, 0x0000003c, 0x00000001, 0x00060041,
+    0x00000016, 0x00000041, 0x0000000f, 0x00000010, 0x0000003f, 0x0003003e, 0x00000041, 0x00000040,
+    0x00060041, 0x00000016, 0x00000049, 0x0000000f, 0x00000010, 0x00000042, 0x0003003e, 0x00000049,
+    0x00000048, 0x00060041, 0x00000016, 0x00000051, 0x0000000f, 0x00000010, 0x0000004a, 0x0003003e,
+    0x00000051, 0x00000050, 0x00040070, 0x00000006, 0x00000054, 0x00000053, 0x00060041, 0x00000016,
+    0x00000055, 0x0000000f, 0x00000010, 0x00000052, 0x0003003e, 0x00000055, 0x00000054, 0x00060041,
+    0x00000058, 0x00000059, 0x0000000f, 0x00000018, 0x00000010, 0x0003003e, 0x00000059, 0x00000057,
+    0x00050051, 0x0000000a, 0x0000005f, 0x0000005e, 0x00000000, 0x00060041, 0x00000058, 0x00000060,
+    0x0000000f, 0x00000018, 0x00000018, 0x0003003e, 0x00000060, 0x0000005f, 0x00050051, 0x0000000a,
+    0x00000061, 0x0000005e, 0x00000001, 0x00060041, 0x00000058, 0x00000062, 0x0000000f, 0x00000018,
+    0x00000023, 0x0003003e, 0x00000062, 0x00000061, 0x00060041, 0x00000058, 0x00000063, 0x0000000f,
+    0x00000018, 0x00000027, 0x0003003e, 0x00000063, 0x00000056, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 450
  * #extension GL_ARB_gpu_shader_int64 : require
  * layout(local_size_x = 32) in;
  * layout(std430, binding = 0) readonly buffer In { uint64_t a[]; } inb;
@@ -7893,6 +8030,155 @@ static void test_spec_overrides(void)
     run_spec(&options, 64, 5, true, 0.25f, 10);
 }
 
+static float f32_of(uint32_t bits)
+{
+    float f;
+    memcpy(&f, &bits, 4);
+    return f;
+}
+
+/* The binary16 conversions OpSpecConstantOp FConvert and QuantizeToF16 fold
+ * with: rounding to nearest even (and toward zero), denormals, overflow,
+ * infinities and NaNs. */
+static void test_spec_half_conversions(void)
+{
+    static const struct { uint32_t f32, rte, rtz; } to16[] = {
+        { 0x3f800000u, 0x3c00u, 0x3c00u },  /* 1.0 */
+        { 0x3eaaaaabu, 0x3555u, 0x3555u },  /* 1/3: rounds down */
+        { 0x3f801000u, 0x3c00u, 0x3c00u },  /* 1 + 2^-11: a tie, to even (down) */
+        { 0x3f803000u, 0x3c02u, 0x3c01u },  /* 1 + 3 * 2^-11: a tie, to even (up) */
+        { 0x3f801001u, 0x3c01u, 0x3c00u },  /* just above the tie */
+        { 0x477fe000u, 0x7bffu, 0x7bffu },  /* 65504: the largest */
+        { 0x477fefffu, 0x7bffu, 0x7bffu },  /* below 65520 */
+        { 0x477ff000u, 0x7c00u, 0x7bffu },  /* 65520: infinity (to even), RTZ the largest */
+        { 0x7f7fffffu, 0x7c00u, 0x7bffu },  /* FLT_MAX */
+        { 0xc77ff000u, 0xfc00u, 0xfbffu },  /* -65520 */
+        { 0x38800000u, 0x0400u, 0x0400u },  /* 2^-14: the smallest normal */
+        { 0x387ff000u, 0x0400u, 0x03ffu },  /* 1023.75 x 2^-24: rounds up to it */
+        { 0x33800000u, 0x0001u, 0x0001u },  /* 2^-24: the smallest denormal */
+        { 0x33000000u, 0x0000u, 0x0000u },  /* 2^-25: a tie, to even (0) */
+        { 0x33000001u, 0x0001u, 0x0000u },  /* just above it */
+        { 0xb3d6bf95u, 0x8002u, 0x8001u },  /* -1e-7: -2 x 2^-24 */
+        { 0x80000000u, 0x8000u, 0x8000u },  /* -0 */
+        { 0x7f800000u, 0x7c00u, 0x7c00u },  /* infinity */
+        { 0xff800000u, 0xfc00u, 0xfc00u },  /* -infinity */
+    };
+    static const struct { uint32_t f16, f32; } to32[] = {
+        { 0x3c00u, 0x3f800000u }, { 0x3555u, 0x3eaaa000u }, { 0x7bffu, 0x477fe000u }, { 0x0400u, 0x38800000u },
+        { 0x0001u, 0x33800000u }, { 0x03ffu, 0x387fc000u }, { 0x8200u, 0xb8000000u }, { 0x7c00u, 0x7f800000u },
+        { 0xfc00u, 0xff800000u }, { 0x8000u, 0x80000000u }, { 0x3c01u, 0x3f802000u },
+    };
+    uint32_t i;
+    bad = 0;
+    for (i = 0; i < PVK_ARRAY_SIZE(to16); i++) {
+        uint32_t rte = pvk_spv_f32_to_f16(to16[i].f32, false), rtz = pvk_spv_f32_to_f16(to16[i].f32, true);
+        EXPECT(rte == to16[i].rte && rtz == to16[i].rtz, "f32 0x%08x -> f16 0x%04x (RTZ 0x%04x), want 0x%04x (0x%04x)",
+               to16[i].f32, rte, rtz, to16[i].rte, to16[i].rtz);
+    }
+    for (i = 0; i < PVK_ARRAY_SIZE(to32); i++) {
+        uint32_t f = pvk_spv_f16_to_f32(to32[i].f16);
+        EXPECT(f == to32[i].f32, "f16 0x%04x -> f32 0x%08x, want 0x%08x", to32[i].f16, f, to32[i].f32);
+    }
+    /* NaNs stay NaNs (quiet), both ways */
+    EXPECT((pvk_spv_f32_to_f16(0x7f800001u, false) & 0x7c00u) == 0x7c00u &&
+               (pvk_spv_f32_to_f16(0x7f800001u, false) & 0x3ffu) != 0,
+           "a NaN converts to 0x%04x", pvk_spv_f32_to_f16(0x7f800001u, false));
+    EXPECT(isnan(f32_of(pvk_spv_f16_to_f32(0x7c01u))), "f16 NaN 0x7c01 converts to 0x%08x", pvk_spv_f16_to_f32(0x7c01u));
+    CHECK(bad == 0);
+}
+
+/* Floating-point and vector OpSpecConstantOp (spv_spec_ops: Select of floats
+ * and vectors, FConvert both ways, CompositeExtract, VectorShuffle,
+ * LogicalNot, SNegate, IMul, vector IAdd) folded with the defaults and with
+ * three specializations (rounding, overflow, denormals). */
+static void test_spec_float_ops(void)
+{
+    struct spec_data {
+        uint32_t b;
+        float f;
+        uint16_t hf, pad;
+        int32_t i;
+    } data[3] = {
+        { 0, 0.0f, 0x3c01u, 0, 5 },     /* F = 1/3 (set below), HF = 1 + 2^-10 */
+        { 1, 65520.0f, 0x0001u, 0, -1 }, /* overflows to infinity; HF = 2^-24 */
+        { 1, -1e-7f, 0xfc00u, 0, 0 },   /* a binary16 denormal; HF = -infinity */
+    };
+    VkSpecializationMapEntry entries[4] = {
+        { 0, offsetof(struct spec_data, b), 4 },
+        { 1, offsetof(struct spec_data, f), 4 },
+        { 2, offsetof(struct spec_data, hf), 2 },
+        { 3, offsetof(struct spec_data, i), 4 },
+    };
+    /* float(float16_t(F)) and float(HF) for the defaults and each specialization */
+    static const uint32_t backs[4] = { 0x3fc00000u, 0x3eaaa000u, 0x7f800000u, 0xb4000000u };
+    static const uint32_t fhs[4] = { 0x40200000u, 0x3f802000u, 0x33800000u, 0xff800000u };
+    VkSpecializationInfo info;
+    struct pvk_msl_options options;
+    uint32_t k, j;
+
+    data[0].f = 1.0f / 3.0f;
+    for (k = 0; k < 4; k++) {
+        const struct spec_data *d = k ? &data[k - 1] : NULL;
+        bool b = d ? d->b != 0 : true;
+        float F = d ? d->f : 1.5f, fh = f32_of(fhs[k]), back = f32_of(backs[k]);
+        int32_t I = d ? d->i : -7;
+        float sel = b ? F : -2.0f;
+        float want[12];
+        int32_t iwant[4];
+        struct pvk_msl_result res;
+        struct mt_buffer out;
+        struct mt_binding bd;
+        id pso;
+
+        want[0] = sel;
+        want[1] = b ? 1.0f : F;
+        want[2] = b ? 2.0f : F;
+        want[3] = b ? 3.0f : F;
+        want[4] = back;
+        want[5] = fh;
+        want[6] = fh;              /* comp.z */
+        want[7] = 4.0f;            /* comp.w */
+        want[8] = sel;             /* comp.y */
+        want[9] = b ? fh : 0.0f;   /* v2.x */
+        want[10] = sel;            /* big.w */
+        want[11] = b ? 1.0f : 0.0f;
+        iwant[0] = -I;
+        iwant[1] = I + 1;
+        iwant[2] = I * 2 + 1;
+        iwant[3] = I;
+        memset(&options, 0, sizeof(options));
+        if (d) {
+            info.mapEntryCount = 4;
+            info.pMapEntries = entries;
+            info.dataSize = sizeof(*d);
+            info.pData = d;
+            options.specialization = &info;
+        }
+        REQUIRE(mt_translate(spv_spec_ops, PVK_ARRAY_SIZE(spv_spec_ops), &options, &res));
+        pso = mt_pipeline(&res);
+        if (!pso)
+            pvk_msl_result_free(&res);
+        REQUIRE(pso);
+        out = mt_buffer(16 * 4, NULL, 0);
+        bd = bind(0, 0, &out);
+        CHECK(mt_dispatch(pso, &res, &bd, 1, NULL, 0, 1, 1, 1));
+        bad = 0;
+        for (j = 0; j < 12; j++) {
+            float got = ((const float *)out.data)[j];
+            EXPECT(got == want[j] || (isnan(got) && isnan(want[j])), "specialization %u: o[%u] = %a, want %a", k, j,
+                   (double)got, (double)want[j]);
+        }
+        for (j = 0; j < 4; j++) {
+            int32_t got = ((const int32_t *)out.data)[12 + j];
+            EXPECT(got == iwant[j], "specialization %u: i[%u] = %d, want %d", k, j, got, iwant[j]);
+        }
+        CHECK(bad == 0);
+        mt_buffer_free(&out);
+        pvk_release(pso);
+        pvk_msl_result_free(&res);
+    }
+}
+
 /* ==========================================================================
  * Types and built-in functions
  * ========================================================================== */
@@ -10355,6 +10641,8 @@ int main(void)
     RUN(test_push_constants);
     RUN(test_spec_defaults);
     RUN(test_spec_overrides);
+    RUN(test_spec_half_conversions);
+    RUN(test_spec_float_ops);
     RUN(test_int64);
     RUN(test_small_types);
     RUN(test_glsl_std450);
