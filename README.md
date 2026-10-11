@@ -22,7 +22,10 @@ views, samplers, image copies, blits, clears and resolves, and host image
 copies work. Descriptor sets work: every descriptor type, dynamic offsets,
 inline uniform blocks, push descriptors, update templates and descriptor
 indexing (update after bind, partially bound, variable-count and runtime
-arrays, non-uniform indexing). Graphics is next; every other Vulkan 1.4
+arrays, non-uniform indexing). Window system integration works:
+VK_EXT_metal_surface surfaces on a CAMetalLayer, VK_KHR_swapchain (FIFO and
+immediate presentation, sRGB and, with VK_EXT_swapchain_colorspace, extended
+and HDR color spaces). Graphics is next; every other Vulkan 1.4
 command exists but logs "not implemented". The target is full Vulkan 1.4 plus
 the Roadmap 2026 profile, measured by the Khronos conformance suite.
 
