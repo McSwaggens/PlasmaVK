@@ -39258,9 +39258,9 @@ static void pvk_spv_parse_constant(struct pvk_spv *ctx, const struct pvk_spv_ins
         break;
     case PVK_SPV_OpConstantNull:
     case PVK_SPV_OpUndef:
-        if (t->op == PVK_SPV_OpTypeVoid || t->op == PVK_SPV_OpTypePointer || t->op == PVK_SPV_OpTypeFunction ||
-            t->op == PVK_SPV_OpTypeRuntimeArray)
-            pvk_spv_fail(ctx, "null constant of type %u", rtype);
+        if (t->op == PVK_SPV_OpTypeVoid || (t->op == PVK_SPV_OpTypePointer && !pvk_spv_is_vptr(t)) ||
+            t->op == PVK_SPV_OpTypeFunction || t->op == PVK_SPV_OpTypeRuntimeArray)
+            pvk_spv_fail(ctx, "null constant of type %u", rtype); /* (variable pointers may be null) */
         c->null = true;
         break;
     case PVK_SPV_OpSpecConstantOp:
@@ -41665,26 +41665,43 @@ static struct pvk_spv_type *pvk_spv_data_type(struct pvk_spv *ctx, uint32_t tid)
     pvk_spv_fail(ctx, "type %u is not a value type", tid);
 }
 
+/* Whether pointer id x (variable, access chain, parameter) has a variable
+ * pointer type with an MSL value spelling (VARIABLE POINTERS). */
+static bool pvk_spv_vptr_value(struct pvk_spv *ctx, const struct pvk_spv_id *x)
+{
+    struct pvk_spv_type *t = x->type ? pvk_spv_type(ctx, x->type) : NULL;
+    return t && pvk_spv_is_vptr(t) && t->msl;
+}
+
 /* MSL expression of a value operand. */
 static const char *pvk_spv_val(struct pvk_spv *ctx, uint32_t v)
 {
     struct pvk_spv_id *x = pvk_spv_get(ctx, v);
     switch (x->kind) {
+    case PVK_SPV_K_VAR: /* a variable as a variable pointer value: its address */
+        if (!x->p || !x->p->expr || (x->func && x->func != pvk_spv_fidx(ctx)) || !pvk_spv_vptr_value(ctx, x) ||
+            x->p->desc_array)
+            break;
+        return pvk_spv_fmt(ctx, pvk_spv_type(ctx, x->p->type)->op == PVK_SPV_OpTypeRuntimeArray ? "(%s)" : "(&%s)",
+                           x->p->expr);
     case PVK_SPV_K_CONST:
         pvk_spv_data_type(ctx, x->type);
         return pvk_spv_const_expr(ctx, v, 0);
     case PVK_SPV_K_VALUE:
     case PVK_SPV_K_PARAM:
-        if (x->p || x->func != pvk_spv_fidx(ctx) || !x->msl)
+        if (x->p || x->func != pvk_spv_fidx(ctx) || !x->msl) {
+            if (x->p && x->p->expr && x->func == pvk_spv_fidx(ctx) && pvk_spv_vptr_value(ctx, x))
+                return pvk_spv_fmt(ctx, "(&%s)", x->p->expr); /* a pointer parameter (a reference) as a value */
             break;
+        }
         pvk_spv_data_type(ctx, x->type);
         return x->msl;
-    case PVK_SPV_K_PTR: /* a physical pointer made by an access chain: its address */
+    case PVK_SPV_K_PTR: /* a physical (or variable) pointer made by an access chain: its address */
         if (!x->p || !x->p->expr || x->func != pvk_spv_fidx(ctx) ||
-            x->p->storage != PVK_SPV_StoragePhysicalStorageBuffer)
+            (x->p->storage != PVK_SPV_StoragePhysicalStorageBuffer && !pvk_spv_vptr_value(ctx, x)))
             break;
-        if (x->p->node || x->p->rm_col)
-            pvk_spv_fail(ctx, "cannot take the address of this physical storage buffer location");
+        if (x->p->node || x->p->rm_col || x->p->desc_array)
+            pvk_spv_fail(ctx, "cannot take the address of this location");
         pvk_spv_data_type(ctx, x->type);
         if (pvk_spv_type(ctx, x->p->type)->op == PVK_SPV_OpTypeRuntimeArray)
             return pvk_spv_fmt(ctx, "(%s)", x->p->expr); /* decays to its first element */
@@ -41708,14 +41725,15 @@ static const struct pvk_spv_ptr *pvk_spv_ptr_of(struct pvk_spv *ctx, uint32_t v)
     if ((x->kind == PVK_SPV_K_VAR || x->kind == PVK_SPV_K_PTR || x->kind == PVK_SPV_K_PARAM) && x->p && x->p->expr &&
         (x->func == 0 || x->func == pvk_spv_fidx(ctx)))
         return x->p;
-    if ((x->kind == PVK_SPV_K_VALUE || x->kind == PVK_SPV_K_PARAM) && !x->p && x->type &&
-        pvk_spv_is_psb(t = pvk_spv_type(ctx, x->type))) {
-        /* A physical pointer value: what it points at. A pointer to a
-         * runtime array is a pointer to its first element: index it. */
+    if ((x->kind == PVK_SPV_K_VALUE || x->kind == PVK_SPV_K_PARAM || x->kind == PVK_SPV_K_CONST) && !x->p && x->type &&
+        (pvk_spv_is_psb(t = pvk_spv_type(ctx, x->type)) || (pvk_spv_is_vptr(t) && t->msl))) {
+        /* A physical (or variable) pointer value: what it points at. A
+         * pointer to a runtime array is a pointer to its first element:
+         * index it. */
         struct pvk_spv_ptr *p = pvk_spv_alloc(ctx, sizeof(*p));
         const char *val = pvk_spv_val(ctx, v);
         p->type = t->elem;
-        p->storage = PVK_SPV_StoragePhysicalStorageBuffer;
+        p->storage = t->storage;
         p->expr = pvk_spv_type(ctx, t->elem)->op == PVK_SPV_OpTypeRuntimeArray ? val : pvk_spv_fmt(ctx, "(*%s)", val);
         return p;
     }
@@ -42865,14 +42883,17 @@ static void pvk_spv_access_chain(struct pvk_spv *ctx, const struct pvk_spv_insn 
         uint32_t elem = pvk_spv_arg(ctx, in, 4);
         struct pvk_spv_type *bt = pvk_spv_type(ctx, btid), *e = pvk_spv_type(ctx, p->type);
         bool zero = pvk_spv_get(ctx, elem)->kind == PVK_SPV_K_CONST && pvk_spv_const_uint(ctx, elem) == 0;
-        if (!pvk_spv_is_psb(bt))
-            pvk_spv_fail(ctx, "OpPtrAccessChain is only supported on physical storage buffer pointers");
+        if (!pvk_spv_is_psb(bt) && !(pvk_spv_is_vptr(bt) && bt->msl))
+            pvk_spv_fail(ctx, "OpPtrAccessChain needs a physical storage buffer or variable pointer");
+        p->rb = NULL; /* (robust buffer access does not follow variable pointers) */
+        p->desc = NULL;
         if (!stride)
             stride = e->op == PVK_SPV_OpTypeRuntimeArray ? 0 : e->size;
         if (!stride)
             pvk_spv_fail(ctx, "OpPtrAccessChain on a pointer without ArrayStride");
         if (!zero) {
-            const char *addr = pvk_spv_fmt(ctx, "(%s)((device char*)%s + long(%s) * %ul)", bt->msl,
+            const char *addr = pvk_spv_fmt(ctx, "(%s)((%s char*)%s + long(%s) * %ul)", bt->msl,
+                                           bt->storage == PVK_SPV_StorageWorkgroup ? "threadgroup" : ctx->dev,
                                            pvk_spv_val(ctx, base), pvk_spv_ival(ctx, elem, true), stride);
             p->expr = e->op == PVK_SPV_OpTypeRuntimeArray ? pvk_spv_fmt(ctx, "(%s)", addr)
                                                            : pvk_spv_fmt(ctx, "(*%s)", addr);
@@ -44697,6 +44718,17 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
     case PVK_SPV_OpSUDotAccSat:
         pvk_spv_dot(ctx, in);
         return;
+    case PVK_SPV_OpPtrEqual: /* variable pointers: address comparisons */
+    case PVK_SPV_OpPtrNotEqual:
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s %s %s", pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3)),
+                                          op == PVK_SPV_OpPtrEqual ? "==" : "!=", pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 4))));
+        return;
+    case PVK_SPV_OpPtrDiff: /* elements of the pointee type between them */
+        if (r->op != PVK_SPV_OpTypeInt)
+            pvk_spv_fail(ctx, "OpPtrDiff returns an integer");
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s - %s)", r->msl, pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3)),
+                                          pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 4))));
+        return;
     case PVK_SPV_OpExpectKHR: /* a hint: the value */
         if (pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 3))->type != rtype || pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 4))->type != rtype)
             pvk_spv_fail(ctx, "OpExpectKHR: type mismatch");
@@ -45226,7 +45258,7 @@ static const char *pvk_spv_space(struct pvk_spv *ctx, const struct pvk_spv_ptr *
 static const char *pvk_spv_qualified(struct pvk_spv *ctx, const char *space, uint32_t tid)
 {
     struct pvk_spv_type *t = pvk_spv_type(ctx, tid);
-    if (pvk_spv_is_psb(t))
+    if (pvk_spv_is_psb(t) || (pvk_spv_is_vptr(t) && t->msl))
         return pvk_spv_fmt(ctx, "%s %s", t->msl, space);
     return pvk_spv_fmt(ctx, "%s %s", space, t->msl);
 }
