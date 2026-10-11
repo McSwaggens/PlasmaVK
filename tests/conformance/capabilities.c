@@ -349,9 +349,75 @@ CT_TEST(sparse_image_format_properties,
     ct_env_fini(&e);
 }
 
+CT_TEST(ycbcr_descriptor_count,
+        "Capabilities > VkSamplerYcbcrConversionImageFormatProperties: for a supported format requiring a sampler "
+        "Y'CbCr conversion, combinedImageSamplerDescriptorCount is at least 1 and, at Vulkan 1.4, at most "
+        "maxCombinedImageSamplerDescriptorCount (Limits: the most any such format uses); the 2D sampled images of "
+        "G8_B8_R8_3PLANE_420_UNORM and G8_B8R8_2PLANE_420_UNORM, required with samplerYcbcrConversion (Formats > "
+        "Required Format Support), are supported",
+        "vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceProperties2 vkGetPhysicalDeviceFormatProperties "
+        "vkGetPhysicalDeviceFormatProperties2 vkGetPhysicalDeviceImageFormatProperties2")
+{
+    static VkFormat ycbcr[64];
+    struct ct_env e;
+    struct ct_properties props;
+    VkPhysicalDeviceSamplerYcbcrConversionFeatures yf;
+    VkPhysicalDeviceFeatures2 f2;
+    size_t n, i;
+    ct_env_init(t, &e);
+    if (e.version < VK_API_VERSION_1_1)
+        ct_skip(t, "sampler Y'CbCr conversion needs Vulkan 1.1");
+    memset(&yf, 0, sizeof(yf));
+    yf.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES;
+    memset(&f2, 0, sizeof(f2));
+    f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    f2.pNext = &yf;
+    vkGetPhysicalDeviceFeatures2(e.pd, &f2);
+    if (!yf.samplerYcbcrConversion)
+        ct_skip(t, "samplerYcbcrConversion is not supported");
+    if (e.version >= VK_API_VERSION_1_4)
+        ct_get_properties(&e, &props, 0);
+    n = ct_ycbcr_formats(ycbcr, CT_ARRAY_SIZE(ycbcr));
+    for (i = 0; i < n; i++) {
+        VkPhysicalDeviceImageFormatInfo2 info;
+        VkSamplerYcbcrConversionImageFormatProperties yp;
+        VkImageFormatProperties2 p2;
+        VkResult r;
+        int required = ycbcr[i] == VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM || ycbcr[i] == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+        if (!(ct_format_features(&e, ycbcr[i], 0) & VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT) && !required)
+            continue;
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
+        info.format = ycbcr[i];
+        info.type = VK_IMAGE_TYPE_2D;
+        info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+        memset(&yp, 0xA5, sizeof(yp));
+        yp.sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_IMAGE_FORMAT_PROPERTIES;
+        yp.pNext = NULL;
+        memset(&p2, 0, sizeof(p2));
+        p2.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
+        p2.pNext = &yp;
+        r = vkGetPhysicalDeviceImageFormatProperties2(e.pd, &info, &p2);
+        if (r != VK_SUCCESS) {
+            CT_CHECKF(t, !required, "format %d: 2D sampled images: %s", (int)ycbcr[i], ct_result_name(r));
+            continue;
+        }
+        CT_CHECKF(t, yp.combinedImageSamplerDescriptorCount >= 1, "format %d: combinedImageSamplerDescriptorCount %u",
+                  (int)ycbcr[i], yp.combinedImageSamplerDescriptorCount);
+        if (e.version >= VK_API_VERSION_1_4)
+            CT_CHECKF(t, yp.combinedImageSamplerDescriptorCount <= props.v14.maxCombinedImageSamplerDescriptorCount,
+                      "format %d: combinedImageSamplerDescriptorCount %u > maxCombinedImageSamplerDescriptorCount %u",
+                      (int)ycbcr[i], yp.combinedImageSamplerDescriptorCount,
+                      props.v14.maxCombinedImageSamplerDescriptorCount);
+    }
+    ct_env_fini(&e);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(image_format_extents),       CT_REF(image_format_sample_counts), CT_REF(image_format_monotonic),
     CT_REF(image_format_host_transfer), CT_REF(image_format_properties2),   CT_REF(sparse_image_format_properties),
+    CT_REF(ycbcr_descriptor_count),
 };
 
 CT_SUITE(capabilities, tests)
