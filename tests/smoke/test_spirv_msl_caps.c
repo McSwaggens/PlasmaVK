@@ -4488,6 +4488,72 @@ static const uint32_t spv_psb_align[] = {
     0x0000004f, 0x0000004e, 0x00000002, 0x00000004, 0x000100fd, 0x00010038,
 };
 
+/*
+ * #version 450
+ * #extension GL_EXT_demote_to_helper_invocation : require
+ * layout(std430, binding = 0) buffer C { uint count; uint px[]; } c;
+ * layout(location = 0) out vec4 o;
+ * void main()
+ * {
+ *     ivec2 p = ivec2(gl_FragCoord.xy);
+ *     if ((p.x & 1) == 1)
+ *         demote;
+ *     atomicAdd(c.count, 1u);
+ *     c.px[p.y * 16 + p.x] = helperInvocationEXT() ? 2u : 1u;
+ *     o = vec4(dFdx(gl_FragCoord.x), helperInvocationEXT() ? 1.0 : 0.0, 0.0, 1.0);
+ * }
+ */
+static const uint32_t spv_demote_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x0000003c, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00001503, 0x000a000a, 0x5f565053, 0x5f545845, 0x6f6d6564, 0x745f6574, 0x65685f6f, 0x7265706c,
+    0x766e695f, 0x7461636f, 0x006e6f69, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e,
+    0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x0008000f, 0x00000004, 0x00000004, 0x6e69616d,
+    0x00000000, 0x0000000d, 0x00000020, 0x00000032, 0x00030010, 0x00000004, 0x00000007, 0x00030003,
+    0x00000002, 0x000001c2, 0x000a0004, 0x455f4c47, 0x645f5458, 0x746f6d65, 0x6f745f65, 0x6c65685f,
+    0x5f726570, 0x6f766e69, 0x69746163, 0x00006e6f, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000,
+    0x00030005, 0x00000009, 0x00000070, 0x00060005, 0x0000000d, 0x465f6c67, 0x43676172, 0x64726f6f,
+    0x00000000, 0x00030005, 0x0000001e, 0x00000043, 0x00050006, 0x0000001e, 0x00000000, 0x6e756f63,
+    0x00000074, 0x00040006, 0x0000001e, 0x00000001, 0x00007870, 0x00030005, 0x00000020, 0x00000063,
+    0x00030005, 0x00000032, 0x0000006f, 0x00040047, 0x0000000d, 0x0000000b, 0x0000000f, 0x00040047,
+    0x0000001d, 0x00000006, 0x00000004, 0x00030047, 0x0000001e, 0x00000002, 0x00050048, 0x0000001e,
+    0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x0000001e, 0x00000001, 0x00000023, 0x00000004,
+    0x00040047, 0x00000020, 0x00000021, 0x00000000, 0x00040047, 0x00000020, 0x00000022, 0x00000000,
+    0x00040047, 0x00000032, 0x0000001e, 0x00000000, 0x00020013, 0x00000002, 0x00030021, 0x00000003,
+    0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000001, 0x00040017, 0x00000007, 0x00000006,
+    0x00000002, 0x00040020, 0x00000008, 0x00000007, 0x00000007, 0x00030016, 0x0000000a, 0x00000020,
+    0x00040017, 0x0000000b, 0x0000000a, 0x00000004, 0x00040020, 0x0000000c, 0x00000001, 0x0000000b,
+    0x0004003b, 0x0000000c, 0x0000000d, 0x00000001, 0x00040017, 0x0000000e, 0x0000000a, 0x00000002,
+    0x00040015, 0x00000012, 0x00000020, 0x00000000, 0x0004002b, 0x00000012, 0x00000013, 0x00000000,
+    0x00040020, 0x00000014, 0x00000007, 0x00000006, 0x0004002b, 0x00000006, 0x00000017, 0x00000001,
+    0x00020014, 0x00000019, 0x0003001d, 0x0000001d, 0x00000012, 0x0004001e, 0x0000001e, 0x00000012,
+    0x0000001d, 0x00040020, 0x0000001f, 0x0000000c, 0x0000001e, 0x0004003b, 0x0000001f, 0x00000020,
+    0x0000000c, 0x0004002b, 0x00000006, 0x00000021, 0x00000000, 0x00040020, 0x00000022, 0x0000000c,
+    0x00000012, 0x0004002b, 0x00000012, 0x00000024, 0x00000001, 0x0004002b, 0x00000006, 0x00000028,
+    0x00000010, 0x0004002b, 0x00000012, 0x0000002e, 0x00000002, 0x00040020, 0x00000031, 0x00000003,
+    0x0000000b, 0x0004003b, 0x00000031, 0x00000032, 0x00000003, 0x00040020, 0x00000033, 0x00000001,
+    0x0000000a, 0x0004002b, 0x0000000a, 0x00000038, 0x3f800000, 0x0004002b, 0x0000000a, 0x00000039,
+    0x00000000, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005,
+    0x0004003b, 0x00000008, 0x00000009, 0x00000007, 0x0004003d, 0x0000000b, 0x0000000f, 0x0000000d,
+    0x0007004f, 0x0000000e, 0x00000010, 0x0000000f, 0x0000000f, 0x00000000, 0x00000001, 0x0004006e,
+    0x00000007, 0x00000011, 0x00000010, 0x0003003e, 0x00000009, 0x00000011, 0x00050041, 0x00000014,
+    0x00000015, 0x00000009, 0x00000013, 0x0004003d, 0x00000006, 0x00000016, 0x00000015, 0x000500c7,
+    0x00000006, 0x00000018, 0x00000016, 0x00000017, 0x000500aa, 0x00000019, 0x0000001a, 0x00000018,
+    0x00000017, 0x000300f7, 0x0000001c, 0x00000000, 0x000400fa, 0x0000001a, 0x0000001b, 0x0000001c,
+    0x000200f8, 0x0000001b, 0x00011504, 0x000200f9, 0x0000001c, 0x000200f8, 0x0000001c, 0x00050041,
+    0x00000022, 0x00000023, 0x00000020, 0x00000021, 0x000700ea, 0x00000012, 0x00000025, 0x00000023,
+    0x00000024, 0x00000013, 0x00000024, 0x00050041, 0x00000014, 0x00000026, 0x00000009, 0x00000024,
+    0x0004003d, 0x00000006, 0x00000027, 0x00000026, 0x00050084, 0x00000006, 0x00000029, 0x00000027,
+    0x00000028, 0x00050041, 0x00000014, 0x0000002a, 0x00000009, 0x00000013, 0x0004003d, 0x00000006,
+    0x0000002b, 0x0000002a, 0x00050080, 0x00000006, 0x0000002c, 0x00000029, 0x0000002b, 0x00031505,
+    0x00000019, 0x0000002d, 0x000600a9, 0x00000012, 0x0000002f, 0x0000002d, 0x0000002e, 0x00000024,
+    0x00060041, 0x00000022, 0x00000030, 0x00000020, 0x00000017, 0x0000002c, 0x0003003e, 0x00000030,
+    0x0000002f, 0x00050041, 0x00000033, 0x00000034, 0x0000000d, 0x00000013, 0x0004003d, 0x0000000a,
+    0x00000035, 0x00000034, 0x000400cf, 0x0000000a, 0x00000036, 0x00000035, 0x00031505, 0x00000019,
+    0x00000037, 0x000600a9, 0x0000000a, 0x0000003a, 0x00000037, 0x00000038, 0x00000039, 0x00070050,
+    0x0000000b, 0x0000003b, 0x00000036, 0x0000003a, 0x00000039, 0x00000038, 0x0003003e, 0x00000032,
+    0x0000003b, 0x000100fd, 0x00010038,
+};
+
 
 /* ==========================================================================
  * Helpers
@@ -5705,8 +5771,9 @@ static struct pvk_msl_options fs_vertex_options(void)
 
 /* Draws the fullscreen triangle with vertex shader vw and fragment shader fw
  * into targets tgt[0, n) (formats fmt, `samples` each), push constants push. */
-static bool fs_draw(const uint32_t *vw, size_t vn, const uint32_t *fw, size_t fn, const pvk_MTLPixelFormat *fmt, id *tgt,
-                    uint32_t n, unsigned long samples, const void *push, size_t push_size)
+static bool fs_draw_with(const uint32_t *vw, size_t vn, const uint32_t *fw, size_t fn, const pvk_MTLPixelFormat *fmt,
+                         id *tgt, uint32_t n, unsigned long samples, const void *push, size_t push_size,
+                         const struct mt_binding *bindings, uint32_t nbindings)
 {
     struct pvk_msl_options vo = fs_vertex_options();
     struct pvk_msl_result vs, fs;
@@ -5740,12 +5807,20 @@ static bool fs_draw(const uint32_t *vw, size_t vn, const uint32_t *fw, size_t fn
     draw.winding = PVK_MTLWindingClockwise;
     draw.push = push;
     draw.push_size = push_size;
+    draw.bindings = bindings;
+    draw.nbindings = nbindings;
     ok = mr_render(&pass, &draw, 1);
     pvk_release(pso);
     mt_buffer_free(&vb);
     pvk_msl_result_free(&vs);
     pvk_msl_result_free(&fs);
     return ok;
+}
+
+static bool fs_draw(const uint32_t *vw, size_t vn, const uint32_t *fw, size_t fn, const pvk_MTLPixelFormat *fmt, id *tgt,
+                    uint32_t n, unsigned long samples, const void *push, size_t push_size)
+{
+    return fs_draw_with(vw, vn, fw, fn, fmt, tgt, n, samples, push, push_size, NULL, 0);
 }
 
 static void check_interpolate_at(const uint32_t *vw, size_t vn, const uint32_t *fw, size_t fn)
@@ -5882,6 +5957,40 @@ static void test_fragment_subgroups(void)
                    (double)n);
         }
     CHECK(bad == 0);
+    pvk_release(tgt);
+}
+
+/* Demoted invocations (odd columns) keep running as helpers: their stores
+ * and atomics have no effect, helperInvocationEXT() becomes true, and the
+ * live neighbours' derivatives still see them. */
+static void test_demote_stores(void)
+{
+    pvk_MTLPixelFormat fmt = PVK_MTLPixelFormatRGBA32Float;
+    id tgt = mr_target(PVK_MTLTextureType2D, fmt, FW, FH, 1, 1);
+    struct mt_buffer c = mt_buffer(4 + FW * FH * 4, NULL, 0);
+    struct mt_binding b = bind(0, 0, &c);
+    static float img[FW * FH * 4];
+    uint32_t *cw;
+    int x, y;
+
+    CHECK(fs_draw_with(spv_ia_vs, PVK_ARRAY_SIZE(spv_ia_vs), spv_demote_fs, PVK_ARRAY_SIZE(spv_demote_fs), &fmt, &tgt, 1, 1,
+                       NULL, 0, &b, 1));
+    mt_download(tgt, 0, 0, FW, FH, 1, 16, img);
+    cw = c.data;
+    bad = 0;
+    EXPECT(cw[0] == FW * FH / 2, "%u atomic adds, want %u", cw[0], FW * FH / 2);
+    for (y = 0; y < FH; y++)
+        for (x = 0; x < FW; x++) {
+            const float *p = &img[(y * FW + x) * 4];
+            EXPECT(cw[1 + y * FW + x] == (x & 1 ? 0u : 1u), "pixel (%d, %d) stored %u", x, y, cw[1 + y * FW + x]);
+            if (x & 1)
+                EXPECT(p[3] == 0.0f, "demoted pixel (%d, %d) was written", x, y);
+            else
+                EXPECT(p[0] == 1.0f && p[1] == 0.0f && p[3] == 1.0f, "pixel (%d, %d): %g %g %g", x, y, (double)p[0],
+                       (double)p[1], (double)p[3]);
+        }
+    CHECK(bad == 0);
+    mt_buffer_free(&c);
     pvk_release(tgt);
 }
 
@@ -6123,6 +6232,7 @@ int main(void)
     RUN(test_invariant_position);
     RUN(test_interpolate_at_sample);
     RUN(test_terminate_in_function);
+    RUN(test_demote_stores);
     RUN(test_fragment_subgroups);
     RUN(test_variable_pointers);
     RUN(test_scalar_layout);
