@@ -3684,8 +3684,23 @@ static void ds_scene_draw(VkCommandBuffer cb, const struct ds_setup *s, const Vk
 static int ds_compare(const float *got, const void *depth, VkFormat format, const uint8_t *stencil, float tol,
                       const char *what)
 {
-    uint32_t i;
+    uint32_t i, depths = 0, stencils = 0;
     int bad = 0;
+    float seen[4];
+    for (i = 0; i < W * H; i++) { /* the scene leaves distinct values: else nothing was compared */
+        float d = format == VK_FORMAT_D16_UNORM ? (float)((const uint16_t *)depth)[i] : ((const float *)depth)[i];
+        uint32_t j;
+        for (j = 0; j < depths && seen[j] != d; j++)
+            ;
+        if (j == depths && depths < 4)
+            seen[depths++] = d;
+        if (stencil && stencil[i] != stencil[0])
+            stencils = 1;
+    }
+    if (depths < 4 || (stencil && !stencils)) {
+        fprintf(stderr, "%s: the attachments hold too few distinct values (%u depths)\n", what, depths);
+        return 1;
+    }
     for (i = 0; i < W * H; i++) {
         float d = format == VK_FORMAT_D16_UNORM ? (float)((const uint16_t *)depth)[i] / 65535.0f
                                                 : ((const float *)depth)[i];
@@ -3784,10 +3799,418 @@ static void ds_local_read_case(VkFormat format)
 
 static void test_ds_local_read(void)
 {
-    (void)spv_ds_read_ms_fs; /* TODO(wip) */
-    (void)spv_ms_fetch_fs;
     ds_local_read_case(VK_FORMAT_D32_SFLOAT_S8_UINT);
     ds_local_read_case(VK_FORMAT_D16_UNORM);
+}
+
+/* Sample `k` of a 4x RGBA32F image (r, g), a 4x depth/stencil image's depth
+ * and stencil, into a W x H RGBA32F download: (r, g, depth, stencil). */
+static void ms_fetch_sample(const struct ds_setup *s, const struct img *color, const struct img *ds, uint32_t k,
+                            struct buf *out)
+{
+    VkDescriptorSetLayoutBinding b[3];
+    VkDescriptorSetLayoutCreateInfo sli;
+    VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
+    VkPushConstantRange range = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 4 };
+    VkPipelineLayoutCreateInfo pli;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkDescriptorPoolSize size = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 };
+    VkDescriptorPoolCreateInfo pi;
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    VkDescriptorSetAllocateInfo ai;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VkDescriptorImageInfo ii[3];
+    VkWriteDescriptorSet w;
+    VkSamplerCreateInfo si;
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkImageView views[2];
+    struct img target = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct pipe p;
+    VkPipeline pipeline;
+    VkCommandBuffer cb;
+    uint32_t i;
+    int32_t index = (int32_t)k;
+
+    memset(b, 0, sizeof(b));
+    for (i = 0; i < 3; i++) {
+        b[i].binding = i;
+        b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[i].descriptorCount = 1;
+        b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    memset(&sli, 0, sizeof(sli));
+    sli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    sli.bindingCount = 3;
+    sli.pBindings = b;
+    vkCreateDescriptorSetLayout(device, &sli, NULL, &set_layout);
+    memset(&pli, 0, sizeof(pli));
+    pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pli.setLayoutCount = 1;
+    pli.pSetLayouts = &set_layout;
+    pli.pushConstantRangeCount = 1;
+    pli.pPushConstantRanges = &range;
+    vkCreatePipelineLayout(device, &pli, NULL, &layout);
+    memset(&pi, 0, sizeof(pi));
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes = &size;
+    vkCreateDescriptorPool(device, &pi, NULL, &pool);
+    memset(&ai, 0, sizeof(ai));
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = pool;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &set_layout;
+    vkAllocateDescriptorSets(device, &ai, &set);
+    memset(&si, 0, sizeof(si));
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    vkCreateSampler(device, &si, NULL, &sampler);
+    views[0] = aspect_view(ds, VK_IMAGE_ASPECT_DEPTH_BIT);
+    views[1] = aspect_view(ds, VK_IMAGE_ASPECT_STENCIL_BIT);
+    for (i = 0; i < 3; i++) {
+        ii[i].sampler = sampler;
+        ii[i].imageView = i ? views[i - 1] : color->view;
+        ii[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    memset(&w, 0, sizeof(w));
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = set;
+    w.descriptorCount = 3;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = ii;
+    vkUpdateDescriptorSets(device, 1, &w, 0, NULL);
+    pipe_init(&p, spv_pos3_vs, sizeof(spv_pos3_vs), spv_ms_fetch_fs, sizeof(spv_ms_fetch_fs));
+    p.layout = layout;
+    p.color_formats[0] = VK_FORMAT_R32G32B32A32_SFLOAT;
+    p.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    p.vertex = &s->vi;
+    pipeline = make_pipe(&p);
+    memset(out->data, 0, (size_t)out->size);
+    CHECK(pipeline);
+    if (pipeline) {
+        VkDeviceSize zero = 0;
+        cb = begin_cmd();
+        barrier(cb);
+        begin_rendering(cb, &target, 1, (const float[4]){ 0, 0, 0, 0 }, NULL);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, NULL);
+        vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 4, &index);
+        vkCmdBindVertexBuffers(cb, 0, 1, &s->vb.buffer, &zero);
+        vkCmdDraw(cb, 6, 1, 0, 0); /* the full-screen quad */
+        vkCmdEndRendering(cb);
+        download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, out);
+        submit(cb);
+        vkDestroyPipeline(device, pipeline, NULL);
+    }
+    vkDestroyImageView(device, views[0], NULL);
+    vkDestroyImageView(device, views[1], NULL);
+    vkDestroySampler(device, sampler, NULL);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyPipelineLayout(device, layout, NULL);
+    vkDestroyDescriptorSetLayout(device, set_layout, NULL);
+    free_img(&target);
+}
+
+/* Render passes: subpass 0 draws the scene, subpass 1 reads the depth and
+ * stencil (input attachment aspects from VkRenderPassInputAttachmentAspect
+ * CreateInfo) with the attachment read-only or not its depth/stencil
+ * attachment at all. load: the scene is drawn and stored by an earlier
+ * render pass, and the reading pass loads it (the copy loads from it). */
+static void ds_subpass_case(VkFormat format, VkSampleCountFlagBits samples, bool read_only, bool load)
+{
+    VkAttachmentDescription a[2];
+    VkAttachmentReference ro = { 0, VK_IMAGE_LAYOUT_GENERAL }, rds = { 1, VK_IMAGE_LAYOUT_GENERAL };
+    VkAttachmentReference rin[2] = { { 1, VK_IMAGE_LAYOUT_GENERAL }, { 1, VK_IMAGE_LAYOUT_GENERAL } };
+    VkInputAttachmentAspectReference aspects[2];
+    VkRenderPassInputAttachmentAspectCreateInfo aspect_info;
+    VkSubpassDescription sp[2];
+    VkSubpassDependency dep;
+    VkRenderPassCreateInfo info;
+    VkRenderPass rp = VK_NULL_HANDLE, scene_rp = VK_NULL_HANDLE;
+    struct img out = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, samples);
+    struct img ds = make_img(format, W, H, 1, samples);
+    struct buf got = make_buf(W * H * 16), depth = make_buf(W * H * 4), stencil = make_buf(W * H);
+    bool has_stencil = (ds.aspects & VK_IMAGE_ASPECT_STENCIL_BIT) != 0, ms = samples > 1;
+    VkImageView views[2] = { out.view, ds.view };
+    VkFramebuffer fb = VK_NULL_HANDLE, scene_fb = VK_NULL_HANDLE;
+    VkClearValue clears[2];
+    struct ds_setup s;
+    struct pipe p;
+    VkPipeline scene[3], reader;
+    VkCommandBuffer cb;
+    char what[96];
+    uint32_t k, i;
+
+    snprintf(what, sizeof(what), "%s %ux%s%s", format == VK_FORMAT_D16_UNORM ? "D16" : "D32S8", (unsigned)samples,
+             read_only ? " read-only" : " input only", load ? " loaded" : "");
+    ds_setup_init(&s, &ds);
+    memset(a, 0, sizeof(a));
+    a[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    a[1].format = format;
+    a[0].samples = a[1].samples = samples;
+    a[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    a[1].loadOp = a[1].stencilLoadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+    a[0].storeOp = a[1].storeOp = a[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+    a[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    a[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    a[0].initialLayout = a[1].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+    a[0].finalLayout = a[1].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    memset(sp, 0, sizeof(sp));
+    sp[0].pipelineBindPoint = sp[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp[0].pDepthStencilAttachment = &rds;
+    sp[1].colorAttachmentCount = 1;
+    sp[1].pColorAttachments = &ro;
+    sp[1].inputAttachmentCount = has_stencil ? 2 : 1;
+    sp[1].pInputAttachments = rin;
+    sp[1].pDepthStencilAttachment = read_only ? &rds : NULL;
+    for (k = 0; k < 2; k++) {
+        aspects[k].subpass = load ? 0 : 1;
+        aspects[k].inputAttachmentIndex = k;
+        aspects[k].aspectMask = k ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
+    }
+    memset(&aspect_info, 0, sizeof(aspect_info));
+    aspect_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_INPUT_ATTACHMENT_ASPECT_CREATE_INFO;
+    aspect_info.aspectReferenceCount = has_stencil ? 2 : 1;
+    aspect_info.pAspectReferences = aspects;
+    memset(&dep, 0, sizeof(dep));
+    dep.srcSubpass = 0;
+    dep.dstSubpass = 1;
+    dep.srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dep.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dep.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+    dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    info.pNext = &aspect_info;
+    info.attachmentCount = 2;
+    info.pAttachments = a;
+    if (load) { /* the reading pass: subpass 1's description alone; the scene pass: subpass 0's */
+        info.subpassCount = 1;
+        info.pSubpasses = &sp[1];
+        CHECK_VK(vkCreateRenderPass(device, &info, NULL, &rp), VK_SUCCESS);
+        a[1].loadOp = a[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        info.pNext = NULL;
+        info.pSubpasses = &sp[0];
+        CHECK_VK(vkCreateRenderPass(device, &info, NULL, &scene_rp), VK_SUCCESS);
+        scene_fb = make_fb(scene_rp, views, 2, W, H, 1);
+    } else {
+        info.subpassCount = 2;
+        info.pSubpasses = sp;
+        info.dependencyCount = 1;
+        info.pDependencies = &dep;
+        CHECK_VK(vkCreateRenderPass(device, &info, NULL, &rp), VK_SUCCESS);
+    }
+    fb = make_fb(rp, views, 2, W, H, 1);
+    pipe_init(&p, spv_pos3_vs, sizeof(spv_pos3_vs), NULL, 0);
+    p.samples = samples;
+    p.colors = 0;
+    p.rp = load ? scene_rp : rp;
+    ds_scene_pipelines(&s, &p, has_stencil, scene);
+    p.rp = rp;
+    p.subpass = load ? 0 : 1;
+    p.colors = 1;
+    p.fs = ms ? spv_ds_read_ms_fs : has_stencil ? spv_ds_read_fs : spv_depth_read_fs;
+    p.fs_size = ms ? sizeof(spv_ds_read_ms_fs) : has_stencil ? sizeof(spv_ds_read_fs) : sizeof(spv_depth_read_fs);
+    p.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    p.vertex = &s.vi;
+    p.layout = s.layout;
+    p.sample_shading = ms; /* gl_SampleID: per sample anyway */
+    p.min_sample_shading = 1.0f;
+    reader = make_pipe(&p);
+    REQUIRE(scene[0] && scene[1] && scene[2] && reader);
+    memset(clears, 0, sizeof(clears));
+    clears[1].depthStencil.depth = 1.0f;
+    cb = begin_cmd();
+    if (load) {
+        begin_pass(cb, scene_rp, scene_fb, 0, 0, W, H, clears, 2);
+        ds_scene_draw(cb, &s, scene);
+        vkCmdEndRenderPass(cb);
+        barrier(cb);
+        begin_pass(cb, rp, fb, 0, 0, W, H, clears, 2);
+    } else {
+        begin_pass(cb, rp, fb, 0, 0, W, H, clears, 2);
+        ds_scene_draw(cb, &s, scene);
+        vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
+    }
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, reader);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s.layout, 0, 1, &s.set, 0, NULL);
+    vkCmdDraw(cb, 6, 1, 0, 0);
+    vkCmdEndRenderPass(cb);
+    if (!ms) {
+        download(cb, &out, 0, VK_IMAGE_ASPECT_COLOR_BIT, &got);
+        download(cb, &ds, 0, VK_IMAGE_ASPECT_DEPTH_BIT, &depth);
+        if (has_stencil)
+            download(cb, &ds, 0, VK_IMAGE_ASPECT_STENCIL_BIT, &stencil);
+    }
+    submit(cb);
+    if (!ms) {
+        CHECK(ds_compare((const float *)got.data, depth.data, format, has_stencil ? stencil.data : NULL, 0.0f, what) == 0);
+    } else { /* sample by sample: (copy depth, copy stencil, depth, stencil) */
+        for (k = 0; k < (uint32_t)samples; k++) {
+            float *f = (float *)got.data;
+            uint8_t st[W * H];
+            ms_fetch_sample(&s, &out, &ds, k, &got);
+            for (i = 0; i < W * H; i++) { /* as ds_compare takes them */
+                float d = f[4 * i + 2];
+                st[i] = (uint8_t)f[4 * i + 3];
+                memcpy(depth.data + 4 * i, &d, 4);
+            }
+            CHECK(ds_compare(f, depth.data, VK_FORMAT_D32_SFLOAT, has_stencil ? st : NULL,
+                             format == VK_FORMAT_D16_UNORM ? 1.1f / 65535.0f : 4e-7f, what) == 0);
+        }
+    }
+    vkDestroyPipeline(device, reader, NULL);
+    for (k = 0; k < 3; k++)
+        vkDestroyPipeline(device, scene[k], NULL);
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyFramebuffer(device, scene_fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+    vkDestroyRenderPass(device, scene_rp, NULL);
+    ds_setup_fini(&s);
+    free_buf(&got);
+    free_buf(&depth);
+    free_buf(&stencil);
+    free_img(&out);
+    free_img(&ds);
+}
+
+/* Depth bounds (depthBounds), with one and four samples: the scene's
+ * sloped triangle over depth 0.5, then a full-screen draw at depth 0.95
+ * with static bounds [0.3, 0.6] writing red and its depth, then one at 0.05
+ * without a fragment shader with dynamic bounds [0.9, 1.0]: a sample passes
+ * where the depth the earlier draws left lies in the bounds. The expected
+ * values come from the scene drawn alone. */
+static void depth_bounds_case(VkSampleCountFlagBits samples)
+{
+    static const VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_DEPTH_BOUNDS, VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE };
+    static const float quads[] = { /* full screen at 0.95, then at 0.05 */
+        -1.0f, -1.0f, 0.95f, 1.0f, -1.0f, 0.95f, -1.0f, 1.0f, 0.95f, 1.0f, -1.0f, 0.95f, 1.0f, 1.0f, 0.95f, -1.0f, 1.0f, 0.95f,
+        -1.0f, -1.0f, 0.05f, 1.0f, -1.0f, 0.05f, -1.0f, 1.0f, 0.05f, 1.0f, -1.0f, 0.05f, 1.0f, 1.0f, 0.05f, -1.0f, 1.0f, 0.05f,
+    };
+    VkFormat format = VK_FORMAT_D32_SFLOAT_S8_UINT;
+    struct img out = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, samples);
+    struct img ds = make_img(format, W, H, 1, samples);
+    struct buf got = make_buf(W * H * 16), depth = make_buf(W * H * 4), qb = make_buf(sizeof(quads));
+    float before[4][W * H], after_depth[4][W * H], after_red[4][W * H];
+    uint32_t k, i, n = (uint32_t)samples;
+    struct ds_setup s;
+    struct pipe p;
+    VkPipeline scene[3], bounded, dynamic;
+    VkCommandBuffer cb;
+    VkDeviceSize zero = 0;
+    struct pc pc;
+    int bad = 0, passed[2] = { 0, 0 };
+    int pass;
+
+    REQUIRE(features.depthBounds);
+    ds_setup_init(&s, &ds);
+    memcpy(qb.data, quads, sizeof(quads));
+    pipe_init(&p, spv_pos3_vs, sizeof(spv_pos3_vs), NULL, 0);
+    p.color_formats[0] = VK_FORMAT_R32G32B32A32_SFLOAT;
+    p.depth_format = p.stencil_format = format;
+    p.samples = samples;
+    ds_scene_pipelines(&s, &p, false, scene);
+    p.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    p.vertex = &s.vi;
+    p.has_ds = true;
+    memset(&p.ds, 0, sizeof(p.ds));
+    p.ds.depthTestEnable = p.ds.depthWriteEnable = VK_TRUE;
+    p.ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    p.ds.depthBoundsTestEnable = VK_TRUE;
+    p.ds.minDepthBounds = 0.3f;
+    p.ds.maxDepthBounds = 0.6f;
+    p.fs = spv_rect_fs;
+    p.fs_size = sizeof(spv_rect_fs);
+    bounded = make_pipe(&p);
+    p.fs = NULL;
+    p.fs_size = 0;
+    p.ds.depthBoundsTestEnable = VK_FALSE;
+    p.dynamic = dyn;
+    p.dynamic_count = 2;
+    dynamic = make_pipe(&p);
+    REQUIRE(scene[0] && bounded && dynamic);
+    for (pass = 0; pass < 2; pass++) { /* the scene alone, then with the bounded draws */
+        cb = begin_cmd();
+        begin_rendering(cb, &out, 1, (const float[4]){ 0, 0, 0, 0 }, &ds); /* depth cleared to 1 */
+        vkCmdBindVertexBuffers(cb, 0, 1, &s.vb.buffer, &zero);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, scene[0]);
+        vkCmdDraw(cb, 6, 1, 0, 0); /* 0.5 */
+        vkCmdDraw(cb, 3, 1, 6, 0); /* the sloped triangle (ALWAYS) */
+        if (pass) {
+            vkCmdBindVertexBuffers(cb, 0, 1, &qb.buffer, &zero);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, bounded);
+            memset(&pc, 0, sizeof(pc));
+            pc.color[0] = pc.color[3] = 1.0f;
+            vkCmdPushConstants(cb, pc_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
+                               &pc);
+            vkCmdDraw(cb, 6, 1, 0, 0);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, dynamic);
+            vkCmdSetDepthBoundsTestEnable(cb, VK_TRUE);
+            vkCmdSetDepthBounds(cb, 0.9f, 1.0f);
+            vkCmdDraw(cb, 6, 1, 6, 0);
+        }
+        vkCmdEndRendering(cb);
+        if (n == 1) {
+            download(cb, &out, 0, VK_IMAGE_ASPECT_COLOR_BIT, &got);
+            download(cb, &ds, 0, VK_IMAGE_ASPECT_DEPTH_BIT, &depth);
+        }
+        submit(cb);
+        for (k = 0; k < n; k++) {
+            const float *f = (const float *)got.data;
+            if (n > 1)
+                ms_fetch_sample(&s, &out, &ds, k, &got);
+            for (i = 0; i < W * H; i++) {
+                float d = n > 1 ? f[4 * i + 2] : ((const float *)depth.data)[i];
+                if (pass)
+                    after_depth[k][i] = d, after_red[k][i] = f[4 * i];
+                else
+                    before[k][i] = d;
+            }
+        }
+    }
+    for (k = 0; k < n; k++)
+        for (i = 0; i < W * H; i++) {
+            float d = before[k][i], red = 0.0f;
+            if (d >= 0.3f && d <= 0.6f)
+                d = 0.95f, red = 1.0f, passed[0]++;
+            if (d >= 0.9f && d <= 1.0f)
+                d = 0.05f, passed[1]++;
+            if (after_depth[k][i] != d || after_red[k][i] != red) {
+                if (bad < 4)
+                    fprintf(stderr, "depth bounds %ux: sample %u of (%u, %u): depth %g red %g, expected %g %g (before %g)\n",
+                            n, k, i % W, i / W, after_depth[k][i], after_red[k][i], d, red, before[k][i]);
+                bad++;
+            }
+        }
+    CHECK(bad == 0);
+    CHECK(passed[0] > 0 && passed[0] < (int)(W * H * n) && passed[1] >= passed[0]); /* (the bounds decided) */
+    vkDestroyPipeline(device, bounded, NULL);
+    vkDestroyPipeline(device, dynamic, NULL);
+    for (k = 0; k < 3; k++)
+        vkDestroyPipeline(device, scene[k], NULL);
+    ds_setup_fini(&s);
+    free_buf(&got);
+    free_buf(&depth);
+    free_buf(&qb);
+    free_img(&out);
+    free_img(&ds);
+}
+
+static void test_depth_bounds(void)
+{
+    depth_bounds_case(VK_SAMPLE_COUNT_1_BIT);
+    depth_bounds_case(VK_SAMPLE_COUNT_4_BIT);
+}
+
+static void test_ds_subpasses(void)
+{
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_1_BIT, true, false);
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_1_BIT, false, false);
+    ds_subpass_case(VK_FORMAT_D16_UNORM, VK_SAMPLE_COUNT_1_BIT, true, false);
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_1_BIT, true, true);
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, true, false);
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, true, true);
 }
 
 static uint32_t expect_msaa(uint32_t x, uint32_t y)
@@ -5284,6 +5707,8 @@ int main(void)
     RUN(test_subpasses);
     RUN(test_local_read);
     RUN(test_ds_local_read);
+    RUN(test_ds_subpasses);
+    RUN(test_depth_bounds);
     RUN(test_msaa);
     RUN(test_suspend_secondary);
     RUN(test_imageless_noattachment);

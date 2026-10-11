@@ -562,6 +562,8 @@ renderpass.dynamic_rendering_suspend_resume
 renderpass.dynamic_rendering_multiview
 renderpass.local_read_attachment_locations
 renderpass.local_read_input_attachment
+renderpass.render_pass_depth_stencil_input
+renderpass.local_read_depth_stencil
 renderpass.render_pass_next_subpass
 renderpass.rendering_area_granularity_khr
 
@@ -612,6 +614,7 @@ rasterization.line_stipple_dynamic
 fragops.scissor_test
 fragops.depth_compare_ops
 fragops.stencil_ops
+fragops.depth_bounds_test
 fragops.sample_mask_test
 fragops.sample_mask_shader_coverage
 fragops.alpha_to_one

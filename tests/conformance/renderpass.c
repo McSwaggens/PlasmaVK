@@ -82,6 +82,49 @@ static const uint32_t view_frag[] = {
     0x00000007, 0x00000015, 0x00000012, 0x00000013, 0x00000013, 0x00000014, 0x0003003e, 0x00000009,
     0x00000015, 0x000100fd, 0x00010038,
 };
+/*
+ * #version 450
+ * // Depth and stencil read through input attachments: (depth, stencil / 255, 0, 1).
+ * layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInput u_depth;
+ * layout(input_attachment_index = 1, set = 0, binding = 1) uniform usubpassInput u_stencil;
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = vec4(subpassLoad(u_depth).r, float(subpassLoad(u_stencil).r) / 255.0, 0.0, 1.0);
+ * }
+ */
+static const uint32_t ds_input_frag[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000023, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000028, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
+    0x00000000, 0x00000001, 0x0008000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009,
+    0x0000000c, 0x00000018, 0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2,
+    0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c,
+    0x00040005, 0x0000000c, 0x65645f75, 0x00687470, 0x00050005, 0x00000018, 0x74735f75, 0x69636e65,
+    0x0000006c, 0x00040047, 0x00000009, 0x0000001e, 0x00000000, 0x00040047, 0x0000000c, 0x00000021,
+    0x00000000, 0x00040047, 0x0000000c, 0x00000022, 0x00000000, 0x00040047, 0x0000000c, 0x0000002b,
+    0x00000000, 0x00040047, 0x00000018, 0x00000021, 0x00000001, 0x00040047, 0x00000018, 0x00000022,
+    0x00000000, 0x00040047, 0x00000018, 0x0000002b, 0x00000001, 0x00020013, 0x00000002, 0x00030021,
+    0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006,
+    0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008, 0x00000009,
+    0x00000003, 0x00090019, 0x0000000a, 0x00000006, 0x00000006, 0x00000000, 0x00000000, 0x00000000,
+    0x00000002, 0x00000000, 0x00040020, 0x0000000b, 0x00000000, 0x0000000a, 0x0004003b, 0x0000000b,
+    0x0000000c, 0x00000000, 0x00040015, 0x0000000e, 0x00000020, 0x00000001, 0x0004002b, 0x0000000e,
+    0x0000000f, 0x00000000, 0x00040017, 0x00000010, 0x0000000e, 0x00000002, 0x0005002c, 0x00000010,
+    0x00000011, 0x0000000f, 0x0000000f, 0x00040015, 0x00000013, 0x00000020, 0x00000000, 0x0004002b,
+    0x00000013, 0x00000014, 0x00000000, 0x00090019, 0x00000016, 0x00000013, 0x00000006, 0x00000000,
+    0x00000000, 0x00000000, 0x00000002, 0x00000000, 0x00040020, 0x00000017, 0x00000000, 0x00000016,
+    0x0004003b, 0x00000017, 0x00000018, 0x00000000, 0x00040017, 0x0000001a, 0x00000013, 0x00000004,
+    0x0004002b, 0x00000006, 0x0000001e, 0x437f0000, 0x0004002b, 0x00000006, 0x00000020, 0x00000000,
+    0x0004002b, 0x00000006, 0x00000021, 0x3f800000, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200f8, 0x00000005, 0x0004003d, 0x0000000a, 0x0000000d, 0x0000000c, 0x00050062,
+    0x00000007, 0x00000012, 0x0000000d, 0x00000011, 0x00050051, 0x00000006, 0x00000015, 0x00000012,
+    0x00000000, 0x0004003d, 0x00000016, 0x00000019, 0x00000018, 0x00060062, 0x0000001a, 0x0000001b,
+    0x00000019, 0x00000011, 0x00002000, 0x00050051, 0x00000013, 0x0000001c, 0x0000001b, 0x00000000,
+    0x00040070, 0x00000006, 0x0000001d, 0x0000001c, 0x00050088, 0x00000006, 0x0000001f, 0x0000001d,
+    0x0000001e, 0x00070050, 0x00000007, 0x00000022, 0x00000015, 0x0000001f, 0x00000020, 0x00000021,
+    0x0003003e, 0x00000009, 0x00000022, 0x000100fd, 0x00010038,
+};
+
 /* A one-subpass render pass (vkCreateRenderPass) with one color attachment
  * in GENERAL layout. */
 static VkRenderPass simple_pass(struct ct *t, struct ct_env *e, VkAttachmentLoadOp load, VkAttachmentStoreOp store)
@@ -1251,6 +1294,349 @@ CT_TEST(local_read_input_attachment,
     ct_scene_fini(&s);
 }
 
+/* Depth/stencil input attachments: what ds_input_frag reads where the left
+ * half holds depth 0.25 and stencil 7, the right half 0.75 and 200. */
+static uint32_t expect_ds_input(uint32_t x, uint32_t y, const void *ctx)
+{
+    (void)y;
+    (void)ctx;
+    return x < 8 ? CT_RGBA(64, 7, 0, 255) : CT_RGBA(191, 200, 0, 255);
+}
+
+/* Descriptor set 0 of ds_input_frag: views of the depth and the stencil
+ * aspect of ds as input attachments 0 and 1, and a pipeline layout with it
+ * and the rectangle push constants. */
+struct ds_inputs {
+    VkImageView views[2];
+    VkDescriptorSetLayout set_layout;
+    VkDescriptorPool pool;
+    VkDescriptorSet set;
+    VkPipelineLayout layout;
+};
+
+static void ds_inputs_init(struct ct *t, struct ct_env *e, const struct ct_target *ds, struct ds_inputs *d)
+{
+    VkImageViewCreateInfo vi;
+    VkDescriptorSetLayoutBinding b[2];
+    VkDescriptorSetLayoutCreateInfo dsl;
+    VkDescriptorPoolSize size;
+    VkDescriptorPoolCreateInfo dpi;
+    VkDescriptorSetAllocateInfo dsa;
+    VkDescriptorImageInfo images[2];
+    VkWriteDescriptorSet write;
+    uint32_t k;
+
+    memset(d, 0, sizeof(*d));
+    memset(b, 0, sizeof(b));
+    for (k = 0; k < 2; k++) {
+        memset(&vi, 0, sizeof(vi));
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = ds->image.image;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = ds->format;
+        vi.subresourceRange.aspectMask = k ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
+        vi.subresourceRange.levelCount = 1;
+        vi.subresourceRange.layerCount = 1;
+        CT_REQUIRE_VK(t, vkCreateImageView(e->device, &vi, NULL, &d->views[k]));
+        b[k].binding = k;
+        b[k].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+        b[k].descriptorCount = 1;
+        b[k].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        images[k].sampler = VK_NULL_HANDLE;
+        images[k].imageView = d->views[k];
+        images[k].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    memset(&dsl, 0, sizeof(dsl));
+    dsl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dsl.bindingCount = 2;
+    dsl.pBindings = b;
+    CT_REQUIRE_VK(t, vkCreateDescriptorSetLayout(e->device, &dsl, NULL, &d->set_layout));
+    size.type = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    size.descriptorCount = 2;
+    memset(&dpi, 0, sizeof(dpi));
+    dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpi.maxSets = 1;
+    dpi.poolSizeCount = 1;
+    dpi.pPoolSizes = &size;
+    CT_REQUIRE_VK(t, vkCreateDescriptorPool(e->device, &dpi, NULL, &d->pool));
+    memset(&dsa, 0, sizeof(dsa));
+    dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsa.descriptorPool = d->pool;
+    dsa.descriptorSetCount = 1;
+    dsa.pSetLayouts = &d->set_layout;
+    CT_REQUIRE_VK(t, vkAllocateDescriptorSets(e->device, &dsa, &d->set));
+    memset(&write, 0, sizeof(write));
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = d->set;
+    write.descriptorCount = 2;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    write.pImageInfo = images;
+    vkUpdateDescriptorSets(e->device, 1, &write, 0, NULL);
+    d->layout = ct_pipeline_layout(t, e, &d->set_layout, 1, sizeof(struct ct_rect_pc));
+}
+
+static void ds_inputs_fini(struct ct_env *e, struct ds_inputs *d)
+{
+    vkDestroyPipelineLayout(e->device, d->layout, NULL);
+    vkDestroyDescriptorPool(e->device, d->pool, NULL);
+    vkDestroyDescriptorSetLayout(e->device, d->set_layout, NULL);
+    vkDestroyImageView(e->device, d->views[0], NULL);
+    vkDestroyImageView(e->device, d->views[1], NULL);
+}
+
+/* The pipeline drawing depth (ALWAYS) and stencil (REPLACE with the dynamic
+ * reference) without a fragment shader. */
+static VkPipeline ds_writer(struct ct *t, struct ct_scene *s, struct ct_gfx *g)
+{
+    g->fs = VK_NULL_HANDLE;
+    g->ds.depthTestEnable = g->ds.depthWriteEnable = VK_TRUE;
+    g->ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    g->ds.stencilTestEnable = VK_TRUE;
+    g->ds.front.failOp = g->ds.front.depthFailOp = VK_STENCIL_OP_KEEP;
+    g->ds.front.passOp = VK_STENCIL_OP_REPLACE;
+    g->ds.front.compareOp = VK_COMPARE_OP_ALWAYS;
+    g->ds.front.compareMask = g->ds.front.writeMask = 0xff;
+    g->ds.back = g->ds.front;
+    g->dynamic[g->dynamic_count++] = VK_DYNAMIC_STATE_STENCIL_REFERENCE;
+    return ct_gfx_pipeline(t, &s->e, g);
+}
+
+static void ds_draw_halves(VkCommandBuffer cb, VkPipelineLayout layout)
+{
+    vkCmdSetStencilReference(cb, VK_STENCIL_FACE_FRONT_AND_BACK, 7);
+    ct_draw_rect(cb, layout, -1.0f, -1.0f, 0.0f, 1.0f, NULL, 0.25f);
+    vkCmdSetStencilReference(cb, VK_STENCIL_FACE_FRONT_AND_BACK, 200);
+    ct_draw_rect(cb, layout, 0.0f, -1.0f, 1.0f, 1.0f, NULL, 0.75f);
+}
+
+CT_TEST(render_pass_depth_stencil_input,
+        "Render Pass > Render Pass Objects (VkAttachmentReference2::aspectMask), Shader Interfaces > Fragment "
+        "Input Attachment Interface: a later subpass reads the depth and the stencil an earlier subpass wrote "
+        "through input attachment references to the depth/stencil attachment with aspectMask DEPTH and STENCIL "
+        "(a subpassInput reads the depth, a usubpassInput the stencil), after a dependency from depth/stencil "
+        "attachment writes to input attachment reads",
+        RP_COMMANDS "vkCreateRenderPass2 vkDestroyRenderPass vkCreateFramebuffer vkDestroyFramebuffer "
+                    "vkCmdBeginRenderPass2 vkCmdNextSubpass2 vkCmdEndRenderPass2 vkCreateDescriptorSetLayout "
+                    "vkDestroyDescriptorSetLayout vkCreateDescriptorPool vkDestroyDescriptorPool "
+                    "vkAllocateDescriptorSets vkUpdateDescriptorSets vkCmdBindDescriptorSets vkCmdSetStencilReference "
+                    "vkCreateImageView vkDestroyImageView")
+{
+    struct ct_scene s;
+    struct ct_target c, ds;
+    struct ct_gfx g;
+    struct ds_inputs d;
+    VkAttachmentDescription2 att[2];
+    VkAttachmentReference2 depth_ref, input_refs[2], color_ref;
+    VkSubpassDescription2 sp[2];
+    VkSubpassDependency2 dep;
+    VkRenderPassCreateInfo2 info;
+    VkRenderPassBeginInfo begin;
+    VkSubpassBeginInfo sbi;
+    VkSubpassEndInfo sei;
+    VkShaderModule fs;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    VkFramebuffer fb;
+    VkImageView views[2];
+    VkPipeline writer, reader;
+    VkClearValue clears[2];
+    VkCommandBuffer cb;
+    VkFormat format;
+    uint32_t i;
+
+    ct_scene_init(t, &s);
+    format = ct_depth_stencil_format(&s.e);
+    ct_scene_color(t, &s, &c);
+    ct_target(t, &s.e, format, W, H, 1, VK_SAMPLE_COUNT_1_BIT,
+              VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT, &ds);
+    ds_inputs_init(t, &s.e, &ds, &d);
+    memset(att, 0, sizeof(att));
+    for (i = 0; i < 2; i++) {
+        att[i].sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2;
+        att[i].format = i ? format : VK_FORMAT_R8G8B8A8_UNORM;
+        att[i].samples = VK_SAMPLE_COUNT_1_BIT;
+        att[i].loadOp = att[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att[i].storeOp = att[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+        att[i].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att[i].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    memset(&depth_ref, 0, sizeof(depth_ref));
+    depth_ref.sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2;
+    depth_ref.attachment = 1;
+    depth_ref.layout = VK_IMAGE_LAYOUT_GENERAL;
+    depth_ref.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+    input_refs[0] = input_refs[1] = depth_ref;
+    input_refs[0].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    input_refs[1].aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
+    color_ref = depth_ref;
+    color_ref.attachment = 0;
+    color_ref.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    memset(sp, 0, sizeof(sp));
+    sp[0].sType = sp[1].sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2;
+    sp[0].pipelineBindPoint = sp[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp[0].pDepthStencilAttachment = &depth_ref;
+    sp[1].inputAttachmentCount = 2;
+    sp[1].pInputAttachments = input_refs;
+    sp[1].colorAttachmentCount = 1;
+    sp[1].pColorAttachments = &color_ref;
+    memset(&dep, 0, sizeof(dep));
+    dep.sType = VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2;
+    dep.srcSubpass = 0;
+    dep.dstSubpass = 1;
+    dep.srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dep.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dep.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+    dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2;
+    info.attachmentCount = 2;
+    info.pAttachments = att;
+    info.subpassCount = 2;
+    info.pSubpasses = sp;
+    info.dependencyCount = 1;
+    info.pDependencies = &dep;
+    CT_REQUIRE_VK(t, vkCreateRenderPass2(s.e.device, &info, NULL, &rp));
+    views[0] = c.view;
+    views[1] = ds.view;
+    fb = framebuffer(t, &s.e, rp, views, 2, 1);
+    fs = ct_shader_module(t, &s.e, ds_input_frag, sizeof(ds_input_frag));
+
+    ct_gfx_init(&g, s.vs, s.fs, d.layout, W, H);
+    g.render_pass = rp;
+    g.colors = 0;
+    writer = ds_writer(t, &s, &g);
+    ct_gfx_init(&g, s.vs, fs, d.layout, W, H);
+    g.render_pass = rp;
+    g.subpass = 1;
+    reader = ct_gfx_pipeline(t, &s.e, &g);
+
+    memset(clears, 0, sizeof(clears));
+    clears[0] = clear_color(ct_black);
+    clears[1].depthStencil.depth = 1.0f;
+    memset(&begin, 0, sizeof(begin));
+    begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    begin.renderPass = rp;
+    begin.framebuffer = fb;
+    begin.renderArea.extent.width = W;
+    begin.renderArea.extent.height = H;
+    begin.clearValueCount = 2;
+    begin.pClearValues = clears;
+    memset(&sbi, 0, sizeof(sbi));
+    sbi.sType = VK_STRUCTURE_TYPE_SUBPASS_BEGIN_INFO;
+    sbi.contents = VK_SUBPASS_CONTENTS_INLINE;
+    memset(&sei, 0, sizeof(sei));
+    sei.sType = VK_STRUCTURE_TYPE_SUBPASS_END_INFO;
+    cb = ct_begin_commands(t, &s.e);
+    vkCmdBeginRenderPass2(cb, &begin, &sbi);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, writer);
+    ds_draw_halves(cb, d.layout);
+    vkCmdNextSubpass2(cb, &sbi, &sei);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, reader);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, d.layout, 0, 1, &d.set, 0, NULL);
+    ct_draw_rect(cb, d.layout, -1.0f, -1.0f, 1.0f, 1.0f, NULL, 0.0f);
+    vkCmdEndRenderPass2(cb, &sei);
+    ct_scene_read(t, &s, cb, &c);
+    ct_check_rgba8(t, s.out.data, W, H, expect_ds_input, NULL, 1, "(depth, stencil / 255) read in subpass 1");
+
+    vkDestroyPipeline(s.e.device, writer, NULL);
+    vkDestroyPipeline(s.e.device, reader, NULL);
+    vkDestroyShaderModule(s.e.device, fs, NULL);
+    vkDestroyFramebuffer(s.e.device, fb, NULL);
+    vkDestroyRenderPass(s.e.device, rp, NULL);
+    ds_inputs_fini(&s.e, &d);
+    ct_target_fini(&s.e, &ds);
+    ct_target_fini(&s.e, &c);
+    ct_scene_fini(&s);
+}
+
+CT_TEST(local_read_depth_stencil,
+        "Render Pass > Dynamic Rendering Local Read: with dynamicRenderingLocalReadDepthStencilAttachments, after "
+        "a VK_DEPENDENCY_BY_REGION_BIT barrier from depth/stencil attachment writes to input attachment reads, a "
+        "fragment shader reads the depth and the stencil earlier draws of the instance wrote, through the input "
+        "attachment indices VkRenderingInputAttachmentIndexInfo::pDepthInputAttachmentIndex and "
+        "pStencilInputAttachmentIndex give them (vkCmdSetRenderingInputAttachmentIndices, the pipeline's alike)",
+        RP_COMMANDS "vkCmdBeginRendering vkCmdEndRendering vkCmdSetRenderingInputAttachmentIndices "
+                    "vkCmdPipelineBarrier2 vkCreateDescriptorSetLayout vkDestroyDescriptorSetLayout "
+                    "vkCreateDescriptorPool vkDestroyDescriptorPool vkAllocateDescriptorSets vkUpdateDescriptorSets "
+                    "vkCmdBindDescriptorSets vkCmdSetStencilReference vkCreateImageView vkDestroyImageView")
+{
+    static const uint32_t color_inputs[1] = { VK_ATTACHMENT_UNUSED };
+    static const uint32_t depth_index = 0, stencil_index = 1;
+    struct ct_scene s;
+    struct ct_properties props;
+    struct ct_target c, ds;
+    struct ct_gfx g;
+    struct ds_inputs d;
+    VkRenderingInputAttachmentIndexInfo idx;
+    VkMemoryBarrier2 mb;
+    VkDependencyInfo dep;
+    VkShaderModule fs;
+    VkPipeline writer, reader;
+    VkCommandBuffer cb;
+    VkFormat format;
+
+    ct_scene_init(t, &s);
+    if (s.e.version < VK_API_VERSION_1_4)
+        ct_skip(t, "dynamic rendering local read is core in Vulkan 1.4");
+    CT_REQUIRE(t, s.f.v14.dynamicRenderingLocalRead);
+    ct_get_properties(&s.e, &props, 0);
+    if (!props.v14.dynamicRenderingLocalReadDepthStencilAttachments)
+        ct_skip(t, "dynamicRenderingLocalReadDepthStencilAttachments is not supported");
+    format = ct_depth_stencil_format(&s.e);
+    ct_scene_color(t, &s, &c);
+    ct_target(t, &s.e, format, W, H, 1, VK_SAMPLE_COUNT_1_BIT,
+              VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT, &ds);
+    ds_inputs_init(t, &s.e, &ds, &d);
+    fs = ct_shader_module(t, &s.e, ds_input_frag, sizeof(ds_input_frag));
+    memset(&idx, 0, sizeof(idx));
+    idx.sType = VK_STRUCTURE_TYPE_RENDERING_INPUT_ATTACHMENT_INDEX_INFO;
+    idx.colorAttachmentCount = 1;
+    idx.pColorAttachmentInputIndices = color_inputs;
+    idx.pDepthInputAttachmentIndex = &depth_index;
+    idx.pStencilInputAttachmentIndex = &stencil_index;
+
+    ct_gfx_init(&g, s.vs, s.fs, d.layout, W, H);
+    g.rendering.depthAttachmentFormat = g.rendering.stencilAttachmentFormat = format;
+    g.blend[0].colorWriteMask = 0;
+    writer = ds_writer(t, &s, &g);
+    ct_gfx_init(&g, s.vs, fs, d.layout, W, H);
+    g.rendering.depthAttachmentFormat = g.rendering.stencilAttachmentFormat = format;
+    g.next = &idx;
+    reader = ct_gfx_pipeline(t, &s.e, &g);
+
+    memset(&mb, 0, sizeof(mb));
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
+    memset(&dep, 0, sizeof(dep));
+    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers = &mb;
+    cb = ct_begin_commands(t, &s.e);
+    ct_begin_rendering(cb, &c, 1, ct_black, &ds, 1.0f);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, writer);
+    ds_draw_halves(cb, d.layout);
+    vkCmdPipelineBarrier2(cb, &dep);
+    vkCmdSetRenderingInputAttachmentIndices(cb, &idx);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, reader);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, d.layout, 0, 1, &d.set, 0, NULL);
+    ct_draw_rect(cb, d.layout, -1.0f, -1.0f, 1.0f, 1.0f, NULL, 0.0f);
+    vkCmdEndRendering(cb);
+    ct_scene_read(t, &s, cb, &c);
+    ct_check_rgba8(t, s.out.data, W, H, expect_ds_input, NULL, 1, "(depth, stencil / 255) read by local read");
+
+    vkDestroyPipeline(s.e.device, writer, NULL);
+    vkDestroyPipeline(s.e.device, reader, NULL);
+    vkDestroyShaderModule(s.e.device, fs, NULL);
+    ds_inputs_fini(&s.e, &d);
+    ct_target_fini(&s.e, &ds);
+    ct_target_fini(&s.e, &c);
+    ct_scene_fini(&s);
+}
+
 CT_TEST(render_pass_next_subpass,
         "Render Pass > Render Pass Commands (vkCmdNextSubpass): the subpass index advances by one and later "
         "commands are recorded for that subpass, inline (VK_SUBPASS_CONTENTS_INLINE) or in secondary command "
@@ -1432,6 +1818,8 @@ static const struct ct_test *const tests[] = {
     CT_REF(dynamic_rendering_multiview),
     CT_REF(local_read_attachment_locations),
     CT_REF(local_read_input_attachment),
+    CT_REF(render_pass_depth_stencil_input),
+    CT_REF(local_read_depth_stencil),
     CT_REF(render_pass_next_subpass),
     CT_REF(rendering_area_granularity_khr),
 };

@@ -32390,9 +32390,10 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
     p14->maxVertexAttribDivisor = UINT32_MAX;
     p14->supportsNonZeroFirstInstance = VK_FALSE;
     p14->maxPushDescriptors = PVK_MAX_PUSH_DESCRIPTORS;
-    /* Local reads are framebuffer fetch, which reads color attachments only;
-     * multisampled reads are unverified. Both stay VK_FALSE. */
-    p14->dynamicRenderingLocalReadDepthStencilAttachments = VK_FALSE;
+    /* Local reads are framebuffer fetch, of color attachments: depth and
+     * stencil through copies in color attachments (section 15, DEPTH/STENCIL
+     * INPUT ATTACHMENTS). Multisampled local reads are unverified. */
+    p14->dynamicRenderingLocalReadDepthStencilAttachments = VK_TRUE;
     p14->dynamicRenderingLocalReadMultisampledAttachments = VK_FALSE;
     /* maintenance5 behaviour as KosmicKrisp and MoltenVK report it for Metal. */
     p14->earlyFragmentMultisampleCoverageAfterSampleCounting = VK_TRUE;
@@ -32591,11 +32592,19 @@ static void pvk_physical_device_init_descriptor_features(struct pvk_physical_dev
  *                          -(2^(b-1) - 1), and a result of -2^(b-1) is stored
  *                          as -(2^(b-1) - 1): Metal converts SNORM through
  *                          floats, both ways. Both are -1.0 when read.
+ *   depthBounds            the pass keeps a copy of the depth attachment in a
+ *                          color attachment (section 15, DEPTH/STENCIL INPUT
+ *                          ATTACHMENTS); a draw testing depth bounds uses a
+ *                          pipeline variant whose fragment function reads the
+ *                          copy (the stored depth) and discards outside the
+ *                          bounds. Metal 4's setDepthTestMinBound:maxBound:
+ *                          traps in the Apple9 driver (M4 Max, macOS 27.2).
+ *                          Deviations: with EarlyFragmentTests the sample is
+ *                          tested, and its depth and stencil written, before
+ *                          the discard; with several samples the copy can be
+ *                          a few ULP off the stored depth at triangle edges.
  * fillModeNonSolid needs points too (Metal fills triangles or lines only),
- * wideLines has no Metal equivalent. depthBounds is not
- * reported: Metal 4 encoders have setDepthTestMinBound:maxBound:, but on
- * Apple9 (M4 Max, macOS 27.2) the driver traps in it; draws only use it on
- * devices that enable the feature. */
+ * wideLines has no Metal equivalent. */
 static void pvk_physical_device_init_graphics_features(struct pvk_physical_device *pd)
 {
     VkPhysicalDeviceFeatures *c = &pd->features.core;
@@ -32605,7 +32614,8 @@ static void pvk_physical_device_init_graphics_features(struct pvk_physical_devic
     c->inheritedQueries = VK_TRUE;      /* secondaries run in the primary's render encoder */
     c->dualSrcBlend = VK_TRUE;
     c->multiDrawIndirect = VK_TRUE;
-    c->logicOp = VK_TRUE; /* by framebuffer fetch */
+    c->logicOp = VK_TRUE;     /* by framebuffer fetch */
+    c->depthBounds = VK_TRUE; /* with the depth copy */
     pd->features.v11.shaderDrawParameters = VK_TRUE;
     pd->features.v12.drawIndirectCount = VK_TRUE;
     pd->features.v12.shaderOutputViewportIndex = VK_TRUE;
@@ -47459,7 +47469,8 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
             if (o->hidden_depth_samples > 1) /* runs per sample (the inputs keep their interpolation) */
                 need |= PVK_SPV_NEED_SAMPLE_ID;
         }
-        pvk_sb_printf(ctx, &outs, "    float pvk_hidden_depth [[color(%u)]];\n", h);
+        /* (float4 as the copy's fetches: a color's input and output types must agree) */
+        pvk_sb_printf(ctx, &outs, "    float4 pvk_hidden_depth [[color(%u)]];\n", h);
         if (o->depth_bounds) { /* the stored depth: the copy, fetched */
             if (!(fetch_colors & (1u << h)))
                 PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_fmt(ctx, "float4 pvk_color%u [[color(%u)]]", h, h));
@@ -47469,10 +47480,10 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
                          pvk_spv_fmt(ctx, "constant pvk_depth_bounds& pvk_bounds [[buffer(%u)]]", PVK_MSL_DEPTH_BOUNDS_BUFFER));
             pvk_spv_line(ctx, "if (pvk_color%u.x < pvk_bounds.min || pvk_color%u.x > pvk_bounds.max)", h, h);
             pvk_spv_line(ctx, "    discard_fragment();");
-            pvk_spv_line(ctx, "pvk_out.pvk_hidden_depth = pvk_bounds.write != 0u ? %s : pvk_color%u.x;", z, h);
+            pvk_spv_line(ctx, "pvk_out.pvk_hidden_depth = float4(pvk_bounds.write != 0u ? %s : pvk_color%u.x);", z, h);
             res->discards = true;
         } else {
-            pvk_spv_line(ctx, "pvk_out.pvk_hidden_depth = %s;", z);
+            pvk_spv_line(ctx, "pvk_out.pvk_hidden_depth = float4(%s);", z);
         }
         depth_copy = true;
     }
@@ -57608,12 +57619,12 @@ static char *pvk_hidden_fragment_msl(const VkAllocationCallbacks *alloc, uint32_
              h, PVK_MSL_DEPTH_BOUNDS_BUFFER);
     snprintf(msl, size,
              "#include <metal_stdlib>\nusing namespace metal;\n%s%s"
-             "struct pvk_depth_out { float d [[color(%u)]]; };\n"
+             "struct pvk_depth_out { float4 d [[color(%u)]]; };\n"
              "fragment pvk_depth_out pvk_depth_fs(float4 pvk_frag_coord [[position]]%s%s)\n"
              "{\n"
              "    pvk_depth_out o;\n"
              "%s"
-             "    o.d = %s%s%s;\n"
+             "    o.d = float4(%s%s%s);\n"
              "    return o;\n"
              "}\n",
              bits == 16 ? pvk_msl_d16_text : "", bounds ? pvk_msl_depth_bounds_text : "", h,
