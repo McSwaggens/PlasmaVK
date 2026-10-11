@@ -38228,6 +38228,7 @@ struct pvk_spv_type {
     const uint32_t *params; /* function parameter types (in the module words) */
     bool explicit_layout;   /* struct with Offset decorations */
     uint32_t pad_to;        /* struct: size an ArrayStride asks for (0: none) */
+    uint32_t need_align;    /* explicit layouts: the largest alignment its placements allow (0: any) */
     bool pad_conflict;
     uint32_t tail_pad;
     uint32_t end;           /* struct: end of the last member */
@@ -40156,7 +40157,7 @@ static uint32_t pvk_spv_vec3_scalar(struct pvk_spv *ctx, const struct pvk_spv_ty
  * type: matrices with a MatrixStride Metal does not use or row-major, and
  * arrays of those. NULL when the value type is the storage. */
 static const struct pvk_spv_node *pvk_spv_member_node(struct pvk_spv *ctx, uint32_t tid, uint32_t mstride,
-                                                      bool row_major)
+                                                      bool row_major, bool packed)
 {
     struct pvk_spv_type *t = pvk_spv_type(ctx, tid);
     struct pvk_spv_node *n;
@@ -40166,12 +40167,16 @@ static const struct pvk_spv_node *pvk_spv_member_node(struct pvk_spv *ctx, uint3
         struct pvk_spv_type *col = pvk_spv_type(ctx, t->elem), *sc = pvk_spv_type(ctx, col->elem);
         uint32_t ncomp = row_major ? t->count : col->count, lines = row_major ? col->count : t->count;
         uint32_t lsize = (ncomp == 3 ? 4 : ncomp) * sc->size;
-        if (!row_major && (mstride == 0 || mstride == col->size))
+        if (!row_major && !packed && (mstride == 0 || mstride == col->size))
             return NULL;
-        if (mstride == 0)
+        if (mstride == 0 && (row_major || !packed))
             pvk_spv_fail(ctx, "row-major matrix without MatrixStride");
-        s = pvk_spv_slot(ctx, pvk_spv_vec_msl(ctx, sc, ncomp, false), lsize, lsize, ncomp == 3 ? sc->size : 0,
-                         mstride);
+        if (packed) /* lines aligned to their scalars (scalar block layout) */
+            s = pvk_spv_slot(ctx, pvk_spv_fmt(ctx, "packed_%s", pvk_spv_vec_msl(ctx, sc, ncomp, false)), ncomp * sc->size,
+                             sc->size, 0, mstride ? mstride : ncomp * sc->size);
+        else
+            s = pvk_spv_slot(ctx, pvk_spv_vec_msl(ctx, sc, ncomp, false), lsize, lsize, ncomp == 3 ? sc->size : 0,
+                             mstride);
         n = pvk_spv_alloc(ctx, sizeof(*n));
         n->kind = PVK_SPV_N_MATRIX;
         n->row_major = row_major;
@@ -40184,7 +40189,7 @@ static const struct pvk_spv_node *pvk_spv_member_node(struct pvk_spv *ctx, uint3
         return n;
     }
     if (t->op == PVK_SPV_OpTypeArray || t->op == PVK_SPV_OpTypeRuntimeArray) {
-        const struct pvk_spv_node *child = pvk_spv_member_node(ctx, t->elem, mstride, row_major);
+        const struct pvk_spv_node *child = pvk_spv_member_node(ctx, t->elem, mstride, row_major, packed);
         uint32_t stride = pvk_spv_get(ctx, tid)->array_stride;
         if (!child)
             return NULL;
@@ -40202,6 +40207,25 @@ static const struct pvk_spv_node *pvk_spv_member_node(struct pvk_spv *ctx, uint3
         return n;
     }
     return NULL;
+}
+
+/* The largest power of two dividing v (0: v is 0, any). */
+static uint32_t pvk_spv_pow2(uint32_t v)
+{
+    return v & (0u - v);
+}
+
+/* The smaller of two alignment limits, 0 meaning none. */
+static uint32_t pvk_spv_min_align(uint32_t a, uint32_t b)
+{
+    return !a ? b : !b ? a : a < b ? a : b;
+}
+
+/* Whether pvk_spv_slot can place an element (size, align, vec3) at stride. */
+static bool pvk_spv_slot_fits(uint32_t size, uint32_t align, uint32_t vec3, uint32_t stride)
+{
+    return stride == 0 || (stride == size && stride % align == 0) || (vec3 && stride == 3 * vec3) ||
+           (stride > size && stride % align == 0);
 }
 
 static uint32_t pvk_spv_round(uint32_t v, uint32_t align)
@@ -40239,7 +40263,7 @@ static void pvk_spv_name_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_sp
 
 static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_spv_type *t)
 {
-    uint32_t i, cur = 0, align = 1, nexplicit = 0;
+    uint32_t i, cur = 0, align = 1, nexplicit = 0, limit = t->need_align;
     char buf[48];
 
     for (i = 0; i < t->nmembers; i++)
@@ -40273,12 +40297,24 @@ static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_
             align = a > align ? a : align;
             continue;
         }
-        m->node = pvk_spv_member_node(ctx, m->type, m->matrix_stride, (m->flags & PVK_SPV_M_ROW_MAJOR) != 0);
+        /* Scalar block layout: members whose MSL alignment exceeds what the
+         * struct's placements allow (need_align) or their offset are packed:
+         * vectors as packed_ types, matrices as arrays of packed lines. */
+        {
+            struct pvk_spv_type *base = mt;
+            uint32_t depth = 0;
+            bool pack;
+            while ((base->op == PVK_SPV_OpTypeArray || base->op == PVK_SPV_OpTypeRuntimeArray) && depth++ < 64)
+                base = pvk_spv_type(ctx, base->elem);
+            pack = base->op == PVK_SPV_OpTypeMatrix && (m->offset % base->align != 0 || (limit && base->align > limit));
+            m->node = pvk_spv_member_node(ctx, m->type, m->matrix_stride, (m->flags & PVK_SPV_M_ROW_MAJOR) != 0, pack);
+        }
         if (m->node) {
             m->decl = m->node->msl; /* runtime arrays: the element slot */
             size = m->node->size;
             a = m->node->align;
-        } else if (mt->op == PVK_SPV_OpTypeVector && (mt->count == 3 || m->offset % mt->align != 0)) {
+        } else if (mt->op == PVK_SPV_OpTypeVector &&
+                   (mt->count == 3 || m->offset % mt->align != 0 || (limit && mt->align > limit))) {
             /* vec3 + scalar share 16 bytes in std140/std430: packed_float3 is 12 bytes. */
             struct pvk_spv_type *sc = pvk_spv_type(ctx, mt->elem);
             m->decl = pvk_spv_fmt(ctx, "packed_%s", mt->msl);
@@ -40420,6 +40456,26 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
     for (i = 0; i < ctx->ntypes; i++)
         if (ctx->ids[ctx->type_order[i]].t->op == PVK_SPV_OpTypeStruct)
             pvk_spv_name_struct(ctx, ctx->type_order[i], ctx->ids[ctx->type_order[i]].t);
+    /* Scalar block layout: the largest alignment each struct and array may
+     * have, from the offsets and strides it is placed at (containers come
+     * after their members: one pass from the last type). */
+    for (i = ctx->ntypes; i-- > 0;) {
+        struct pvk_spv_type *t = ctx->ids[ctx->type_order[i]].t, *e;
+        uint32_t stride = ctx->ids[ctx->type_order[i]].array_stride, m;
+        if (t->op == PVK_SPV_OpTypeStruct) {
+            for (m = 0; m < t->nmembers; m++) {
+                e = pvk_spv_type(ctx, t->members[m].type);
+                if ((t->members[m].flags & PVK_SPV_M_OFFSET) &&
+                    (e->op == PVK_SPV_OpTypeStruct || e->op == PVK_SPV_OpTypeArray || e->op == PVK_SPV_OpTypeRuntimeArray))
+                    e->need_align = pvk_spv_min_align(e->need_align, pvk_spv_min_align(pvk_spv_pow2(t->members[m].offset),
+                                                                                       t->need_align));
+            }
+        } else if ((t->op == PVK_SPV_OpTypeArray || t->op == PVK_SPV_OpTypeRuntimeArray) && stride) {
+            e = pvk_spv_type(ctx, t->elem);
+            if (e->op == PVK_SPV_OpTypeStruct || e->op == PVK_SPV_OpTypeArray)
+                e->need_align = pvk_spv_min_align(e->need_align, pvk_spv_min_align(pvk_spv_pow2(stride), t->need_align));
+        }
+    }
 
     for (i = 0; i < ctx->ntypes; i++) {
         uint32_t tid = ctx->type_order[i];
@@ -40490,7 +40546,22 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
                 pvk_spv_psb_layout(ctx, e);
             if (!e->msl || !e->size)
                 pvk_spv_fail(ctx, "array of unsized type");
-            s = pvk_spv_slot(ctx, e->msl, e->size, e->align, pvk_spv_vec3_scalar(ctx, e), ctx->ids[tid].array_stride);
+            {
+                uint32_t stride = ctx->ids[tid].array_stride, esize = e->size, ealign = e->align;
+                uint32_t vec3 = pvk_spv_vec3_scalar(ctx, e);
+                const char *emsl = e->msl;
+                if (e->op == PVK_SPV_OpTypeVector && t->need_align && e->align > t->need_align) {
+                    /* scalar block layout: elements aligned to their scalars */
+                    struct pvk_spv_type *sc = pvk_spv_type(ctx, e->elem);
+                    emsl = pvk_spv_fmt(ctx, "packed_%s", e->msl);
+                    esize = e->count * sc->size;
+                    ealign = sc->size;
+                    vec3 = 0;
+                }
+                if (e->op == PVK_SPV_OpTypeMatrix && !pvk_spv_slot_fits(esize, ealign, vec3, stride))
+                    stride = 0; /* stored as a struct member's node (lines): the value keeps the natural layout */
+                s = pvk_spv_slot(ctx, emsl, esize, ealign, vec3, stride);
+            }
             t->slot = s.msl;
             t->slot_padded = s.padded;
             t->stride = s.size;
