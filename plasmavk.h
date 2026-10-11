@@ -38182,6 +38182,14 @@ static bool pvk_spv_is_psb(const struct pvk_spv_type *t)
     return t->op == PVK_SPV_OpTypePointer && t->storage == PVK_SPV_StoragePhysicalStorageBuffer;
 }
 
+/* A pointer that may be a value with variable pointers (VARIABLE POINTERS):
+ * StorageBuffer and Workgroup pointers. */
+static bool pvk_spv_is_vptr(const struct pvk_spv_type *t)
+{
+    return t->op == PVK_SPV_OpTypePointer &&
+           (t->storage == PVK_SPV_StorageStorageBuffer || t->storage == PVK_SPV_StorageWorkgroup);
+}
+
 /* An input attachment image type, or an array of them. */
 static bool pvk_spv_is_subpass(struct pvk_spv *ctx, uint32_t tid)
 {
@@ -39521,7 +39529,11 @@ static void pvk_spv_parse_body(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         struct pvk_spv_type *t = pvk_spv_type(ctx, in->w[1]);
         bool chain = in->op == PVK_SPV_OpAccessChain || in->op == PVK_SPV_OpInBoundsAccessChain ||
                      in->op == PVK_SPV_OpPtrAccessChain;
-        x->kind = t->op == PVK_SPV_OpTypePointer && (chain || !pvk_spv_is_psb(t)) ? PVK_SPV_K_PTR : PVK_SPV_K_VALUE;
+        /* Variable pointers (selected, loaded, returned) are values too. */
+        bool vvalue = pvk_spv_is_vptr(t) && (in->op == PVK_SPV_OpSelect || in->op == PVK_SPV_OpLoad ||
+                                             in->op == PVK_SPV_OpFunctionCall);
+        x->kind = t->op == PVK_SPV_OpTypePointer && (chain || !pvk_spv_is_psb(t)) && !vvalue ? PVK_SPV_K_PTR
+                                                                                         : PVK_SPV_K_VALUE;
     } else if (shape == 1) {
         pvk_spv_fail(ctx, "unexpected instruction (opcode %u) in a function", in->op);
     } else if (in->op != PVK_SPV_OpStore && in->op != PVK_SPV_OpCopyMemory && in->op != PVK_SPV_OpControlBarrier &&
@@ -39900,6 +39912,18 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
         case PVK_SPV_OpTypePointer:
             if (pvk_spv_is_psb(t))
                 pvk_spv_psb_layout(ctx, t);
+            else if (pvk_spv_is_vptr(t)) { /* a variable pointer's value type (VARIABLE POINTERS) */
+                e = pvk_spv_type(ctx, t->elem);
+                if (e->op == PVK_SPV_OpTypeRuntimeArray && e->slot)
+                    t->msl = pvk_spv_fmt(ctx, "%s %s*", t->storage == PVK_SPV_StorageWorkgroup ? "threadgroup" : ctx->dev,
+                                         e->slot);
+                else if (e->msl && !e->opaque && e->op != PVK_SPV_OpTypePointer && e->op != PVK_SPV_OpTypeFunction &&
+                         e->op != PVK_SPV_OpTypeVoid && e->op != PVK_SPV_OpTypeRuntimeArray)
+                    t->msl = pvk_spv_fmt(ctx, "%s %s*", t->storage == PVK_SPV_StorageWorkgroup ? "threadgroup" : ctx->dev,
+                                         e->msl);
+                if (t->msl)
+                    t->size = t->align = 8;
+            }
             break;
         case PVK_SPV_OpTypeImage:
             if (t->img.dim == PVK_SPV_DimSubpassData) { /* the fetched color */
@@ -41055,7 +41079,7 @@ static struct pvk_spv_type *pvk_spv_data_type(struct pvk_spv *ctx, uint32_t tid)
             return t;
         break;
     case PVK_SPV_OpTypePointer:
-        if (pvk_spv_is_psb(t) && t->msl)
+        if ((pvk_spv_is_psb(t) || pvk_spv_is_vptr(t)) && t->msl)
             return t;
         break;
     default:
