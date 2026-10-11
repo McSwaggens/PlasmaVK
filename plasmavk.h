@@ -41251,6 +41251,8 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
         return;
     }
     p->desc = NULL; /* below the block */
+    if (cidx >= 0) /* constant indices in decimal: the stage interface matches leaves by name */
+        idx = pvk_spv_fmt(ctx, "%u", (uint32_t)cidx);
     switch (t->op) {
     case PVK_SPV_OpTypeStruct: {
         const struct pvk_spv_member *m;
@@ -41528,6 +41530,8 @@ static const char *const pvk_spv_helper_text[] = {
     "    return o < d.size && n <= d.size - o;\n}\n\n",
 };
 
+static void pvk_spv_interpolate_at(struct pvk_spv *ctx, const struct pvk_spv_insn *in);
+
 static void pvk_spv_glsl(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     uint32_t rtype = in->w[1], rid = in->w[2], inst = pvk_spv_arg(ctx, in, 4), nops = in->wc - 5, i;
@@ -41561,6 +41565,10 @@ static void pvk_spv_glsl(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 
     if (pvk_spv_arg(ctx, in, 3) != ctx->glsl)
         pvk_spv_fail(ctx, "unsupported extended instruction set");
+    if (inst >= PVK_SPV_GLSL_InterpolateAtCentroid && inst <= PVK_SPV_GLSL_InterpolateAtOffset) {
+        pvk_spv_interpolate_at(ctx, in);
+        return;
+    }
     if (nops > 3)
         pvk_spv_fail(ctx, "GLSL.std.450 instruction %u has too many operands", inst);
     for (i = 0; i < nops; i++)
@@ -44756,6 +44764,133 @@ static const char *pvk_spv_interp_attr(uint32_t interp, bool integer)
     return np ? "center_no_perspective" : "center_perspective";
 }
 
+static bool pvk_spv_stage_global(struct pvk_spv *ctx, const struct pvk_spv_func *entry, uint32_t g);
+
+/* Flattens stage interface variable globals[g] (a user Input or Output; not
+ * a built-in) into f's leaves. */
+static void pvk_spv_iface_var(struct pvk_spv *ctx, struct pvk_spv_iface *f, uint32_t g)
+{
+    struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+    uint32_t st = x->p->storage, loc, idx, at;
+    struct pvk_spv_type *t = pvk_spv_type(ctx, x->p->type);
+    bool vertex = ctx->model == PVK_SPV_ExecutionModelVertex;
+    if ((x->flags & PVK_SPV_F_BUILTIN) ||
+        (t->op == PVK_SPV_OpTypeStruct && t->nmembers && (t->members[0].flags & PVK_SPV_M_BUILTIN)))
+        return; /* built-ins: pvk_spv_stage_builtin */
+    loc = x->location;
+    idx = (x->flags & PVK_SPV_F_INDEX) ? x->index : 0;
+    if (!(x->flags & PVK_SPV_F_LOCATION) && t->op != PVK_SPV_OpTypeStruct)
+        pvk_spv_fail(ctx, "stage %s variable %u has no Location", st == PVK_SPV_StorageInput ? "input" : "output",
+                     ctx->globals[g]);
+    if (idx > 1 || (idx && (vertex || st != PVK_SPV_StorageOutput || loc != 0)))
+        pvk_spv_fail(ctx, "variable %u: Index 1 is only for fragment output location 0 (dual-source blending)",
+                     ctx->globals[g]);
+    if (!(x->flags & PVK_SPV_F_LOCATION) && t->op == PVK_SPV_OpTypeStruct && t->nmembers &&
+        !(t->members[0].flags & PVK_SPV_M_LOCATION))
+        pvk_spv_fail(ctx, "stage interface block %u has no Location", ctx->globals[g]);
+    at = loc;
+    if (!(x->flags & PVK_SPV_F_LOCATION) && t->op == PVK_SPV_OpTypeStruct && t->nmembers)
+        at = t->members[0].location;
+    pvk_spv_flatten(ctx, f, x->p->type, x->msl, &at, (x->flags & PVK_SPV_F_COMPONENT) ? x->component : 0, x->interp,
+                    idx, 0);
+}
+
+/* The entry point's user inputs as leaves, and the slot type of each input
+ * location (a linked fragment shader's: the vertex stage's output type,
+ * NONE where the vertex stage writes nothing). */
+static void pvk_spv_stage_inputs(struct pvk_spv *ctx, struct pvk_spv_iface *in, enum pvk_msl_scalar_type *in_type)
+{
+    const struct pvk_msl_options *o = ctx->options;
+    struct pvk_spv_func *entry = ctx->funcs[pvk_spv_get(ctx, ctx->entry_fid)->func - 1];
+    bool vertex = ctx->model == PVK_SPV_ExecutionModelVertex;
+    uint32_t g, loc, i;
+
+    memset(in, 0, sizeof(*in));
+    for (g = 0; g < ctx->nglobals; g++)
+        if (pvk_spv_stage_global(ctx, entry, g) && ctx->ids[ctx->globals[g]].p->storage == PVK_SPV_StorageInput)
+            pvk_spv_iface_var(ctx, in, g);
+    for (loc = 0; loc < PVK_MSL_MAX_LOCATIONS; loc++) {
+        in_type[loc] = pvk_spv_slot_type(ctx, in, loc, 0, !vertex);
+        if (!vertex && in_type[loc] != PVK_SPV_SLOT_NONE && o && o->linked) {
+            enum pvk_msl_scalar_type vt = PVK_SPV_SLOT_NONE;
+            for (i = 0; i < o->vertex_output_count && o->vertex_outputs; i++)
+                if (o->vertex_outputs[i].location == loc)
+                    vt = o->vertex_outputs[i].type;
+            if (vt == PVK_SPV_SLOT_NONE) {
+                in_type[loc] = PVK_SPV_SLOT_NONE; /* not written (undefined in Vulkan): reads 0 */
+                continue;
+            }
+            /* A float read from a vertex location that mixes types (uint) is
+             * reinterpreted; integers cannot come from a float location. */
+            if (vt == PVK_MSL_SCALAR_FLOAT && in_type[loc] != PVK_MSL_SCALAR_FLOAT)
+                pvk_spv_fail(ctx, "location %u: the fragment input does not match the vertex output's type", loc);
+            in_type[loc] = vt;
+        }
+    }
+}
+
+/* interpolateAtCentroid/Sample/Offset (GLSL.std.450 76-78) in fragment
+ * shaders: a fragment input location read this way is a Metal
+ * interpolant<float4, ...> in the stage_in struct, passed to the functions
+ * that need it (pvk_iN, pvk_spv_func.interp_locs); the stage function reads
+ * its ordinary value with interpolate_at_center/centroid/sample. Metal's
+ * offsets are from the pixel's top-left corner, Vulkan's from its center
+ * (checked on M4 Max): +0.5. Flat and integer inputs (and inputs the vertex
+ * stage does not write) have one value: the variable's. The operand must
+ * name its input with constant indices (a dynamically indexed array is not
+ * supported). */
+static void pvk_spv_interpolate_at(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    uint32_t inst = in->w[4], rid = in->w[2], i, n, comp;
+    const struct pvk_spv_ptr *p;
+    struct pvk_spv_iface ifc;
+    enum pvk_msl_scalar_type in_type[PVK_MSL_MAX_LOCATIONS];
+    const struct pvk_spv_leaf *leaf = NULL;
+    struct pvk_spv_type *r = pvk_spv_vtype(ctx, rid), *rs = pvk_spv_scalar_of(ctx, r);
+    const char *e, *sel = "";
+
+    if (ctx->model != PVK_SPV_ExecutionModelFragment)
+        pvk_spv_fail(ctx, "interpolateAt* is only available in fragment shaders");
+    if (in->wc != (inst == PVK_SPV_GLSL_InterpolateAtCentroid ? 6u : 7u))
+        pvk_spv_fail(ctx, "GLSL.std.450 instruction %u: wrong operand count", inst);
+    p = pvk_spv_ptr_of(ctx, in->w[5]);
+    if (p->storage != PVK_SPV_StorageInput || p->type != in->w[1] || !rs || rs->op != PVK_SPV_OpTypeFloat)
+        pvk_spv_fail(ctx, "interpolateAt* needs a pointer to a floating-point input");
+    pvk_spv_stage_inputs(ctx, &ifc, in_type);
+    for (i = 0; i < ifc.nleaves && !leaf; i++) { /* the leaf p points into, by its selectors */
+        size_t l = strlen(ifc.leaves[i].lvalue);
+        if (strncmp(p->expr, ifc.leaves[i].lvalue, l) == 0 && (p->expr[l] == '\0' || p->expr[l] == '.' || p->expr[l] == '[')) {
+            leaf = &ifc.leaves[i];
+            sel = p->expr + l;
+        }
+    }
+    if (!leaf)
+        pvk_spv_fail(ctx, "interpolateAt* of an input with a dynamic index is not supported");
+    n = pvk_spv_components(r);
+    comp = leaf->component;
+    if (sel[0] == '.' && sel[1] >= 'w' && sel[1] <= 'z' && sel[2] == '\0' && n == 1)
+        comp += sel[1] == 'w' ? 3u : (uint32_t)(sel[1] - 'x'); /* a component of a vector input */
+    else if (sel[0] != '\0')
+        pvk_spv_fail(ctx, "interpolateAt* of a dynamically selected component is not supported");
+    if (in_type[leaf->location] != PVK_MSL_SCALAR_FLOAT || (leaf->interp & PVK_MSL_INTERP_FLAT)) {
+        pvk_spv_load(ctx, rid, p); /* one value per primitive */
+        return;
+    }
+    ctx->fn->interp_locs |= 1u << leaf->location;
+    ctx->interp_type[leaf->location] = (leaf->interp & PVK_MSL_INTERP_NO_PERSPECTIVE)
+                                           ? "interpolant<float4, interpolation::no_perspective>"
+                                           : "interpolant<float4, interpolation::perspective>";
+    if (inst == PVK_SPV_GLSL_InterpolateAtCentroid)
+        e = pvk_spv_fmt(ctx, "pvk_i%u.interpolate_at_centroid()", leaf->location);
+    else if (inst == PVK_SPV_GLSL_InterpolateAtSample)
+        e = pvk_spv_fmt(ctx, "pvk_i%u.interpolate_at_sample(uint(%s))", leaf->location, pvk_spv_val(ctx, in->w[6]));
+    else
+        e = pvk_spv_fmt(ctx, "pvk_i%u.interpolate_at_offset(float2(%s) + 0.5f)", leaf->location,
+                        pvk_spv_val(ctx, in->w[6]));
+    e = pvk_spv_swizzle(ctx, e, comp, n);
+    pvk_spv_set(ctx, rid, rs->width == 16 ? pvk_spv_fmt(ctx, "%s(%s)", r->msl, e) : e);
+}
+
 /* Whether the reachable functions may write member m of the global block
  * var: access chains to it, or any other use of the whole variable. */
 static bool pvk_spv_member_used(struct pvk_spv *ctx, uint32_t var, uint32_t m)
@@ -45288,6 +45423,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     uint32_t nparams = 0, cap = 0, nargs = 0, cap_args = 0, g, i, loc, idx, set, need = 0;
     uint32_t fetch_colors = 0, sample_inputs = 0, nin = 0, nout = 0;
     enum pvk_msl_scalar_type in_type[PVK_MSL_MAX_LOCATIONS], out_type[2][PVK_MSL_MAX_LOCATIONS];
+    uint32_t loc_interp[PVK_MSL_MAX_LOCATIONS];
     struct pvk_msl_varying vin[PVK_MSL_MAX_LOCATIONS], vout[PVK_MSL_MAX_LOCATIONS + 1];
     struct pvk_sb *text = &ctx->text;
 
@@ -45328,58 +45464,17 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     }
     res->early_fragment_tests = early;
 
-    /* Interface variables: user locations into leaves */
-    for (g = 0; g < ctx->nglobals; g++) {
-        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
-        uint32_t st = x->p->storage;
-        struct pvk_spv_type *t = pvk_spv_type(ctx, x->p->type);
-        if (!pvk_spv_stage_global(ctx, entry, g) || (st != PVK_SPV_StorageInput && st != PVK_SPV_StorageOutput))
-            continue;
-        if ((x->flags & PVK_SPV_F_BUILTIN) || (t->op == PVK_SPV_OpTypeStruct && t->nmembers &&
-                                                (t->members[0].flags & PVK_SPV_M_BUILTIN)))
-            continue; /* built-ins below */
-        loc = x->location;
-        idx = (x->flags & PVK_SPV_F_INDEX) ? x->index : 0;
-        if (!(x->flags & PVK_SPV_F_LOCATION) && t->op != PVK_SPV_OpTypeStruct)
-            pvk_spv_fail(ctx, "stage %s variable %u has no Location", st == PVK_SPV_StorageInput ? "input" : "output",
-                         ctx->globals[g]);
-        if (idx > 1 || (idx && (vertex || st != PVK_SPV_StorageOutput || loc != 0)))
-            pvk_spv_fail(ctx, "variable %u: Index 1 is only for fragment output location 0 (dual-source blending)",
-                         ctx->globals[g]);
-        if ((x->flags & PVK_SPV_F_LOCATION) || t->op != PVK_SPV_OpTypeStruct || t->nmembers == 0 ||
-            (t->members[0].flags & PVK_SPV_M_LOCATION)) {
-            uint32_t at = loc;
-            if (!(x->flags & PVK_SPV_F_LOCATION) && t->op == PVK_SPV_OpTypeStruct)
-                at = t->members[0].location;
-            pvk_spv_flatten(ctx, st == PVK_SPV_StorageInput ? &in : &out, x->p->type, x->msl, &at,
-                            (x->flags & PVK_SPV_F_COMPONENT) ? x->component : 0, x->interp, idx, 0);
-        } else {
-            pvk_spv_fail(ctx, "stage interface block %u has no Location", ctx->globals[g]);
-        }
-    }
-
-    /* Slot types: per location (fragment inputs: the vertex stage's when linked) */
+    /* Interface variables: user locations into leaves; slot types per
+     * location (fragment inputs: the vertex stage's when linked) */
+    pvk_spv_stage_inputs(ctx, &in, in_type);
+    for (g = 0; g < ctx->nglobals; g++)
+        if (pvk_spv_stage_global(ctx, entry, g) && ctx->ids[ctx->globals[g]].p->storage == PVK_SPV_StorageOutput)
+            pvk_spv_iface_var(ctx, &out, g);
     for (loc = 0; loc < PVK_MSL_MAX_LOCATIONS; loc++) {
-        in_type[loc] = pvk_spv_slot_type(ctx, &in, loc, 0, !vertex);
         out_type[0][loc] = pvk_spv_slot_type(ctx, &out, loc, 0, vertex);
         out_type[1][loc] = pvk_spv_slot_type(ctx, &out, loc, 1, vertex);
         if (!vertex && out_type[0][loc] != PVK_SPV_SLOT_NONE && loc >= 8)
             pvk_spv_fail(ctx, "fragment output location %u is out of range (0-7)", loc);
-        if (!vertex && in_type[loc] != PVK_SPV_SLOT_NONE && o && o->linked) {
-            enum pvk_msl_scalar_type vt = PVK_SPV_SLOT_NONE;
-            for (i = 0; i < o->vertex_output_count && o->vertex_outputs; i++)
-                if (o->vertex_outputs[i].location == loc)
-                    vt = o->vertex_outputs[i].type;
-            if (vt == PVK_SPV_SLOT_NONE) {
-                in_type[loc] = PVK_SPV_SLOT_NONE; /* not written (undefined in Vulkan): reads 0 */
-                continue;
-            }
-            /* A float read from a vertex location that mixes types (uint) is
-             * reinterpreted; integers cannot come from a float location. */
-            if (vt == PVK_MSL_SCALAR_FLOAT && in_type[loc] != PVK_MSL_SCALAR_FLOAT)
-                pvk_spv_fail(ctx, "location %u: the fragment input does not match the vertex output's type", loc);
-            in_type[loc] = vt;
-        }
     }
     if (!vertex) { /* per-sample execution: Sample inputs, SampleId, SamplePosition, sample shading */
         for (i = 0; i < in.nleaves; i++)
@@ -45485,33 +45580,44 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         }
         res->vertex_table_buffer = o && o->vertex_table_buffer ? o->vertex_table_buffer : PVK_MSL_VERTEX_TABLE_BUFFER;
     }
+    for (loc = 0; !vertex && loc < PVK_MSL_MAX_LOCATIONS; loc++) { /* each fragment input location's interpolation */
+        loc_interp[loc] = 0;
+        for (i = 0; i < in.nleaves; i++)
+            if (in.leaves[i].location == loc)
+                loc_interp[loc] = in.leaves[i].interp; /* (a location's variables must agree) */
+        if (per_sample && !(loc_interp[loc] & PVK_MSL_INTERP_FLAT)) /* sample shading: interpolated at the sample */
+            loc_interp[loc] = (loc_interp[loc] & ~PVK_MSL_INTERP_CENTROID) | PVK_MSL_INTERP_SAMPLE;
+        if (in_type[loc] != PVK_MSL_SCALAR_FLOAT)
+            loc_interp[loc] = PVK_MSL_INTERP_FLAT;
+    }
     for (i = 0; i < in.nleaves; i++) {
         const struct pvk_spv_leaf *l = &in.leaves[i];
         enum pvk_msl_scalar_type k = in_type[l->location];
+        const char *slot;
         if (k == PVK_SPV_SLOT_NONE)
             continue; /* (an unwritten fragment input: 0) */
+        slot = vertex ? pvk_spv_fmt(ctx, "pvk_attr%u", l->location) : pvk_spv_fmt(ctx, "pvk_in.pvk_l%u", l->location);
+        if (!vertex && (entry->interp_locs & (1u << l->location))) /* an interpolant (interpolateAt*) */
+            slot = pvk_spv_fmt(ctx, "%s.%s", slot,
+                               (loc_interp[l->location] & PVK_MSL_INTERP_SAMPLE)     ? "interpolate_at_sample(pvk_sample_id)"
+                               : (loc_interp[l->location] & PVK_MSL_INTERP_CENTROID) ? "interpolate_at_centroid()"
+                                                                                     : "interpolate_at_center()");
         pvk_spv_line(ctx, "%s = %s;", l->lvalue,
-                     pvk_spv_from_slot(ctx, pvk_spv_swizzle(ctx, vertex ? pvk_spv_fmt(ctx, "pvk_attr%u", l->location)
-                                                                         : pvk_spv_fmt(ctx, "pvk_in.pvk_l%u", l->location),
-                                                            l->component, l->ncomp),
-                                       k, l));
+                     pvk_spv_from_slot(ctx, pvk_spv_swizzle(ctx, slot, l->component, l->ncomp), k, l));
     }
     if (!vertex) {
         for (loc = 0; loc < PVK_MSL_MAX_LOCATIONS; loc++) {
-            uint32_t interp = 0;
+            uint32_t interp = loc_interp[loc];
             if (in_type[loc] == PVK_SPV_SLOT_NONE)
                 continue;
             for (i = 0; i < in.nleaves; i++)
-                if (in.leaves[i].location == loc) {
-                    interp = in.leaves[i].interp; /* (a location's variables must agree) */
+                if (in.leaves[i].location == loc)
                     vin[nin].components |= ((1u << in.leaves[i].ncomp) - 1) << in.leaves[i].component;
-                }
-            if (per_sample && !(interp & PVK_MSL_INTERP_FLAT)) /* sample shading: interpolated at the sample */
-                interp = (interp & ~PVK_MSL_INTERP_CENTROID) | PVK_MSL_INTERP_SAMPLE;
-            if (in_type[loc] != PVK_MSL_SCALAR_FLOAT)
-                interp = PVK_MSL_INTERP_FLAT;
-            pvk_sb_printf(ctx, &ins, "    %s pvk_l%u [[user(locn%u)]] [[%s]];\n", pvk_spv_kind_msl(ctx, in_type[loc], 4),
-                          loc, loc, pvk_spv_interp_attr(interp, in_type[loc] != PVK_MSL_SCALAR_FLOAT));
+            if (entry->interp_locs & (1u << loc))
+                pvk_sb_printf(ctx, &ins, "    %s pvk_l%u [[user(locn%u)]];\n", ctx->interp_type[loc], loc, loc);
+            else
+                pvk_sb_printf(ctx, &ins, "    %s pvk_l%u [[user(locn%u)]] [[%s]];\n", pvk_spv_kind_msl(ctx, in_type[loc], 4),
+                              loc, loc, pvk_spv_interp_attr(interp, in_type[loc] != PVK_MSL_SCALAR_FLOAT));
             vin[nin].location = loc;
             vin[nin].type = in_type[loc];
             vin[nin].interpolation = interp;
