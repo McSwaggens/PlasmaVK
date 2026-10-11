@@ -31547,6 +31547,14 @@ static inline void pvk_MTLSharedEvent_notifyListener_atValue_block(id self, id l
 static inline void pvk_CATransaction_begin(void) { PVK_CLASS_CACHE("CATransaction"); PVK_SEL_CACHE("begin"); PVK_MSG(void, (id, SEL))((id)pvk_cls_, pvk_sel_); }
 static inline void pvk_CATransaction_commit(void) { PVK_CLASS_CACHE("CATransaction"); PVK_SEL_CACHE("commit"); PVK_MSG(void, (id, SEL))((id)pvk_cls_, pvk_sel_); }
 static inline void pvk_CATransaction_setDisableActions(bool flag) { PVK_CLASS_CACHE("CATransaction"); PVK_SEL_CACHE("setDisableActions:"); PVK_MSG(void, (id, SEL, bool))((id)pvk_cls_, pvk_sel_, flag); }
+/* Queries (section 14) */
+static inline id pvk_MTL4CounterHeapDescriptor_new(void) { PVK_CLASS_CACHE("MTL4CounterHeapDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTL4CounterHeapDescriptor_setType(id self, pvk_MTL4CounterHeapType type) { PVK_SEL_CACHE("setType:"); PVK_MSG(void, (id, SEL, pvk_MTL4CounterHeapType))(self, pvk_sel_, type); }
+static inline void pvk_MTL4CounterHeapDescriptor_setCount(id self, unsigned long count) { PVK_SEL_CACHE("setCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, count); }
+static inline id pvk_MTLDevice_newCounterHeapWithDescriptor_error(id self, id descriptor, id * error) { PVK_SEL_CACHE("newCounterHeapWithDescriptor:error:"); return PVK_MSG(id, (id, SEL, id, id *))(self, pvk_sel_, descriptor, error); }
+static inline unsigned long pvk_MTLDevice_sizeOfCounterHeapEntry(id self, pvk_MTL4CounterHeapType type) { PVK_SEL_CACHE("sizeOfCounterHeapEntry:"); return PVK_MSG(unsigned long, (id, SEL, pvk_MTL4CounterHeapType))(self, pvk_sel_, type); }
+static inline void pvk_MTL4CommandBuffer_writeTimestampIntoHeap_atIndex(id self, id counterHeap, unsigned long index) { PVK_SEL_CACHE("writeTimestampIntoHeap:atIndex:"); PVK_MSG(void, (id, SEL, id, unsigned long))(self, pvk_sel_, counterHeap, index); }
+static inline void pvk_MTL4CommandBuffer_resolveCounterHeap_withRange_intoBuffer_waitFence_updateFence(id self, id counterHeap, pvk_NSRange range, pvk_MTL4BufferRange bufferRange, id fenceToWait, id fenceToUpdate) { PVK_SEL_CACHE("resolveCounterHeap:withRange:intoBuffer:waitFence:updateFence:"); PVK_MSG(void, (id, SEL, id, pvk_NSRange, pvk_MTL4BufferRange, id, id))(self, pvk_sel_, counterHeap, range, bufferRange, fenceToWait, fenceToUpdate); }
 
 /* ==========================================================================
  * 5. Internals
@@ -31623,7 +31631,7 @@ static void *pvk_alloc(const VkAllocationCallbacks *alloc, size_t size, VkSystem
     return p;
 }
 
-static void pvk_free(const VkAllocationCallbacks *alloc, void *p)
+static void pvk_free_raw(const VkAllocationCallbacks *alloc, void *p)
 {
     if (!p)
         return;
@@ -31631,6 +31639,19 @@ static void pvk_free(const VkAllocationCallbacks *alloc, void *p)
         alloc->pfnFree(alloc->pUserData, p);
     else
         free(p);
+}
+
+/* Private data (section 9) is keyed by handle, and handles are the objects'
+ * addresses: freeing an object drops its private data, so that an object
+ * allocated later at the same address starts without any. */
+static long pvk_private_data_entries; /* in all slots (atomic) */
+static void pvk_private_data_forget(const void *object);
+
+static void pvk_free(const VkAllocationCallbacks *alloc, void *p)
+{
+    if (p && __atomic_load_n(&pvk_private_data_entries, __ATOMIC_ACQUIRE))
+        pvk_private_data_forget(p);
+    pvk_free_raw(alloc, p);
 }
 
 /* ---- Helpers ---- */
@@ -31828,6 +31849,10 @@ struct pvk_device {
     struct pvk_blit_pipeline *blit_pipelines; /* render pipelines made from it, by function and format */
     id host_queue, host_event;                /* MTL4CommandQueue, MTLSharedEvent: host copies' blits */
     uint64_t host_serial;
+    /* Queries (sections 14-16) */
+    id query_copy_pipeline; /* internal kernel of vkCmdCopyQueryPoolResults, made on first use */
+    /* Private data (section 9): slots reserved by VkDevicePrivateDataCreateInfo */
+    struct pvk_private_data_slot *private_data_reserve;
 };
 
 /* Section 13: a queue's submission state, and waiting for the GPU before
@@ -33515,6 +33540,55 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceSparseImageFormatProperties2(VkPhy
     *pPropertyCount = 0;
 }
 
+/* ---- External handles, tools ----
+ *
+ * No external memory, fence or semaphore handle types are supported. For
+ * memory, Capabilities > External Memory Capabilities: "compatibleHandleTypes
+ * must include at least handleType"; the other members are 0. Writing member
+ * by member keeps the application's sType and pNext. */
+VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceExternalBufferProperties(VkPhysicalDevice physicalDevice,
+                                                                       const VkPhysicalDeviceExternalBufferInfo *pExternalBufferInfo,
+                                                                       VkExternalBufferProperties *pExternalBufferProperties)
+{
+    VkExternalMemoryProperties *p = &pExternalBufferProperties->externalMemoryProperties;
+    (void)physicalDevice;
+    p->externalMemoryFeatures = 0;
+    p->exportFromImportedHandleTypes = 0;
+    p->compatibleHandleTypes = (VkExternalMemoryHandleTypeFlags)pExternalBufferInfo->handleType;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceExternalFenceProperties(VkPhysicalDevice physicalDevice,
+                                                                      const VkPhysicalDeviceExternalFenceInfo *pExternalFenceInfo,
+                                                                      VkExternalFenceProperties *pExternalFenceProperties)
+{
+    (void)physicalDevice;
+    (void)pExternalFenceInfo;
+    pExternalFenceProperties->exportFromImportedHandleTypes = 0;
+    pExternalFenceProperties->compatibleHandleTypes = 0;
+    pExternalFenceProperties->externalFenceFeatures = 0;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceExternalSemaphoreProperties(
+    VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalSemaphoreInfo *pExternalSemaphoreInfo,
+    VkExternalSemaphoreProperties *pExternalSemaphoreProperties)
+{
+    (void)physicalDevice;
+    (void)pExternalSemaphoreInfo;
+    pExternalSemaphoreProperties->exportFromImportedHandleTypes = 0;
+    pExternalSemaphoreProperties->compatibleHandleTypes = 0;
+    pExternalSemaphoreProperties->externalSemaphoreFeatures = 0;
+}
+
+/* No layers or tools: PlasmaVK is linked directly, without a loader. */
+VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceToolProperties(VkPhysicalDevice physicalDevice, uint32_t *pToolCount,
+                                                                  VkPhysicalDeviceToolProperties *pToolProperties)
+{
+    (void)physicalDevice;
+    (void)pToolProperties;
+    *pToolCount = 0;
+    return VK_SUCCESS;
+}
+
 /* Whether a device extension is supported on physical devices of this
  * instance: its instance extension dependency, if any, is enabled. */
 static bool pvk_device_extension_supported(const struct pvk_instance *instance, unsigned ext)
@@ -33744,10 +33818,282 @@ static VkResult pvk_device_features(const struct pvk_physical_device *pd, const 
     return VK_SUCCESS;
 }
 
+/* ---- Private data ----
+ *
+ * A slot is a hash table from object handle to value (open addressing,
+ * linear probing). A value of 0 is not stored: an absent entry reads as 0.
+ * Handles of different object types are different addresses, so the object
+ * type is not needed. All slots of all devices are on one list behind one
+ * lock, so that pvk_free (section 5) can drop the entries of a freed object:
+ * an object created later at the same address must read 0 (Private Data:
+ * "0 will be written in the absence of a previous call to vkSetPrivateData
+ * using the object"). Queues are not freed on their own; their entries go
+ * with the slots, which are destroyed before the device.
+ *
+ * VkDevicePrivateDataCreateInfo reserves slots: vkCreateDevice allocates
+ * them with room for PVK_PRIVATE_DATA_ROOM entries, and vkCreatePrivateDataSlot
+ * hands them out (and vkDestroyPrivateDataSlot takes them back) before
+ * allocating new ones. */
+
+#define PVK_PRIVATE_DATA_ROOM 64u      /* initial table size, a power of two */
+#define PVK_PRIVATE_DATA_GONE UINT64_MAX /* handle of a deleted entry */
+
+struct pvk_private_data_entry {
+    uint64_t handle; /* 0: empty */
+    uint64_t value;
+};
+
+struct pvk_private_data_slot {
+    struct pvk_private_data_slot *prev, *next; /* all slots; the device's reserve uses next */
+    struct pvk_device *device;
+    VkAllocationCallbacks alloc;
+    bool has_alloc;
+    bool reserved;                 /* from the device's reserve, and returned there */
+    uint32_t capacity, used, live; /* used: live and deleted entries */
+    struct pvk_private_data_entry *entries;
+};
+
+static pthread_mutex_t pvk_private_data_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct pvk_private_data_slot *pvk_private_data_slots; /* created slots */
+
+static const VkAllocationCallbacks *pvk_private_data_alloc(const struct pvk_private_data_slot *slot)
+{
+    return slot->has_alloc ? &slot->alloc : NULL;
+}
+
+static uint32_t pvk_private_data_hash(uint64_t handle, uint32_t capacity)
+{
+    return (uint32_t)((handle * 0x9e3779b97f4a7c15ull) >> 32) & (capacity - 1);
+}
+
+/* The entry of handle, or NULL. Lock held. */
+static struct pvk_private_data_entry *pvk_private_data_find(const struct pvk_private_data_slot *slot, uint64_t handle)
+{
+    uint32_t i, n;
+    if (!slot->capacity)
+        return NULL;
+    for (i = pvk_private_data_hash(handle, slot->capacity), n = 0; n < slot->capacity;
+         i = (i + 1) & (slot->capacity - 1), n++) {
+        if (slot->entries[i].handle == handle)
+            return &slot->entries[i];
+        if (!slot->entries[i].handle)
+            return NULL;
+    }
+    return NULL;
+}
+
+/* Rebuilds the table with `capacity` entries (a power of two). Lock held. */
+static VkResult pvk_private_data_rehash(struct pvk_private_data_slot *slot, uint32_t capacity)
+{
+    struct pvk_private_data_entry *old = slot->entries, *entries;
+    uint32_t i, old_capacity = slot->capacity;
+
+    entries = pvk_alloc(pvk_private_data_alloc(slot), sizeof(*entries) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!entries)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    slot->entries = entries;
+    slot->capacity = capacity;
+    slot->used = slot->live;
+    for (i = 0; i < old_capacity; i++) {
+        uint32_t j;
+        if (!old[i].handle || old[i].handle == PVK_PRIVATE_DATA_GONE)
+            continue;
+        for (j = pvk_private_data_hash(old[i].handle, capacity); entries[j].handle; j = (j + 1) & (capacity - 1))
+            ;
+        entries[j] = old[i];
+    }
+    pvk_free_raw(pvk_private_data_alloc(slot), old);
+    return VK_SUCCESS;
+}
+
+static void pvk_private_data_delete(struct pvk_private_data_slot *slot, struct pvk_private_data_entry *entry)
+{
+    entry->handle = PVK_PRIVATE_DATA_GONE;
+    entry->value = 0;
+    slot->live--;
+    __atomic_sub_fetch(&pvk_private_data_entries, 1, __ATOMIC_RELEASE);
+}
+
+/* Lock held. */
+static VkResult pvk_private_data_set(struct pvk_private_data_slot *slot, uint64_t handle, uint64_t value)
+{
+    struct pvk_private_data_entry *entry = pvk_private_data_find(slot, handle);
+    uint32_t i;
+
+    if (entry) {
+        if (value)
+            entry->value = value;
+        else
+            pvk_private_data_delete(slot, entry);
+        return VK_SUCCESS;
+    }
+    if (!value)
+        return VK_SUCCESS;
+    if (!slot->capacity || (slot->used + 1) * 4 > slot->capacity * 3) { /* at most 3/4 full, deletions included */
+        uint32_t capacity = slot->capacity ? slot->capacity : PVK_PRIVATE_DATA_ROOM;
+        while ((slot->live + 1) * 2 > capacity)
+            capacity *= 2;
+        if (pvk_private_data_rehash(slot, capacity) != VK_SUCCESS)
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    for (i = pvk_private_data_hash(handle, slot->capacity);
+         slot->entries[i].handle && slot->entries[i].handle != PVK_PRIVATE_DATA_GONE; i = (i + 1) & (slot->capacity - 1))
+        ;
+    if (!slot->entries[i].handle)
+        slot->used++;
+    slot->entries[i].handle = handle;
+    slot->entries[i].value = value;
+    slot->live++;
+    __atomic_add_fetch(&pvk_private_data_entries, 1, __ATOMIC_RELEASE);
+    return VK_SUCCESS;
+}
+
+static void pvk_private_data_forget(const void *object)
+{
+    struct pvk_private_data_slot *slot;
+    pthread_mutex_lock(&pvk_private_data_lock);
+    for (slot = pvk_private_data_slots; slot; slot = slot->next) {
+        struct pvk_private_data_entry *entry = pvk_private_data_find(slot, (uint64_t)(uintptr_t)object);
+        if (entry)
+            pvk_private_data_delete(slot, entry);
+    }
+    pthread_mutex_unlock(&pvk_private_data_lock);
+}
+
+/* The slots VkDevicePrivateDataCreateInfo asks vkCreateDevice to reserve. */
+static VkResult pvk_private_data_reserve(struct pvk_device *device, const VkDeviceCreateInfo *info)
+{
+    const VkBaseInStructure *s;
+    uint32_t i, count = 0;
+    for (s = info->pNext; s; s = s->pNext)
+        if (s->sType == VK_STRUCTURE_TYPE_DEVICE_PRIVATE_DATA_CREATE_INFO)
+            count += ((const VkDevicePrivateDataCreateInfo *)s)->privateDataSlotRequestCount;
+    for (i = 0; i < count; i++) {
+        struct pvk_private_data_slot *slot =
+            pvk_alloc(pvk_device_alloc(device), sizeof(*slot), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+        if (!slot)
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        slot->device = device;
+        slot->reserved = true;
+        if (device->has_alloc) {
+            slot->alloc = device->alloc;
+            slot->has_alloc = true;
+        }
+        slot->next = device->private_data_reserve;
+        device->private_data_reserve = slot;
+        if (pvk_private_data_rehash(slot, PVK_PRIVATE_DATA_ROOM) != VK_SUCCESS)
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    return VK_SUCCESS;
+}
+
+static void pvk_private_data_free_reserve(struct pvk_device *device)
+{
+    struct pvk_private_data_slot *slot = device->private_data_reserve, *next;
+    for (; slot; slot = next) {
+        next = slot->next;
+        pvk_free_raw(pvk_private_data_alloc(slot), slot->entries);
+        pvk_free_raw(pvk_device_alloc(device), slot);
+    }
+    device->private_data_reserve = NULL;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreatePrivateDataSlot(VkDevice _device, const VkPrivateDataSlotCreateInfo *pCreateInfo,
+                                                       const VkAllocationCallbacks *pAllocator,
+                                                       VkPrivateDataSlot *pPrivateDataSlot)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    struct pvk_private_data_slot *slot;
+
+    (void)pCreateInfo; /* flags: none defined */
+    pthread_mutex_lock(&pvk_private_data_lock);
+    slot = device->private_data_reserve;
+    if (slot)
+        device->private_data_reserve = slot->next;
+    pthread_mutex_unlock(&pvk_private_data_lock);
+    if (!slot) {
+        slot = pvk_alloc(alloc, sizeof(*slot), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+        if (!slot)
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        slot->device = device;
+        if (alloc) {
+            slot->alloc = *alloc;
+            slot->has_alloc = true;
+        }
+    }
+    pthread_mutex_lock(&pvk_private_data_lock);
+    slot->prev = NULL;
+    slot->next = pvk_private_data_slots;
+    if (pvk_private_data_slots)
+        pvk_private_data_slots->prev = slot;
+    pvk_private_data_slots = slot;
+    pthread_mutex_unlock(&pvk_private_data_lock);
+    *pPrivateDataSlot = (VkPrivateDataSlot)slot;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyPrivateDataSlot(VkDevice device, VkPrivateDataSlot privateDataSlot,
+                                                    const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_private_data_slot *slot = (struct pvk_private_data_slot *)privateDataSlot;
+    (void)device;
+    (void)pAllocator; /* must match creation; the stored copy is authoritative */
+    if (!slot)
+        return;
+    pthread_mutex_lock(&pvk_private_data_lock);
+    if (slot->prev)
+        slot->prev->next = slot->next;
+    else
+        pvk_private_data_slots = slot->next;
+    if (slot->next)
+        slot->next->prev = slot->prev;
+    __atomic_sub_fetch(&pvk_private_data_entries, (long)slot->live, __ATOMIC_RELEASE);
+    slot->live = slot->used = 0;
+    if (slot->reserved) { /* back to the reserve, emptied */
+        if (slot->entries)
+            memset(slot->entries, 0, sizeof(*slot->entries) * slot->capacity);
+        slot->prev = NULL;
+        slot->next = slot->device->private_data_reserve;
+        slot->device->private_data_reserve = slot;
+        slot = NULL;
+    }
+    pthread_mutex_unlock(&pvk_private_data_lock);
+    if (slot) {
+        pvk_free_raw(pvk_private_data_alloc(slot), slot->entries);
+        pvk_free_raw(pvk_private_data_alloc(slot), slot);
+    }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkSetPrivateData(VkDevice device, VkObjectType objectType, uint64_t objectHandle,
+                                                VkPrivateDataSlot privateDataSlot, uint64_t data)
+{
+    VkResult result;
+    (void)device;
+    (void)objectType;
+    pthread_mutex_lock(&pvk_private_data_lock);
+    result = pvk_private_data_set((struct pvk_private_data_slot *)privateDataSlot, objectHandle, data);
+    pthread_mutex_unlock(&pvk_private_data_lock);
+    return result;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetPrivateData(VkDevice device, VkObjectType objectType, uint64_t objectHandle,
+                                            VkPrivateDataSlot privateDataSlot, uint64_t *pData)
+{
+    struct pvk_private_data_entry *entry;
+    (void)device;
+    (void)objectType;
+    pthread_mutex_lock(&pvk_private_data_lock);
+    entry = pvk_private_data_find((struct pvk_private_data_slot *)privateDataSlot, objectHandle);
+    *pData = entry ? entry->value : 0;
+    pthread_mutex_unlock(&pvk_private_data_lock);
+}
+
 static void pvk_device_free(struct pvk_device *device)
 {
     uint32_t i;
     pvk_device_finish(device);
+    pvk_private_data_free_reserve(device);
     for (i = 0; i < device->queue_count; i++) {
         pvk_queue_finish(&device->queues[i]);
         pvk_release(device->queues[i].mtl_queue);
@@ -33826,6 +34172,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
     if (pvk_device_create_residency_set(device) != VK_SUCCESS) {
         pvk_device_free(device);
         return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    if (pvk_private_data_reserve(device, pCreateInfo) != VK_SUCCESS) {
+        pvk_device_free(device);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
 
     for (i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
@@ -33910,6 +34260,21 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceQueue(VkDevice device, uint32_t queueFamil
     info.queueFamilyIndex = queueFamilyIndex;
     info.queueIndex = queueIndex;
     vkGetDeviceQueue2(device, &info, pQueue);
+}
+
+/* A device group of one device (section 8): valid usage allows no call
+ * (localDeviceIndex must differ from remoteDeviceIndex), and a device can do
+ * everything with its own memory. */
+VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, uint32_t heapIndex,
+                                                              uint32_t localDeviceIndex, uint32_t remoteDeviceIndex,
+                                                              VkPeerMemoryFeatureFlags *pPeerMemoryFeatures)
+{
+    (void)device;
+    (void)heapIndex;
+    (void)localDeviceIndex;
+    (void)remoteDeviceIndex;
+    *pPeerMemoryFeatures = VK_PEER_MEMORY_FEATURE_COPY_SRC_BIT | VK_PEER_MEMORY_FEATURE_COPY_DST_BIT |
+                           VK_PEER_MEMORY_FEATURE_GENERIC_SRC_BIT | VK_PEER_MEMORY_FEATURE_GENERIC_DST_BIT;
 }
 
 /* ==========================================================================
@@ -45571,8 +45936,267 @@ static VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_t vs_wo
 /* ==========================================================================
  * 14. Queries
  *
- * Query pools: timestamps, occlusion and the results commands.
+ * Query pools: timestamps, occlusion and the results commands. The commands
+ * are recorded in section 15 and encoded in section 16.
+ *
+ * STORAGE
+ *   A pool is one MTLBuffer of shared memory, resident and untracked:
+ *       results    uint64_t[queryCount] at offset 0, query q's at 8 q
+ *       available  uint64_t[queryCount] after them, non-zero: available
+ *   The GPU writes both in submission order; resets zero both
+ *   (vkResetQueryPool on the host, vkCmdResetQueryPool on the GPU).
+ *   vkGetQueryPoolResults reads them on the host, vkCmdCopyQueryPoolResults
+ *   with a kernel on the GPU. A result is final once its query is
+ *   available: section 16 sets the word behind a barrier against all
+ *   earlier work of the queue, so after whatever wrote the result.
+ *
+ * TIMESTAMPS
+ *   A timestamp pool also has an MTL4CounterHeap with one entry per query.
+ *   vkCmdWriteTimestamp is -[MTL4CommandBuffer writeTimestampIntoHeap:
+ *   atIndex:] between encoders; later in the batch (pvk_encode_query_flush)
+ *   the entry is resolved into `results` (-resolveCounterHeap:withRange:
+ *   intoBuffer:waitFence:updateFence:) and the query made available.
+ *   Measured on M4 Max, macOS 27.2:
+ *   - The command buffer's timestamp is taken once all earlier work of the
+ *     queue finished, also that of earlier command buffers: the execution
+ *     dependency of a timestamp on everything earlier in submission order,
+ *     whatever its stage. (The encoders' -writeTimestampWithGranularity:...
+ *     writes nothing in an encoder without other work, so it is not used.)
+ *   - A resolve encoded after it gets the value written (900 runs, also
+ *     behind long dispatches and under MTL_DEBUG_LAYER).
+ *   - Values are mach_absolute_time ticks, MTLDevice.queryTimestampFrequency
+ *     a second (24 MHz): section 7 reports timestampPeriod = 1e9 / that and
+ *     timestampValidBits = 64, and timestamps compare with the CPU's clock.
+ *
+ * OCCLUSION (for the render pass code)
+ *   `buffer` is the visibility result buffer: MTL4RenderPassDescriptor's
+ *   visibilityResultBuffer, with MTLVisibilityResultTypeAccumulate (a query
+ *   may span render passes; vkCmdResetQueryPool zeroed its result, and set
+ *   queue->ordered so that render encoders start after the reset). The
+ *   query's counting is -[MTL4RenderCommandEncoder setVisibilityResultMode:
+ *   MTLVisibilityResultModeCounting offset:8 q] from vkCmdBeginQuery to
+ *   vkCmdEndQuery (Disabled); exact counts serve precise and non-precise
+ *   queries. Once the render encoder has ended, pvk_encoder_query_available
+ *   (section 16) makes the query available. A render encoder has one
+ *   visibility buffer: queries of different pools in one render pass need
+ *   an encoder each (or a device-wide buffer that results are copied from).
+ *   Timestamps inside a render pass: end the render encoder around
+ *   pvk_encode_timestamp, or write with the render encoder's
+ *   -writeTimestampWithGranularity:afterStage:intoHeap:atIndex: and call
+ *   pvk_encoder_query_available after the encoder ends (heap resolved then).
+ *
+ * Pipeline statistics queries are not supported (pipelineStatisticsQuery
+ * is not reported, section 7).
  * ========================================================================== */
+
+#include <time.h>
+
+struct pvk_query_pool {
+    VkQueryType type;
+    uint32_t count;
+    id buffer;                 /* MTLBuffer: results, then availability */
+    uint64_t *results;         /* its contents */
+    uint64_t *available;       /* results + count */
+    pvk_MTLGPUAddress address; /* of results; availability at address + 8 count */
+    id heap;                   /* MTL4CounterHeap of a timestamp pool */
+};
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateQueryPool(VkDevice _device, const VkQueryPoolCreateInfo *pCreateInfo,
+                                                 const VkAllocationCallbacks *pAllocator, VkQueryPool *pQueryPool)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    id mtl = device->physical_device->mtl_device;
+    struct pvk_query_pool *pool = pvk_alloc(alloc, sizeof(*pool), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    unsigned long size;
+
+    if (!pool)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    pool->type = pCreateInfo->queryType;
+    pool->count = pCreateInfo->queryCount;
+    size = 16ul * pool->count;
+    if (size <= pvk_MTLDevice_maxBufferLength(mtl))
+        pool->buffer = pvk_MTLDevice_newBufferWithLength_options(
+            mtl, size,
+            PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeDefaultCache |
+                PVK_MTLResourceHazardTrackingModeUntracked);
+    /* Resolved entries are MTL4TimestampHeapEntry, 8 bytes: a query's result. */
+    if (pool->buffer && pool->type == VK_QUERY_TYPE_TIMESTAMP &&
+        pvk_MTLDevice_sizeOfCounterHeapEntry(mtl, PVK_MTL4CounterHeapTypeTimestamp) == sizeof(uint64_t)) {
+        void *ap = objc_autoreleasePoolPush(); /* the NSError, on failure */
+        id desc = pvk_MTL4CounterHeapDescriptor_new();
+        if (desc) {
+            pvk_MTL4CounterHeapDescriptor_setType(desc, PVK_MTL4CounterHeapTypeTimestamp);
+            pvk_MTL4CounterHeapDescriptor_setCount(desc, pool->count);
+            pool->heap = pvk_MTLDevice_newCounterHeapWithDescriptor_error(mtl, desc, NULL);
+            pvk_release(desc);
+        }
+        objc_autoreleasePoolPop(ap);
+    }
+    if (!pool->buffer || (pool->type == VK_QUERY_TYPE_TIMESTAMP && !pool->heap)) {
+        pvk_release(pool->heap);
+        pvk_release(pool->buffer);
+        pvk_free(alloc, pool);
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    pool->results = pvk_MTLBuffer_contents(pool->buffer);
+    pool->available = pool->results + pool->count;
+    pool->address = pvk_MTLBuffer_gpuAddress(pool->buffer);
+    memset(pool->results, 0, size);
+    pvk_device_make_resident(device, pool->buffer);
+    *pQueryPool = (VkQueryPool)pool;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyQueryPool(VkDevice _device, VkQueryPool queryPool,
+                                              const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    struct pvk_query_pool *pool = (struct pvk_query_pool *)queryPool;
+    if (!pool)
+        return;
+    pvk_device_evict(device, pool->buffer);
+    pvk_release(pool->buffer);
+    pvk_release(pool->heap);
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc(device), pool);
+}
+
+/* Valid usage: the GPU is done with these queries. */
+VKAPI_ATTR void VKAPI_CALL vkResetQueryPool(VkDevice device, VkQueryPool queryPool, uint32_t firstQuery,
+                                            uint32_t queryCount)
+{
+    struct pvk_query_pool *pool = (struct pvk_query_pool *)queryPool;
+    (void)device;
+    memset(pool->results + firstQuery, 0, sizeof(uint64_t) * queryCount);
+    memset(pool->available + firstQuery, 0, sizeof(uint64_t) * queryCount);
+}
+
+/* Value `index` (0: the result, 1: the availability) of a query's results. */
+static void pvk_query_store(char *dst, uint32_t index, bool wide, uint64_t value)
+{
+    if (wide) {
+        memcpy(dst + 8 * index, &value, 8);
+    } else {
+        uint32_t v = (uint32_t)value; /* wraps (vkGetQueryPoolResults: "may either wrap or saturate") */
+        memcpy(dst + 4 * index, &v, 4);
+    }
+}
+
+/* VK_QUERY_RESULT_WAIT_BIT: until query q is available, polling. It may
+ * never be (not written since its reset): the wait is then endless, which
+ * vkGetQueryPoolResults allows ("a VK_ERROR_DEVICE_LOST error may occur"). */
+static VkResult pvk_query_wait(struct pvk_device *device, const struct pvk_query_pool *pool, uint32_t q)
+{
+    long sleep_ns = 10000;
+    while (!__atomic_load_n(&pool->available[q], __ATOMIC_ACQUIRE)) {
+        struct timespec ts;
+        if (__atomic_load_n(&device->lost, __ATOMIC_ACQUIRE))
+            return VK_ERROR_DEVICE_LOST;
+        ts.tv_sec = 0;
+        ts.tv_nsec = sleep_ns;
+        nanosleep(&ts, NULL);
+        if (sleep_ns < 1000000)
+            sleep_ns *= 2;
+    }
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetQueryPoolResults(VkDevice _device, VkQueryPool queryPool, uint32_t firstQuery,
+                                                     uint32_t queryCount, size_t dataSize, void *pData,
+                                                     VkDeviceSize stride, VkQueryResultFlags flags)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    struct pvk_query_pool *pool = (struct pvk_query_pool *)queryPool;
+    bool wide = (flags & VK_QUERY_RESULT_64_BIT) != 0;
+    VkResult result = VK_SUCCESS;
+    uint32_t i;
+
+    (void)dataSize;
+    for (i = 0; i < queryCount; i++) {
+        uint32_t q = firstQuery + i;
+        char *dst = (char *)pData + stride * i;
+        bool ready = __atomic_load_n(&pool->available[q], __ATOMIC_ACQUIRE) != 0;
+        if (!ready && (flags & VK_QUERY_RESULT_WAIT_BIT)) {
+            VkResult r = pvk_query_wait(device, pool, q);
+            if (r != VK_SUCCESS)
+                return r;
+            ready = true;
+        }
+        /* Unavailable without PARTIAL: nothing is written. PARTIAL (not
+         * for timestamps): an occlusion count so far, between 0 and the
+         * final result. */
+        if (ready || (flags & VK_QUERY_RESULT_PARTIAL_BIT))
+            pvk_query_store(dst, 0, wide, __atomic_load_n(&pool->results[q], __ATOMIC_RELAXED));
+        if (flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT)
+            pvk_query_store(dst, 1, wide, ready ? 1 : 0);
+        if (!ready)
+            result = VK_NOT_READY;
+    }
+    return __atomic_load_n(&device->lost, __ATOMIC_ACQUIRE) ? VK_ERROR_DEVICE_LOST : result;
+}
+
+/* vkCmdCopyQueryPoolResults (section 16): one query per thread, arguments
+ * (struct pvk_query_copy_args) at the push-constant index. Flags are
+ * VkQueryResultFlags: 1 64_BIT, 4 WITH_AVAILABILITY, 8 PARTIAL. */
+static const char pvk_query_copy_msl[] =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct pvk_query_copy_args {\n"
+    "    device const ulong *results;\n"
+    "    device const ulong *available;\n"
+    "    device uchar *dst;\n"
+    "    ulong stride;\n"
+    "    uint count;\n"
+    "    uint flags;\n"
+    "};\n"
+    "kernel void pvk_query_copy(constant pvk_query_copy_args &a [[buffer(30)]], uint i [[thread_position_in_grid]])\n"
+    "{\n"
+    "    if (i >= a.count)\n"
+    "        return;\n"
+    "    bool ready = a.available[i] != 0;\n"
+    "    bool write = ready || (a.flags & 8u) != 0;\n"
+    "    device uchar *p = a.dst + a.stride * i;\n"
+    "    if (a.flags & 1u) {\n"
+    "        device ulong *d = (device ulong *)p;\n"
+    "        if (write)\n"
+    "            d[0] = a.results[i];\n"
+    "        if (a.flags & 4u)\n"
+    "            d[1] = ready ? 1ul : 0ul;\n"
+    "    } else {\n"
+    "        device uint *d = (device uint *)p;\n"
+    "        if (write)\n"
+    "            d[0] = uint(a.results[i]);\n"
+    "        if (a.flags & 4u)\n"
+    "            d[1] = ready ? 1u : 0u;\n"
+    "    }\n"
+    "}\n";
+
+struct pvk_query_copy_args {
+    pvk_MTLGPUAddress results, available, dst;
+    uint64_t stride;
+    uint32_t count, flags;
+};
+
+static id pvk_compile_compute(struct pvk_device *device, const char *msl, const char *entry, unsigned long max_threads,
+                              char *error, size_t error_size); /* section 17 */
+
+static pthread_mutex_t pvk_query_lock = PTHREAD_MUTEX_INITIALIZER; /* queues of a device encode concurrently */
+
+static id pvk_device_query_copy_pipeline(struct pvk_device *device)
+{
+    id pso;
+    pthread_mutex_lock(&pvk_query_lock);
+    if (!device->query_copy_pipeline) {
+        char error[256];
+        device->query_copy_pipeline =
+            pvk_compile_compute(device, pvk_query_copy_msl, "pvk_query_copy", 64, error, sizeof(error));
+        if (!device->query_copy_pipeline)
+            pvk_log(PVK_LOG_ERROR, "internal query copy kernel: %s", error);
+    }
+    pso = device->query_copy_pipeline;
+    pthread_mutex_unlock(&pvk_query_lock);
+    return pso;
+}
 
 /* ==========================================================================
  * 15. Command buffers
@@ -45862,7 +46486,10 @@ enum pvk_cmd_op {
     PVK_CMD_COPY_BUFFER_IMAGE, /* struct pvk_cmd_buffer_image */
     PVK_CMD_COPY_IMAGE,        /* struct pvk_cmd_copy_image */
     PVK_CMD_BLIT_IMAGE,        /* struct pvk_cmd_blit (blits and resolves) */
-    PVK_CMD_CLEAR_IMAGE        /* struct pvk_cmd_clear */
+    PVK_CMD_CLEAR_IMAGE,       /* struct pvk_cmd_clear */
+    /* Queries and events (end of this section) */
+    PVK_CMD_QUERY,             /* struct pvk_cmd_query */
+    PVK_CMD_EVENT              /* struct pvk_cmd_event */
 };
 
 struct pvk_cmd {
@@ -46943,10 +47570,171 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
     }
 }
 
+/* ---- Query and event commands ----
+ *
+ * Query pools are section 14's. Events are section 16's, as the commands
+ * see them: a word of shared memory, 0 when reset. Encoding is in section 16
+ * (pvk_encode_query, pvk_encode_event).
+ *
+ * Device waits for events wait for nothing. Valid usage lets vkCmdWaitEvents2
+ * wait only for an event signaled by a vkCmdSetEvent2 earlier in submission
+ * order (VUID-vkCmdWaitEvents2-pEvents-03841), which is on the same queue, or
+ * by a vkSetEvent before the wait executes (-03840); vkCmdWaitEvents waits
+ * for vkCmdSetEvent and vkSetEvent alike (VUID-vkCmdWaitEvents-srcStageMask-
+ * 01158); and vkSetEvent must not signal an event that a pending command
+ * buffer waits on (VUID-vkSetEvent-event-09543). So a wait is the pipeline
+ * barrier of its dependencies: its first scope, everything earlier in
+ * submission order, contains the signal's. Host stages need no GPU barrier
+ * (pvk_barrier_stages), so a host signal costs nothing, and no queue waits on
+ * an event (section 16: Metal 4 queue waits give up after about 4 s). */
+
+struct pvk_event {
+    id buffer;       /* MTLBuffer of 8 bytes, shared, resident */
+    uint64_t *state; /* its contents: 0 reset, else set */
+};
+
+enum pvk_query_op { PVK_QUERY_RESET, PVK_QUERY_TIMESTAMP, PVK_QUERY_COPY };
+
+struct pvk_cmd_query {
+    struct pvk_cmd hdr;
+    uint32_t op; /* enum pvk_query_op */
+    uint32_t first, count;
+    uint32_t flags; /* copy: VkQueryResultFlags */
+    struct pvk_query_pool *pool;
+    pvk_MTLGPUAddress dst; /* copy: where the first query's results go */
+    VkDeviceSize stride;   /* copy */
+};
+
+struct pvk_cmd_event {
+    struct pvk_cmd hdr;
+    struct pvk_event *event;
+    uint64_t value; /* the new state */
+};
+
+static struct pvk_cmd_query *pvk_cmd_query(VkCommandBuffer cb, enum pvk_query_op op, VkQueryPool pool, uint32_t first,
+                                           uint32_t count)
+{
+    struct pvk_cmd_query *c = pvk_cmd_append((struct pvk_command_buffer *)cb, PVK_CMD_QUERY, sizeof(*c));
+    if (!c)
+        return NULL;
+    pvk_cmd_zero(c, sizeof(*c));
+    c->op = op;
+    c->first = first;
+    c->count = count;
+    c->pool = (struct pvk_query_pool *)pool;
+    return c;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdResetQueryPool(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
+                                               uint32_t firstQuery, uint32_t queryCount)
+{
+    if (queryCount)
+        pvk_cmd_query(commandBuffer, PVK_QUERY_RESET, queryPool, firstQuery, queryCount);
+}
+
+/* Whatever the stage, the timestamp is taken once all earlier work is done
+ * (section 14), which Vulkan allows: "it may instead do so at any logically
+ * later stage". */
+VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp2(VkCommandBuffer commandBuffer, VkPipelineStageFlags2 stage,
+                                                VkQueryPool queryPool, uint32_t query)
+{
+    (void)stage;
+    pvk_cmd_query(commandBuffer, PVK_QUERY_TIMESTAMP, queryPool, query, 1);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp(VkCommandBuffer commandBuffer, VkPipelineStageFlagBits pipelineStage,
+                                               VkQueryPool queryPool, uint32_t query)
+{
+    vkCmdWriteTimestamp2(commandBuffer, (VkPipelineStageFlags2)pipelineStage, queryPool, query);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdCopyQueryPoolResults(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
+                                                     uint32_t firstQuery, uint32_t queryCount, VkBuffer dstBuffer,
+                                                     VkDeviceSize dstOffset, VkDeviceSize stride,
+                                                     VkQueryResultFlags flags)
+{
+    const struct pvk_buffer *buffer = (const struct pvk_buffer *)dstBuffer;
+    struct pvk_cmd_query *c;
+    if (!queryCount || !buffer->memory)
+        return;
+    c = pvk_cmd_query(commandBuffer, PVK_QUERY_COPY, queryPool, firstQuery, queryCount);
+    if (!c)
+        return;
+    c->flags = flags;
+    c->dst = buffer->gpu_address + dstOffset;
+    c->stride = stride;
+}
+
+static void pvk_cmd_event(VkCommandBuffer cb, VkEvent event, uint64_t value)
+{
+    struct pvk_cmd_event *c = pvk_cmd_append((struct pvk_command_buffer *)cb, PVK_CMD_EVENT, sizeof(*c));
+    if (!c)
+        return;
+    c->event = (struct pvk_event *)event;
+    c->value = value;
+}
+
+/* A signal or reset waits for all earlier work (section 16), whatever the
+ * stages. */
+VKAPI_ATTR void VKAPI_CALL vkCmdSetEvent(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags stageMask)
+{
+    (void)stageMask;
+    pvk_cmd_event(commandBuffer, event, 1);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetEvent2(VkCommandBuffer commandBuffer, VkEvent event,
+                                          const VkDependencyInfo *pDependencyInfo)
+{
+    (void)pDependencyInfo; /* the waits apply the dependencies */
+    pvk_cmd_event(commandBuffer, event, 1);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdResetEvent(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags stageMask)
+{
+    (void)stageMask;
+    pvk_cmd_event(commandBuffer, event, 0);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdResetEvent2(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags2 stageMask)
+{
+    (void)stageMask;
+    pvk_cmd_event(commandBuffer, event, 0);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdWaitEvents(VkCommandBuffer commandBuffer, uint32_t eventCount, const VkEvent *pEvents,
+                                           VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask,
+                                           uint32_t memoryBarrierCount, const VkMemoryBarrier *pMemoryBarriers,
+                                           uint32_t bufferMemoryBarrierCount,
+                                           const VkBufferMemoryBarrier *pBufferMemoryBarriers,
+                                           uint32_t imageMemoryBarrierCount,
+                                           const VkImageMemoryBarrier *pImageMemoryBarriers)
+{
+    (void)eventCount;
+    (void)pEvents;
+    vkCmdPipelineBarrier(commandBuffer, srcStageMask, dstStageMask, 0, memoryBarrierCount, pMemoryBarriers,
+                         bufferMemoryBarrierCount, pBufferMemoryBarriers, imageMemoryBarrierCount, pImageMemoryBarriers);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdWaitEvents2(VkCommandBuffer commandBuffer, uint32_t eventCount, const VkEvent *pEvents,
+                                            const VkDependencyInfo *pDependencyInfos)
+{
+    uint32_t i;
+    (void)pEvents;
+    for (i = 0; i < eventCount; i++)
+        vkCmdPipelineBarrier2(commandBuffer, &pDependencyInfos[i]);
+}
+
+/* One device: the mask is 1. */
+VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uint32_t deviceMask)
+{
+    (void)commandBuffer;
+    (void)deviceMask;
+}
+
 /* ==========================================================================
  * 16. Queue submission and synchronization
  *
- * vkQueueSubmit, fences, semaphores and waiting for idle.
+ * vkQueueSubmit, fences, semaphores, events and waiting for idle.
  *
  * SUBMISSION
  *   Each batch (VkSubmitInfo) with command buffers is encoded into one
@@ -47219,6 +48007,12 @@ static void pvk_queue_put_submissions(struct pvk_queue *queue, struct pvk_submis
 
 /* ---- Encoding ---- */
 
+/* Queries to make available (see "Queries and events" below). */
+struct pvk_query_range {
+    struct pvk_query_pool *pool;
+    uint32_t first, count;
+};
+
 struct pvk_encoder {
     struct pvk_device *device;
     struct pvk_queue *queue;
@@ -47238,6 +48032,9 @@ struct pvk_encoder {
      * those the argument table holds at indices 0.. (0: unknown). */
     pvk_MTLGPUAddress sets[2][PVK_MAX_BOUND_SETS];
     pvk_MTLGPUAddress sets_bound[PVK_MAX_BOUND_SETS];
+    /* Queries made available since the last pvk_encode_query_flush */
+    struct pvk_query_range queries[16];
+    uint32_t query_count;
 };
 
 /* A new upload chunk of `size` bytes, resident; NULL with e->result set. */
@@ -48031,6 +48828,186 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
     }
 }
 
+/* ---- Queries and events ----
+ *
+ * The packets of section 15's query and event commands (sections 14 and 15
+ * say what they do). The queries a batch makes available are collected and
+ * flushed together (pvk_encode_query_flush): timestamp heap entries are
+ * resolved into their pools, then one compute encoder, behind a barrier
+ * against all earlier work of the queue (the resolves run in the blit stage,
+ * occlusion counting render passes before them), sets the availability
+ * words. Flushes come before what must see the queries available or must
+ * not be undone by a late availability write: resets, result copies, event
+ * signals (after which the host may read results) and the end of a batch.
+ *
+ * Resets, availability and event writes are compute encoders of their own,
+ * so that their barriers do not hold back the work around them. */
+
+static id pvk_encoder_alone(struct pvk_encoder *e)
+{
+    id enc;
+    if (e->result != VK_SUCCESS)
+        return NULL;
+    pvk_encoder_end(e);
+    enc = pvk_MTL4CommandBuffer_computeCommandEncoder(e->cb);
+    if (!enc) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return NULL;
+    }
+    pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
+        enc, PVK_STAGES_ALL, PVK_MTLStageBlit, PVK_MTL4VisibilityOptionDevice);
+    return enc;
+}
+
+/* Fills 8-byte words [first, first + count) of a buffer with bytes `value`. */
+static void pvk_encode_fill_words(id enc, id buffer, uint64_t first, uint64_t count, uint8_t value)
+{
+    pvk_NSRange range;
+    range.location = 8 * first;
+    range.length = 8 * count;
+    pvk_MTL4ComputeCommandEncoder_fillBuffer_range_value(enc, buffer, range, value);
+}
+
+static void pvk_encode_query_flush(struct pvk_encoder *e)
+{
+    uint32_t i, n = e->query_count;
+    id enc;
+
+    e->query_count = 0;
+    if (!n || e->result != VK_SUCCESS)
+        return;
+    pvk_encoder_end(e);
+    for (i = 0; i < n; i++) {
+        const struct pvk_query_range *r = &e->queries[i];
+        pvk_NSRange range;
+        pvk_MTL4BufferRange dst;
+        if (!r->pool->heap)
+            continue;
+        range.location = r->first;
+        range.length = r->count;
+        dst.bufferAddress = r->pool->address + 8ull * r->first;
+        dst.length = 8ull * r->count;
+        pvk_MTL4CommandBuffer_resolveCounterHeap_withRange_intoBuffer_waitFence_updateFence(e->cb, r->pool->heap, range,
+                                                                                            dst, NULL, NULL);
+    }
+    if (!(enc = pvk_encoder_alone(e)))
+        return;
+    for (i = 0; i < n; i++)
+        pvk_encode_fill_words(enc, e->queries[i].pool->buffer, (uint64_t)e->queries[i].pool->count + e->queries[i].first,
+                              e->queries[i].count, 1);
+    pvk_MTL4CommandEncoder_endEncoding(enc);
+}
+
+/* Queries [first, first + count) of a pool become available once the work
+ * encoded so far is done (a timestamp pool's heap entries: written, to be
+ * resolved). No encoder other than e->enc may be open. */
+static void pvk_encoder_query_available(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t first,
+                                        uint32_t count)
+{
+    struct pvk_query_range *r = e->query_count ? &e->queries[e->query_count - 1] : NULL;
+    if (r && r->pool == pool && r->first + r->count == first) {
+        r->count += count;
+        return;
+    }
+    if (e->query_count == PVK_ARRAY_SIZE(e->queries))
+        pvk_encode_query_flush(e);
+    r = &e->queries[e->query_count++];
+    r->pool = pool;
+    r->first = first;
+    r->count = count;
+}
+
+/* No encoder other than e->enc may be open. */
+static void pvk_encode_timestamp(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t query)
+{
+    if (e->result != VK_SUCCESS)
+        return;
+    pvk_encoder_end(e);
+    pvk_MTL4CommandBuffer_writeTimestampIntoHeap_atIndex(e->cb, pool->heap, query);
+    pvk_encoder_query_available(e, pool, query, 1);
+}
+
+static void pvk_encode_query_reset(struct pvk_encoder *e, const struct pvk_cmd_query *c)
+{
+    id enc;
+    pvk_encode_query_flush(e);
+    if (!(enc = pvk_encoder_alone(e)))
+        return;
+    pvk_encode_fill_words(enc, c->pool->buffer, c->first, c->count, 0);
+    pvk_encode_fill_words(enc, c->pool->buffer, (uint64_t)c->pool->count + c->first, c->count, 0);
+    pvk_MTL4CommandEncoder_endEncoding(enc);
+    /* Render passes counting occlusion into the results must start after
+     * it, so later encoders wait for earlier work. Timestamps, availability
+     * writes and copies wait for earlier work anyway. */
+    if (c->pool->type != VK_QUERY_TYPE_TIMESTAMP)
+        e->queue->ordered = true;
+}
+
+static void pvk_encode_query_copy(struct pvk_encoder *e, const struct pvk_cmd_query *c)
+{
+    struct pvk_query_copy_args *args;
+    pvk_MTLGPUAddress address;
+    pvk_MTLSize groups, threads;
+    id enc, pso;
+
+    pvk_encode_query_flush(e);
+    if (!(pso = pvk_device_query_copy_pipeline(e->device))) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return;
+    }
+    if (!(enc = pvk_encoder_get(e)))
+        return;
+    if (!e->consumer_barrier) { /* earlier encoders wrote the results and availability */
+        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
+            enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, PVK_MTL4VisibilityOptionDevice);
+        e->consumer_barrier = true;
+    }
+    if (!(args = pvk_upload(e, sizeof(*args), 16, NULL, NULL, &address)))
+        return;
+    args->results = c->pool->address + 8ull * c->first;
+    args->available = c->pool->address + 8ull * ((uint64_t)c->pool->count + c->first);
+    args->dst = c->dst;
+    args->stride = c->stride;
+    args->count = c->count;
+    args->flags = c->flags;
+    pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, pso);
+    e->pipeline_dirty = true;
+    pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+    e->push_bound = 0;
+    groups.width = (c->count + 63) / 64;
+    groups.height = groups.depth = 1;
+    threads.width = 64;
+    threads.height = threads.depth = 1;
+    pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(enc, groups, threads);
+}
+
+static void pvk_encode_query(struct pvk_encoder *e, const struct pvk_cmd_query *c)
+{
+    switch ((enum pvk_query_op)c->op) {
+    case PVK_QUERY_RESET:
+        pvk_encode_query_reset(e, c);
+        break;
+    case PVK_QUERY_TIMESTAMP:
+        pvk_encode_timestamp(e, c->pool, c->first);
+        break;
+    case PVK_QUERY_COPY:
+        pvk_encode_query_copy(e, c);
+        break;
+    }
+}
+
+/* After all earlier work: what the signal's first scope holds, and a reset
+ * lands after an earlier signal. */
+static void pvk_encode_event(struct pvk_encoder *e, const struct pvk_cmd_event *c)
+{
+    id enc;
+    pvk_encode_query_flush(e);
+    if (!(enc = pvk_encoder_alone(e)))
+        return;
+    pvk_encode_fill_words(enc, c->event->buffer, 0, 1, c->value ? 1 : 0);
+    pvk_MTL4CommandEncoder_endEncoding(enc);
+}
+
 static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_buffer *cb, uint32_t depth)
 {
     static const uint32_t zero[3] = { 0, 0, 0 };
@@ -48114,6 +49091,12 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
             case PVK_CMD_CLEAR_IMAGE:
                 pvk_encode_clear(e, (const struct pvk_cmd_clear *)c);
                 break;
+            case PVK_CMD_QUERY:
+                pvk_encode_query(e, (const struct pvk_cmd_query *)c);
+                break;
+            case PVK_CMD_EVENT:
+                pvk_encode_event(e, (const struct pvk_cmd_event *)c);
+                break;
             }
         }
     }
@@ -48134,6 +49117,7 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
     pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(s->cb, s->allocator);
     for (i = 0; i < submit->commandBufferInfoCount && e.result == VK_SUCCESS; i++)
         pvk_encode_commands(&e, (const struct pvk_command_buffer *)submit->pCommandBufferInfos[i].commandBuffer, 0);
+    pvk_encode_query_flush(&e);
     pvk_encoder_end(&e);
     pvk_MTL4CommandBuffer_endCommandBuffer(s->cb);
     return e.result;
@@ -48523,6 +49507,66 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue _queue, uint32_t submitCoun
     return result;
 }
 
+/* No queue family has VK_QUEUE_SPARSE_BINDING_BIT (section 7), so valid
+ * usage allows no call (VUID-vkQueueBindSparse-queuetype). Should one come
+ * anyway, its batches still wait for and signal their semaphores, as
+ * batches without command buffers, and the fence is signaled. */
+VKAPI_ATTR VkResult VKAPI_CALL vkQueueBindSparse(VkQueue _queue, uint32_t bindInfoCount, const VkBindSparseInfo *pBindInfo,
+                                                 VkFence fence)
+{
+    struct pvk_queue *queue = (struct pvk_queue *)_queue;
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(queue->device);
+    VkSemaphoreSubmitInfo *sems;
+    VkSubmitInfo2 *submits;
+    VkResult result;
+    size_t nsem = 0;
+    uint32_t i, j;
+
+    if (!bindInfoCount)
+        return pvk_queue_submit(queue, 0, NULL, fence);
+    for (i = 0; i < bindInfoCount; i++) {
+        nsem += (size_t)pBindInfo[i].waitSemaphoreCount + pBindInfo[i].signalSemaphoreCount;
+        if (pBindInfo[i].bufferBindCount || pBindInfo[i].imageOpaqueBindCount || pBindInfo[i].imageBindCount)
+            pvk_log(PVK_LOG_WARN, "vkQueueBindSparse: sparse resources are not supported, binds ignored");
+    }
+    submits = pvk_alloc(alloc, sizeof(*submits) * bindInfoCount + sizeof(*sems) * nsem, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+    if (!submits)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    sems = (VkSemaphoreSubmitInfo *)(submits + bindInfoCount);
+    for (i = 0; i < bindInfoCount; i++) {
+        const VkBindSparseInfo *in = &pBindInfo[i];
+        const VkTimelineSemaphoreSubmitInfo *values = NULL;
+        const VkBaseInStructure *ext;
+        VkSubmitInfo2 *out = &submits[i];
+
+        for (ext = in->pNext; ext; ext = ext->pNext)
+            if (ext->sType == VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO)
+                values = (const VkTimelineSemaphoreSubmitInfo *)ext;
+        out->sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+        out->waitSemaphoreInfoCount = in->waitSemaphoreCount;
+        out->pWaitSemaphoreInfos = sems;
+        for (j = 0; j < in->waitSemaphoreCount; j++, sems++) {
+            sems->sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            sems->semaphore = in->pWaitSemaphores[j];
+            sems->stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            if (values && values->pWaitSemaphoreValues && j < values->waitSemaphoreValueCount)
+                sems->value = values->pWaitSemaphoreValues[j];
+        }
+        out->signalSemaphoreInfoCount = in->signalSemaphoreCount;
+        out->pSignalSemaphoreInfos = sems;
+        for (j = 0; j < in->signalSemaphoreCount; j++, sems++) {
+            sems->sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            sems->semaphore = in->pSignalSemaphores[j];
+            sems->stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            if (values && values->pSignalSemaphoreValues && j < values->signalSemaphoreValueCount)
+                sems->value = values->pSignalSemaphoreValues[j];
+        }
+    }
+    result = pvk_queue_submit(queue, bindInfoCount, submits, fence);
+    pvk_free(alloc, submits);
+    return result;
+}
+
 /* ---- Presentation ----
  *
  * The queue operation of vkQueuePresentKHR (section 18 gets the drawables
@@ -48770,6 +49814,8 @@ static void pvk_device_finish(struct pvk_device *device)
     }
     pvk_release(device->fill_pipeline);
     device->fill_pipeline = NULL;
+    pvk_release(device->query_copy_pipeline);
+    device->query_copy_pipeline = NULL;
     pvk_device_finish_images(device);
 }
 
@@ -48897,6 +49943,69 @@ VKAPI_ATTR VkResult VKAPI_CALL vkWaitSemaphores(VkDevice device, const VkSemapho
     return pvk_wait((struct pvk_device *)device, pWaitInfo->semaphoreCount,
                     !(pWaitInfo->flags & VK_SEMAPHORE_WAIT_ANY_BIT), timeout, pvk_semaphore_state,
                     pWaitInfo->pSemaphores, pWaitInfo->pValues);
+}
+
+/* ---- Events ----
+ *
+ * An event (struct pvk_event, section 15) is a word of shared memory that
+ * the host and the GPU (pvk_encode_event) write and the host reads; no GPU
+ * work waits on it (section 15, "Query and event commands"). */
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateEvent(VkDevice _device, const VkEventCreateInfo *pCreateInfo,
+                                             const VkAllocationCallbacks *pAllocator, VkEvent *pEvent)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    struct pvk_event *event = pvk_alloc(alloc, sizeof(*event), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+
+    (void)pCreateInfo; /* VK_EVENT_CREATE_DEVICE_ONLY_BIT changes nothing */
+    if (!event)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    event->buffer = pvk_MTLDevice_newBufferWithLength_options(
+        device->physical_device->mtl_device, 8,
+        PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeDefaultCache |
+            PVK_MTLResourceHazardTrackingModeUntracked);
+    if (!event->buffer) {
+        pvk_free(alloc, event);
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    event->state = pvk_MTLBuffer_contents(event->buffer);
+    *event->state = 0; /* created unsignaled */
+    pvk_device_make_resident(device, event->buffer);
+    *pEvent = (VkEvent)event;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyEvent(VkDevice _device, VkEvent _event, const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    struct pvk_event *event = (struct pvk_event *)_event;
+    if (!event)
+        return;
+    pvk_device_evict(device, event->buffer);
+    pvk_release(event->buffer);
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc(device), event);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetEventStatus(VkDevice device, VkEvent event)
+{
+    if (pvk_device_lost((struct pvk_device *)device))
+        return VK_ERROR_DEVICE_LOST;
+    return __atomic_load_n(((struct pvk_event *)event)->state, __ATOMIC_ACQUIRE) ? VK_EVENT_SET : VK_EVENT_RESET;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkSetEvent(VkDevice device, VkEvent event)
+{
+    (void)device;
+    __atomic_store_n(((struct pvk_event *)event)->state, 1, __ATOMIC_RELEASE);
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkResetEvent(VkDevice device, VkEvent event)
+{
+    (void)device;
+    __atomic_store_n(((struct pvk_event *)event)->state, 0, __ATOMIC_RELEASE);
+    return VK_SUCCESS;
 }
 
 /* ==========================================================================
@@ -50059,7 +51168,6 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer2(VkCommandBuffer commandBuffer, 
 VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers(VkCommandBuffer commandBuffer, uint32_t firstBinding, uint32_t bindingCount, const VkBuffer* pBuffers, const VkDeviceSize* pOffsets) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers2(VkCommandBuffer commandBuffer, uint32_t firstBinding, uint32_t bindingCount, const VkBuffer* pBuffers, const VkDeviceSize* pOffsets, const VkDeviceSize* pSizes, const VkDeviceSize* pStrides) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdClearAttachments(VkCommandBuffer commandBuffer, uint32_t attachmentCount, const VkClearAttachment* pAttachments, uint32_t rectCount, const VkClearRect* pRects) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdCopyQueryPoolResults(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount, VkBuffer dstBuffer, VkDeviceSize dstOffset, VkDeviceSize stride, VkQueryResultFlags flags) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdDraw(VkCommandBuffer commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexed(VkCommandBuffer commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexedIndirect(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, uint32_t drawCount, uint32_t stride) { PVK_UNIMPLEMENTED(); }
@@ -50072,9 +51180,6 @@ VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass2(VkCommandBuffer commandBuffer, co
 VKAPI_ATTR void VKAPI_CALL vkCmdEndRendering(VkCommandBuffer commandBuffer) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass(VkCommandBuffer commandBuffer, VkSubpassContents contents) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass2(VkCommandBuffer commandBuffer, const VkSubpassBeginInfo* pSubpassBeginInfo, const VkSubpassEndInfo* pSubpassEndInfo) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdResetEvent(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags stageMask) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdResetEvent2(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags2 stageMask) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdResetQueryPool(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetBlendConstants(VkCommandBuffer commandBuffer, const float blendConstants[4]) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetCullMode(VkCommandBuffer commandBuffer, VkCullModeFlags cullMode) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthBias(VkCommandBuffer commandBuffer, float depthBiasConstantFactor, float depthBiasClamp, float depthBiasSlopeFactor) { PVK_UNIMPLEMENTED(); }
@@ -50084,9 +51189,6 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthBoundsTestEnable(VkCommandBuffer command
 VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthCompareOp(VkCommandBuffer commandBuffer, VkCompareOp depthCompareOp) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthTestEnable(VkCommandBuffer commandBuffer, VkBool32 depthTestEnable) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthWriteEnable(VkCommandBuffer commandBuffer, VkBool32 depthWriteEnable) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uint32_t deviceMask) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetEvent(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags stageMask) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdSetEvent2(VkCommandBuffer commandBuffer, VkEvent event, const VkDependencyInfo* pDependencyInfo) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetFrontFace(VkCommandBuffer commandBuffer, VkFrontFace frontFace) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetLineStipple(VkCommandBuffer commandBuffer, uint32_t lineStippleFactor, uint16_t lineStipplePattern) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetLineWidth(VkCommandBuffer commandBuffer, float lineWidth) { PVK_UNIMPLEMENTED(); }
@@ -50104,43 +51206,20 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetStencilTestEnable(VkCommandBuffer commandBuff
 VKAPI_ATTR void VKAPI_CALL vkCmdSetStencilWriteMask(VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMask, uint32_t writeMask) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetViewport(VkCommandBuffer commandBuffer, uint32_t firstViewport, uint32_t viewportCount, const VkViewport* pViewports) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkCmdSetViewportWithCount(VkCommandBuffer commandBuffer, uint32_t viewportCount, const VkViewport* pViewports) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdWaitEvents(VkCommandBuffer commandBuffer, uint32_t eventCount, const VkEvent* pEvents, VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask, uint32_t memoryBarrierCount, const VkMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const VkBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const VkImageMemoryBarrier* pImageMemoryBarriers) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdWaitEvents2(VkCommandBuffer commandBuffer, uint32_t eventCount, const VkEvent* pEvents, const VkDependencyInfo* pDependencyInfos) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp(VkCommandBuffer commandBuffer, VkPipelineStageFlagBits pipelineStage, VkQueryPool queryPool, uint32_t query) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp2(VkCommandBuffer commandBuffer, VkPipelineStageFlags2 stage, VkQueryPool queryPool, uint32_t query) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateEvent(VkDevice device, const VkEventCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkEvent* pEvent) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateFramebuffer(VkDevice device, const VkFramebufferCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkFramebuffer* pFramebuffer) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateGraphicsPipelines(VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount, const VkGraphicsPipelineCreateInfo* pCreateInfos, const VkAllocationCallbacks* pAllocator, VkPipeline* pPipelines) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineCache(VkDevice device, const VkPipelineCacheCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkPipelineCache* pPipelineCache) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreatePrivateDataSlot(VkDevice device, const VkPrivateDataSlotCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkPrivateDataSlot* pPrivateDataSlot) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkCreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkQueryPool* pQueryPool) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRenderPassCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkRenderPass* pRenderPass) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass2(VkDevice device, const VkRenderPassCreateInfo2* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkRenderPass* pRenderPass) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateSamplerYcbcrConversion(VkDevice device, const VkSamplerYcbcrConversionCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSamplerYcbcrConversion* pYcbcrConversion) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkDestroyEvent(VkDevice device, VkEvent event, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyFramebuffer(VkDevice device, VkFramebuffer framebuffer, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineCache(VkDevice device, VkPipelineCache pipelineCache, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyPrivateDataSlot(VkDevice device, VkPrivateDataSlot privateDataSlot, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkDestroyQueryPool(VkDevice device, VkQueryPool queryPool, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroyRenderPass(VkDevice device, VkRenderPass renderPass, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkDestroySamplerYcbcrConversion(VkDevice device, VkSamplerYcbcrConversion ycbcrConversion, const VkAllocationCallbacks* pAllocator) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, uint32_t heapIndex, uint32_t localDeviceIndex, uint32_t remoteDeviceIndex, VkPeerMemoryFeatureFlags* pPeerMemoryFeatures) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetEventStatus(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceExternalBufferProperties(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalBufferInfo* pExternalBufferInfo, VkExternalBufferProperties* pExternalBufferProperties) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceExternalFenceProperties(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalFenceInfo* pExternalFenceInfo, VkExternalFenceProperties* pExternalFenceProperties) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceExternalSemaphoreProperties(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalSemaphoreInfo* pExternalSemaphoreInfo, VkExternalSemaphoreProperties* pExternalSemaphoreProperties) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceToolProperties(VkPhysicalDevice physicalDevice, uint32_t* pToolCount, VkPhysicalDeviceToolProperties* pToolProperties) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPipelineCacheData(VkDevice device, VkPipelineCache pipelineCache, size_t* pDataSize, void* pData) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkGetPrivateData(VkDevice device, VkObjectType objectType, uint64_t objectHandle, VkPrivateDataSlot privateDataSlot, uint64_t* pData) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkGetQueryPoolResults(VkDevice device, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* pData, VkDeviceSize stride, VkQueryResultFlags flags) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 VKAPI_ATTR void VKAPI_CALL vkGetRenderAreaGranularity(VkDevice device, VkRenderPass renderPass, VkExtent2D* pGranularity) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR void VKAPI_CALL vkGetRenderingAreaGranularity(VkDevice device, const VkRenderingAreaInfo* pRenderingAreaInfo, VkExtent2D* pGranularity) { PVK_UNIMPLEMENTED(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkMergePipelineCaches(VkDevice device, VkPipelineCache dstCache, uint32_t srcCacheCount, const VkPipelineCache* pSrcCaches) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkQueueBindSparse(VkQueue queue, uint32_t bindInfoCount, const VkBindSparseInfo* pBindInfo, VkFence fence) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkResetEvent(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR void VKAPI_CALL vkResetQueryPool(VkDevice device, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount) { PVK_UNIMPLEMENTED(); }
-VKAPI_ATTR VkResult VKAPI_CALL vkSetEvent(VkDevice device, VkEvent event) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
-VKAPI_ATTR VkResult VKAPI_CALL vkSetPrivateData(VkDevice device, VkObjectType objectType, uint64_t objectHandle, VkPrivateDataSlot privateDataSlot, uint64_t data) { PVK_UNIMPLEMENTED(); return VK_ERROR_UNKNOWN; }
 
 #if defined(__clang__)
 #pragma clang diagnostic pop

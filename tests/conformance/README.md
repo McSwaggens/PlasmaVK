@@ -30,6 +30,9 @@ One file per chapter of the Vulkan specification:
 | `copies.c` | Copy Commands: buffer/image and image/image copies, blits, resolves, host image copies, texel by texel | 10 |
 | `clears.c` | Clear Commands: color and depth/stencil image clears, texel by texel | 4 |
 | `descriptorsets.c` | Resource Descriptors > Descriptor Sets: set layouts and support queries, pools and allocation, writes, copies, inline uniform blocks, update templates, dynamic offsets, push descriptors, update after bind, variable-count and partially bound bindings, every descriptor type read by a compute shader | 19 |
+| `queries.c` | Queries: pools, host and device resets, timestamp availability, order and period, `vkCmdWriteTimestamp2`, secondaries, results layout with every flag, waiting, unavailable occlusion queries with PARTIAL, `vkCmdCopyQueryPoolResults` (later submission, same command buffer, WAIT) | 15 |
+| `synchronization.c` | Synchronization and Cache Control > Events: host and device state, the host seeing a device signal, device waits on host and device signals (same command buffer, batch, earlier submission, several events, synchronization2, device-only events) | 7 |
+| `privatedata.c` | Private Data: slots, data on objects of many types, data of new objects and slots, many objects, reserved slots, allocation callbacks | 7 |
 | `wsi.c` | Window System Integration: Metal surfaces, surface queries (support, capabilities, formats, present modes, present rectangles, device group modes), swapchains (images, allocation callbacks, `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`, recreation with `oldSwapchain`, aliasing a swapchain image), acquire and present (semaphores, fences, timeouts, two swapchains in one present), swapchain images as transfer source and destination | 20 |
 
 Framework: `ct.h` (test macros, helpers), `ct.c` (runner, helpers),
@@ -174,6 +177,30 @@ against the specification; the tests are right:
   pCopySrcLayouts array, and on return the variable is overwritten with the
   number of values actually written to pCopySrcLayouts" (and the same for the
   destination list).
+- `queries.copy_results_same_commands`, `queries.copy_results_wait`
+  (intermittent): `vkCmdCopyQueryPoolResults` in the command buffer that wrote
+  the timestamps copies 0 for some of them (with availability 1), after an
+  `ALL_COMMANDS` to `TRANSFER` execution dependency on the writes, or with
+  `VK_QUERY_RESULT_WAIT_BIT` ("the implementation will wait for each query's
+  status to be in the available state before retrieving the numerical
+  results"). Copied by a later submission (`queries.copy_results`) they are
+  right; under the validation layer, which changes the timing, both pass.
+- `synchronization.event_device_state`: in one command buffer, `vkCmdSetEvent`,
+  a pipeline barrier with `VK_PIPELINE_STAGE_ALL_COMMANDS_BIT`, then
+  `vkCmdResetEvent` leaves the event signaled (and reset, barrier, set leaves
+  it unsignaled). The specification (vkCmdResetEvent2) leaves set and reset
+  unordered only without such a dependency: "Another execution dependency
+  (e.g. a pipeline barrier or semaphore with
+  VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT) is needed to prevent such a race
+  condition." In separate submissions both work.
+- `privatedata.private_data_slot_destroy_null`: `vkDestroyPrivateDataSlot`
+  with `VK_NULL_HANDLE` crashes (`MVKDevice::destroyPrivateDataSlot`), which
+  VUID-vkDestroyPrivateDataSlot-privateDataSlot-parameter allows ("If
+  privateDataSlot is not VK_NULL_HANDLE, ...").
+- `privatedata.private_data_new_objects`: an object created after one with
+  private data was destroyed, at the same address, reads that data.
+  vkGetPrivateData: "0 will be written in the absence of a previous call to
+  vkSetPrivateData using the object specified by objectHandle".
 
 - `wsi.native_window_in_use_other_surface`: with a swapchain on one
   VkSurfaceKHR of a CAMetalLayer, MoltenVK creates a second swapchain for
