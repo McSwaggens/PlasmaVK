@@ -1,7 +1,9 @@
 /* Chapter "Copy Commands": copies between buffers and images and between
  * images, blits, resolves, and host image copies (Copying Data Between Host
- * Memory and Images), checked texel by texel. Formats and capabilities are
- * the required ones (Formats > Required Format Support) or queried first. */
+ * Memory and Images), checked texel by texel; buffer copies and the copies,
+ * blits and resolves of Vulkan 1.3 (vkCmdCopyBuffer2 and the others with
+ * extensible regions). Formats and capabilities are the required ones
+ * (Formats > Required Format Support) or queried first. */
 #include "ct.h"
 
 #include <stdio.h>
@@ -1029,11 +1031,470 @@ CT_TEST(copy_image_planes,
     ct_env_fini(&e);
 }
 
+/* ---- The commands of Vulkan 1.3 (VK_KHR_copy_commands2) ----
+ *
+ * "Functionally identical" to the Vulkan 1.0 commands, with the regions in
+ * structures that have sType and pNext. */
+
+#define COPY2_COMMANDS                                                                                             \
+    "vkCmdPipelineBarrier vkCreateImage vkDestroyImage vkGetImageMemoryRequirements vkAllocateMemory "             \
+    "vkBindImageMemory vkFreeMemory vkCreateBuffer vkDestroyBuffer vkGetBufferMemoryRequirements "                 \
+    "vkBindBufferMemory vkMapMemory "
+
+static VkBufferImageCopy2 region2(const VkBufferImageCopy *r)
+{
+    VkBufferImageCopy2 r2;
+    memset(&r2, 0, sizeof(r2));
+    r2.sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2;
+    r2.bufferOffset = r->bufferOffset;
+    r2.bufferRowLength = r->bufferRowLength;
+    r2.bufferImageHeight = r->bufferImageHeight;
+    r2.imageSubresource = r->imageSubresource;
+    r2.imageOffset = r->imageOffset;
+    r2.imageExtent = r->imageExtent;
+    return r2;
+}
+
+static void copy_to_image2(VkCommandBuffer cb, VkBuffer buffer, VkImage image, uint32_t n, const VkBufferImageCopy *r)
+{
+    VkBufferImageCopy2 r2[4];
+    VkCopyBufferToImageInfo2 info;
+    uint32_t i;
+    for (i = 0; i < n && i < 4; i++)
+        r2[i] = region2(&r[i]);
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2;
+    info.srcBuffer = buffer;
+    info.dstImage = image;
+    info.dstImageLayout = DST;
+    info.regionCount = n;
+    info.pRegions = r2;
+    vkCmdCopyBufferToImage2(cb, &info);
+}
+
+static void copy_to_buffer2(VkCommandBuffer cb, VkImage image, VkBuffer buffer, uint32_t n, const VkBufferImageCopy *r)
+{
+    VkBufferImageCopy2 r2[4];
+    VkCopyImageToBufferInfo2 info;
+    uint32_t i;
+    for (i = 0; i < n && i < 4; i++)
+        r2[i] = region2(&r[i]);
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2;
+    info.srcImage = image;
+    info.srcImageLayout = SRC;
+    info.dstBuffer = buffer;
+    info.regionCount = n;
+    info.pRegions = r2;
+    vkCmdCopyImageToBuffer2(cb, &info);
+}
+
+CT_TEST(copy_buffer2,
+        "Copy Commands > Copying Data Between Buffers (vkCmdCopyBuffer2, Vulkan 1.3): each region of "
+        "VkCopyBufferInfo2 (VkBufferCopy2) copies size bytes from srcOffset to dstOffset, at any byte offsets; "
+        "the rest of the destination is untouched",
+        "vkCmdCopyBuffer2 vkCmdPipelineBarrier vkCreateBuffer vkDestroyBuffer vkGetBufferMemoryRequirements "
+        "vkAllocateMemory vkBindBufferMemory vkMapMemory vkFreeMemory")
+{
+    enum { SIZE = 65536 };
+    static const VkDeviceSize regions[3][3] = { { 3, 1001, 517 }, { 4096, 8192, 4096 }, { 60000, 0, 100 } };
+    struct ct_env e;
+    struct ct_buffer src, dst;
+    VkBufferCopy2 r[3];
+    VkCopyBufferInfo2 info;
+    VkCommandBuffer cb;
+    unsigned char *want;
+    uint32_t i;
+
+    ct_env_init(t, &e);
+    if (e.version < VK_API_VERSION_1_3)
+        ct_skip(t, "vkCmdCopyBuffer2 is Vulkan 1.3");
+    ct_env_device(t, &e, NULL);
+    ct_host_buffer(t, &e, SIZE, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &src);
+    ct_host_buffer(t, &e, SIZE, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &dst);
+    want = malloc(SIZE);
+    CT_REQUIRE(t, want != NULL);
+    ct_fill_pattern(src.data, SIZE, 21);
+    memset(dst.data, 0xCC, SIZE);
+    memset(want, 0xCC, SIZE);
+    memset(r, 0, sizeof(r));
+    for (i = 0; i < 3; i++) {
+        r[i].sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2;
+        r[i].srcOffset = regions[i][0];
+        r[i].dstOffset = regions[i][1];
+        r[i].size = regions[i][2];
+        memcpy(want + regions[i][1], src.data + regions[i][0], (size_t)regions[i][2]);
+    }
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2;
+    info.srcBuffer = src.buffer;
+    info.dstBuffer = dst.buffer;
+    info.regionCount = 3;
+    info.pRegions = r;
+    cb = ct_begin_commands(t, &e);
+    vkCmdCopyBuffer2(cb, &info);
+    ct_host_read_barrier(cb);
+    ct_submit_and_wait(t, &e, cb);
+    for (i = 0; i < SIZE; i++)
+        if (dst.data[i] != want[i]) {
+            ct_fail(t, __FILE__, __LINE__, "byte %u is 0x%02x, expected 0x%02x", i, dst.data[i], want[i]);
+            break;
+        }
+    free(want);
+    ct_buffer_fini(&e, &src);
+    ct_buffer_fini(&e, &dst);
+    ct_env_fini(&e);
+}
+
+/* Uploads `up` with vkCmdCopyBufferToImage2, reads the same region back
+ * tightly packed with vkCmdCopyImageToBuffer2, compares row by row. */
+static void roundtrip2(struct ct *t, struct ct_env *e, const VkImageCreateInfo *info, const VkBufferImageCopy *up,
+                       uint32_t texel, const char *what)
+{
+    uint32_t rl = up->bufferRowLength ? up->bufferRowLength : up->imageExtent.width;
+    uint32_t ih = up->bufferImageHeight ? up->bufferImageHeight : up->imageExtent.height;
+    uint32_t w = up->imageExtent.width, h = up->imageExtent.height;
+    uint32_t slices = up->imageSubresource.layerCount > up->imageExtent.depth ? up->imageSubresource.layerCount
+                                                                             : up->imageExtent.depth;
+    VkDeviceSize in_size = up->bufferOffset + (VkDeviceSize)rl * ih * slices * texel;
+    VkBufferImageCopy down = *up;
+    struct ct_buffer in, out;
+    struct ct_image m;
+    VkCommandBuffer cb;
+    uint32_t z, y, bad = 0;
+
+    ct_image(t, e, info, 0, &m);
+    ct_host_buffer(t, e, in_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &in);
+    ct_host_buffer(t, e, 8 + (VkDeviceSize)w * h * slices * texel, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &out);
+    ct_fill_pattern(in.data, (size_t)in_size, (unsigned)info->format + 1);
+    down.bufferOffset = 8;
+    down.bufferRowLength = down.bufferImageHeight = 0;
+    cb = ct_begin_commands(t, e);
+    ct_image_barrier(cb, m.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, DST);
+    copy_to_image2(cb, in.buffer, m.image, 1, up);
+    ct_image_barrier(cb, m.image, VK_IMAGE_ASPECT_COLOR_BIT, DST, SRC);
+    copy_to_buffer2(cb, m.image, out.buffer, 1, &down);
+    ct_host_read_barrier(cb);
+    ct_submit_and_wait(t, e, cb);
+    for (z = 0; z < slices; z++)
+        for (y = 0; y < h; y++)
+            if (memcmp(out.data + 8 + ((VkDeviceSize)z * h + y) * w * texel,
+                       in.data + up->bufferOffset + ((VkDeviceSize)z * ih + y) * rl * texel, (size_t)w * texel))
+                bad++;
+    CT_CHECKF(t, bad == 0, "%s: %u of %u rows differ", what, bad, slices * h);
+    ct_buffer_fini(e, &in);
+    ct_buffer_fini(e, &out);
+    ct_image_fini(e, &m);
+}
+
+CT_TEST(copy_buffer_image2,
+        "Copy Commands > Copying Data Between Buffers and Images (vkCmdCopyBufferToImage2, vkCmdCopyImageToBuffer2, "
+        "Vulkan 1.3): functionally identical to vkCmdCopyBufferToImage and vkCmdCopyImageToBuffer: a region "
+        "(VkBufferImageCopy2: offset, extent, mip level, array layers) is copied between buffer memory laid out by "
+        "bufferOffset, bufferRowLength and bufferImageHeight and the image's texels, both ways",
+        COPY2_COMMANDS "vkCmdCopyBufferToImage2 vkCmdCopyImageToBuffer2")
+{
+    struct ct_env e;
+    VkImageCreateInfo info;
+    VkBufferImageCopy r;
+    ct_env_init(t, &e);
+    if (e.version < VK_API_VERSION_1_3)
+        ct_skip(t, "the copy commands 2 are Vulkan 1.3");
+    ct_env_device(t, &e, NULL);
+    info = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 37, 21, 1, 4, 3, XFER);
+    r = region(VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 2, 3, 2, 0, 13, 7, 1);
+    r.bufferOffset = 12;
+    r.bufferRowLength = 20;
+    r.bufferImageHeight = 9;
+    roundtrip2(t, &e, &info, &r, 4, "2D array, level 1, padded rows");
+    info = ct_image_info(VK_IMAGE_TYPE_3D, VK_FORMAT_R32_SFLOAT, 16, 12, 8, 2, 1, XFER);
+    r = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 2, 1, 3, 10, 9, 4);
+    r.bufferRowLength = 12;
+    roundtrip2(t, &e, &info, &r, 4, "3D slices");
+    ct_env_fini(&e);
+}
+
+CT_TEST(copy_image2,
+        "Copy Commands > Copying Data Between Images (vkCmdCopyImage2, Vulkan 1.3): functionally identical to "
+        "vkCmdCopyImage: regions (VkImageCopy2) of mip levels and array layers are copied between images, also of "
+        "size-compatible formats (R32_UINT to R8G8B8A8_UNORM: the same bytes)",
+        COPY2_COMMANDS "vkCmdCopyImage2 vkCmdCopyBufferToImage vkCmdCopyImageToBuffer")
+{
+    struct ct_env e;
+    VkImageCreateInfo ia, ib;
+    struct ct_image a, b;
+    struct ct_buffer in, out;
+    VkBufferImageCopy up, down;
+    VkImageCopy c;
+    VkImageCopy2 c2[2];
+    VkCopyImageInfo2 info;
+    VkCommandBuffer cb;
+    uint32_t y, l, bad = 0;
+
+    ct_env_init(t, &e);
+    if (e.version < VK_API_VERSION_1_3)
+        ct_skip(t, "vkCmdCopyImage2 is Vulkan 1.3");
+    ct_env_device(t, &e, NULL);
+    ia = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R32_UINT, 32, 32, 1, 2, 3, XFER);
+    ib = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 16, 16, 1, 1, 4, XFER);
+    ct_image(t, &e, &ia, 0, &a);
+    ct_image(t, &e, &ib, 0, &b);
+    ct_host_buffer(t, &e, 16 * 16 * 3 * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &in);
+    ct_host_buffer(t, &e, 16 * 16 * 4 * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &out);
+    ct_fill_pattern(in.data, (size_t)in.size, 13);
+    up = region(VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 3, 0, 0, 0, 16, 16, 1);
+    down = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 4, 0, 0, 0, 16, 16, 1);
+    memset(c2, 0, sizeof(c2));
+    c = image_copy(1, 1, 2, 3, 0, 0, 2, 5, 6, 0, 2, 9, 7, 1); /* layers 1..2 of level 1 -> layers 2..3 */
+    c2[0].sType = VK_STRUCTURE_TYPE_IMAGE_COPY_2;
+    c2[0].srcSubresource = c.srcSubresource;
+    c2[0].srcOffset = c.srcOffset;
+    c2[0].dstSubresource = c.dstSubresource;
+    c2[0].dstOffset = c.dstOffset;
+    c2[0].extent = c.extent;
+    c = image_copy(1, 0, 10, 0, 0, 0, 0, 0, 12, 0, 1, 6, 4, 1); /* layer 0 of level 1 -> layer 0, bottom left */
+    c2[1] = c2[0];
+    c2[1].srcSubresource = c.srcSubresource;
+    c2[1].srcOffset = c.srcOffset;
+    c2[1].dstSubresource = c.dstSubresource;
+    c2[1].dstOffset = c.dstOffset;
+    c2[1].extent = c.extent;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_COPY_IMAGE_INFO_2;
+    info.srcImage = a.image;
+    info.srcImageLayout = SRC;
+    info.dstImage = b.image;
+    info.dstImageLayout = DST;
+    info.regionCount = 2;
+    info.pRegions = c2;
+    cb = ct_begin_commands(t, &e);
+    ct_image_barrier(cb, a.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, DST);
+    ct_image_barrier(cb, b.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, DST);
+    vkCmdCopyBufferToImage(cb, in.buffer, a.image, DST, 1, &up);
+    ct_image_barrier(cb, a.image, VK_IMAGE_ASPECT_COLOR_BIT, DST, SRC);
+    vkCmdCopyImage2(cb, &info);
+    ct_image_barrier(cb, b.image, VK_IMAGE_ASPECT_COLOR_BIT, DST, SRC);
+    vkCmdCopyImageToBuffer(cb, b.image, SRC, out.buffer, 1, &down);
+    ct_host_read_barrier(cb);
+    ct_submit_and_wait(t, &e, cb);
+    for (l = 0; l < 2; l++)
+        for (y = 0; y < 7; y++)
+            if (memcmp(out.data + (((l + 2) * 16 + 6 + y) * 16 + 5) * 4, in.data + (((l + 1) * 16 + 3 + y) * 16 + 2) * 4,
+                       9 * 4))
+                bad++;
+    for (y = 0; y < 4; y++)
+        if (memcmp(out.data + ((12 + y) * 16) * 4, in.data + (y * 16 + 10) * 4, 6 * 4))
+            bad++;
+    CT_CHECKF(t, bad == 0, "%u rows differ", bad);
+    ct_buffer_fini(&e, &in);
+    ct_buffer_fini(&e, &out);
+    ct_image_fini(&e, &a);
+    ct_image_fini(&e, &b);
+    ct_env_fini(&e);
+}
+
+static VkImageBlit2 blit2(const VkImageBlit *b)
+{
+    VkImageBlit2 b2;
+    memset(&b2, 0, sizeof(b2));
+    b2.sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2;
+    b2.srcSubresource = b->srcSubresource;
+    b2.srcOffsets[0] = b->srcOffsets[0];
+    b2.srcOffsets[1] = b->srcOffsets[1];
+    b2.dstSubresource = b->dstSubresource;
+    b2.dstOffsets[0] = b->dstOffsets[0];
+    b2.dstOffsets[1] = b->dstOffsets[1];
+    return b2;
+}
+
+CT_TEST(blit_image2,
+        "Copy Commands > Image Copies With Scaling (vkCmdBlitImage2, Vulkan 1.3): functionally identical to "
+        "vkCmdBlitImage: with VkBlitImageInfo2's filter, nearest filtering of a 2x reduction takes the odd texels, "
+        "linear filtering averages 2x2 texels, reversed offsets mirror (several VkImageBlit2 regions)",
+        COPY2_COMMANDS "vkCmdBlitImage2 vkCmdCopyBufferToImage vkCmdCopyImageToBuffer")
+{
+    struct ct_env e;
+    VkImageCreateInfo info;
+    struct ct_image a, b;
+    struct ct_buffer in, out;
+    VkBufferImageCopy up, down;
+    VkImageBlit bl;
+    VkImageBlit2 near[2], lin;
+    VkBlitImageInfo2 bi;
+    VkCommandBuffer cb;
+    uint32_t x, y, c;
+    int bad = 0;
+
+    ct_env_init(t, &e);
+    if (e.version < VK_API_VERSION_1_3)
+        ct_skip(t, "vkCmdBlitImage2 is Vulkan 1.3");
+    ct_env_device(t, &e, NULL);
+    info = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 4, 4, 1, 1, 1, XFER);
+    ct_image(t, &e, &info, 0, &a);
+    info = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 8, 8, 1, 1, 1, XFER);
+    ct_image(t, &e, &info, 0, &b);
+    ct_host_buffer(t, &e, 4 * 4 * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &in);
+    ct_host_buffer(t, &e, 8 * 8 * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &out);
+    for (y = 0; y < 4; y++)
+        for (x = 0; x < 4; x++)
+            for (c = 0; c < 4; c++)
+                in.data[(y * 4 + x) * 4 + c] = (unsigned char)(16 * (y * 4 + x) + 4 * c);
+    up = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, 4, 4, 1);
+    down = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, 8, 8, 1);
+    bl = blit_region(0, 0, 0, 4, 4, 0, 0, 0, 2, 2); /* 2x down */
+    near[0] = blit2(&bl);
+    bl = blit_region(0, 0, 0, 4, 4, 0, 8, 2, 0, 6); /* 2x up horizontally, mirrored */
+    near[1] = blit2(&bl);
+    bl = blit_region(0, 0, 0, 4, 4, 0, 4, 0, 6, 2); /* 2x down, linear */
+    lin = blit2(&bl);
+    memset(&bi, 0, sizeof(bi));
+    bi.sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2;
+    bi.srcImage = a.image;
+    bi.srcImageLayout = SRC;
+    bi.dstImage = b.image;
+    bi.dstImageLayout = DST;
+    cb = ct_begin_commands(t, &e);
+    ct_image_barrier(cb, a.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, DST);
+    ct_image_barrier(cb, b.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, DST);
+    vkCmdCopyBufferToImage(cb, in.buffer, a.image, DST, 1, &up);
+    ct_image_barrier(cb, a.image, VK_IMAGE_ASPECT_COLOR_BIT, DST, SRC);
+    bi.regionCount = 2;
+    bi.pRegions = near;
+    bi.filter = VK_FILTER_NEAREST;
+    vkCmdBlitImage2(cb, &bi);
+    bi.regionCount = 1;
+    bi.pRegions = &lin;
+    bi.filter = VK_FILTER_LINEAR;
+    vkCmdBlitImage2(cb, &bi);
+    ct_image_barrier(cb, b.image, VK_IMAGE_ASPECT_COLOR_BIT, DST, SRC);
+    vkCmdCopyImageToBuffer(cb, b.image, SRC, out.buffer, 1, &down);
+    ct_host_read_barrier(cb);
+    ct_submit_and_wait(t, &e, cb);
+    for (y = 0; y < 2; y++)
+        for (x = 0; x < 2; x++) {
+            if (memcmp(out.data + (y * 8 + x) * 4, in.data + ((2 * y + 1) * 4 + 2 * x + 1) * 4, 4))
+                bad |= 1;
+            for (c = 0; c < 4; c++) {
+                int sum = in.data[((2 * y) * 4 + 2 * x) * 4 + c] + in.data[((2 * y) * 4 + 2 * x + 1) * 4 + c] +
+                          in.data[((2 * y + 1) * 4 + 2 * x) * 4 + c] + in.data[((2 * y + 1) * 4 + 2 * x + 1) * 4 + c];
+                int got = out.data[(y * 8 + 4 + x) * 4 + c];
+                if (got - sum / 4 > 1 || sum / 4 - got > 1)
+                    bad |= 2;
+            }
+        }
+    for (y = 2; y < 6; y++)
+        for (x = 0; x < 8; x++)
+            if (memcmp(out.data + (y * 8 + x) * 4, in.data + ((y - 2) * 4 + (7 - x) / 2) * 4, 4))
+                bad |= 4;
+    CT_CHECKF(t, !(bad & 1), "nearest reduction");
+    CT_CHECKF(t, !(bad & 2), "linear reduction");
+    CT_CHECKF(t, !(bad & 4), "mirrored magnification");
+    ct_buffer_fini(&e, &in);
+    ct_buffer_fini(&e, &out);
+    ct_image_fini(&e, &a);
+    ct_image_fini(&e, &b);
+    ct_env_fini(&e);
+}
+
+CT_TEST(resolve_image2,
+        "Copy Commands > Resolving Multisample Images (vkCmdResolveImage2, Vulkan 1.3): functionally identical to "
+        "vkCmdResolveImage: a region (VkImageResolve2) of a multisampled image resolves to a single-sample image "
+        "at another offset and layer; samples of equal value resolve to that value",
+        COPY2_COMMANDS "vkCmdResolveImage2 vkCmdClearColorImage vkCmdCopyImageToBuffer "
+                       "vkGetPhysicalDeviceImageFormatProperties")
+{
+    struct ct_env e;
+    VkImageCreateInfo info;
+    VkImageFormatProperties p;
+    struct ct_image ms, single;
+    struct ct_buffer out;
+    VkImageSubresourceRange range;
+    VkClearColorValue color;
+    VkImageResolve2 res;
+    VkResolveImageInfo2 ri;
+    VkBufferImageCopy down;
+    VkCommandBuffer cb;
+    uint32_t x, y, l;
+    const unsigned char want[4] = { 0x00, 0xff, 0x00, 0xff }, zero[4] = { 0, 0, 0, 0 };
+
+    ct_env_init(t, &e);
+    if (e.version < VK_API_VERSION_1_3)
+        ct_skip(t, "vkCmdResolveImage2 is Vulkan 1.3");
+    if (vkGetPhysicalDeviceImageFormatProperties(e.pd, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
+                                                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | XFER, 0, &p) != VK_SUCCESS ||
+        !(p.sampleCounts & VK_SAMPLE_COUNT_4_BIT))
+        ct_skip(t, "no 4-sample R8G8B8A8_UNORM images");
+    ct_env_device(t, &e, NULL);
+    info = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 16, 16, 1, 1, 1,
+                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | XFER);
+    info.samples = VK_SAMPLE_COUNT_4_BIT;
+    ct_image(t, &e, &info, 0, &ms);
+    info = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 16, 16, 1, 1, 2, XFER);
+    ct_image(t, &e, &info, 0, &single);
+    ct_host_buffer(t, &e, 16 * 16 * 2 * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &out);
+    memset(&range, 0, sizeof(range));
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = VK_REMAINING_ARRAY_LAYERS;
+    memset(&res, 0, sizeof(res));
+    res.sType = VK_STRUCTURE_TYPE_IMAGE_RESOLVE_2;
+    res.srcSubresource.aspectMask = res.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    res.srcSubresource.layerCount = res.dstSubresource.layerCount = 1;
+    res.dstSubresource.baseArrayLayer = 1;
+    res.srcOffset.x = 3;
+    res.srcOffset.y = 1;
+    res.dstOffset.x = 2;
+    res.dstOffset.y = 9;
+    res.extent.width = 7;
+    res.extent.height = 4;
+    res.extent.depth = 1;
+    memset(&ri, 0, sizeof(ri));
+    ri.sType = VK_STRUCTURE_TYPE_RESOLVE_IMAGE_INFO_2;
+    ri.srcImage = ms.image;
+    ri.srcImageLayout = SRC;
+    ri.dstImage = single.image;
+    ri.dstImageLayout = DST;
+    ri.regionCount = 1;
+    ri.pRegions = &res;
+    down = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 2, 0, 0, 0, 16, 16, 1);
+    cb = ct_begin_commands(t, &e);
+    ct_image_barrier(cb, ms.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, DST);
+    ct_image_barrier(cb, single.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, DST);
+    memset(&color, 0, sizeof(color));
+    vkCmdClearColorImage(cb, single.image, DST, &color, 1, &range);
+    color.float32[1] = 1.0f;
+    color.float32[3] = 1.0f;
+    vkCmdClearColorImage(cb, ms.image, DST, &color, 1, &range);
+    ct_image_barrier(cb, ms.image, VK_IMAGE_ASPECT_COLOR_BIT, DST, SRC);
+    vkCmdResolveImage2(cb, &ri);
+    ct_image_barrier(cb, single.image, VK_IMAGE_ASPECT_COLOR_BIT, DST, SRC);
+    vkCmdCopyImageToBuffer(cb, single.image, SRC, out.buffer, 1, &down);
+    ct_host_read_barrier(cb);
+    ct_submit_and_wait(t, &e, cb);
+    for (l = 0; l < 2; l++)
+        for (y = 0; y < 16; y++)
+            for (x = 0; x < 16; x++) {
+                int inside = l == 1 && x >= 2 && x < 9 && y >= 9 && y < 13;
+                if (memcmp(out.data + ((l * 16 + y) * 16 + x) * 4, inside ? want : zero, 4)) {
+                    CT_CHECKF(t, 0, "layer %u texel (%u, %u)", l, x, y);
+                    l = 2;
+                    y = 16;
+                    break;
+                }
+            }
+    ct_buffer_fini(&e, &out);
+    ct_image_fini(&e, &ms);
+    ct_image_fini(&e, &single);
+    ct_env_fini(&e);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(copy_buffer_image),    CT_REF(copy_buffer_image_depth_stencil), CT_REF(copy_buffer_image_compressed),
     CT_REF(copy_image),           CT_REF(copy_image_compressed),           CT_REF(copy_image_3d_layers),
     CT_REF(blit_image),           CT_REF(blit_image_integer),              CT_REF(resolve_image),
     CT_REF(host_image_copy),      CT_REF(copy_buffer_image_planes),        CT_REF(copy_image_planes),
+    CT_REF(copy_buffer2),         CT_REF(copy_buffer_image2),              CT_REF(copy_image2),
+    CT_REF(blit_image2),          CT_REF(resolve_image2),
 };
 
 CT_SUITE(copies, tests)

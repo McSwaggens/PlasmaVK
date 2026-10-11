@@ -1,9 +1,9 @@
-/* Chapter "Synchronization and Cache Control", section "Events": event
- * state on the host and the device, and device waits on events signaled by
- * the host before submission or by the device earlier in submission order
- * (the only waits valid usage allows: VUID-vkCmdWaitEvents2-pEvents-03840,
- * -03841, VUID-vkSetEvent-event-09543), with the memory dependency of the
- * wait. */
+/* Chapter "Synchronization and Cache Control". Events: event state on the
+ * host and the device, and device waits on events signaled by the host
+ * before submission or by the device earlier in submission order (the only
+ * waits valid usage allows: VUID-vkCmdWaitEvents2-pEvents-03840, -03841,
+ * VUID-vkSetEvent-event-09543), with the memory dependency of the wait.
+ * Timeline semaphores: their values and host waits. Wait idle operations. */
 #include "ct.h"
 
 #include <time.h>
@@ -485,10 +485,352 @@ CT_TEST(event_wait2,
     ct_env_fini(&s.e);
 }
 
+/* ---- Timeline semaphores ---- */
+
+/* A device with timelineSemaphore; skips below Vulkan 1.2. */
+static void st_init_timeline(struct ct *t, struct ct_env *e)
+{
+    VkPhysicalDeviceVulkan12Features v12;
+    struct ct_features f;
+    ct_env_init(t, e);
+    if (e->version < VK_API_VERSION_1_2)
+        ct_skip(t, "timeline semaphores are Vulkan 1.2");
+    ct_get_features(e, &f, 0);
+    CT_REQUIREF(t, f.v12.timelineSemaphore, "timelineSemaphore is required by Vulkan 1.2");
+    memset(&v12, 0, sizeof(v12));
+    v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    v12.timelineSemaphore = VK_TRUE;
+    ct_env_device(t, e, &v12);
+}
+
+static VkSemaphore st_timeline(struct ct *t, struct ct_env *e, uint64_t initial)
+{
+    VkSemaphoreTypeCreateInfo type;
+    VkSemaphoreCreateInfo info;
+    VkSemaphore s = VK_NULL_HANDLE;
+    memset(&type, 0, sizeof(type));
+    type.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+    type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+    type.initialValue = initial;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    info.pNext = &type;
+    CT_REQUIRE_VK(t, vkCreateSemaphore(e->device, &info, NULL, &s));
+    return s;
+}
+
+static uint64_t st_value(struct ct *t, struct ct_env *e, VkSemaphore s)
+{
+    uint64_t v = 0xdeadbeefdeadbeefull;
+    CT_CHECK_VK(t, vkGetSemaphoreCounterValue(e->device, s, &v), VK_SUCCESS);
+    return v;
+}
+
+static VkResult st_host_signal(struct ct_env *e, VkSemaphore s, uint64_t value)
+{
+    VkSemaphoreSignalInfo info;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
+    info.semaphore = s;
+    info.value = value;
+    return vkSignalSemaphore(e->device, &info);
+}
+
+/* Submits cb in a batch waiting for `wait` to reach wait_value (if wait is
+ * not VK_NULL_HANDLE) and signaling `signal` with signal_value. */
+static void st_submit_timeline(struct ct *t, struct ct_env *e, VkCommandBuffer cb, VkSemaphore wait,
+                               uint64_t wait_value, VkSemaphore signal, uint64_t signal_value)
+{
+    VkTimelineSemaphoreSubmitInfo values;
+    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    VkSubmitInfo submit;
+    memset(&values, 0, sizeof(values));
+    values.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+    values.waitSemaphoreValueCount = wait ? 1 : 0;
+    values.pWaitSemaphoreValues = wait ? &wait_value : NULL;
+    values.signalSemaphoreValueCount = 1;
+    values.pSignalSemaphoreValues = &signal_value;
+    memset(&submit, 0, sizeof(submit));
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.pNext = &values;
+    submit.waitSemaphoreCount = wait ? 1 : 0;
+    submit.pWaitSemaphores = wait ? &wait : NULL;
+    submit.pWaitDstStageMask = wait ? &stage : NULL;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cb;
+    submit.signalSemaphoreCount = 1;
+    submit.pSignalSemaphores = &signal;
+    CT_REQUIRE_VK(t, vkQueueSubmit(e->queue, 1, &submit, VK_NULL_HANDLE));
+}
+
+static void st_sleep_ms(long ms)
+{
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000;
+    nanosleep(&ts, NULL);
+}
+
+CT_TEST(semaphore_counter_value,
+        "Synchronization and Cache Control > Semaphores > Host Operations on Semaphores (vkGetSemaphoreCounterValue, "
+        "Vulkan 1.2): a timeline semaphore's value is VkSemaphoreTypeCreateInfo::initialValue, then the value of "
+        "each signal operation: by vkSignalSemaphore at once, by a batch once it executes; not before (a batch "
+        "held by a wait on a value the host signals later has not signaled)",
+        "vkGetSemaphoreCounterValue vkCreateSemaphore vkDestroySemaphore vkSignalSemaphore vkQueueSubmit "
+        "vkQueueWaitIdle vkCmdFillBuffer vkCmdPipelineBarrier vkEndCommandBuffer vkCreateBuffer vkDestroyBuffer "
+        "vkGetBufferMemoryRequirements vkAllocateMemory vkBindBufferMemory vkMapMemory vkFreeMemory")
+{
+    struct st s;
+    struct ct_buffer buf;
+    VkSemaphore a, gate, big;
+    VkCommandBuffer cb;
+    uint64_t v;
+
+    st_init_timeline(t, &s.e);
+    a = st_timeline(t, &s.e, 7);
+    gate = st_timeline(t, &s.e, 0);
+    big = st_timeline(t, &s.e, 0x123456789abcull);
+    CT_CHECKF(t, (v = st_value(t, &s.e, a)) == 7, "initial value 7: %llu", (unsigned long long)v);
+    CT_CHECKF(t, (v = st_value(t, &s.e, gate)) == 0, "initial value 0: %llu", (unsigned long long)v);
+    CT_CHECKF(t, (v = st_value(t, &s.e, big)) == 0x123456789abcull, "initial value 0x123456789abc: 0x%llx",
+              (unsigned long long)v);
+    CT_REQUIRE_VK(t, st_host_signal(&s.e, a, 9));
+    CT_CHECKF(t, (v = st_value(t, &s.e, a)) == 9, "after vkSignalSemaphore(9): %llu", (unsigned long long)v);
+    ct_host_buffer(t, &s.e, 4096, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &buf);
+    cb = ct_begin_commands(t, &s.e);
+    vkCmdFillBuffer(cb, buf.buffer, 0, VK_WHOLE_SIZE, 0x5e5e5e5eu);
+    ct_host_read_barrier(cb);
+    CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
+    st_submit_timeline(t, &s.e, cb, gate, 1, a, 12);
+    st_sleep_ms(20);
+    CT_CHECKF(t, (v = st_value(t, &s.e, a)) == 9, "signaled (%llu) by a batch still waiting for the host",
+              (unsigned long long)v);
+    CT_REQUIRE_VK(t, st_host_signal(&s.e, gate, 1));
+    st_idle(t, &s);
+    CT_CHECKF(t, (v = st_value(t, &s.e, a)) == 12, "after the batch's signal of 12: %llu", (unsigned long long)v);
+    CT_CHECKF(t, (v = st_value(t, &s.e, gate)) == 1, "after vkSignalSemaphore(1): %llu", (unsigned long long)v);
+    CT_CHECK(t, st_all_words(&buf, 0x5e5e5e5eu));
+    vkFreeCommandBuffers(s.e.device, s.e.pool, 1, &cb);
+    vkDestroySemaphore(s.e.device, a, NULL);
+    vkDestroySemaphore(s.e.device, gate, NULL);
+    vkDestroySemaphore(s.e.device, big, NULL);
+    ct_buffer_fini(&s.e, &buf);
+    ct_env_fini(&s.e);
+}
+
+static VkResult st_wait(struct ct_env *e, VkSemaphoreWaitFlags flags, uint32_t n, const VkSemaphore *s,
+                        const uint64_t *values, uint64_t timeout)
+{
+    VkSemaphoreWaitInfo info;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+    info.flags = flags;
+    info.semaphoreCount = n;
+    info.pSemaphores = s;
+    info.pValues = values;
+    return vkWaitSemaphores(e->device, &info, timeout);
+}
+
+struct st_waiter {
+    struct ct_env *e;
+    VkSemaphore s;
+    uint64_t value;
+    VkResult result;
+    volatile int done;
+};
+
+static void *st_waiter_main(void *p)
+{
+    struct st_waiter *w = p;
+    w->result = st_wait(w->e, 0, 1, &w->s, &w->value, 10000000000ull);
+    w->done = 1;
+    return NULL;
+}
+
+CT_TEST(wait_semaphores,
+        "Synchronization and Cache Control > Semaphores > Host Operations on Semaphores (vkWaitSemaphores, Vulkan "
+        "1.2): with timeout 0, VK_SUCCESS if every semaphore (VK_SEMAPHORE_WAIT_ANY_BIT: at least one) has reached "
+        "its value, else VK_TIMEOUT; an expiring timeout returns VK_TIMEOUT; a wait blocks until a later host signal "
+        "satisfies it, and returns once a batch's signal does (the batch's writes then visible to the host)",
+        "vkWaitSemaphores vkGetSemaphoreCounterValue vkCreateSemaphore vkDestroySemaphore vkSignalSemaphore "
+        "vkQueueSubmit vkQueueWaitIdle vkCmdFillBuffer vkCmdPipelineBarrier vkEndCommandBuffer vkCreateBuffer "
+        "vkDestroyBuffer vkGetBufferMemoryRequirements vkAllocateMemory vkBindBufferMemory vkMapMemory vkFreeMemory")
+{
+    struct st s;
+    struct ct_buffer buf;
+    struct st_waiter w;
+    pthread_t thread;
+    VkSemaphore sem[2];
+    VkCommandBuffer cb;
+    uint64_t v[2];
+
+    st_init_timeline(t, &s.e);
+    sem[0] = st_timeline(t, &s.e, 5);
+    sem[1] = st_timeline(t, &s.e, 0);
+    v[0] = 5;
+    v[1] = 0;
+    CT_CHECK_VK(t, st_wait(&s.e, 0, 2, sem, v, 0), VK_SUCCESS);
+    v[0] = 3; /* below the value: reached */
+    CT_CHECK_VK(t, st_wait(&s.e, 0, 2, sem, v, 0), VK_SUCCESS);
+    v[0] = 5;
+    v[1] = 1;
+    CT_CHECK_VK(t, st_wait(&s.e, 0, 2, sem, v, 0), VK_TIMEOUT);
+    CT_CHECK_VK(t, st_wait(&s.e, 0, 2, sem, v, 1000000), VK_TIMEOUT); /* 1 ms */
+    CT_CHECK_VK(t, st_wait(&s.e, VK_SEMAPHORE_WAIT_ANY_BIT, 2, sem, v, 0), VK_SUCCESS);
+    v[0] = 6;
+    CT_CHECK_VK(t, st_wait(&s.e, VK_SEMAPHORE_WAIT_ANY_BIT, 2, sem, v, 0), VK_TIMEOUT);
+    CT_CHECK_VK(t, st_wait(&s.e, VK_SEMAPHORE_WAIT_ANY_BIT, 2, sem, v, 1000000), VK_TIMEOUT);
+
+    /* a host signal ends another thread's wait */
+    memset(&w, 0, sizeof(w));
+    w.e = &s.e;
+    w.s = sem[1];
+    w.value = 3;
+    CT_REQUIRE(t, pthread_create(&thread, NULL, st_waiter_main, &w) == 0);
+    st_sleep_ms(20);
+    CT_CHECKF(t, !w.done, "vkWaitSemaphores returned %s before the value was reached", ct_result_name(w.result));
+    CT_CHECK_VK(t, st_host_signal(&s.e, sem[1], 3), VK_SUCCESS);
+    pthread_join(thread, NULL);
+    CT_CHECK_VK(t, w.result, VK_SUCCESS);
+    v[0] = 6;
+    v[1] = 3;
+    CT_CHECK_VK(t, st_wait(&s.e, VK_SEMAPHORE_WAIT_ANY_BIT, 2, sem, v, 0), VK_SUCCESS);
+    CT_CHECK_VK(t, st_wait(&s.e, 0, 2, sem, v, 0), VK_TIMEOUT);
+
+    /* a batch's signal */
+    ct_host_buffer(t, &s.e, 1 << 20, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &buf);
+    cb = ct_begin_commands(t, &s.e);
+    vkCmdFillBuffer(cb, buf.buffer, 0, VK_WHOLE_SIZE, 0x7a7a7a7au);
+    ct_host_read_barrier(cb);
+    CT_REQUIRE_VK(t, vkEndCommandBuffer(cb));
+    st_submit_timeline(t, &s.e, cb, VK_NULL_HANDLE, 0, sem[0], 8);
+    v[0] = 8;
+    CT_CHECK_VK(t, st_wait(&s.e, 0, 1, sem, v, 10000000000ull), VK_SUCCESS);
+    CT_CHECK(t, st_value(t, &s.e, sem[0]) == 8);
+    CT_CHECK(t, st_all_words(&buf, 0x7a7a7a7au));
+    st_idle(t, &s);
+    vkFreeCommandBuffers(s.e.device, s.e.pool, 1, &cb);
+    vkDestroySemaphore(s.e.device, sem[0], NULL);
+    vkDestroySemaphore(s.e.device, sem[1], NULL);
+    ct_buffer_fini(&s.e, &buf);
+    ct_env_fini(&s.e);
+}
+
+/* ---- Wait idle ---- */
+
+#define WI_QUEUES 16
+#define WI_SIZE (4 << 20)
+
+struct wi_queue {
+    uint32_t family;
+    VkQueue queue;
+    VkCommandPool pool;
+    VkCommandBuffer cb;
+    VkFence fence;
+    struct ct_buffer buf;
+};
+
+CT_TEST(device_wait_idle,
+        "Synchronization and Cache Control > Wait Idle Operations (vkDeviceWaitIdle): equivalent to "
+        "vkQueueWaitIdle on every queue of the device (waiting for a fence of every earlier submission): after it "
+        "returns, the work submitted to each queue (two of a family that has them, one of every other family "
+        "with transfers) has completed: their fences are signaled and their writes visible to the host",
+        "vkDeviceWaitIdle vkCreateDevice vkDestroyDevice vkGetDeviceQueue vkGetPhysicalDeviceQueueFamilyProperties "
+        "vkCreateFence vkDestroyFence vkGetFenceStatus vkQueueSubmit vkCmdFillBuffer vkCmdPipelineBarrier "
+        "vkCreateCommandPool vkDestroyCommandPool vkAllocateCommandBuffers vkBeginCommandBuffer vkEndCommandBuffer "
+        "vkCreateBuffer vkDestroyBuffer vkGetBufferMemoryRequirements vkAllocateMemory vkBindBufferMemory "
+        "vkMapMemory vkFreeMemory")
+{
+    struct ct_env e;
+    VkQueueFamilyProperties families[16];
+    VkDeviceQueueCreateInfo qinfo[16];
+    VkDeviceCreateInfo dinfo;
+    const char *names[2];
+    float priorities[2] = { 1.0f, 1.0f };
+    struct wi_queue q[WI_QUEUES];
+    uint32_t family_count = 16, nfam = 0, nq = 0, i, j, k;
+
+    ct_env_init(t, &e);
+    vkGetPhysicalDeviceQueueFamilyProperties(e.pd, &family_count, families);
+    memset(qinfo, 0, sizeof(qinfo));
+    memset(q, 0, sizeof(q));
+    for (i = 0; i < family_count && nq < WI_QUEUES; i++) {
+        if (!(families[i].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT)))
+            continue;
+        qinfo[nfam].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        qinfo[nfam].queueFamilyIndex = i;
+        qinfo[nfam].queueCount = CT_MIN(families[i].queueCount, 2);
+        qinfo[nfam].pQueuePriorities = priorities;
+        for (j = 0; j < qinfo[nfam].queueCount && nq < WI_QUEUES; j++)
+            q[nq++].family = i;
+        nfam++;
+    }
+    CT_REQUIRE(t, nq > 0);
+    memset(&dinfo, 0, sizeof(dinfo));
+    dinfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    dinfo.queueCreateInfoCount = nfam;
+    dinfo.pQueueCreateInfos = qinfo;
+    dinfo.enabledExtensionCount = ct_add_portability_subset(&e, names, 0);
+    dinfo.ppEnabledExtensionNames = dinfo.enabledExtensionCount ? names : NULL;
+    CT_REQUIRE_VK(t, vkCreateDevice(e.pd, &dinfo, NULL, &e.device));
+    for (i = 0; i < nq; i++) {
+        VkCommandPoolCreateInfo pinfo;
+        VkCommandBufferAllocateInfo ainfo;
+        VkCommandBufferBeginInfo begin;
+        VkFenceCreateInfo finfo;
+        VkSubmitInfo submit;
+        uint32_t index = (i > 0 && q[i - 1].family == q[i].family) ? 1 : 0;
+        vkGetDeviceQueue(e.device, q[i].family, index, &q[i].queue);
+        memset(&pinfo, 0, sizeof(pinfo));
+        pinfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pinfo.queueFamilyIndex = q[i].family;
+        CT_REQUIRE_VK(t, vkCreateCommandPool(e.device, &pinfo, NULL, &q[i].pool));
+        memset(&ainfo, 0, sizeof(ainfo));
+        ainfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        ainfo.commandPool = q[i].pool;
+        ainfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ainfo.commandBufferCount = 1;
+        CT_REQUIRE_VK(t, vkAllocateCommandBuffers(e.device, &ainfo, &q[i].cb));
+        memset(&finfo, 0, sizeof(finfo));
+        finfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        CT_REQUIRE_VK(t, vkCreateFence(e.device, &finfo, NULL, &q[i].fence));
+        ct_host_buffer(t, &e, WI_SIZE, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &q[i].buf);
+        memset(&begin, 0, sizeof(begin));
+        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        CT_REQUIRE_VK(t, vkBeginCommandBuffer(q[i].cb, &begin));
+        for (k = 0; k < 16; k++) { /* some work; the last fill decides */
+            vkCmdFillBuffer(q[i].cb, q[i].buf.buffer, 0, VK_WHOLE_SIZE, 0x01010101u * (k + 1) + i);
+            ct_transfer_barrier(q[i].cb);
+        }
+        ct_host_read_barrier(q[i].cb);
+        CT_REQUIRE_VK(t, vkEndCommandBuffer(q[i].cb));
+        memset(&submit, 0, sizeof(submit));
+        submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &q[i].cb;
+        CT_REQUIRE_VK(t, vkQueueSubmit(q[i].queue, 1, &submit, q[i].fence));
+    }
+    CT_CHECK_VK(t, vkDeviceWaitIdle(e.device), VK_SUCCESS);
+    for (i = 0; i < nq; i++) {
+        CT_CHECKF(t, vkGetFenceStatus(e.device, q[i].fence) == VK_SUCCESS, "queue %u (family %u): fence not signaled",
+                  i, q[i].family);
+        CT_CHECKF(t, st_all_words(&q[i].buf, 0x10101010u + i), "queue %u (family %u): fills not done", i,
+                  q[i].family);
+    }
+    CT_CHECK_VK(t, vkDeviceWaitIdle(e.device), VK_SUCCESS); /* idle already */
+    for (i = 0; i < nq; i++) {
+        vkDestroyFence(e.device, q[i].fence, NULL);
+        vkDestroyCommandPool(e.device, q[i].pool, NULL);
+        ct_buffer_fini(&e, &q[i].buf);
+    }
+    ct_note(t, "%u queues of %u families", nq, nfam);
+    ct_env_fini(&e);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(event_host_state),      CT_REF(event_device_state),     CT_REF(event_device_state2),
     CT_REF(event_device_signal_host_sees), CT_REF(event_wait_host_signal), CT_REF(event_wait_device_signal),
-    CT_REF(event_wait2),
+    CT_REF(event_wait2), CT_REF(semaphore_counter_value), CT_REF(wait_semaphores), CT_REF(device_wait_idle),
 };
 
 CT_SUITE(synchronization, tests)

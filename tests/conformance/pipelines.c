@@ -1,5 +1,6 @@
 /* Chapter "Pipelines": graphics pipeline creation (without a fragment
- * shader, specialization, descriptor sets), dynamic state (viewports and
+ * shader, specialization, specialization constant operations, descriptor
+ * sets), dynamic state (viewports and
  * scissors with and without counts, cull mode, front face, primitive
  * topology, depth and stencil state, rasterizer discard, depth bias),
  * pipeline caches (header, round trip, merging, partial data),
@@ -88,6 +89,50 @@ static const uint32_t ubo_frag[] = {
     0x00000010, 0x0000000c, 0x0000000e, 0x0004003d, 0x00000007, 0x00000011, 0x00000010, 0x0003003e,
     0x00000009, 0x00000011, 0x000100fd, 0x00010038,
 };
+/*
+ * #version 450
+ * // Specialization constant operations on floats: selects of a float and a
+ * // vector, a composite extract and a vector shuffle.
+ * layout(constant_id = 0) const bool B = false;
+ * layout(constant_id = 1) const float F = 0.25;
+ * const float f = B ? 1.0 : 0.0;
+ * const vec4 c = B ? vec4(F, 0.5, 0.0, 1.0) : vec4(0.0, F, 1.0, 1.0);
+ * const float g = c.y;
+ * const vec2 sw = c.wx;
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = vec4(f, g, sw.y, sw.x);
+ * }
+ */
+static const uint32_t spec_ops_frag[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x0000001d, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0006000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x00030010, 0x00000004,
+    0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000,
+    0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c, 0x00030005, 0x0000000b, 0x00000042, 0x00030005,
+    0x0000000e, 0x00000066, 0x00030005, 0x0000000f, 0x00000046, 0x00030005, 0x00000013, 0x00000063,
+    0x00030005, 0x00000016, 0x00000067, 0x00030005, 0x00000018, 0x00007773, 0x00040047, 0x00000009,
+    0x0000001e, 0x00000000, 0x00040047, 0x0000000b, 0x00000001, 0x00000000, 0x00040047, 0x0000000f,
+    0x00000001, 0x00000001, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016,
+    0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040020, 0x00000008,
+    0x00000003, 0x00000007, 0x0004003b, 0x00000008, 0x00000009, 0x00000003, 0x00020014, 0x0000000a,
+    0x00030031, 0x0000000a, 0x0000000b, 0x0004002b, 0x00000006, 0x0000000c, 0x3f800000, 0x0004002b,
+    0x00000006, 0x0000000d, 0x00000000, 0x00070034, 0x00000006, 0x0000000e, 0x000000a9, 0x0000000b,
+    0x0000000c, 0x0000000d, 0x00040032, 0x00000006, 0x0000000f, 0x3e800000, 0x0004002b, 0x00000006,
+    0x00000010, 0x3f000000, 0x00070033, 0x00000007, 0x00000011, 0x0000000f, 0x00000010, 0x0000000d,
+    0x0000000c, 0x00070033, 0x00000007, 0x00000012, 0x0000000d, 0x0000000f, 0x0000000c, 0x0000000c,
+    0x00070034, 0x00000007, 0x00000013, 0x000000a9, 0x0000000b, 0x00000011, 0x00000012, 0x00040015,
+    0x00000014, 0x00000020, 0x00000000, 0x0004002b, 0x00000014, 0x00000015, 0x00000001, 0x00060034,
+    0x00000006, 0x00000016, 0x00000051, 0x00000013, 0x00000001, 0x00040017, 0x00000017, 0x00000006,
+    0x00000002, 0x00080034, 0x00000017, 0x00000018, 0x0000004f, 0x00000013, 0x00000013, 0x00000003,
+    0x00000000, 0x00060034, 0x00000006, 0x00000019, 0x00000051, 0x00000018, 0x00000001, 0x0004002b,
+    0x00000014, 0x0000001a, 0x00000000, 0x00060034, 0x00000006, 0x0000001b, 0x00000051, 0x00000018,
+    0x00000000, 0x00070033, 0x00000007, 0x0000001c, 0x0000000e, 0x00000016, 0x00000019, 0x0000001b,
+    0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0003003e,
+    0x00000009, 0x0000001c, 0x000100fd, 0x00010038,
+};
+
 static uint16_t expect_depth_left(uint32_t x, uint32_t y)
 {
     (void)y;
@@ -173,6 +218,59 @@ CT_TEST(pipeline_specialization,
     vkCmdEndRendering(cb);
     ct_scene_read(t, &s, cb, &c);
     ct_check_rgba8(t, s.out.data, W, H, expect_spec, NULL, 1, "specialized (left), defaults (right)");
+    vkDestroyPipeline(s.e.device, specialized, NULL);
+    vkDestroyPipeline(s.e.device, defaults, NULL);
+    vkDestroyShaderModule(s.e.device, fs, NULL);
+    ct_target_fini(&s.e, &c);
+    ct_scene_fini(&s);
+}
+
+static uint32_t expect_spec_ops(uint32_t x, uint32_t y, const void *ctx)
+{
+    (void)ctx;
+    (void)y;
+    return x < W / 2 ? CT_RGBA(255, 128, 191, 255) : CT_RGBA(0, 64, 0, 255);
+}
+
+CT_TEST(pipeline_specialization_ops,
+        "Pipelines > Specialization Constants: specialization constant operations (OpSpecConstantOp) are "
+        "evaluated with the specialized values: Select of a float and of a vector, CompositeExtract and "
+        "VectorShuffle of floats",
+        PL_COMMANDS)
+{
+    struct spec {
+        VkBool32 b;
+        float f;
+    } data = { VK_TRUE, 0.75f };
+    VkSpecializationMapEntry map[2] = {
+        { 0, offsetof(struct spec, b), sizeof(VkBool32) },
+        { 1, offsetof(struct spec, f), sizeof(float) },
+    };
+    VkSpecializationInfo info = { 2, map, sizeof(data), &data };
+    struct ct_scene s;
+    struct ct_target c;
+    struct ct_gfx g;
+    VkShaderModule fs;
+    VkPipeline specialized, defaults;
+    VkCommandBuffer cb;
+
+    ct_scene_init(t, &s);
+    ct_scene_color(t, &s, &c);
+    fs = ct_shader_module(t, &s.e, spec_ops_frag, sizeof(spec_ops_frag));
+    ct_gfx_init(&g, s.vs, fs, s.layout, W, H);
+    defaults = ct_gfx_pipeline(t, &s.e, &g);
+    g.fs_spec = &info;
+    specialized = ct_gfx_pipeline(t, &s.e, &g);
+    cb = ct_begin_commands(t, &s.e);
+    ct_begin_rendering(cb, &c, 1, ct_white, NULL, 0.0f);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, specialized);
+    ct_draw_rect(cb, s.layout, -1.0f, -1.0f, 0.0f, 1.0f, NULL, 0.0f);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, defaults);
+    ct_draw_rect(cb, s.layout, 0.0f, -1.0f, 1.0f, 1.0f, NULL, 0.0f);
+    vkCmdEndRendering(cb);
+    ct_scene_read(t, &s, cb, &c);
+    ct_check_rgba8(t, s.out.data, W, H, expect_spec_ops, NULL, 1,
+                   "specialized: (1, 0.5, 0.75, 1) (left); defaults: (0, 0.25, 0, 1) (right)");
     vkDestroyPipeline(s.e.device, specialized, NULL);
     vkDestroyPipeline(s.e.device, defaults, NULL);
     vkDestroyShaderModule(s.e.device, fs, NULL);
@@ -894,6 +992,7 @@ CT_TEST(pipeline_creation_feedback,
 static const struct ct_test *const tests[] = {
     CT_REF(pipeline_without_fragment_shader),
     CT_REF(pipeline_specialization),
+    CT_REF(pipeline_specialization_ops),
     CT_REF(pipeline_uniform_buffer),
     CT_REF(dynamic_viewport_scissor),
     CT_REF(dynamic_cull_front_face_topology),

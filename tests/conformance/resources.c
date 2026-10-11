@@ -1429,6 +1429,113 @@ CT_TEST(linear_image_layout,
     ct_env_fini(&e);
 }
 
+CT_TEST(linear_image_layout_khr,
+        "Resource Creation > Images (vkGetImageSubresourceLayout2KHR, vkGetDeviceImageSubresourceLayoutKHR: "
+        "VK_KHR_maintenance5 on an apiVersion 1.3 device, the maintenance5 feature enabled): they \"behave "
+        "similarly to vkGetImageSubresourceLayout\" (the device query for the image's create info): the same "
+        "layout, with which texel (x, y) of a linear image is at offset + y * rowPitch + x * texel size (checked "
+        "by writing texels through a mapping and copying the image to a buffer)",
+        "vkGetImageSubresourceLayout2KHR vkGetDeviceImageSubresourceLayoutKHR vkGetImageSubresourceLayout "
+        "vkGetDeviceProcAddr vkCreateDevice vkDestroyDevice vkCreateImage vkDestroyImage vkGetImageMemoryRequirements "
+        "vkAllocateMemory vkBindImageMemory vkFreeMemory vkMapMemory vkCmdCopyImageToBuffer vkCmdPipelineBarrier "
+        "vkCreateBuffer vkDestroyBuffer vkGetBufferMemoryRequirements vkBindBufferMemory "
+        "vkGetPhysicalDeviceImageFormatProperties")
+{
+    const char *exts[] = { "VK_KHR_maintenance5" };
+    VkPhysicalDeviceMaintenance5Features m5;
+    PFN_vkGetImageSubresourceLayout2KHR get2;
+    PFN_vkGetDeviceImageSubresourceLayoutKHR get_device;
+    VkImageCreateInfo info = ct_image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 13, 7, 1, 1, 1,
+                                           VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    VkImageFormatProperties p;
+    VkImageSubresource2 sub;
+    VkDeviceImageSubresourceInfo dinfo;
+    VkSubresourceLayout layout;
+    VkSubresourceLayout2 l2, ld;
+    VkBufferImageCopy r;
+    VkCommandBuffer cb;
+    struct ct_env e;
+    struct ct_image m;
+    struct ct_buffer out;
+    unsigned char *data;
+    uint32_t y;
+
+    if (CT_VERSION(ct_instance_version()) < VK_API_VERSION_1_3)
+        ct_skip(t, "instance version below 1.3");
+    ct_env_init_ex(t, &e, VK_API_VERSION_1_3, NULL, 0);
+    if (e.version < VK_API_VERSION_1_3)
+        ct_skip(t, "device version below 1.3");
+    if (!ct_device_extension_supported(e.pd, "VK_KHR_maintenance5"))
+        ct_skip(t, "VK_KHR_maintenance5 is not offered");
+    if (vkGetPhysicalDeviceImageFormatProperties(e.pd, info.format, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_LINEAR,
+                                                 info.usage, 0, &p) != VK_SUCCESS)
+        ct_skip(t, "no linear R8G8B8A8_UNORM images with TRANSFER_SRC usage");
+    memset(&m5, 0, sizeof(m5));
+    m5.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES;
+    m5.maintenance5 = VK_TRUE;
+    ct_env_device_ex(t, &e, &m5, exts, 1, NULL);
+    get2 = (PFN_vkGetImageSubresourceLayout2KHR)vkGetDeviceProcAddr(e.device, "vkGetImageSubresourceLayout2KHR");
+    get_device =
+        (PFN_vkGetDeviceImageSubresourceLayoutKHR)vkGetDeviceProcAddr(e.device, "vkGetDeviceImageSubresourceLayoutKHR");
+    CT_REQUIREF(t, get2 && get_device, "a command of VK_KHR_maintenance5 is NULL with the extension enabled");
+    info.tiling = VK_IMAGE_TILING_LINEAR;
+    info.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
+    ct_image(t, &e, &info, HOST_COHERENT, &m);
+    memset(&sub, 0, sizeof(sub));
+    sub.sType = VK_STRUCTURE_TYPE_IMAGE_SUBRESOURCE_2;
+    sub.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    memset(&layout, 0xA5, sizeof(layout));
+    vkGetImageSubresourceLayout(e.device, m.image, &sub.imageSubresource, &layout);
+    memset(&l2, 0x5A, sizeof(l2));
+    l2.sType = VK_STRUCTURE_TYPE_SUBRESOURCE_LAYOUT_2;
+    l2.pNext = NULL;
+    get2(e.device, m.image, &sub, &l2);
+    CT_CHECK(t, l2.sType == VK_STRUCTURE_TYPE_SUBRESOURCE_LAYOUT_2 && l2.pNext == NULL);
+    CT_CHECKF(t, memcmp(&l2.subresourceLayout, &layout, sizeof(layout)) == 0,
+              "vkGetImageSubresourceLayout2KHR: offset %llu rowPitch %llu size %llu, vkGetImageSubresourceLayout: "
+              "offset %llu rowPitch %llu size %llu",
+              (unsigned long long)l2.subresourceLayout.offset, (unsigned long long)l2.subresourceLayout.rowPitch,
+              (unsigned long long)l2.subresourceLayout.size, (unsigned long long)layout.offset,
+              (unsigned long long)layout.rowPitch, (unsigned long long)layout.size);
+    memset(&dinfo, 0, sizeof(dinfo));
+    dinfo.sType = VK_STRUCTURE_TYPE_DEVICE_IMAGE_SUBRESOURCE_INFO;
+    dinfo.pCreateInfo = &info;
+    dinfo.pSubresource = &sub;
+    memset(&ld, 0x5A, sizeof(ld));
+    ld.sType = VK_STRUCTURE_TYPE_SUBRESOURCE_LAYOUT_2;
+    ld.pNext = NULL;
+    get_device(e.device, &dinfo, &ld);
+    CT_CHECKF(t, memcmp(&ld.subresourceLayout, &layout, sizeof(layout)) == 0,
+              "vkGetDeviceImageSubresourceLayoutKHR: offset %llu rowPitch %llu size %llu",
+              (unsigned long long)ld.subresourceLayout.offset, (unsigned long long)ld.subresourceLayout.rowPitch,
+              (unsigned long long)ld.subresourceLayout.size);
+    CT_REQUIREF(t, l2.subresourceLayout.rowPitch >= 13 * 4, "rowPitch %llu",
+                (unsigned long long)l2.subresourceLayout.rowPitch);
+    CT_REQUIRE_VK(t, vkMapMemory(e.device, m.memory, 0, VK_WHOLE_SIZE, 0, (void **)&data));
+    for (y = 0; y < 7; y++)
+        ct_fill_pattern(data + l2.subresourceLayout.offset + y * l2.subresourceLayout.rowPitch, 13 * 4, y + 3);
+    ct_host_buffer(t, &e, 13 * 7 * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &out);
+    memset(&r, 0, sizeof(r));
+    r.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    r.imageSubresource.layerCount = 1;
+    r.imageExtent.width = 13;
+    r.imageExtent.height = 7;
+    r.imageExtent.depth = 1;
+    cb = ct_begin_commands(t, &e);
+    ct_image_barrier(cb, m.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_PREINITIALIZED,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    vkCmdCopyImageToBuffer(cb, m.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, out.buffer, 1, &r);
+    ct_host_read_barrier(cb);
+    ct_submit_and_wait(t, &e, cb);
+    for (y = 0; y < 7; y++)
+        CT_CHECKF(t, memcmp(out.data + y * 13 * 4, data + l2.subresourceLayout.offset + y * l2.subresourceLayout.rowPitch,
+                            13 * 4) == 0,
+                  "row %u", y);
+    ct_buffer_fini(&e, &out);
+    ct_image_fini(&e, &m);
+    ct_env_fini(&e);
+}
+
 CT_TEST(create_image_views,
         "Resource Creation > Image Views: views of each type compatible with the image (1D/1D_ARRAY of 1D images; "
         "2D/2D_ARRAY of 2D; CUBE and, with imageCubeArray, CUBE_ARRAY of cube-compatible images; 3D of 3D), of "
@@ -1856,6 +1963,7 @@ static const struct ct_test *const tests[] = {
     CT_REF(device_image_requirements),
     CT_REF(bind_image_memory2),
     CT_REF(linear_image_layout),
+    CT_REF(linear_image_layout_khr),
     CT_REF(create_image_views),
     CT_REF(create_buffer_views),
     CT_REF(multiplanar_disjoint_memory),

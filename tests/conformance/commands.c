@@ -1,6 +1,7 @@
 /* Every Vulkan 1.4 core command, plus the commands of the extensions PlasmaVK
- * advertises: VK_KHR_surface, VK_EXT_metal_surface, VK_KHR_portability_enumeration
- * (which has none) and VK_KHR_swapchain. Each entry names the core version or
+ * advertises: VK_KHR_surface, VK_EXT_metal_surface and VK_KHR_swapchain, and the
+ * KHR aliases of VK_KHR_maintenance5 and VK_KHR_draw_indirect_count (the other
+ * advertised extensions have no commands). Each entry names the core version or
  * extension that introduced the command and its dispatch level (global,
  * instance, physical device or device; see Initialization > Command Function
  * Pointers). Used for coverage and by the vkGet*ProcAddr tests.
@@ -260,6 +261,28 @@ const struct ct_command ct_commands[] = {
     { "vkGetDeviceGroupSurfacePresentModesKHR", "VK_KHR_swapchain", CT_LEVEL_DEVICE },
     { "vkGetPhysicalDevicePresentRectanglesKHR", "VK_KHR_swapchain", CT_LEVEL_PHYSICAL },
     { "vkAcquireNextImage2KHR", "VK_KHR_swapchain", CT_LEVEL_DEVICE },
+    { "vkCmdBindIndexBuffer2KHR", "VK_KHR_maintenance5", CT_LEVEL_DEVICE },
+    { "vkGetRenderingAreaGranularityKHR", "VK_KHR_maintenance5", CT_LEVEL_DEVICE },
+    { "vkGetDeviceImageSubresourceLayoutKHR", "VK_KHR_maintenance5", CT_LEVEL_DEVICE },
+    { "vkGetImageSubresourceLayout2KHR", "VK_KHR_maintenance5", CT_LEVEL_DEVICE },
+    { "vkCmdDrawIndirectCountKHR", "VK_KHR_draw_indirect_count", CT_LEVEL_DEVICE },
+    { "vkCmdDrawIndexedIndirectCountKHR", "VK_KHR_draw_indirect_count", CT_LEVEL_DEVICE },
 };
 
 const size_t ct_command_count = sizeof(ct_commands) / sizeof(ct_commands[0]);
+
+/* Whether an extension origin above is a device extension (the others are
+ * instance extensions). vkGetInstanceProcAddr treats the two differently:
+ * device extension commands are returned when the extension is available on
+ * a physical device, instance extension commands only when enabled. */
+int ct_origin_is_device_extension(const char *origin)
+{
+    static const char *const device_extensions[] = {
+        "VK_KHR_swapchain", "VK_KHR_maintenance5", "VK_KHR_draw_indirect_count",
+    };
+    size_t i;
+    for (i = 0; i < CT_ARRAY_SIZE(device_extensions); i++)
+        if (strcmp(origin, device_extensions[i]) == 0)
+            return 1;
+    return 0;
+}

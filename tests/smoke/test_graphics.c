@@ -1,7 +1,8 @@
 /* Graphics (sections 15-17): render passes, dynamic rendering (local read
  * included), graphics pipelines with every state block, draws of every
- * kind, dynamic state, clears of attachments and pipeline caches, checked
- * on offscreen images, pixel by pixel.
+ * kind, dynamic state, clears of attachments, sample masks, logical
+ * operations, specialization constant operations and pipeline caches,
+ * checked on offscreen images, pixel by pixel.
  *
  * Shaders: GLSL in the comment above each array, compiled with
  *   glslangValidator -V --target-env vulkan1.3 */
@@ -986,6 +987,255 @@ static const uint32_t spv_depth_read_fs[] = {
     0x000100fd, 0x00010038,
 };
 
+/*
+ * #version 450
+ * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = vec4(float(bitCount(gl_SampleMaskIn[0])) * 0.25, pc.color.gba);
+ *     gl_SampleMask[0] = pc.layer;
+ * }
+ */
+static const uint32_t spv_mask_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x0000002d, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0009000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000f, 0x0000001a,
+    0x00000026, 0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c, 0x00060005,
+    0x0000000f, 0x535f6c67, 0x6c706d61, 0x73614d65, 0x006e496b, 0x00030005, 0x00000018, 0x00000050,
+    0x00050006, 0x00000018, 0x00000000, 0x74636572, 0x00000000, 0x00050006, 0x00000018, 0x00000001,
+    0x6f6c6f63, 0x00000072, 0x00050006, 0x00000018, 0x00000002, 0x74706564, 0x00000068, 0x00050006,
+    0x00000018, 0x00000003, 0x6579616c, 0x00000072, 0x00060006, 0x00000018, 0x00000004, 0x77656976,
+    0x74726f70, 0x00000000, 0x00030005, 0x0000001a, 0x00006370, 0x00060005, 0x00000026, 0x535f6c67,
+    0x6c706d61, 0x73614d65, 0x0000006b, 0x00040047, 0x00000009, 0x0000001e, 0x00000000, 0x00040047,
+    0x0000000f, 0x0000000b, 0x00000014, 0x00030047, 0x0000000f, 0x0000000e, 0x00030047, 0x00000018,
+    0x00000002, 0x00050048, 0x00000018, 0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x00000018,
+    0x00000001, 0x00000023, 0x00000010, 0x00050048, 0x00000018, 0x00000002, 0x00000023, 0x00000020,
+    0x00050048, 0x00000018, 0x00000003, 0x00000023, 0x00000024, 0x00050048, 0x00000018, 0x00000004,
+    0x00000023, 0x00000028, 0x00040047, 0x00000026, 0x0000000b, 0x00000014, 0x00020013, 0x00000002,
+    0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007,
+    0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008,
+    0x00000009, 0x00000003, 0x00040015, 0x0000000a, 0x00000020, 0x00000001, 0x00040015, 0x0000000b,
+    0x00000020, 0x00000000, 0x0004002b, 0x0000000b, 0x0000000c, 0x00000001, 0x0004001c, 0x0000000d,
+    0x0000000a, 0x0000000c, 0x00040020, 0x0000000e, 0x00000001, 0x0000000d, 0x0004003b, 0x0000000e,
+    0x0000000f, 0x00000001, 0x0004002b, 0x0000000a, 0x00000010, 0x00000000, 0x00040020, 0x00000011,
+    0x00000001, 0x0000000a, 0x0004002b, 0x00000006, 0x00000016, 0x3e800000, 0x0007001e, 0x00000018,
+    0x00000007, 0x00000007, 0x00000006, 0x0000000a, 0x0000000a, 0x00040020, 0x00000019, 0x00000009,
+    0x00000018, 0x0004003b, 0x00000019, 0x0000001a, 0x00000009, 0x0004002b, 0x0000000a, 0x0000001b,
+    0x00000001, 0x00040017, 0x0000001c, 0x00000006, 0x00000003, 0x00040020, 0x0000001d, 0x00000009,
+    0x00000007, 0x00040020, 0x00000025, 0x00000003, 0x0000000d, 0x0004003b, 0x00000025, 0x00000026,
+    0x00000003, 0x0004002b, 0x0000000a, 0x00000027, 0x00000003, 0x00040020, 0x00000028, 0x00000009,
+    0x0000000a, 0x00040020, 0x0000002b, 0x00000003, 0x0000000a, 0x00050036, 0x00000002, 0x00000004,
+    0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x00050041, 0x00000011, 0x00000012, 0x0000000f,
+    0x00000010, 0x0004003d, 0x0000000a, 0x00000013, 0x00000012, 0x000400cd, 0x0000000a, 0x00000014,
+    0x00000013, 0x0004006f, 0x00000006, 0x00000015, 0x00000014, 0x00050085, 0x00000006, 0x00000017,
+    0x00000015, 0x00000016, 0x00050041, 0x0000001d, 0x0000001e, 0x0000001a, 0x0000001b, 0x0004003d,
+    0x00000007, 0x0000001f, 0x0000001e, 0x0008004f, 0x0000001c, 0x00000020, 0x0000001f, 0x0000001f,
+    0x00000001, 0x00000002, 0x00000003, 0x00050051, 0x00000006, 0x00000021, 0x00000020, 0x00000000,
+    0x00050051, 0x00000006, 0x00000022, 0x00000020, 0x00000001, 0x00050051, 0x00000006, 0x00000023,
+    0x00000020, 0x00000002, 0x00070050, 0x00000007, 0x00000024, 0x00000017, 0x00000021, 0x00000022,
+    0x00000023, 0x0003003e, 0x00000009, 0x00000024, 0x00050041, 0x00000028, 0x00000029, 0x0000001a,
+    0x00000027, 0x0004003d, 0x0000000a, 0x0000002a, 0x00000029, 0x00050041, 0x0000002b, 0x0000002c,
+    0x00000026, 0x00000010, 0x0003003e, 0x0000002c, 0x0000002a, 0x000100fd, 0x00010038,
+};
+/*
+ * #version 450
+ * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
+ * layout(location = 0) out uvec4 o_color;
+ * void main()
+ * {
+ *     o_color = floatBitsToUint(pc.color);
+ * }
+ */
+static const uint32_t spv_uint_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000015, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0007000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000f, 0x00030010,
+    0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d,
+    0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c, 0x00030005, 0x0000000d, 0x00000050,
+    0x00050006, 0x0000000d, 0x00000000, 0x74636572, 0x00000000, 0x00050006, 0x0000000d, 0x00000001,
+    0x6f6c6f63, 0x00000072, 0x00050006, 0x0000000d, 0x00000002, 0x74706564, 0x00000068, 0x00050006,
+    0x0000000d, 0x00000003, 0x6579616c, 0x00000072, 0x00060006, 0x0000000d, 0x00000004, 0x77656976,
+    0x74726f70, 0x00000000, 0x00030005, 0x0000000f, 0x00006370, 0x00040047, 0x00000009, 0x0000001e,
+    0x00000000, 0x00030047, 0x0000000d, 0x00000002, 0x00050048, 0x0000000d, 0x00000000, 0x00000023,
+    0x00000000, 0x00050048, 0x0000000d, 0x00000001, 0x00000023, 0x00000010, 0x00050048, 0x0000000d,
+    0x00000002, 0x00000023, 0x00000020, 0x00050048, 0x0000000d, 0x00000003, 0x00000023, 0x00000024,
+    0x00050048, 0x0000000d, 0x00000004, 0x00000023, 0x00000028, 0x00020013, 0x00000002, 0x00030021,
+    0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000000, 0x00040017, 0x00000007,
+    0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008,
+    0x00000009, 0x00000003, 0x00030016, 0x0000000a, 0x00000020, 0x00040017, 0x0000000b, 0x0000000a,
+    0x00000004, 0x00040015, 0x0000000c, 0x00000020, 0x00000001, 0x0007001e, 0x0000000d, 0x0000000b,
+    0x0000000b, 0x0000000a, 0x0000000c, 0x0000000c, 0x00040020, 0x0000000e, 0x00000009, 0x0000000d,
+    0x0004003b, 0x0000000e, 0x0000000f, 0x00000009, 0x0004002b, 0x0000000c, 0x00000010, 0x00000001,
+    0x00040020, 0x00000011, 0x00000009, 0x0000000b, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200f8, 0x00000005, 0x00050041, 0x00000011, 0x00000012, 0x0000000f, 0x00000010,
+    0x0004003d, 0x0000000b, 0x00000013, 0x00000012, 0x0004007c, 0x00000007, 0x00000014, 0x00000013,
+    0x0003003e, 0x00000009, 0x00000014, 0x000100fd, 0x00010038,
+};
+/*
+ * #version 450
+ * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
+ * layout(location = 0) out ivec4 o_color;
+ * void main()
+ * {
+ *     o_color = floatBitsToInt(pc.color);
+ * }
+ */
+static const uint32_t spv_int_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000014, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0007000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000e, 0x00030010,
+    0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d,
+    0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c, 0x00030005, 0x0000000c, 0x00000050,
+    0x00050006, 0x0000000c, 0x00000000, 0x74636572, 0x00000000, 0x00050006, 0x0000000c, 0x00000001,
+    0x6f6c6f63, 0x00000072, 0x00050006, 0x0000000c, 0x00000002, 0x74706564, 0x00000068, 0x00050006,
+    0x0000000c, 0x00000003, 0x6579616c, 0x00000072, 0x00060006, 0x0000000c, 0x00000004, 0x77656976,
+    0x74726f70, 0x00000000, 0x00030005, 0x0000000e, 0x00006370, 0x00040047, 0x00000009, 0x0000001e,
+    0x00000000, 0x00030047, 0x0000000c, 0x00000002, 0x00050048, 0x0000000c, 0x00000000, 0x00000023,
+    0x00000000, 0x00050048, 0x0000000c, 0x00000001, 0x00000023, 0x00000010, 0x00050048, 0x0000000c,
+    0x00000002, 0x00000023, 0x00000020, 0x00050048, 0x0000000c, 0x00000003, 0x00000023, 0x00000024,
+    0x00050048, 0x0000000c, 0x00000004, 0x00000023, 0x00000028, 0x00020013, 0x00000002, 0x00030021,
+    0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000001, 0x00040017, 0x00000007,
+    0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008,
+    0x00000009, 0x00000003, 0x00030016, 0x0000000a, 0x00000020, 0x00040017, 0x0000000b, 0x0000000a,
+    0x00000004, 0x0007001e, 0x0000000c, 0x0000000b, 0x0000000b, 0x0000000a, 0x00000006, 0x00000006,
+    0x00040020, 0x0000000d, 0x00000009, 0x0000000c, 0x0004003b, 0x0000000d, 0x0000000e, 0x00000009,
+    0x0004002b, 0x00000006, 0x0000000f, 0x00000001, 0x00040020, 0x00000010, 0x00000009, 0x0000000b,
+    0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x00050041,
+    0x00000010, 0x00000011, 0x0000000e, 0x0000000f, 0x0004003d, 0x0000000b, 0x00000012, 0x00000011,
+    0x0004007c, 0x00000007, 0x00000013, 0x00000012, 0x0003003e, 0x00000009, 0x00000013, 0x000100fd,
+    0x00010038,
+};
+/*
+ * #version 450
+ * #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+ * layout(constant_id = 0) const bool B = false;
+ * layout(constant_id = 1) const float F = 0.25;
+ * const float f = B ? 1.0 : 0.0;
+ * const vec4 c = B ? vec4(F, 0.5, 0.0, 1.0) : vec4(0.0, F, 1.0, 1.0);
+ * const float g = c.y;
+ * const vec2 sw = c.wx;
+ * const float16_t h = float16_t(F);
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = vec4(f, g, sw.y, float(h) * sw.x);
+ * }
+ */
+static const uint32_t spv_spec_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000021, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000009, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
+    0x00000000, 0x00000001, 0x0006000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009,
+    0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x000d0004, 0x455f4c47,
+    0x735f5458, 0x65646168, 0x78655f72, 0x63696c70, 0x615f7469, 0x68746972, 0x6974656d, 0x79745f63,
+    0x5f736570, 0x616f6c66, 0x00363174, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00040005,
+    0x00000009, 0x6f635f6f, 0x00726f6c, 0x00030005, 0x0000000b, 0x00000042, 0x00030005, 0x0000000e,
+    0x00000066, 0x00030005, 0x0000000f, 0x00000046, 0x00030005, 0x00000013, 0x00000063, 0x00030005,
+    0x00000016, 0x00000067, 0x00030005, 0x00000018, 0x00007773, 0x00030005, 0x0000001b, 0x00000068,
+    0x00040047, 0x00000009, 0x0000001e, 0x00000000, 0x00040047, 0x0000000b, 0x00000001, 0x00000000,
+    0x00040047, 0x0000000f, 0x00000001, 0x00000001, 0x00020013, 0x00000002, 0x00030021, 0x00000003,
+    0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000004,
+    0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008, 0x00000009, 0x00000003,
+    0x00020014, 0x0000000a, 0x00030031, 0x0000000a, 0x0000000b, 0x0004002b, 0x00000006, 0x0000000c,
+    0x3f800000, 0x0004002b, 0x00000006, 0x0000000d, 0x00000000, 0x00070034, 0x00000006, 0x0000000e,
+    0x000000a9, 0x0000000b, 0x0000000c, 0x0000000d, 0x00040032, 0x00000006, 0x0000000f, 0x3e800000,
+    0x0004002b, 0x00000006, 0x00000010, 0x3f000000, 0x00070033, 0x00000007, 0x00000011, 0x0000000f,
+    0x00000010, 0x0000000d, 0x0000000c, 0x00070033, 0x00000007, 0x00000012, 0x0000000d, 0x0000000f,
+    0x0000000c, 0x0000000c, 0x00070034, 0x00000007, 0x00000013, 0x000000a9, 0x0000000b, 0x00000011,
+    0x00000012, 0x00040015, 0x00000014, 0x00000020, 0x00000000, 0x0004002b, 0x00000014, 0x00000015,
+    0x00000001, 0x00060034, 0x00000006, 0x00000016, 0x00000051, 0x00000013, 0x00000001, 0x00040017,
+    0x00000017, 0x00000006, 0x00000002, 0x00080034, 0x00000017, 0x00000018, 0x0000004f, 0x00000013,
+    0x00000013, 0x00000003, 0x00000000, 0x00030016, 0x0000001a, 0x00000010, 0x00050034, 0x0000001a,
+    0x0000001b, 0x00000073, 0x0000000f, 0x00050034, 0x00000006, 0x0000001c, 0x00000073, 0x0000001b,
+    0x0004002b, 0x00000014, 0x0000001d, 0x00000000, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200f8, 0x00000005, 0x00050051, 0x00000006, 0x00000019, 0x00000018, 0x00000001,
+    0x00050051, 0x00000006, 0x0000001e, 0x00000018, 0x00000000, 0x00050085, 0x00000006, 0x0000001f,
+    0x0000001c, 0x0000001e, 0x00070050, 0x00000007, 0x00000020, 0x0000000e, 0x00000016, 0x00000019,
+    0x0000001f, 0x0003003e, 0x00000009, 0x00000020, 0x000100fd, 0x00010038,
+};
+/*
+ * #version 450
+ * layout(set = 0, binding = 0) buffer Counts { uint count[]; };
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     ivec2 p = ivec2(gl_FragCoord.xy);
+ *     atomicAdd(count[p.y * 16 + p.x], 1u);
+ *     o_color = vec4(1.0, 0.0, 0.0, 1.0);
+ * }
+ */
+static const uint32_t spv_count_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x0000002a, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0008000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000d, 0x00000016, 0x00000026,
+    0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004,
+    0x6e69616d, 0x00000000, 0x00030005, 0x00000009, 0x00000070, 0x00060005, 0x0000000d, 0x465f6c67,
+    0x43676172, 0x64726f6f, 0x00000000, 0x00040005, 0x00000014, 0x6e756f43, 0x00007374, 0x00050006,
+    0x00000014, 0x00000000, 0x6e756f63, 0x00000074, 0x00030005, 0x00000016, 0x00000000, 0x00040005,
+    0x00000026, 0x6f635f6f, 0x00726f6c, 0x00040047, 0x0000000d, 0x0000000b, 0x0000000f, 0x00040047,
+    0x00000013, 0x00000006, 0x00000004, 0x00030047, 0x00000014, 0x00000002, 0x00050048, 0x00000014,
+    0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x00000016, 0x00000021, 0x00000000, 0x00040047,
+    0x00000016, 0x00000022, 0x00000000, 0x00040047, 0x00000026, 0x0000001e, 0x00000000, 0x00020013,
+    0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000001,
+    0x00040017, 0x00000007, 0x00000006, 0x00000002, 0x00040020, 0x00000008, 0x00000007, 0x00000007,
+    0x00030016, 0x0000000a, 0x00000020, 0x00040017, 0x0000000b, 0x0000000a, 0x00000004, 0x00040020,
+    0x0000000c, 0x00000001, 0x0000000b, 0x0004003b, 0x0000000c, 0x0000000d, 0x00000001, 0x00040017,
+    0x0000000e, 0x0000000a, 0x00000002, 0x00040015, 0x00000012, 0x00000020, 0x00000000, 0x0003001d,
+    0x00000013, 0x00000012, 0x0003001e, 0x00000014, 0x00000013, 0x00040020, 0x00000015, 0x0000000c,
+    0x00000014, 0x0004003b, 0x00000015, 0x00000016, 0x0000000c, 0x0004002b, 0x00000006, 0x00000017,
+    0x00000000, 0x0004002b, 0x00000012, 0x00000018, 0x00000001, 0x00040020, 0x00000019, 0x00000007,
+    0x00000006, 0x0004002b, 0x00000006, 0x0000001c, 0x00000010, 0x0004002b, 0x00000012, 0x0000001e,
+    0x00000000, 0x00040020, 0x00000022, 0x0000000c, 0x00000012, 0x00040020, 0x00000025, 0x00000003,
+    0x0000000b, 0x0004003b, 0x00000025, 0x00000026, 0x00000003, 0x0004002b, 0x0000000a, 0x00000027,
+    0x3f800000, 0x0004002b, 0x0000000a, 0x00000028, 0x00000000, 0x0007002c, 0x0000000b, 0x00000029,
+    0x00000027, 0x00000028, 0x00000028, 0x00000027, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200f8, 0x00000005, 0x0004003b, 0x00000008, 0x00000009, 0x00000007, 0x0004003d,
+    0x0000000b, 0x0000000f, 0x0000000d, 0x0007004f, 0x0000000e, 0x00000010, 0x0000000f, 0x0000000f,
+    0x00000000, 0x00000001, 0x0004006e, 0x00000007, 0x00000011, 0x00000010, 0x0003003e, 0x00000009,
+    0x00000011, 0x00050041, 0x00000019, 0x0000001a, 0x00000009, 0x00000018, 0x0004003d, 0x00000006,
+    0x0000001b, 0x0000001a, 0x00050084, 0x00000006, 0x0000001d, 0x0000001b, 0x0000001c, 0x00050041,
+    0x00000019, 0x0000001f, 0x00000009, 0x0000001e, 0x0004003d, 0x00000006, 0x00000020, 0x0000001f,
+    0x00050080, 0x00000006, 0x00000021, 0x0000001d, 0x00000020, 0x00060041, 0x00000022, 0x00000023,
+    0x00000016, 0x00000017, 0x00000021, 0x000700ea, 0x00000012, 0x00000024, 0x00000023, 0x00000018,
+    0x0000001e, 0x00000018, 0x0003003e, 0x00000026, 0x00000029, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 450
+ * layout(early_fragment_tests) in;
+ * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = pc.color;
+ * }
+ */
+static const uint32_t spv_early_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000012, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0007000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000d, 0x00030010,
+    0x00000004, 0x00000007, 0x00030010, 0x00000004, 0x00000009, 0x00030003, 0x00000002, 0x000001c2,
+    0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c,
+    0x00030005, 0x0000000b, 0x00000050, 0x00050006, 0x0000000b, 0x00000000, 0x74636572, 0x00000000,
+    0x00050006, 0x0000000b, 0x00000001, 0x6f6c6f63, 0x00000072, 0x00050006, 0x0000000b, 0x00000002,
+    0x74706564, 0x00000068, 0x00050006, 0x0000000b, 0x00000003, 0x6579616c, 0x00000072, 0x00060006,
+    0x0000000b, 0x00000004, 0x77656976, 0x74726f70, 0x00000000, 0x00030005, 0x0000000d, 0x00006370,
+    0x00040047, 0x00000009, 0x0000001e, 0x00000000, 0x00030047, 0x0000000b, 0x00000002, 0x00050048,
+    0x0000000b, 0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x0000000b, 0x00000001, 0x00000023,
+    0x00000010, 0x00050048, 0x0000000b, 0x00000002, 0x00000023, 0x00000020, 0x00050048, 0x0000000b,
+    0x00000003, 0x00000023, 0x00000024, 0x00050048, 0x0000000b, 0x00000004, 0x00000023, 0x00000028,
+    0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020,
+    0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007,
+    0x0004003b, 0x00000008, 0x00000009, 0x00000003, 0x00040015, 0x0000000a, 0x00000020, 0x00000001,
+    0x0007001e, 0x0000000b, 0x00000007, 0x00000007, 0x00000006, 0x0000000a, 0x0000000a, 0x00040020,
+    0x0000000c, 0x00000009, 0x0000000b, 0x0004003b, 0x0000000c, 0x0000000d, 0x00000009, 0x0004002b,
+    0x0000000a, 0x0000000e, 0x00000001, 0x00040020, 0x0000000f, 0x00000009, 0x00000007, 0x00050036,
+    0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x00050041, 0x0000000f,
+    0x00000010, 0x0000000d, 0x0000000e, 0x0004003d, 0x00000007, 0x00000011, 0x00000010, 0x0003003e,
+    0x00000009, 0x00000011, 0x000100fd, 0x00010038,
+};
+
 /* ==========================================================================
  * Harness
  * ========================================================================== */
@@ -1371,6 +1621,9 @@ struct pipe {
     VkRect2D scissor[2];
     VkPipelineCache cache;
     VkPipelineCreateFlags flags;
+    VkBool32 logic_op_enable;
+    VkLogicOp logic_op;
+    const VkSpecializationInfo *fs_spec;
 };
 
 static void pipe_init(struct pipe *p, const uint32_t *vs, size_t vs_size, const uint32_t *fs, size_t fs_size)
@@ -1416,6 +1669,7 @@ static VkResult make_pipe_result(const struct pipe *p, VkPipeline *out)
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = fs;
     stages[1].pName = "main";
+    stages[1].pSpecializationInfo = p->fs_spec;
     memset(&vi, 0, sizeof(vi));
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     memset(&ia, 0, sizeof(ia));
@@ -1462,6 +1716,8 @@ static VkResult make_pipe_result(const struct pipe *p, VkPipeline *out)
     cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     cb.attachmentCount = p->colors;
     cb.pAttachments = p->has_blend ? p->blend : att;
+    cb.logicOpEnable = p->logic_op_enable;
+    cb.logicOp = p->logic_op;
     memcpy(cb.blendConstants, p->blend_constants, sizeof(cb.blendConstants));
     memset(&ds, 0, sizeof(ds));
     ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
@@ -4067,6 +4323,645 @@ static void test_alpha_coverage(void)
     free_img(&resolved);
 }
 
+/* ==========================================================================
+ * Sample masks and logical operations (the fragment function does them:
+ * section 13, FRAGMENT OPERATIONS)
+ * ========================================================================== */
+
+/* Dynamic rendering into a multisampled color image resolved (average) into
+ * `resolved`, cleared to `clear`, with an optional multisampled depth image
+ * cleared to 1. Neither multisampled image is stored. */
+static void begin_resolved(VkCommandBuffer cb, const struct img *ms, const struct img *resolved, const float *clear,
+                           const struct img *depth)
+{
+    VkRenderingAttachmentInfo att, da;
+    VkRenderingInfo info;
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = ms->view;
+    att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    memcpy(att.clearValue.color.float32, clear, 16);
+    att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+    att.resolveImageView = resolved->view;
+    att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    memset(&da, 0, sizeof(da));
+    if (depth) {
+        da.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        da.imageView = depth->view;
+        da.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        da.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        da.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        da.clearValue.depthStencil.depth = 1.0f;
+    }
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &att;
+    info.pDepthAttachment = depth ? &da : NULL;
+    vkCmdBeginRendering(cb, &info);
+}
+
+static uint32_t quad_want[4]; /* top left, top right, bottom left, bottom right */
+
+static uint32_t expect_quads(uint32_t x, uint32_t y)
+{
+    return quad_want[(y >= H / 2) * 2 + (x >= W / 2)];
+}
+
+static uint32_t expect_column0_black(uint32_t x, uint32_t y)
+{
+    return x == 0 ? BLACK : expect_quads(x, y);
+}
+
+/* pSampleMask with 4 samples: alone; with a shader reading SampleMask (the
+ * coverage after the mask) and writing it (ANDed); with alpha to coverage
+ * (both apply); with sample shading; with EarlyFragmentTests (colors); on
+ * depth writes, with and without a fragment shader; with one sample; and
+ * samples it clears are not shaded (their atomics do not happen). */
+static void test_sample_mask(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    static const VkSampleMask m0 = 0x0, m1 = 0x1, m2 = 0x2, m3 = 0x3, m4 = 0x4, m5 = 0x5, m6 = 0x6;
+    struct img ms = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img msd = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img resolved = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4), counter = make_buf(W * H * 4);
+    VkDescriptorSetLayoutBinding binding;
+    VkDescriptorSetLayoutCreateInfo set_info;
+    VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
+    VkPushConstantRange range;
+    VkPipelineLayoutCreateInfo layout_info;
+    VkPipelineLayout count_layout = VK_NULL_HANDLE;
+    VkDescriptorPoolSize pool_size;
+    VkDescriptorPoolCreateInfo pool_info;
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    VkDescriptorSetAllocateInfo alloc;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VkDescriptorBufferInfo bi;
+    VkWriteDescriptorSet wr;
+    VkPipeline pipes[4];
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t k;
+
+    /* alone (top left), SampleMask in and out (top right), alpha to
+     * coverage with alpha 1 (bottom left) and 0 (bottom right) */
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.sample_mask = &m1;
+    pipes[0] = make_pipe(&p);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_mask_fs, sizeof(spv_mask_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.sample_mask = &m5;
+    pipes[1] = make_pipe(&p);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.sample_mask = &m3;
+    p.alpha_to_coverage = VK_TRUE;
+    pipes[2] = make_pipe(&p);
+    REQUIRE(pipes[0] && pipes[1] && pipes[2]);
+    cb = begin_cmd();
+    begin_resolved(cb, &ms, &resolved, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[0]);
+    rect(cb, -1, -1, 0, 0, 1, 0, 0, 1, 0);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[1]);
+    rect_lv(cb, 0, -1, 1, 0, 0, 0, 0, 1, 0x3, 0); /* writes SampleMask 0x3 (pc.layer) */
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[2]);
+    rect(cb, -1, 0, 0, 1, 1, 0, 0, 1, 0);
+    rect(cb, 0, 0, 1, 1, 1, 0, 0, 0, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    quad_want[0] = RGBA(64, 0, 0, 255);   /* sample 0 */
+    quad_want[1] = RGBA(32, 0, 0, 255);   /* SampleMask in 0x5: red 0.5, on 0x5 & 0x3: sample 0 */
+    quad_want[2] = RGBA(128, 0, 0, 255);  /* all samples by alpha, 0x3 by the mask */
+    quad_want[3] = BLACK;                 /* no samples by alpha */
+    CHECK(count_far(&out, expect_quads, 1, "sample mask") == 0);
+    for (k = 0; k < 3; k++)
+        vkDestroyPipeline(device, pipes[k], NULL);
+
+    /* sample shading: two samples of four (top left); per-sample colors,
+     * sample 0 red and sample 1 black (top right); EarlyFragmentTests, no
+     * sample shading: sample 0 (bottom left) */
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.sample_shading = VK_TRUE;
+    p.min_sample_shading = 1.0f;
+    p.sample_mask = &m6;
+    pipes[0] = make_pipe(&p);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_sample_fs, sizeof(spv_sample_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.sample_shading = VK_TRUE;
+    p.min_sample_shading = 1.0f;
+    p.sample_mask = &m3;
+    pipes[1] = make_pipe(&p);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_early_fs, sizeof(spv_early_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.sample_mask = &m1;
+    pipes[2] = make_pipe(&p);
+    REQUIRE(pipes[0] && pipes[1] && pipes[2]);
+    cb = begin_cmd();
+    begin_resolved(cb, &ms, &resolved, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[0]);
+    rect(cb, -1, -1, 0, 0, 1, 0, 0, 1, 0);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[1]);
+    rect(cb, 0, -1, 1, 0, 1, 0, 0, 1, 0);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[2]);
+    rect(cb, -1, 0, 0, 1, 1, 0, 0, 1, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    quad_want[0] = RGBA(128, 0, 0, 255);
+    quad_want[1] = quad_want[2] = RGBA(64, 0, 0, 255);
+    quad_want[3] = BLACK;
+    CHECK(count_far(&out, expect_quads, 1, "sample mask, sample shading") == 0);
+    for (k = 0; k < 3; k++)
+        vkDestroyPipeline(device, pipes[k], NULL);
+
+    /* depth: mask 0x2 on depth 0.25 without a fragment shader (left) and
+     * with one (right), then red at depth 0.5 where it is less: samples 0,
+     * 2 and 3 */
+    for (k = 0; k < 3; k++) {
+        pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), k == 0 ? NULL : spv_rect_fs, k == 0 ? 0 : sizeof(spv_rect_fs));
+        p.samples = VK_SAMPLE_COUNT_4_BIT;
+        p.depth_format = VK_FORMAT_D32_SFLOAT;
+        p.has_ds = true;
+        p.ds.depthTestEnable = VK_TRUE;
+        p.ds.depthWriteEnable = k < 2;
+        p.ds.depthCompareOp = VK_COMPARE_OP_LESS;
+        if (k < 2) {
+            p.sample_mask = &m2;
+            p.has_blend = true;
+            memset(p.blend, 0, sizeof(p.blend)); /* no color writes */
+        }
+        pipes[k] = make_pipe(&p);
+    }
+    REQUIRE(pipes[0] && pipes[1] && pipes[2]);
+    cb = begin_cmd();
+    begin_resolved(cb, &ms, &resolved, black, &msd);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[0]);
+    rect(cb, -1, -1, 0, 1, 0, 0, 0, 1, 0.25f);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[1]);
+    rect(cb, 0, -1, 1, 1, 0, 0, 0, 1, 0.25f);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[2]);
+    rect(cb, -1, -1, 1, 1, 1, 0, 0, 1, 0.5f);
+    vkCmdEndRendering(cb);
+    download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    quad_want[0] = quad_want[1] = quad_want[2] = quad_want[3] = RGBA(191, 0, 0, 255);
+    CHECK(count_far(&out, expect_quads, 1, "sample mask, depth") == 0);
+    for (k = 0; k < 3; k++)
+        vkDestroyPipeline(device, pipes[k], NULL);
+
+    /* one sample: mask 0 draws nothing (left), no mask draws (right) */
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.sample_mask = &m0;
+    pipes[0] = make_pipe(&p);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.sample_mask = &m1; /* every sample: no effect */
+    pipes[1] = make_pipe(&p);
+    REQUIRE(pipes[0] && pipes[1]);
+    cb = begin_cmd();
+    begin_rendering(cb, &resolved, 1, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[0]);
+    rect(cb, -1, -1, 0, 1, 1, 0, 0, 1, 0);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[1]);
+    rect(cb, 0, -1, 1, 1, 1, 0, 0, 1, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    quad_want[0] = quad_want[2] = BLACK;
+    quad_want[1] = quad_want[3] = RED;
+    CHECK(count_bad(&out, expect_quads, "sample mask, one sample") == 0);
+    for (k = 0; k < 2; k++)
+        vkDestroyPipeline(device, pipes[k], NULL);
+
+    /* not shaded: an atomic counter of invocations */
+    memset(&binding, 0, sizeof(binding));
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    memset(&set_info, 0, sizeof(set_info));
+    set_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    set_info.bindingCount = 1;
+    set_info.pBindings = &binding;
+    CHECK_VK(vkCreateDescriptorSetLayout(device, &set_info, NULL, &set_layout), VK_SUCCESS);
+    range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    range.offset = 0;
+    range.size = sizeof(struct pc);
+    memset(&layout_info, 0, sizeof(layout_info));
+    layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout_info.setLayoutCount = 1;
+    layout_info.pSetLayouts = &set_layout;
+    layout_info.pushConstantRangeCount = 1;
+    layout_info.pPushConstantRanges = &range;
+    CHECK_VK(vkCreatePipelineLayout(device, &layout_info, NULL, &count_layout), VK_SUCCESS);
+    pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    pool_size.descriptorCount = 1;
+    memset(&pool_info, 0, sizeof(pool_info));
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.maxSets = 1;
+    pool_info.poolSizeCount = 1;
+    pool_info.pPoolSizes = &pool_size;
+    CHECK_VK(vkCreateDescriptorPool(device, &pool_info, NULL, &pool), VK_SUCCESS);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc.descriptorPool = pool;
+    alloc.descriptorSetCount = 1;
+    alloc.pSetLayouts = &set_layout;
+    CHECK_VK(vkAllocateDescriptorSets(device, &alloc, &set), VK_SUCCESS);
+    bi.buffer = counter.buffer;
+    bi.offset = 0;
+    bi.range = W * H * 4;
+    memset(&wr, 0, sizeof(wr));
+    wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wr.dstSet = set;
+    wr.descriptorCount = 1;
+    wr.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    wr.pBufferInfo = &bi;
+    vkUpdateDescriptorSets(device, 1, &wr, 0, NULL);
+    for (k = 0; k < 3; k++) {
+        /* 0: sample shading, mask 0x2: one invocation per pixel (sample 1);
+         * 1: mask 0x4 on a rectangle from x = 0.5: column 0 covers samples
+         * 1 and 3 only (standard locations) and is not shaded, the others
+         * once (sample 2); 2: one sample, mask 0 */
+        uint32_t n, bad_counts = 0;
+        pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_count_fs, sizeof(spv_count_fs));
+        p.layout = count_layout;
+        p.samples = k == 2 ? VK_SAMPLE_COUNT_1_BIT : VK_SAMPLE_COUNT_4_BIT;
+        p.sample_shading = k == 0;
+        p.min_sample_shading = 1.0f;
+        p.sample_mask = k == 0 ? &m2 : k == 1 ? &m4 : &m0;
+        pipes[0] = make_pipe(&p);
+        REQUIRE(pipes[0]);
+        memset(counter.data, 0, W * H * 4);
+        cb = begin_cmd();
+        if (k == 2)
+            begin_rendering(cb, &resolved, 1, black, NULL);
+        else
+            begin_resolved(cb, &ms, &resolved, black, NULL);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[0]);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, count_layout, 0, 1, &set, 0, NULL);
+        rect(cb, k == 1 ? -1.0f + 1.0f / W : -1.0f, -1, 1, 1, 0, 0, 0, 0, 0);
+        vkCmdEndRendering(cb);
+        download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        for (n = 0; n < W * H; n++) {
+            uint32_t got, x = n % W;
+            int ok;
+            memcpy(&got, counter.data + 4 * n, 4);
+            ok = k == 0 ? got == 1 : k == 1 ? got == (x == 0 ? 0u : 1u) : got == 0;
+            if (!ok && bad_counts++ < 4)
+                fprintf(stderr, "sample mask case %u: pixel (%u, %u) shaded %u times\n", k, x, n / W, got);
+        }
+        CHECK(bad_counts == 0);
+        quad_want[0] = quad_want[1] = quad_want[2] = quad_want[3] = k == 2 ? BLACK : RGBA(64, 0, 0, 255);
+        if (k == 1)
+            CHECK(count_far(&out, expect_column0_black, 1, "sample mask, invocations") == 0);
+        else
+            CHECK(count_far(&out, expect_quads, 1, "sample mask, invocations") == 0);
+        vkDestroyPipeline(device, pipes[0], NULL);
+    }
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyPipelineLayout(device, count_layout, NULL);
+    vkDestroyDescriptorSetLayout(device, set_layout, NULL);
+    free_buf(&counter);
+    free_buf(&out);
+    free_img(&ms);
+    free_img(&msd);
+    free_img(&resolved);
+}
+
+static uint32_t logic_apply(VkLogicOp op, uint32_t s, uint32_t d)
+{
+    switch (op) {
+    case VK_LOGIC_OP_CLEAR: return 0;
+    case VK_LOGIC_OP_AND: return s & d;
+    case VK_LOGIC_OP_AND_REVERSE: return s & ~d;
+    case VK_LOGIC_OP_COPY: return s;
+    case VK_LOGIC_OP_AND_INVERTED: return ~s & d;
+    case VK_LOGIC_OP_NO_OP: return d;
+    case VK_LOGIC_OP_XOR: return s ^ d;
+    case VK_LOGIC_OP_OR: return s | d;
+    case VK_LOGIC_OP_NOR: return ~(s | d);
+    case VK_LOGIC_OP_EQUIVALENT: return ~(s ^ d);
+    case VK_LOGIC_OP_INVERT: return ~d;
+    case VK_LOGIC_OP_OR_REVERSE: return s | ~d;
+    case VK_LOGIC_OP_COPY_INVERTED: return ~s;
+    case VK_LOGIC_OP_OR_INVERTED: return ~s | d;
+    case VK_LOGIC_OP_NAND: return ~(s & d);
+    default: return ~0u; /* SET */
+    }
+}
+
+/* A color format for the logical operation test: where its components are
+ * in a texel, and a source and stored value per component (raw bits). */
+struct logic_format {
+    VkFormat format;
+    const char *name;
+    uint32_t bytes; /* per texel (up to 8) */
+    int kind;       /* 0 UNORM, 1 SNORM, 2 UINT, 3 SINT */
+    uint32_t ncomp;
+    uint32_t shift[4], bits[4];
+    uint32_t src[4], dst[4];
+    bool all_ops; /* every operation, else four */
+};
+
+static int32_t sext_bits(uint32_t v, uint32_t bits)
+{
+    uint32_t m = 1u << (bits - 1);
+    v &= bits >= 32 ? ~0u : (1u << bits) - 1;
+    return (int32_t)(v ^ m) - (int32_t)m;
+}
+
+/* The value whose conversion to the format gives `raw` (a float for UNORM
+ * and SNORM, the integer's bits for UINT and SINT). */
+static uint32_t logic_value(const struct logic_format *f, uint32_t c, uint32_t raw)
+{
+    uint32_t b = f->bits[c], v;
+    float x;
+    if (f->kind == 2)
+        return raw;
+    if (f->kind == 3)
+        return (uint32_t)sext_bits(raw, b);
+    x = f->kind == 0 ? (float)raw / (float)((1u << b) - 1) : (float)sext_bits(raw, b) / (float)((1u << (b - 1)) - 1);
+    memcpy(&v, &x, 4);
+    return v;
+}
+
+/* Every logical operation on UNORM and UINT attachments (and four on
+ * SNORM, SINT and packed formats), each in a 4x4 cell, with write masks
+ * (odd operations write R and B), checked bit for bit; a float attachment
+ * takes the color unchanged and unblended. */
+static void test_logic_ops(void)
+{
+    static const VkLogicOp some[4] = { VK_LOGIC_OP_XOR, VK_LOGIC_OP_INVERT, VK_LOGIC_OP_NOR, VK_LOGIC_OP_OR_REVERSE };
+    static const struct logic_format formats[] = {
+        { VK_FORMAT_R8G8B8A8_UNORM, "R8G8B8A8_UNORM", 4, 0, 4, { 0, 8, 16, 24 }, { 8, 8, 8, 8 },
+          { 0xcc, 0x55, 0xf0, 0x0f }, { 0xf0, 0x3c, 0xaa, 0x0f }, true },
+        { VK_FORMAT_R8G8B8A8_UINT, "R8G8B8A8_UINT", 4, 2, 4, { 0, 8, 16, 24 }, { 8, 8, 8, 8 },
+          { 0xcc, 0x55, 0xf0, 0x0f }, { 0xf0, 0x3c, 0xaa, 0x0f }, true },
+        { VK_FORMAT_R32_UINT, "R32_UINT", 4, 2, 1, { 0 }, { 32 }, { 0xdeadbeef }, { 0x12345678 }, false },
+        { VK_FORMAT_A2B10G10R10_UINT_PACK32, "A2B10G10R10_UINT", 4, 2, 4, { 0, 10, 20, 30 }, { 10, 10, 10, 2 },
+          { 0x2aa, 0x155, 0x3f0, 0x2 }, { 0x0f0, 0x3cc, 0x055, 0x1 }, false },
+        { VK_FORMAT_R16G16B16A16_SINT, "R16G16B16A16_SINT", 8, 3, 4, { 0, 16, 32, 48 }, { 16, 16, 16, 16 },
+          { 0x1234, 0xfedc, 0x8001, 0x7fff }, { 0xf0f0, 0x0ff0, 0x5555, 0xaaaa }, false },
+        { VK_FORMAT_R8G8B8A8_SNORM, "R8G8B8A8_SNORM", 4, 1, 4, { 0, 8, 16, 24 }, { 8, 8, 8, 8 },
+          { 0x31, 0xcf, 0x31, 0xcf }, { 0x1a, 0x1a, 0xe6, 0xe6 }, false }, /* (no result is 0x80: -128) */
+        { VK_FORMAT_A2B10G10R10_UNORM_PACK32, "A2B10G10R10_UNORM", 4, 0, 4, { 0, 10, 20, 30 }, { 10, 10, 10, 2 },
+          { 0x2aa, 0x155, 0x3f0, 0x2 }, { 0x0f0, 0x3cc, 0x055, 0x1 }, false },
+        { VK_FORMAT_R5G6B5_UNORM_PACK16, "R5G6B5_UNORM", 2, 0, 3, { 11, 5, 0 }, { 5, 6, 5 },
+          { 0x15, 0x2a, 0x0c }, { 0x0f, 0x33, 0x1e }, false },
+    };
+    struct buf out = make_buf(W * H * 8);
+    VkPipeline pipes[16];
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t i, k, c, x, y, nops;
+
+    if (!features.logicOp) {
+        fprintf(stderr, "logicOp is not supported: skipped\n");
+        free_buf(&out);
+        return;
+    }
+    for (i = 0; i < PVK_ARRAY_SIZE(formats); i++) {
+        const struct logic_format *f = &formats[i];
+        struct img target = make_img(f->format, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+        VkRenderingAttachmentInfo att;
+        VkRenderingInfo info;
+        struct pc pc;
+        int bad = 0;
+        nops = f->all_ops ? 16 : 4;
+        for (k = 0; k < nops; k++) {
+            const uint32_t *fs = f->kind == 2 ? spv_uint_fs : f->kind == 3 ? spv_int_fs : spv_rect_fs;
+            size_t fs_size = f->kind == 2 ? sizeof(spv_uint_fs) : f->kind == 3 ? sizeof(spv_int_fs) : sizeof(spv_rect_fs);
+            pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), fs, fs_size);
+            p.color_formats[0] = f->format;
+            p.logic_op_enable = VK_TRUE;
+            p.logic_op = f->all_ops ? (VkLogicOp)k : some[k];
+            p.has_blend = true;
+            memset(p.blend, 0, sizeof(p.blend));
+            p.blend[0].colorWriteMask = k & 1 ? VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_B_BIT : 0xf;
+            pipes[k] = make_pipe(&p);
+            REQUIRE(pipes[k]);
+        }
+        memset(&att, 0, sizeof(att));
+        att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView = target.view;
+        att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        for (c = 0; c < 4; c++) {
+            uint32_t v = c < f->ncomp ? logic_value(f, c, f->dst[c]) : 0;
+            memcpy(&att.clearValue.color.uint32[c], &v, 4);
+        }
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        info.renderArea.extent.width = W;
+        info.renderArea.extent.height = H;
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &att;
+        cb = begin_cmd();
+        vkCmdBeginRendering(cb, &info);
+        memset(&pc, 0, sizeof(pc));
+        for (c = 0; c < 4; c++) {
+            uint32_t v = c < f->ncomp ? logic_value(f, c, f->src[c]) : 0;
+            memcpy(&pc.color[c], &v, 4);
+        }
+        for (k = 0; k < nops; k++) { /* cell k: column k % 4, row k / 4 */
+            pc.rect[0] = -1.0f + 0.5f * (float)(k % 4);
+            pc.rect[1] = -1.0f + 0.5f * (float)(k / 4);
+            pc.rect[2] = pc.rect[0] + 0.5f;
+            pc.rect[3] = pc.rect[1] + 0.5f;
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[k]);
+            vkCmdPushConstants(cb, pc_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
+                               &pc);
+            vkCmdDraw(cb, 4, 1, 0, 0);
+        }
+        vkCmdEndRendering(cb);
+        download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++) {
+                uint32_t cell = (y / 4) * 4 + x / 4;
+                uint64_t texel = 0;
+                memcpy(&texel, out.data + f->bytes * (y * W + x), f->bytes);
+                for (c = 0; c < f->ncomp; c++) {
+                    uint32_t mask = f->bits[c] >= 32 ? ~0u : (1u << f->bits[c]) - 1, want = f->dst[c] & mask;
+                    uint32_t got = (uint32_t)(texel >> f->shift[c]) & mask;
+                    VkLogicOp op = f->all_ops ? (VkLogicOp)cell : some[cell & 3];
+                    if (cell < nops && (!(cell & 1) || c == 0 || c == 2))
+                        want = logic_apply(op, f->src[c] & mask, f->dst[c] & mask) & mask;
+                    if (got != want) {
+                        if (bad < 4)
+                            fprintf(stderr, "logic op %u on %s: texel (%u, %u) component %u is 0x%x, expected 0x%x\n",
+                                    cell < nops ? (unsigned)op : 99u, f->name, x, y, c, got, want);
+                        bad++;
+                    }
+                }
+            }
+        CHECK(bad == 0);
+        for (k = 0; k < nops; k++)
+            vkDestroyPipeline(device, pipes[k], NULL);
+        free_img(&target);
+    }
+
+    /* a float attachment: logical operations do not apply, and blending is off */
+    {
+        static const float clear[4] = { 0.5f, 0.5f, 0.5f, 0.5f };
+        struct img target = make_img(VK_FORMAT_R32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+        int bad = 0;
+        pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+        p.color_formats[0] = VK_FORMAT_R32_SFLOAT;
+        p.logic_op_enable = VK_TRUE;
+        p.logic_op = VK_LOGIC_OP_XOR;
+        p.has_blend = true;
+        memset(p.blend, 0, sizeof(p.blend));
+        p.blend[0].blendEnable = VK_TRUE;
+        p.blend[0].srcColorBlendFactor = p.blend[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        p.blend[0].srcAlphaBlendFactor = p.blend[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        p.blend[0].colorWriteMask = 0xf;
+        pipes[0] = make_pipe(&p);
+        REQUIRE(pipes[0]);
+        cb = begin_cmd();
+        begin_rendering(cb, &target, 1, clear, NULL);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[0]);
+        rect(cb, -1, -1, 1, 1, 0.375f, 0, 0, 1, 0);
+        vkCmdEndRendering(cb);
+        download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        for (i = 0; i < W * H; i++) {
+            float v;
+            memcpy(&v, out.data + 4 * i, 4);
+            bad += v != 0.375f;
+        }
+        if (bad)
+            fprintf(stderr, "logic op on R32_SFLOAT: %d texels changed or blended\n", bad);
+        CHECK(bad == 0);
+        vkDestroyPipeline(device, pipes[0], NULL);
+        free_img(&target);
+    }
+    free_buf(&out);
+}
+
+/* Logical operations with 4 samples apply to each sample's stored value
+ * (samples 0 and 1 white, 2 and 3 black: XOR white leaves them the other
+ * way), and alpha to coverage and to one come first (with COPY: alpha 0.5
+ * covers two samples, which get alpha 1). */
+static void test_logic_op_msaa(void)
+{
+    static const float clear[4] = { 0, 0, 0, 0 };
+    static const VkSampleMask m3 = 0x3;
+    struct img ms = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img resolved = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkPipeline half, xor_pipe, copy;
+    struct pipe p;
+    VkCommandBuffer cb;
+
+    if (!features.logicOp || !features.alphaToOne) {
+        fprintf(stderr, "logicOp or alphaToOne is not supported: skipped\n");
+        free_buf(&out);
+        free_img(&ms);
+        free_img(&resolved);
+        return;
+    }
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.sample_mask = &m3;
+    half = make_pipe(&p);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.logic_op_enable = VK_TRUE;
+    p.logic_op = VK_LOGIC_OP_XOR;
+    xor_pipe = make_pipe(&p);
+    p.logic_op = VK_LOGIC_OP_COPY;
+    p.alpha_to_coverage = VK_TRUE;
+    p.alpha_to_one = VK_TRUE;
+    copy = make_pipe(&p);
+    REQUIRE(half && xor_pipe && copy);
+    cb = begin_cmd();
+    begin_resolved(cb, &ms, &resolved, clear, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, half);
+    rect(cb, -1, -1, 0, 0, 1, 1, 1, 1, 0); /* top left: samples 0 and 1 white */
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, xor_pipe);
+    rect(cb, -1, -1, 1, 0, 1, 1, 1, 1, 0); /* top: XOR white */
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, copy);
+    rect(cb, -1, 0, 1, 1, 1, 0, 0, 0.5f, 0); /* bottom: two samples of (1, 0, 0, 1) */
+    vkCmdEndRendering(cb);
+    download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    quad_want[0] = RGBA(128, 128, 128, 128);
+    quad_want[1] = WHITE;
+    quad_want[2] = quad_want[3] = RGBA(128, 0, 0, 128);
+    CHECK(count_far(&out, expect_quads, 1, "logic op, 4 samples") == 0);
+    vkDestroyPipeline(device, half, NULL);
+    vkDestroyPipeline(device, xor_pipe, NULL);
+    vkDestroyPipeline(device, copy, NULL);
+    free_buf(&out);
+    free_img(&ms);
+    free_img(&resolved);
+}
+
+/* Specialization constants folded through floating-point OpSpecConstantOp
+ * (Select, FConvert, CompositeExtract, VectorShuffle) in a fragment shader,
+ * with the defaults and specialized. */
+static void test_spec_fragment(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkSpecializationMapEntry entries[2];
+    VkSpecializationInfo spec;
+    struct {
+        VkBool32 b;
+        float f;
+    } data = { VK_TRUE, 0.75f };
+    VkPipeline pipes[2];
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t k;
+
+    entries[0].constantID = 0;
+    entries[0].offset = 0;
+    entries[0].size = 4;
+    entries[1].constantID = 1;
+    entries[1].offset = 4;
+    entries[1].size = 4;
+    spec.mapEntryCount = 2;
+    spec.pMapEntries = entries;
+    spec.dataSize = sizeof(data);
+    spec.pData = &data;
+    for (k = 0; k < 2; k++) {
+        pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_spec_fs, sizeof(spv_spec_fs));
+        p.fs_spec = k ? &spec : NULL;
+        pipes[k] = make_pipe(&p);
+        REQUIRE(pipes[k]);
+    }
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[0]);
+    rect(cb, -1, -1, 0, 1, 0, 0, 0, 0, 0);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[1]);
+    rect(cb, 0, -1, 1, 1, 0, 0, 0, 0, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    quad_want[0] = quad_want[2] = RGBA(0, 64, 0, 64);     /* B false, F 0.25 */
+    quad_want[1] = quad_want[3] = RGBA(255, 128, 191, 191); /* B true, F 0.75 */
+    CHECK(count_far(&out, expect_quads, 1, "specialization constants") == 0);
+    for (k = 0; k < 2; k++)
+        vkDestroyPipeline(device, pipes[k], NULL);
+    free_buf(&out);
+    free_img(&target);
+}
+
 /* Pipeline caches: a second creation from the same cache needs no compiler
  * (FAIL_ON_PIPELINE_COMPILE_REQUIRED succeeds, feedback reports a hit), the
  * data round-trips into a new cache (valid header, a hit), merging works,
@@ -4394,6 +5289,10 @@ int main(void)
     RUN(test_imageless_noattachment);
     RUN(test_dual_source);
     RUN(test_alpha_coverage);
+    RUN(test_sample_mask);
+    RUN(test_logic_ops);
+    RUN(test_logic_op_msaa);
+    RUN(test_spec_fragment);
     RUN(test_pipeline_cache);
     RUN(test_ycbcr_fragment);
     teardown();

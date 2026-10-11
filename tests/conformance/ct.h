@@ -424,6 +424,12 @@ struct ct_scene {
     struct ct_buffer out;
 };
 void ct_scene_init(struct ct *t, struct ct_scene *s);
+/* The same on an instance and device of apiVersion 1.3 (for the KHR aliases
+ * of commands core in 1.4) with the device extensions enabled and chain
+ * appended to the feature chain; skips below 1.3 or when an extension is
+ * not offered. */
+void ct_scene_init_ext(struct ct *t, struct ct_scene *s, const char *const *extensions, uint32_t extension_count,
+                       void *chain);
 void ct_scene_fini(struct ct_scene *s);
 /* A CT_SIZE x CT_SIZE R8G8B8A8_UNORM color attachment. */
 void ct_scene_color(struct ct *t, struct ct_scene *s, struct ct_target *c);
@@ -469,5 +475,6 @@ extern const size_t ct_command_count;
 
 /* VK_API_VERSION_1_x of a core origin, or 0 for an extension. */
 uint32_t ct_command_version(const struct ct_command *c);
+int ct_origin_is_device_extension(const char *origin);
 
 #endif /* CT_H */
