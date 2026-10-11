@@ -13,10 +13,13 @@ no dependencies.
 Everywhere else, include `plasmavk.h` and call `vk*` as usual. You don't need
 linker flags: the header links Metal itself.
 
-**Status:** early. Instance, physical device, device and queue creation work.
-Every other Vulkan 1.4 command exists but logs "not implemented". The target
-is full Vulkan 1.4 plus the Roadmap 2026 profile, measured by the Khronos
-conformance suite.
+**Status:** early. Instances, devices and queues, memory and buffers, command
+buffers with transfer and compute commands, queue submission, fences, binary
+and timeline semaphores, and compute pipelines (SPIR-V translated to MSL,
+push constants and buffer device addresses) work. Descriptor sets, images and
+graphics are next; every other Vulkan 1.4 command exists but logs "not
+implemented". The target is full Vulkan 1.4 plus the Roadmap 2026 profile,
+measured by the Khronos conformance suite.
 
 ## Requirements
 

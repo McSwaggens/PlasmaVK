@@ -39312,13 +39312,14 @@ VKAPI_ATTR void VKAPI_CALL vkCmdExecuteCommands(VkCommandBuffer commandBuffer, u
  * TIMELINE
  *   Each queue has an MTLSharedEvent that reaches N once submission N and
  *   everything before it finished (a queue signal follows all earlier work).
- *   Allocators, command buffers and upload chunks are tagged with the serial
- *   of their last use and reused once the timeline passed it, at the next
- *   submit or wait for idle. Commit feedback handlers only report errors: a
- *   failed command buffer loses the device (VK_ERROR_DEVICE_LOST from then
- *   on). They run after the timeline signal, so the wait that sees a failed
- *   submission complete may still return VK_SUCCESS (allowed: device loss is
- *   reported "eventually").
+ *   Allocators and upload chunks are tagged with the serial of their last
+ *   use and reused (command buffers released) once the timeline passed it,
+ *   at the next submit or wait for idle. Commit feedback handlers only
+ *   report errors: a failed command buffer loses the device
+ *   (VK_ERROR_DEVICE_LOST from then on). They run after the timeline signal,
+ *   so the wait that sees a failed submission complete may still return
+ *   VK_SUCCESS (allowed: device loss is reported "eventually"). Not tested:
+ *   Apple GPUs drop stray writes instead of failing the command buffer.
  *
  * UPLOAD RING
  *   vkCmdUpdateBuffer data, push constants and internal kernel arguments go
