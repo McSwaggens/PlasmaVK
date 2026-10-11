@@ -37250,7 +37250,10 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   past options->dispatch_base_offset and the push constants); WorkgroupId
  *   and GlobalInvocationId include it. The kernel always takes the buffer.
  *
- *   Compute builtins are kernel parameters ([[thread_position_in_grid]] ...).
+ *   Compute builtins are kernel parameters ([[thread_position_in_grid]] ...);
+ *   SubgroupSize is 32, the subgroup masks and SubgroupLocalInvocationId
+ *   come from [[thread_index_in_simdgroup]] (a hidden parameter pvk_lane,
+ *   which helper functions using subgroup operations also take).
  *   Specialization constants (options->specialization, same layout as
  *   VkSpecializationInfo) are applied while translating, so the MSL and the
  *   workgroup size in the result are final. result->spec_constants lists
@@ -37306,7 +37309,18 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *     with sample shading) and out [[sample_mask]], FragDepth
  *     [[depth(any|greater|less)]], HelperInvocation (simd_is_helper_thread(),
  *     read at each load), PointCoord (origin top left), Layer, ViewportIndex,
- *     ViewIndex and PrimitiveId in fragment shaders.
+ *     ViewIndex, PrimitiveId, SubgroupSize and SubgroupLocalInvocationId
+ *     (and masks) in fragment shaders; DeviceIndex 0. An Invariant Position
+ *     is [[invariant]] (result->invariant: compile the vertex function with
+ *     MTLCompileOptions.preserveInvariance).
+ *   interpolateAtCentroid/Sample/Offset: a location they read is a Metal
+ *   interpolant<float4, perspective | no_perspective> in <ep>_in, passed to
+ *   the functions that read it (pvk_iN); its ordinary value is
+ *   interpolate_at_center/centroid/sample(). Offsets are from the pixel's
+ *   center in Vulkan, from its top-left corner in Metal: +0.5. Flat and
+ *   integer inputs (and inputs the vertex stage does not write) have one
+ *   value: interpolateAt* reads the variable. The input must be named with
+ *   constant indices.
  *   Fragment outputs: location n is [[color(n)]] (Index 1: [[color(0),
  *   index(1)]] for dual-source blending) of float4, int4 or uint4 like the
  *   variable; result->outputs. Metal rejects outputs a pipeline has no
@@ -37315,9 +37329,10 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   Fragment execution: EarlyFragmentTests -> [[early_fragment_tests]];
  *   result->sample_shading when Metal runs it per sample (SampleId,
  *   SamplePosition, Sample inputs, options->sample_shading); result->discards
- *   for OpKill/OpTerminateInvocation (discard_fragment(); return: discarded
- *   fragments write nothing, callers go on as helpers) and
- *   OpDemoteToHelperInvocation (discard_fragment(), which demotes in Metal).
+ *   for OpKill/OpTerminateInvocation (discard_fragment(); the function and
+ *   its callers return: a terminated invocation runs nothing more, see
+ *   pvk_killed) and OpDemoteToHelperInvocation (discard_fragment(), which
+ *   demotes in Metal: helper threads' stores and atomics have no effect).
  *   Input attachments: framebuffer fetch. A subpassInput variable is the
  *   color [[color(c)]] of the attachment it maps to, a value (no descriptor
  *   is read, so it has no binding in the sets): input attachment index i
@@ -37384,7 +37399,8 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   Inf and precision guarantees Vulkan gives. The kernel's name is
  *   result->entry_point; dispatch with result->workgroup_size threads per
  *   threadgroup (declared with [[max_total_threads_per_threadgroup]], so the
- *   compiler fits up to 1024).
+ *   compiler fits up to 1024). A vertex function with result->invariant
+ *   needs MTLCompileOptions.preserveInvariance.
  *
  * SUPPORTED (GLCompute, Vertex and Fragment, as glslang and spirv-opt produce them)
  *   Types: bool, 8/16/32/64-bit ints, half, float (no double: Metal has none),
@@ -37392,7 +37408,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   (Offset/ArrayStride/MatrixStride, std140/std430, row- and column-major)
  *   are reproduced byte for byte with padding members, packed vectors and
  *   pvk_padded<T, P> slots; matrices whose stride Metal cannot express are
- *   stored as arrays of lines and converted on access. Arrays are values
+ *   stored as arrays of lines and converted on access. Scalar block layout:
+ *   a struct or array placed at offsets or strides below its MSL alignment
+ *   gets packed vectors and arrays of packed matrix lines. Arrays are values
  *   (pvk_array<T, N>), so they load, store, copy and return like SPIR-V's.
  *   Storage: StorageBuffer, Uniform, PushConstant, Workgroup (compute),
  *   Private, Function, Input and Output (STAGE INTERFACE), UniformConstant
@@ -37401,11 +37419,15 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   (RuntimeDescriptorArray), indexed dynamically and non-uniformly (Metal
  *   needs nothing for NonUniform: descriptors are per-thread data).
  *   Instructions: arithmetic, bit, logical, relational, conversion,
- *   composite, memory, GLSL.std.450, barriers, 32-bit integer atomics and
- *   float atomic add, function calls, OpArrayLength, specialization
- *   constants (including OpSpecConstantOp on integers), structured control
- *   flow (if, switch with fallthrough, loops with break/continue, early
- *   returns, phis). NonSemantic debug info is ignored.
+ *   composite, memory, GLSL.std.450 (also interpolateAt*), barriers, 32-bit
+ *   integer atomics and float atomic add with memory semantics (Memory
+ *   model), GroupNonUniform operations (Subgroups), integer dot products,
+ *   OpExpectKHR and OpAssumeTrueKHR, variable pointers (VARIABLE POINTERS:
+ *   OpSelect, OpPhi, OpPtrEqual, OpPtrNotEqual, OpPtrDiff on pointers),
+ *   FPRoundingMode RTZ conversions to half, function calls, OpArrayLength,
+ *   specialization constants (including OpSpecConstantOp on integers),
+ *   structured control flow (if, switch with fallthrough, loops with
+ *   break/continue, early returns, phis). NonSemantic debug info is ignored.
  *   Physical storage buffer pointers (PhysicalStorageBuffer64 addressing,
  *   GL_EXT_buffer_reference): `device T*` values, in any memory, struct or
  *   array; OpTypeForwardPointer (structs are declared up front, so pointers
@@ -37447,15 +37469,85 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   none), 64-bit and 8-bit stage inputs and outputs, input attachments that
  *   are not color attachments (depth/stencil: Metal has no depth fetch). A
  *   texture1d has one mip level (image_1d_as_2d for mipmapped 1D images).
- *   Not yet: subgroup ops, 64-bit atomics, variable pointers,
- *   OpCopyMemorySized, interpolateAt* (Metal's interpolant<>), scalar-layout
- *   corner cases Metal cannot express, robust image access (out-of-bounds
- *   texels are whatever Metal does).
- *   Semantics to know: atomics are memory_order_relaxed (barriers carry the
- *   ordering); signed integer overflow is undefined in MSL where SPIR-V
- *   wraps; NoContraction and Invariant are ignored (Metal's invariance needs
- *   a compile option); derivatives after a discard (OpKill/Terminate) are
- *   undefined, as in Vulkan.
+ *   Not yet: 64-bit atomics (shaderBufferInt64Atomics is not reported),
+ *   bounds checks through variable pointers (ROBUSTNESS), Aligned memory
+ *   operands below the MSL type's alignment. (OpCopyMemorySized needs the
+ *   Addresses capability, which Vulkan does not allow.)
+ *   Semantics to know: atomics are memory_order_relaxed, memory semantics
+ *   become fences (Memory model); signed integer overflow is undefined in
+ *   MSL where SPIR-V wraps; NoContraction is ignored; derivatives after a
+ *   discard (OpKill/Terminate) are undefined, as in Vulkan.
+ *
+ * SHADER CAPABILITIES
+ *   What section 7 reports that shaders depend on, the SPIR-V it allows and
+ *   its translation (tested in tests/smoke/test_spirv_msl_caps.c unless an
+ *   earlier test file has it):
+ *   robustBufferAccess, robustImageAccess, pipelineRobustness:
+ *     bounds of buffer, texel buffer, image and vertex accesses (ROBUSTNESS).
+ *   Subgroups (Vulkan 1.1; size 32, compute and fragment stages; BASIC,
+ *     VOTE, ARITHMETIC, BALLOT, SHUFFLE, SHUFFLE_RELATIVE, QUAD, ROTATE,
+ *     ROTATE_CLUSTERED), subgroupBroadcastDynamicId, shaderSubgroupRotate
+ *     (Clustered), shaderSubgroupExtendedTypes: the GroupNonUniform
+ *     capabilities but Clustered (not reported), OpGroupNonUniformRotateKHR,
+ *     SubgroupSize, SubgroupLocalInvocationId, NumSubgroups, SubgroupId,
+ *     Subgroup{Eq,Ge,Gt,Le,Lt}Mask, on 8/16/32/64-bit integers, half, float
+ *     and bool (Subgroups, below).
+ *   shaderIntegerDotProduct: DotProduct, DotProductInput*, OpSDot, OpUDot,
+ *     OpSUDot and AccSat forms, packed 4x8 and vectors (Integer dot products).
+ *   vulkanMemoryModel, vulkanMemoryModelDeviceScope: VulkanMemoryModel(Device
+ *     Scope), scopes and semantics of atomics and barriers, MakePointer
+ *     Available/Visible and NonPrivatePointer (Memory model, COHERENCE).
+ *   shaderZeroInitializeWorkgroupMemory: Workgroup variable initializers,
+ *     written by the workgroup's threads before the entry point runs.
+ *   Float controls (SignedZeroInfNanPreserve and RoundingModeRTE for 16 and
+ *     32 bits), shaderFloatControls2: the execution modes and FPFastMath*
+ *     are accepted (MTLMathModeSafe keeps signed zeros, Inf, NaN and rounds
+ *     to nearest even: stricter than any fast-math flag); FPRoundingMode RTZ
+ *     on conversions to half (16-bit storage) is pvk_f16_rtz. No denormal
+ *     modes are reported.
+ *   shaderExpectAssume: ExpectAssumeKHR; OpExpectKHR is its value,
+ *     OpAssumeTrueKHR nothing (hints).
+ *   shaderDemoteToHelperInvocation, shaderTerminateInvocation: demote is
+ *     discard_fragment (helper threads' stores and atomics have no effect);
+ *     terminate also stops the callers (pvk_killed).
+ *   variablePointers(StorageBuffer): VariablePointers(StorageBuffer)
+ *     (VARIABLE POINTERS).
+ *   scalarBlockLayout, uniformBufferStandardLayout: explicit layouts at any
+ *     offsets and strides their scalars allow (members packed where a
+ *     struct's or array's placements need it).
+ *   Always in Vulkan: InterpolationFunction (interpolateAt*: STAGE
+ *     INTERFACE), DeviceGroup (DeviceIndex is 0), Invariant (Position gets
+ *     [[invariant]]: compile with preserveInvariance, result->invariant).
+ *   Earlier, unchanged: storageBuffer8/16BitAccess, shaderInt8/16,
+ *     bufferDeviceAddress, inlineUniformBlock, descriptor indexing,
+ *     shaderImageGatherExtended, shaderStorageImageExtendedFormats,
+ *     imageCubeArray, multiview, sampleRateShading, largePoints,
+ *     maintenance4 (LocalSizeId), fragmentStoresAndAtomics.
+ *
+ * ROBUSTNESS (options->robust_*: pvk_pipeline_robustness in section 17)
+ *   Storage and uniform buffers: each load, store, atomic and copy through
+ *   an access chain from a buffer descriptor is checked against the
+ *   descriptor's range (pvk_inb: every accessed byte inside); outside it,
+ *   loads read zero and stores and atomics do nothing (atomics return 0).
+ *   A vector component is checked alone, a whole load or store (a struct,
+ *   a vector straddling the end) as a whole, a row-major matrix column as
+ *   its matrix. Texel buffers and images: texel reads and fetches outside
+ *   the image (coordinates, level, layer, cube face, sample) read zero,
+ *   writes and atomics are dropped; sampling needs no checks (the sampler
+ *   clamps). Not checked: accesses through variable pointers and pointer
+ *   parameters (bounds do not travel with a pointer value), push constants
+ *   and inline uniform blocks (always in range), physical storage buffers
+ *   (no robustness in Vulkan).
+ *
+ * VARIABLE POINTERS (VariablePointersStorageBuffer, VariablePointers)
+ *   StorageBuffer and Workgroup pointers that are selected (OpSelect, OpPhi),
+ *   loaded from Function or Private variables, returned or compared are MSL
+ *   values: `device T*` (`device coherent(device) T*`, COHERENCE) or
+ *   `threadgroup T*`; variables, access chains and pointer parameters (MSL
+ *   references) become them by taking their address. OpPtrAccessChain steps
+ *   by the pointer type's ArrayStride; null pointers are nullptr. Such a
+ *   pointer carries no descriptor: OpArrayLength and bounds checks need the
+ *   descriptor's variable.
  *
  * HOW IT WORKS
  *   One pass records every instruction and id; then types get MSL spellings
@@ -51471,8 +51563,7 @@ static VkResult pvk_msl_set_layouts(const struct pvk_pipeline_layout *layout, co
  * ROBUSTNESS): the device's robustBufferAccess (storage, uniform and texel
  * buffers, vertex input) and robustImageAccess, unless
  * VkPipelineRobustnessCreateInfo in the pipeline's pNext, then in the
- * stage's, says otherwise. Every behavior other than DISABLED gets the
- * checks (they meet ROBUST_*_ACCESS_2's rules as well). */
+ * stage's, says otherwise: every behavior but DISABLED gets the checks. */
 static void pvk_pipeline_robustness(const struct pvk_device *device, const void *pipeline_next, const void *stage_next,
                                     struct pvk_msl_options *options)
 {
