@@ -40669,7 +40669,10 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   reads color attachment options->input_attachment_colors[i] (identity
  *   without it, as dynamic rendering local read defaults to). The render
  *   pass must keep that image bound as color attachment c. subpassInputMS
- *   reads the current sample (the shader should run per sample).
+ *   reads the current sample (the shader should run per sample). One mapped
+ *   to PVK_MSL_IA_TEXTURE (another sample count than the pass's) is read
+ *   from [[texture(i)]] at the fragment's pixel and the Sample operand's
+ *   sample: its value is a pvk_ia_tex(_ms) of the texture and the pixel.
  *   result->input_attachments / color_fetches.
  *   DEPTH/STENCIL INPUT ATTACHMENTS: Metal fetches color attachments only,
  *   so the render pass keeps copies of the depth (R32Float) and stencil
@@ -40987,6 +40990,7 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
 #define PVK_MSL_IA_DEPTH 0x100u
 #define PVK_MSL_IA_STENCIL 0x101u
 #define PVK_MSL_IA_DEPTH_STENCIL 0x102u
+#define PVK_MSL_IA_TEXTURE 0x103u
 #define PVK_MSL_IA_UNDECORATED_DEPTH 0x1u
 #define PVK_MSL_IA_UNDECORATED_STENCIL 0x2u
 
@@ -41152,7 +41156,10 @@ struct pvk_msl_options {
      * PVK_MSL_IA_DEPTH_STENCIL: either, by the variable's type (float:
      * depth). Variables without InputAttachmentIndex (dynamic rendering
      * local read) read the copies the input_attachment_undecorated bits
-     * PVK_MSL_IA_UNDECORATED_* allow, by type. */
+     * PVK_MSL_IA_UNDECORATED_* allow, by type. PVK_MSL_IA_TEXTURE: not
+     * fetched, read from the texture bound at [[texture(i)]] at the
+     * fragment's position (multisampled: the read's sample), in the entry
+     * point only. */
     const uint32_t *input_attachment_colors;
     uint32_t input_attachment_color_count;
     uint32_t input_attachment_depth, input_attachment_stencil;
@@ -41837,6 +41844,7 @@ struct pvk_spv_type {
         uint32_t dim, depth, arrayed, ms, sampled, format, access;
     } img;
     bool opaque; /* image, sampler, sampled image, or an array of them: descriptors */
+    uint8_t ia_use; /* input attachment types: 1 fetched variables have it, 2 ones read from textures */
     uint32_t desc_emitted; /* block struct: bit 0 pvk_ubuf_, bit 1 pvk_sbuf_ declared */
     /* MSL value type */
     const char *msl;
@@ -41896,6 +41904,7 @@ struct pvk_spv_ptr {
     uint32_t texel_type; /* image type */
     const char *texel_ok; /* robust image access: the texel is in bounds */
     bool value; /* an input attachment variable: a value like an Input, not a descriptor */
+    uint32_t ia_texture; /* read from a texture (PVK_MSL_IA_TEXTURE): input attachment index + 1 */
     /* Combined image samplers with Y'CbCr conversions (Y'CBCR SAMPLING): the
      * conversion of the descriptor reached, or of each element of the array
      * (ycbcr_count > 1: they differ); ycbcr_desc: descriptors are pvk_ycbcr_d. */
@@ -41923,6 +41932,7 @@ struct pvk_spv_id {
     struct pvk_spv_ptr *p;
     const struct pvk_ycbcr *ycbcr; /* a loaded combined image sampler with this Y'CbCr conversion */
     const char *residency;         /* a loaded storage image: its descriptor's residency texture */
+    uint32_t ia_texture;           /* a loaded input attachment read from a texture (pvk_spv_ptr) */
 };
 
 struct pvk_spv_block {
@@ -42049,6 +42059,7 @@ struct pvk_spv {
     bool use_sampled, use_cast; /* emit pvk_sampled / pvk_tex_cast */
     bool use_storage;           /* emit pvk_storage */
     bool use_math;              /* emit pvk_atan2, pvk_tanh */
+    bool use_ia;                /* emit pvk_ia_tex, pvk_ia_tex_ms */
     bool use_ycbcr;             /* emit pvk_ycbcr_d (Y'CBCR SAMPLING) */
     const struct pvk_ycbcr *ycbcr_fns[PVK_SPV_MAX_YCBCR]; /* conversions with a pvk_ycbcr_<k> function */
     uint32_t nycbcr;
@@ -43586,6 +43597,25 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         if (x->p->storage != storage)
             pvk_spv_fail(ctx, "variable %u: storage class mismatch", rid);
         x->p->value = storage == PVK_SPV_StorageUniformConstant && pvk_spv_is_subpass(ctx, x->p->type);
+        if (x->p->value && (x->flags & PVK_SPV_F_IA_INDEX) && ctx->options && ctx->options->input_attachment_colors &&
+            x->ia_index < ctx->options->input_attachment_color_count &&
+            ctx->options->input_attachment_colors[x->ia_index] == PVK_MSL_IA_TEXTURE) {
+            struct pvk_spv_type *it = pvk_spv_type(ctx, x->p->type);
+            if (it->op != PVK_SPV_OpTypeImage)
+                pvk_spv_fail(ctx, "arrays of input attachments of another sample count are not supported");
+            if (ctx->options->view_mask)
+                pvk_spv_fail(ctx, "multiview input attachments of another sample count are not supported");
+            x->p->ia_texture = x->ia_index + 1;
+            ctx->use_ia = true;
+        }
+        if (x->p->value) { /* (a type is one or the other) */
+            struct pvk_spv_type *it = pvk_spv_type(ctx, x->p->type);
+            while (it->op == PVK_SPV_OpTypeArray || it->op == PVK_SPV_OpTypeRuntimeArray)
+                it = pvk_spv_type(ctx, it->elem);
+            if (it->ia_use && it->ia_use != (x->p->ia_texture ? 2 : 1))
+                pvk_spv_fail(ctx, "input attachments of one type are fetched and read from textures");
+            it->ia_use = x->p->ia_texture ? 2 : 1;
+        }
         if ((storage == PVK_SPV_StorageUniformConstant) != (pvk_spv_type(ctx, x->p->type)->opaque || x->p->value))
             pvk_spv_fail(ctx, "variable %u: images and samplers must be UniformConstant variables (and only they)", rid);
         if (in->wc > 4) {
@@ -44216,8 +44246,10 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
             }
             break;
         case PVK_SPV_OpTypeImage:
-            if (t->img.dim == PVK_SPV_DimSubpassData) { /* the fetched color */
-                t->msl = pvk_spv_fmt(ctx, "%s4", pvk_spv_type(ctx, t->elem)->msl);
+            if (t->img.dim == PVK_SPV_DimSubpassData) { /* the fetched color, or a texture and the pixel */
+                t->msl = t->ia_use == 2 ? pvk_spv_fmt(ctx, "%s<%s>", t->img.ms ? "pvk_ia_tex_ms" : "pvk_ia_tex",
+                                                      pvk_spv_type(ctx, t->elem)->msl)
+                                        : pvk_spv_fmt(ctx, "%s4", pvk_spv_type(ctx, t->elem)->msl);
                 t->size = t->align = 16;
                 break;
             }
@@ -45778,6 +45810,7 @@ static void pvk_spv_load(struct pvk_spv *ctx, uint32_t rid, const struct pvk_spv
     const char *ok = pvk_spv_bounds(ctx, p), *name;
     if (x->type != p->type)
         pvk_spv_fail(ctx, "load of %u: type mismatch", rid);
+    x->ia_texture = p->ia_texture;
     if (p->desc_array)
         pvk_spv_fail(ctx, "cannot load a whole descriptor array");
     if (p->storage == PVK_SPV_StorageImage)
@@ -47612,6 +47645,8 @@ static void pvk_spv_image_read(struct pvk_spv *ctx, const struct pvk_spv_insn *i
          * sample (multisampled input attachments need per-sample shading). */
         if (fetch || o.lod || o.const_offset || o.offset || (it->img.ms != 0) != (o.sample != 0))
             pvk_spv_fail(ctx, "malformed input attachment read");
+        if (pvk_spv_get(ctx, img)->ia_texture) /* from a texture (PVK_MSL_IA_TEXTURE): the Sample operand's sample */
+            tex = pvk_spv_fmt(ctx, "%s.read(%s)", tex, o.sample ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.sample)) : "");
         pvk_spv_texel_result(ctx, rid, tex, 4, it);
         return;
     }
@@ -50612,6 +50647,16 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
                 fetch_colors |= 1u << c;
                 continue;
             }
+            if (c == PVK_MSL_IA_TEXTURE) { /* the texture at [[texture(ia)]] and the pixel, read where loaded */
+                PVK_SPV_PUSH(ctx, params, nparams, cap,
+                             pvk_spv_fmt(ctx, "%s<%s, access::read> pvk_ia_tex%u [[texture(%u)]]",
+                                         it->img.ms ? "texture2d_ms" : "texture2d", pvk_spv_type(ctx, it->elem)->msl, ia,
+                                         ia));
+                need |= PVK_SPV_NEED_POSITION;
+                res->input_attachments |= 1u << ia;
+                pvk_spv_line(ctx, "%s = %s{pvk_ia_tex%u, uint2(pvk_frag_coord.xy)};", lv, it->msl, ia);
+                continue;
+            }
             if (c >= 8)
                 pvk_spv_fail(ctx, "input attachment index %u maps to color attachment %u (0-7)", ia, c);
             const char *et = pvk_spv_type(ctx, t->op == PVK_SPV_OpTypeArray ? t->elem : tid)->msl, *value;
@@ -51059,6 +51104,21 @@ static const char pvk_spv_ycbcr_template[] =
     "    texture2d<float> t1, t2;\n"
     "};\n\n";
 
+static const char pvk_spv_ia_template[] =
+    "/* An input attachment read from a texture at the fragment's pixel (PVK_MSL_IA_TEXTURE). */\n"
+    "template <typename T> struct pvk_ia_tex\n"
+    "{\n"
+    "    texture2d<T, access::read> t;\n"
+    "    uint2 p;\n"
+    "    vec<T, 4> read() const { return t.read(p); }\n"
+    "};\n"
+    "template <typename T> struct pvk_ia_tex_ms\n"
+    "{\n"
+    "    texture2d_ms<T, access::read> t;\n"
+    "    uint2 p;\n"
+    "    vec<T, 4> read(uint s) const { return t.read(p, s); }\n"
+    "};\n\n";
+
 static const char pvk_spv_math_template[] =
     "/* Where Metal's are wrong: atan2 of arguments near the top of the float range\n"
     " * is 0 (scaled alike, the angle stays; tiny ones too), atan2 of x = -0 has\n"
@@ -51274,6 +51334,8 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         pvk_sb_append(ctx, out, pvk_spv_cast_template, sizeof(pvk_spv_cast_template) - 1);
     if (ctx->use_math)
         pvk_sb_append(ctx, out, pvk_spv_math_template, sizeof(pvk_spv_math_template) - 1);
+    if (ctx->use_ia)
+        pvk_sb_append(ctx, out, pvk_spv_ia_template, sizeof(pvk_spv_ia_template) - 1);
     if (ctx->types.len)
         pvk_sb_append(ctx, out, ctx->types.data, ctx->types.len);
     if (ctx->consts.len)
@@ -53326,7 +53388,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
  *   depth/stencil attachment, one sample count, one view mask) and none
  *   needs what an earlier one resolved. So input attachments are read from
  *   tile memory (framebuffer fetch, section 13) and transient attachments
- *   never leave it. Within an encoder, each subpass maps the fragment
+ *   never leave it. Color input attachments of another sample count than
+ *   their subpass are read from their textures instead (bound at fragment
+ *   texture index i, pvk_subpass_texture_inputs). Within an encoder, each subpass maps the fragment
  *   shader's color locations (logical indices) to the encoder's attachments
  *   (physical indices) with Metal 4's color attachment map, which every
  *   pipeline inherits (checked on M4 Max: a pipeline's color attachment
@@ -53427,6 +53491,7 @@ struct pvk_subpass {
     uint32_t pass;                                /* index of its struct pvk_rp_pass */
     uint32_t ds_input;                            /* depth/stencil attachment read as input attachment */
     uint32_t hidden;                              /* PVK_HIDDEN_* copies of it the subpass reads */
+    uint32_t texture_inputs;                      /* input attachment indices read from textures */
     uint8_t map[PVK_MAX_COLOR_ATTACHMENTS];       /* logical color index -> slot of its pass */
     uint8_t hidden_logical[2];                    /* logical indices of the copies (pvk_hidden_logical) */
 };
@@ -53707,6 +53772,7 @@ struct pvk_cmd_subpass {
     uint32_t dynamic;        /* vkCmdClearAttachments names color slots (dynamic rendering) */
     uint8_t hidden_logical[2]; /* logical indices of the depth and stencil copies */
     uint8_t pad[2];
+    id inputs[PVK_MAX_INPUT_ATTACHMENTS]; /* input attachments read from textures: their views (NULL: none) */
 };
 
 struct pvk_cmd_end_pass {
@@ -54046,6 +54112,7 @@ static void pvk_cmd_subpass_rp(struct pvk_command_buffer *cb, const struct pvk_c
 {
     const struct pvk_subpass *sp = &r->pass->subpasses[r->subpass];
     struct pvk_cmd_subpass *c = pvk_cmd_append(cb, PVK_CMD_SUBPASS, sizeof(*c));
+    uint32_t i;
     if (!c)
         return;
     pvk_cmd_zero(c, sizeof(*c));
@@ -54056,6 +54123,9 @@ static void pvk_cmd_subpass_rp(struct pvk_command_buffer *cb, const struct pvk_c
         c->depth = pvk_format_has_depth(r->pass->attachments[sp->depth].fmt);
         c->stencil = pvk_format_has_stencil(r->pass->attachments[sp->depth].fmt);
     }
+    for (i = 0; i < sp->input_count; i++)
+        if ((sp->texture_inputs & (1u << i)) && r->views[sp->inputs[i]])
+            c->inputs[i] = r->views[sp->inputs[i]]->mtl_texture;
 }
 
 static void pvk_cmd_subpass_dynamic(struct pvk_command_buffer *cb, const struct pvk_cb_render *r)
@@ -55153,6 +55223,7 @@ static VkResult pvk_queue_init(struct pvk_queue *queue)
     queue->timeline = pvk_MTLDevice_newSharedEvent(mtl);
     if (desc) {
         pvk_MTL4ArgumentTableDescriptor_setMaxBufferBindCount(desc, 31);
+        pvk_MTL4ArgumentTableDescriptor_setMaxTextureBindCount(desc, PVK_MAX_INPUT_ATTACHMENTS); /* (section 16) */
         queue->argument_table = pvk_MTLDevice_newArgumentTableWithDescriptor_error(mtl, desc, NULL);
         /* Internal draws (blits, resolves): arguments and one texture. */
         pvk_MTL4ArgumentTableDescriptor_setMaxBufferBindCount(desc, 1);
@@ -58464,6 +58535,7 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
 static void pvk_encode_subpass(struct pvk_encoder *e, const struct pvk_cmd_subpass *c)
 {
     struct pvk_render *r = &e->render;
+    uint32_t i;
     memcpy(r->map, c->map, sizeof(r->map));
     r->view_mask = c->view_mask;
     r->depth = c->depth && r->depth_fmt;
@@ -58471,6 +58543,10 @@ static void pvk_encode_subpass(struct pvk_encoder *e, const struct pvk_cmd_subpa
     r->dynamic = c->dynamic != 0;
     memcpy(r->hidden_logical, c->hidden_logical, sizeof(r->hidden_logical));
     r->dirty |= PVK_RD_MAP | PVK_RD_DS | PVK_RD_DEPTH_BOUNDS | PVK_RD_AMPLIFICATION;
+    for (i = 0; i < PVK_MAX_INPUT_ATTACHMENTS; i++) /* input attachments read from textures, at index i */
+        if (c->inputs[i])
+            pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->argument_table, pvk_MTLTexture_gpuResourceID(c->inputs[i]),
+                                                    i);
 }
 
 /* ---- State ---- */
@@ -61902,6 +61978,26 @@ static void pvk_subpass_ds_input(const struct pvk_render_pass *rp, struct pvk_su
     }
 }
 
+/* The color input attachments a subpass reads from textures (bits of input
+ * attachment indices): those of another sample count than its color and
+ * depth/stencil attachments, which no Metal pass holds beside them for
+ * framebuffer fetch. The encoder binds their views at fragment texture
+ * index i (section 16) and shaders read them at the fragment's position
+ * (section 13, PVK_MSL_IA_TEXTURE). */
+static uint32_t pvk_subpass_texture_inputs(const struct pvk_render_pass *rp, const struct pvk_subpass *sp)
+{
+    uint32_t samples = 0, bits = 0, j;
+    for (j = 0; j < sp->color_count && !samples; j++)
+        if (sp->colors[j] < rp->attachment_count)
+            samples = rp->attachments[sp->colors[j]].samples;
+    if (!samples && sp->depth < rp->attachment_count)
+        samples = rp->attachments[sp->depth].samples;
+    for (j = 0; j < sp->input_count && samples; j++)
+        if (pvk_rp_color(rp, sp->inputs[j]) && rp->attachments[sp->inputs[j]].samples != samples)
+            bits |= 1u << j;
+    return bits;
+}
+
 /* The slot of attachment a in a Metal pass, or color_count if absent. */
 static uint32_t pvk_rp_slot(const struct pvk_rp_pass *mp, uint32_t a)
 {
@@ -61957,7 +62053,7 @@ static bool pvk_rp_can_merge(const struct pvk_render_pass *rp, const struct pvk_
     }
     for (i = 0; i < sp->input_count; i++) {
         uint32_t a = sp->inputs[i];
-        if (a == VK_ATTACHMENT_UNUSED)
+        if (a == VK_ATTACHMENT_UNUSED || (sp->texture_inputs & (1u << i)))
             continue;
         if (pvk_rp_resolves_into(mp, a))
             return false;
@@ -62016,7 +62112,7 @@ static void pvk_rp_pass_add(const struct pvk_render_pass *rp, struct pvk_rp_pass
         mp->samples = rp->attachments[a].samples;
     }
     for (i = 0; i < sp->input_count; i++)
-        if (pvk_rp_color(rp, sp->inputs[i]))
+        if (pvk_rp_color(rp, sp->inputs[i]) && !(sp->texture_inputs & (1u << i)))
             pvk_rp_slot_add(mp, sp->inputs[i]);
     if (sp->depth != VK_ATTACHMENT_UNUSED) {
         mp->depth = sp->depth;
@@ -62042,7 +62138,9 @@ static void pvk_subpass_ids(const struct pvk_render_pass *rp, const struct pvk_s
     for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
         loc_ids[i] = i < sp->color_count ? sp->colors[i] : PVK_NO_ID;
     for (i = 0; i < PVK_MAX_INPUT_ATTACHMENTS; i++)
-        input_ids[i] = i < sp->input_count && pvk_rp_color(rp, sp->inputs[i]) ? sp->inputs[i] : PVK_NO_ID;
+        input_ids[i] = i < sp->input_count && pvk_rp_color(rp, sp->inputs[i]) && !(sp->texture_inputs & (1u << i))
+                           ? sp->inputs[i]
+                           : PVK_NO_ID;
 }
 
 static VkResult pvk_render_pass_create(struct pvk_device *device, const VkRenderPassCreateInfo2 *info,
@@ -62099,6 +62197,7 @@ static VkResult pvk_render_pass_create(struct pvk_device *device, const VkRender
         sp->depth = d->pDepthStencilAttachment ? d->pDepthStencilAttachment->attachment : VK_ATTACHMENT_UNUSED;
         pvk_rp_use(rp, sp->depth, i);
         pvk_subpass_ds_input(rp, sp);
+        sp->texture_inputs = pvk_subpass_texture_inputs(rp, sp);
         sp->depth_resolve = VK_ATTACHMENT_UNUSED;
         for (ext = d->pNext; ext; ext = ext->pNext) {
             if (ext->sType == VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE) {
@@ -63076,6 +63175,9 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         if (rp->passes[sp->pass].hidden & PVK_HIDDEN_DEPTH)
             eager = 1u << PVK_VARIANT_DEPTH; /* the pass keeps a depth copy: draws writing depth need the variant */
         readable = sp->hidden;
+        for (i = 0; i < sp->input_count; i++)
+            if (sp->texture_inputs & (1u << i))
+                input_colors[i] = PVK_MSL_IA_TEXTURE;
         for (i = 0; i < sp->input_count; i++) {
             uint32_t aspects = sp->input_aspects[i] ? sp->input_aspects[i]
                                                     : VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;

@@ -3525,6 +3525,166 @@ static void test_subpasses(void)
     subpass_case(true);
 }
 
+/*
+ * #version 450
+ * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
+ * layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInputMS u_ms;
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = subpassLoad(u_ms, pc.layer);
+ * }
+ */
+static const uint32_t spv_ms_input_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x0000001a, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000028, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
+    0x00000000, 0x00000001, 0x0008000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009,
+    0x0000000c, 0x00000011, 0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2,
+    0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c,
+    0x00040005, 0x0000000c, 0x736d5f75, 0x00000000, 0x00030005, 0x0000000f, 0x00000050, 0x00050006,
+    0x0000000f, 0x00000000, 0x74636572, 0x00000000, 0x00050006, 0x0000000f, 0x00000001, 0x6f6c6f63,
+    0x00000072, 0x00050006, 0x0000000f, 0x00000002, 0x74706564, 0x00000068, 0x00050006, 0x0000000f,
+    0x00000003, 0x6579616c, 0x00000072, 0x00060006, 0x0000000f, 0x00000004, 0x77656976, 0x74726f70,
+    0x00000000, 0x00030005, 0x00000011, 0x00006370, 0x00040047, 0x00000009, 0x0000001e, 0x00000000,
+    0x00040047, 0x0000000c, 0x00000021, 0x00000000, 0x00040047, 0x0000000c, 0x00000022, 0x00000000,
+    0x00040047, 0x0000000c, 0x0000002b, 0x00000000, 0x00030047, 0x0000000f, 0x00000002, 0x00050048,
+    0x0000000f, 0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x0000000f, 0x00000001, 0x00000023,
+    0x00000010, 0x00050048, 0x0000000f, 0x00000002, 0x00000023, 0x00000020, 0x00050048, 0x0000000f,
+    0x00000003, 0x00000023, 0x00000024, 0x00050048, 0x0000000f, 0x00000004, 0x00000023, 0x00000028,
+    0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020,
+    0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007,
+    0x0004003b, 0x00000008, 0x00000009, 0x00000003, 0x00090019, 0x0000000a, 0x00000006, 0x00000006,
+    0x00000000, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00040020, 0x0000000b, 0x00000000,
+    0x0000000a, 0x0004003b, 0x0000000b, 0x0000000c, 0x00000000, 0x00040015, 0x0000000e, 0x00000020,
+    0x00000001, 0x0007001e, 0x0000000f, 0x00000007, 0x00000007, 0x00000006, 0x0000000e, 0x0000000e,
+    0x00040020, 0x00000010, 0x00000009, 0x0000000f, 0x0004003b, 0x00000010, 0x00000011, 0x00000009,
+    0x0004002b, 0x0000000e, 0x00000012, 0x00000003, 0x00040020, 0x00000013, 0x00000009, 0x0000000e,
+    0x0004002b, 0x0000000e, 0x00000016, 0x00000000, 0x00040017, 0x00000017, 0x0000000e, 0x00000002,
+    0x0005002c, 0x00000017, 0x00000018, 0x00000016, 0x00000016, 0x00050036, 0x00000002, 0x00000004,
+    0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003d, 0x0000000a, 0x0000000d, 0x0000000c,
+    0x00050041, 0x00000013, 0x00000014, 0x00000011, 0x00000012, 0x0004003d, 0x0000000e, 0x00000015,
+    0x00000014, 0x00070062, 0x00000007, 0x00000019, 0x0000000d, 0x00000018, 0x00000040, 0x00000015,
+    0x0003003e, 0x00000009, 0x00000019, 0x000100fd, 0x00010038,
+};
+
+/* A single-sampled subpass reads a sample (pc.layer) of a 4-sample input
+ * attachment, which framebuffer fetch cannot (one sample count per Metal
+ * pass): its texture is read instead. The first subpass renders sample 0
+ * red, the others black. */
+static void test_subpass_ms_input(void)
+{
+    VkAttachmentDescription a[2];
+    VkAttachmentReference ra = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+    VkAttachmentReference rin = { 0, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    VkAttachmentReference rb = { 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+    VkSubpassDescription sp[2];
+    VkSubpassDependency dep;
+    VkRenderPassCreateInfo info;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    struct img ms = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img ib = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkImageView views[2];
+    VkFramebuffer fb;
+    VkDescriptorPool dpool = VK_NULL_HANDLE;
+    VkDescriptorSet set;
+    VkClearValue clears[2];
+    VkPipeline p0, p1;
+    struct pipe p;
+    struct pc pc;
+    VkCommandBuffer cb;
+    uint32_t s, x, y;
+    int bad = 0;
+
+    memset(a, 0, sizeof(a));
+    a[0].format = a[1].format = VK_FORMAT_R8G8B8A8_UNORM;
+    a[0].samples = VK_SAMPLE_COUNT_4_BIT;
+    a[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    a[0].loadOp = a[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    a[0].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    a[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    a[0].stencilLoadOp = a[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    a[0].stencilStoreOp = a[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    a[0].initialLayout = a[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    a[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    a[1].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    memset(sp, 0, sizeof(sp));
+    sp[0].pipelineBindPoint = sp[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp[0].colorAttachmentCount = 1;
+    sp[0].pColorAttachments = &ra;
+    sp[1].inputAttachmentCount = 1;
+    sp[1].pInputAttachments = &rin;
+    sp[1].colorAttachmentCount = 1;
+    sp[1].pColorAttachments = &rb;
+    memset(&dep, 0, sizeof(dep));
+    dep.srcSubpass = 0;
+    dep.dstSubpass = 1;
+    dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+    dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    info.attachmentCount = 2;
+    info.pAttachments = a;
+    info.subpassCount = 2;
+    info.pSubpasses = sp;
+    info.dependencyCount = 1;
+    info.pDependencies = &dep;
+    CHECK_VK(vkCreateRenderPass(device, &info, NULL, &rp), VK_SUCCESS);
+    views[0] = ms.view;
+    views[1] = ib.view;
+    fb = make_fb(rp, views, 2, W, H, 1);
+    set = input_set(&dpool, ms.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_sample_fs, sizeof(spv_sample_fs));
+    p.rp = rp;
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.sample_shading = VK_TRUE;
+    p.min_sample_shading = 1.0f;
+    p0 = make_pipe(&p);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_ms_input_fs, sizeof(spv_ms_input_fs));
+    p.layout = input_layout;
+    p.rp = rp;
+    p.subpass = 1;
+    p1 = make_pipe(&p);
+    REQUIRE(p0 && p1);
+    memset(clears, 0, sizeof(clears));
+    clears[0].color.float32[2] = clears[1].color.float32[2] = 1.0f; /* blue: not drawn */
+    for (s = 0; s < 2; s++) {
+        cb = begin_cmd();
+        begin_pass(cb, rp, fb, 0, 0, W, H, clears, 2);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p0);
+        rect(cb, -1, -1, 1, 1, 0, 0, 0, 0, 0);
+        vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p1);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, input_layout, 0, 1, &set, 0, NULL);
+        memset(&pc, 0, sizeof(pc));
+        pc.rect[0] = pc.rect[1] = -1;
+        pc.rect[2] = pc.rect[3] = 1;
+        pc.layer = (int32_t)s;
+        vkCmdPushConstants(cb, input_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
+                           &pc);
+        vkCmdDraw(cb, 4, 1, 0, 0);
+        vkCmdEndRenderPass(cb);
+        download(cb, &ib, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++)
+                if (px(&out, x, y) != (s == 0 ? RED : BLACK) && bad++ < 4)
+                    fprintf(stderr, "multisampled input: sample %u pixel (%u, %u) is %08x\n", s, x, y, px(&out, x, y));
+    }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, p0, NULL);
+    vkDestroyPipeline(device, p1, NULL);
+    vkDestroyDescriptorPool(device, dpool, NULL);
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+    free_buf(&out);
+    free_img(&ms);
+    free_img(&ib);
+}
+
 /* Dynamic rendering local read: draw into attachment 0, then map location 0
  * to attachment 1 and read attachment 0 as input attachment 0. */
 static void test_local_read(void)
@@ -6210,6 +6370,7 @@ int main(void)
     RUN(test_vertex_input);
     RUN(test_clear_attachments);
     RUN(test_subpasses);
+    RUN(test_subpass_ms_input);
     RUN(test_local_read);
     RUN(test_ds_local_read);
     RUN(test_ds_split);
