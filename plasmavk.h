@@ -42844,10 +42844,13 @@ static uint64_t pvk_spv_fold(struct pvk_spv *ctx, uint32_t op, const struct pvk_
         if (aw == 32 && r->width == 16)
             return pvk_spv_f32_to_f16((uint32_t)a, rtz);
         pvk_spv_fail(ctx, "OpSpecConstantOp FConvert from %u to %u bits is not supported", aw, r->width);
-    case PVK_SPV_OpQuantizeToF16:
+    case PVK_SPV_OpQuantizeToF16: { /* a zero where the result is no normal binary16 */
+        uint32_t h;
         if (aw != 32 || r->width != 32)
             pvk_spv_fail(ctx, "QuantizeToF16 takes and gives 32-bit floats");
-        return pvk_spv_f16_to_f32(pvk_spv_f32_to_f16((uint32_t)a, false));
+        h = pvk_spv_f32_to_f16((uint32_t)a, false);
+        return (h & 0x7c00u) ? pvk_spv_f16_to_f32(h) : (h & 0x8000u) << 16;
+    }
     default:
         pvk_spv_fail(ctx, "unsupported OpSpecConstantOp operation (opcode %u)", op);
     }
@@ -45722,7 +45725,8 @@ enum {
     PVK_SPV_H_BALLOT = 1u << 9,
     PVK_SPV_H_SG_SCAN = 1u << 10,
     PVK_SPV_H_INB = 1u << 11,
-    PVK_SPV_H_F16_RTZ = 1u << 12
+    PVK_SPV_H_F16_RTZ = 1u << 12,
+    PVK_SPV_H_QUANTIZE = 1u << 13
 };
 
 static const char *pvk_spv_helper(struct pvk_spv *ctx, uint32_t bit, const char *name)
@@ -46307,6 +46311,13 @@ static const char *const pvk_spv_helper_text[] = {
     "    for (int i = 0; i < N; i++)\n"
     "        r[i] = pvk_f16_rtz(f[i]);\n"
     "    return r;\n}\n\n",
+    "/* OpQuantizeToF16: through half, and a zero where that is no normal half. */\n"
+    "inline float pvk_quantize_f16(float f)\n{\n"
+    "    float h = float(half(f));\n"
+    "    return abs(h) < 6.103515625e-05f ? copysign(0.0f, f) : h;\n}\n\n"
+    "template <int N>\ninline vec<float, N> pvk_quantize_f16(vec<float, N> f)\n{\n"
+    "    vec<float, N> h = vec<float, N>(vec<half, N>(f));\n"
+    "    return select(h, copysign(vec<float, N>(0.0f), f), abs(h) < 6.103515625e-05f);\n}\n\n",
 };
 
 static void pvk_spv_interpolate_at(struct pvk_spv *ctx, const struct pvk_spv_insn *in);
@@ -48990,8 +49001,7 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         return;
     }
     case PVK_SPV_OpQuantizeToF16:
-        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s(%s))", r->msl,
-                                          pvk_spv_components(r) > 1 ? pvk_spv_fmt(ctx, "half%u", r->count) : "half",
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", pvk_spv_helper(ctx, PVK_SPV_H_QUANTIZE, "pvk_quantize_f16"),
                                           pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3))));
         return;
     case PVK_SPV_OpBitFieldInsert:
