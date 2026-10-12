@@ -34180,6 +34180,9 @@ static VkFormatFeatureFlags2 pvk_format_image_features(const struct pvk_physical
         if (pd->filter_minmax)
             r |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT;
     }
+    if (f->mtl == PVK_MTLPixelFormatA1BGR5Unorm) /* R5G5B5A1, B5G5R5A1 (optional): Metal's opaque black border */
+        r &= ~(VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT | /* reads */
+               VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT);                                       /* (1,0,0,0) */
     if (!pvk_format_is_color(f)) {
         /* Formats > Depth Comparison Format Support */
         r |= VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT;
@@ -37593,6 +37596,7 @@ struct pvk_buffer_view {
 
 struct pvk_sampler {
     id mtl_sampler; /* MTLSamplerState created with supportArgumentBuffers */
+    id mtl_alpha;   /* for A8_UNORM views (struct pvk_sampler_state) */
     struct pvk_ycbcr ycbcr; /* VkSamplerYcbcrConversionInfo (planes 0: none) */
     /* section 11: */
     struct pvk_sampler_state *state; /* the shared state mtl_sampler belongs to */
@@ -39104,6 +39108,11 @@ struct pvk_sampler_state {
     struct pvk_sampler_state *next;
     struct pvk_sampler_key key;
     id mtl_sampler;
+    /* An opaque black border on a clamp-to-border mode: the same with an
+     * opaque white border, which A8_UNORM views take (Metal's opaque black
+     * reads (0, 0, 0, 0) from A8Unorm, its opaque white (0, 0, 0, 1),
+     * Vulkan's opaque black there). NULL: none. */
+    id mtl_alpha;
     uint32_t refs;
 };
 
@@ -39313,6 +39322,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSampler(VkDevice _device, const VkSampler
         state = pvk_alloc(pvk_device_alloc(device), sizeof(*state), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
         if (state)
             state->mtl_sampler = pvk_sampler_state_create(device, &key);
+        if (state && state->mtl_sampler && key.border == PVK_MTLSamplerBorderColorOpaqueBlack &&
+            (key.s == PVK_MTLSamplerAddressModeClampToBorderColor || key.t == PVK_MTLSamplerAddressModeClampToBorderColor ||
+             key.r == PVK_MTLSamplerAddressModeClampToBorderColor)) {
+            struct pvk_sampler_key white = key;
+            white.border = PVK_MTLSamplerBorderColorOpaqueWhite;
+            state->mtl_alpha = pvk_sampler_state_create(device, &white);
+        }
         if (!state || !state->mtl_sampler) {
             pthread_mutex_unlock(&pvk_sampler_lock);
             pvk_free(pvk_device_alloc(device), state);
@@ -39327,6 +39343,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSampler(VkDevice _device, const VkSampler
     pthread_mutex_unlock(&pvk_sampler_lock);
     sampler->state = state;
     sampler->mtl_sampler = state->mtl_sampler;
+    sampler->mtl_alpha = state->mtl_alpha ? state->mtl_alpha : state->mtl_sampler;
     pvk_live_add(device, VK_OBJECT_TYPE_SAMPLER, sampler, NULL, pAllocator != NULL);
     *pSampler = (VkSampler)sampler;
     return VK_SUCCESS;
@@ -39353,6 +39370,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroySampler(VkDevice _device, VkSampler _sampler
     pthread_mutex_unlock(&pvk_sampler_lock);
     if (state) {
         pvk_release(state->mtl_sampler);
+        pvk_release(state->mtl_alpha);
         pvk_free(pvk_device_alloc(device), state);
     }
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc(device), sampler);
@@ -39365,6 +39383,7 @@ static void pvk_device_free_sampler_states(struct pvk_device *device)
     for (; s; s = next) {
         next = s->next;
         pvk_release(s->mtl_sampler);
+        pvk_release(s->mtl_alpha);
         pvk_free(pvk_device_alloc(device), s);
     }
     device->sampler_states = NULL;
@@ -39739,11 +39758,13 @@ static pvk_MTLResourceID pvk_texture_id(id texture)
     return texture ? pvk_MTLTexture_gpuResourceID(texture) : none;
 }
 
-static pvk_MTLResourceID pvk_sampler_id(VkSampler sampler)
+/* alpha: for an A8_UNORM view (struct pvk_sampler_state) */
+static pvk_MTLResourceID pvk_sampler_id(VkSampler sampler, bool alpha)
 {
     pvk_MTLResourceID none = { 0 };
     const struct pvk_sampler *s = (const struct pvk_sampler *)sampler;
-    return s && s->mtl_sampler ? pvk_MTLSamplerState_gpuResourceID(s->mtl_sampler) : none;
+    id smp = s ? (alpha ? s->mtl_alpha : s->mtl_sampler) : NULL;
+    return smp ? pvk_MTLSamplerState_gpuResourceID(smp) : none;
 }
 
 /* ---- Layouts ---- */
@@ -39913,7 +39934,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
             lb->immutable = ids;
             for (j = 0; j < lb->count; j++) {
                 const struct pvk_sampler *s = (const struct pvk_sampler *)b->pImmutableSamplers[j];
-                *ids++ = pvk_sampler_id(b->pImmutableSamplers[j]);
+                *ids++ = pvk_sampler_id(b->pImmutableSamplers[j], false);
                 if (s) {
                     ycbcr[j] = s->ycbcr;
                     converts |= s->ycbcr.planes != 0;
@@ -40301,7 +40322,7 @@ static void pvk_descriptor_write(char *dst, VkDescriptorType type, const void *i
             memcpy(dst + 8, &residency, 8);
         }
         if (type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && !immutable) {
-            pvk_MTLResourceID sampler = pvk_sampler_id(ii->sampler);
+            pvk_MTLResourceID sampler = pvk_sampler_id(ii->sampler, view && view->format == VK_FORMAT_A8_UNORM);
             memcpy(dst + 8, &sampler, 8);
         }
         if (type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && stride >= 32) {
@@ -40314,7 +40335,7 @@ static void pvk_descriptor_write(char *dst, VkDescriptorType type, const void *i
     }
     case VK_DESCRIPTOR_TYPE_SAMPLER:
         if (!immutable) {
-            pvk_MTLResourceID sampler = pvk_sampler_id(((const VkDescriptorImageInfo *)info)->sampler);
+            pvk_MTLResourceID sampler = pvk_sampler_id(((const VkDescriptorImageInfo *)info)->sampler, false);
             memcpy(dst, &sampler, 8);
         }
         break;
