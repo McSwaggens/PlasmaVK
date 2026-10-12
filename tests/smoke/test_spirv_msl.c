@@ -11607,6 +11607,105 @@ static void test_padded_struct_store(void)
 }
 
 /*
+ * SPIR-V assembly (spirv-as from the Vulkan SDK): a constant index past the
+ * end of a vec3, in a branch never taken (undefined if it ran).
+ *
+ *                OpCapability Shader
+ *                OpMemoryModel Logical GLSL450
+ *                OpEntryPoint GLCompute %main "main"
+ *                OpExecutionMode %main LocalSize 1 1 1
+ *                OpDecorate %B Block
+ *                OpMemberDecorate %B 0 Offset 0
+ *                OpMemberDecorate %B 1 Offset 4
+ *                OpDecorate %b DescriptorSet 0
+ *                OpDecorate %b Binding 0
+ *        %void = OpTypeVoid
+ *          %fn = OpTypeFunction %void
+ *         %int = OpTypeInt 32 1
+ *       %float = OpTypeFloat 32
+ *        %vec3 = OpTypeVector %float 3
+ *           %B = OpTypeStruct %int %float
+ *       %ptr_B = OpTypePointer StorageBuffer %B
+ *           %b = OpVariable %ptr_B StorageBuffer
+ *   %ptr_v_fn = OpTypePointer Function %vec3
+ *   %ptr_f_fn = OpTypePointer Function %float
+ * %ptr_int_sb = OpTypePointer StorageBuffer %int
+ * %ptr_flt_sb = OpTypePointer StorageBuffer %float
+ *        %bool = OpTypeBool
+ *       %int_0 = OpConstant %int 0
+ *       %int_1 = OpConstant %int 1
+ *       %int_3 = OpConstant %int 3
+ *     %float_1 = OpConstant %float 1
+ *     %float_2 = OpConstant %float 2
+ *        %ones = OpConstantComposite %vec3 %float_1 %float_1 %float_1
+ *        %main = OpFunction %void None %fn
+ *       %entry = OpLabel
+ *           %v = OpVariable %ptr_v_fn Function
+ *                OpStore %v %ones
+ *       %zp = OpAccessChain %ptr_int_sb %b %int_0
+ *        %z = OpLoad %int %zp
+ *        %c = OpSGreaterThan %bool %z %int_0
+ *                OpSelectionMerge %merge None
+ *                OpBranchConditional %c %oob %merge
+ *         %oob = OpLabel
+ *          %p3 = OpAccessChain %ptr_f_fn %v %int_3
+ *                OpStore %p3 %float_2
+ *                OpBranch %merge
+ *       %merge = OpLabel
+ *          %p1 = OpAccessChain %ptr_f_fn %v %int_1
+ *          %v1 = OpLoad %float %p1
+ *          %op = OpAccessChain %ptr_flt_sb %b %int_1
+ *                OpStore %op %v1
+ *                OpReturn
+ *                OpFunctionEnd
+ */
+static const uint32_t spv_vector_index_past_end[] = {
+    0x07230203, 0x00010300, 0x00070000, 0x00000020, 0x00000000, 0x00020011, 0x00000001, 0x0003000e,
+    0x00000000, 0x00000001, 0x0005000f, 0x00000005, 0x00000001, 0x6e69616d, 0x00000000, 0x00060010,
+    0x00000001, 0x00000011, 0x00000001, 0x00000001, 0x00000001, 0x00030047, 0x00000002, 0x00000002,
+    0x00050048, 0x00000002, 0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x00000002, 0x00000001,
+    0x00000023, 0x00000004, 0x00040047, 0x00000003, 0x00000022, 0x00000000, 0x00040047, 0x00000003,
+    0x00000021, 0x00000000, 0x00020013, 0x00000004, 0x00030021, 0x00000005, 0x00000004, 0x00040015,
+    0x00000006, 0x00000020, 0x00000001, 0x00030016, 0x00000007, 0x00000020, 0x00040017, 0x00000008,
+    0x00000007, 0x00000003, 0x0004001e, 0x00000002, 0x00000006, 0x00000007, 0x00040020, 0x00000009,
+    0x0000000c, 0x00000002, 0x0004003b, 0x00000009, 0x00000003, 0x0000000c, 0x00040020, 0x0000000a,
+    0x00000007, 0x00000008, 0x00040020, 0x0000000b, 0x00000007, 0x00000007, 0x00040020, 0x0000000c,
+    0x0000000c, 0x00000006, 0x00040020, 0x0000000d, 0x0000000c, 0x00000007, 0x00020014, 0x0000000e,
+    0x0004002b, 0x00000006, 0x0000000f, 0x00000000, 0x0004002b, 0x00000006, 0x00000010, 0x00000001,
+    0x0004002b, 0x00000006, 0x00000011, 0x00000003, 0x0004002b, 0x00000007, 0x00000012, 0x3f800000,
+    0x0004002b, 0x00000007, 0x00000013, 0x40000000, 0x0006002c, 0x00000008, 0x00000014, 0x00000012,
+    0x00000012, 0x00000012, 0x00050036, 0x00000004, 0x00000001, 0x00000000, 0x00000005, 0x000200f8,
+    0x00000015, 0x0004003b, 0x0000000a, 0x00000016, 0x00000007, 0x0003003e, 0x00000016, 0x00000014,
+    0x00050041, 0x0000000c, 0x00000017, 0x00000003, 0x0000000f, 0x0004003d, 0x00000006, 0x00000018,
+    0x00000017, 0x000500ad, 0x0000000e, 0x00000019, 0x00000018, 0x0000000f, 0x000300f7, 0x0000001a,
+    0x00000000, 0x000400fa, 0x00000019, 0x0000001b, 0x0000001a, 0x000200f8, 0x0000001b, 0x00050041,
+    0x0000000b, 0x0000001c, 0x00000016, 0x00000011, 0x0003003e, 0x0000001c, 0x00000013, 0x000200f9,
+    0x0000001a, 0x000200f8, 0x0000001a, 0x00050041, 0x0000000b, 0x0000001d, 0x00000016, 0x00000010,
+    0x0004003d, 0x00000007, 0x0000001e, 0x0000001d, 0x00050041, 0x0000000d, 0x0000001f, 0x00000003,
+    0x00000010, 0x0003003e, 0x0000001f, 0x0000001e, 0x000100fd, 0x00010038,
+};
+
+/* An access chain into a vector by a constant index past its end compiles
+ * (Metal rejects .w on a float3); the shader runs its other path. */
+static void test_vector_index_past_end(void)
+{
+    uint32_t init[2] = { 0, 0 };
+    struct pvk_msl_result res;
+    struct mt_buffer buf;
+    struct mt_binding b;
+    id pso;
+
+    MT_BUILD(spv_vector_index_past_end, NULL, res, pso);
+    buf = mt_buffer(sizeof(init), init, sizeof(init));
+    b = bind(0, 0, &buf);
+    CHECK(mt_dispatch(pso, &res, &b, 1, NULL, 0, 1, 1, 1));
+    CHECK(get_f32(buf.data, 4) == 1.0f);
+    mt_buffer_free(&buf);
+    pvk_release(pso);
+    pvk_msl_result_free(&res);
+}
+
+/*
  * #version 450
  * layout(local_size_x = 4) in;
  * shared uvec4 s[1];
@@ -12336,6 +12435,7 @@ int main(void)
     RUN(test_pointer_array);
     RUN(test_empty_struct_member);
     RUN(test_padded_struct_store);
+    RUN(test_vector_index_past_end);
     RUN(test_atomic_components);
     RUN(test_ieee_specials);
     RUN(test_layout_odds);

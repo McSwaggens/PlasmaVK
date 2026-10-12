@@ -46126,8 +46126,8 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
             p->expr = pvk_spv_fmt(ctx, "%s[%s]%s[%s]", p->expr, idx, p->node->padded ? ".v" : "", p->rm_col);
             p->rm_col = NULL;
             p->node = NULL;
-        } else if (cidx >= 0 && cidx < 4) {
-            p->expr = pvk_spv_fmt(ctx, "%s.%c", p->expr, "xyzw"[cidx]);
+        } else if (cidx >= 0) { /* (past the end: undefined, but it must compile) */
+            p->expr = pvk_spv_fmt(ctx, "%s.%c", p->expr, "xyzw"[cidx < t->count ? cidx : t->count - 1]);
         } else {
             p->expr = pvk_spv_fmt(ctx, "%s[%s]", p->expr, idx);
         }
