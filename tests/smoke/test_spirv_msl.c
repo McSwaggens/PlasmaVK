@@ -11607,6 +11607,126 @@ static void test_padded_struct_store(void)
 }
 
 /*
+ * SPIR-V assembly (spirv-as from the Vulkan SDK): HLSL cbuffer packing, a
+ * member in the padding after an array's last element (int foo[2], stride
+ * 16; int bar at 20). Reads bar and foo[1], and copies the whole struct.
+ *
+ *                OpCapability Shader
+ *                OpMemoryModel Logical GLSL450
+ *                OpEntryPoint GLCompute %main "main"
+ *                OpExecutionMode %main LocalSize 1 1 1
+ *                OpDecorate %arr ArrayStride 16
+ *                OpMemberDecorate %S 0 Offset 0
+ *                OpMemberDecorate %S 1 Offset 20
+ *                OpDecorate %UB Block
+ *                OpMemberDecorate %UB 0 Offset 0
+ *                OpDecorate %ub DescriptorSet 0
+ *                OpDecorate %ub Binding 0
+ *                OpDecorate %OB Block
+ *                OpMemberDecorate %OB 0 Offset 0
+ *                OpMemberDecorate %OB 1 Offset 32
+ *                OpDecorate %ob DescriptorSet 0
+ *                OpDecorate %ob Binding 1
+ *        %void = OpTypeVoid
+ *          %fn = OpTypeFunction %void
+ *         %int = OpTypeInt 32 1
+ *        %uint = OpTypeInt 32 0
+ *      %uint_2 = OpConstant %uint 2
+ *         %arr = OpTypeArray %int %uint_2
+ *           %S = OpTypeStruct %arr %int
+ *          %UB = OpTypeStruct %S
+ *          %OB = OpTypeStruct %S %int
+ *      %ptr_UB = OpTypePointer Uniform %UB
+ *          %ub = OpVariable %ptr_UB Uniform
+ *      %ptr_OB = OpTypePointer StorageBuffer %OB
+ *          %ob = OpVariable %ptr_OB StorageBuffer
+ *      %ptr_uS = OpTypePointer Uniform %S
+ *      %ptr_ui = OpTypePointer Uniform %int
+ *      %ptr_sS = OpTypePointer StorageBuffer %S
+ *      %ptr_si = OpTypePointer StorageBuffer %int
+ *       %int_0 = OpConstant %int 0
+ *       %int_1 = OpConstant %int 1
+ *        %main = OpFunction %void None %fn
+ *       %entry = OpLabel
+ *          %bp = OpAccessChain %ptr_ui %ub %int_0 %int_1
+ *           %b = OpLoad %int %bp
+ *          %fp = OpAccessChain %ptr_ui %ub %int_0 %int_0 %int_1
+ *           %f = OpLoad %int %fp
+ *           %s = OpIAdd %int %b %f
+ *          %sp = OpAccessChain %ptr_si %ob %int_1
+ *                OpStore %sp %s
+ *          %wp = OpAccessChain %ptr_uS %ub %int_0
+ *       %whole = OpLoad %S %wp
+ *          %cp = OpAccessChain %ptr_sS %ob %int_0
+ *                OpStore %cp %whole
+ *                OpReturn
+ *                OpFunctionEnd
+ */
+static const uint32_t spv_member_in_padding[] = {
+    0x07230203, 0x00010300, 0x00070000, 0x0000001f, 0x00000000, 0x00020011, 0x00000001, 0x0003000e,
+    0x00000000, 0x00000001, 0x0005000f, 0x00000005, 0x00000001, 0x6e69616d, 0x00000000, 0x00060010,
+    0x00000001, 0x00000011, 0x00000001, 0x00000001, 0x00000001, 0x00040047, 0x00000002, 0x00000006,
+    0x00000010, 0x00050048, 0x00000003, 0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x00000003,
+    0x00000001, 0x00000023, 0x00000014, 0x00030047, 0x00000004, 0x00000002, 0x00050048, 0x00000004,
+    0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x00000005, 0x00000022, 0x00000000, 0x00040047,
+    0x00000005, 0x00000021, 0x00000000, 0x00030047, 0x00000006, 0x00000002, 0x00050048, 0x00000006,
+    0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x00000006, 0x00000001, 0x00000023, 0x00000020,
+    0x00040047, 0x00000007, 0x00000022, 0x00000000, 0x00040047, 0x00000007, 0x00000021, 0x00000001,
+    0x00020013, 0x00000008, 0x00030021, 0x00000009, 0x00000008, 0x00040015, 0x0000000a, 0x00000020,
+    0x00000001, 0x00040015, 0x0000000b, 0x00000020, 0x00000000, 0x0004002b, 0x0000000b, 0x0000000c,
+    0x00000002, 0x0004001c, 0x00000002, 0x0000000a, 0x0000000c, 0x0004001e, 0x00000003, 0x00000002,
+    0x0000000a, 0x0003001e, 0x00000004, 0x00000003, 0x0004001e, 0x00000006, 0x00000003, 0x0000000a,
+    0x00040020, 0x0000000d, 0x00000002, 0x00000004, 0x0004003b, 0x0000000d, 0x00000005, 0x00000002,
+    0x00040020, 0x0000000e, 0x0000000c, 0x00000006, 0x0004003b, 0x0000000e, 0x00000007, 0x0000000c,
+    0x00040020, 0x0000000f, 0x00000002, 0x00000003, 0x00040020, 0x00000010, 0x00000002, 0x0000000a,
+    0x00040020, 0x00000011, 0x0000000c, 0x00000003, 0x00040020, 0x00000012, 0x0000000c, 0x0000000a,
+    0x0004002b, 0x0000000a, 0x00000013, 0x00000000, 0x0004002b, 0x0000000a, 0x00000014, 0x00000001,
+    0x00050036, 0x00000008, 0x00000001, 0x00000000, 0x00000009, 0x000200f8, 0x00000015, 0x00060041,
+    0x00000010, 0x00000016, 0x00000005, 0x00000013, 0x00000014, 0x0004003d, 0x0000000a, 0x00000017,
+    0x00000016, 0x00070041, 0x00000010, 0x00000018, 0x00000005, 0x00000013, 0x00000013, 0x00000014,
+    0x0004003d, 0x0000000a, 0x00000019, 0x00000018, 0x00050080, 0x0000000a, 0x0000001a, 0x00000017,
+    0x00000019, 0x00050041, 0x00000012, 0x0000001b, 0x00000007, 0x00000014, 0x0003003e, 0x0000001b,
+    0x0000001a, 0x00050041, 0x0000000f, 0x0000001c, 0x00000005, 0x00000013, 0x0004003d, 0x00000003,
+    0x0000001d, 0x0000001c, 0x00050041, 0x00000011, 0x0000001e, 0x00000007, 0x00000013, 0x0003003e,
+    0x0000001e, 0x0000001d, 0x000100fd, 0x00010038,
+};
+
+/* A member in the padding after an array's last element (HLSL cbuffer
+ * packing): a union with the array, read and copied as itself, and a store
+ * of the whole struct leaves the padding alone. */
+static void test_member_in_padding(void)
+{
+    uint32_t in[8], out[9], k;
+    struct pvk_msl_result res;
+    struct mt_buffer bi, bo;
+    struct mt_binding b[2];
+    id pso;
+
+    for (k = 0; k < 8; k++)
+        in[k] = 0x5e5e5e5eu;
+    in[0] = 1;
+    in[4] = 10;
+    in[5] = 100;
+    for (k = 0; k < 9; k++)
+        out[k] = 0xdeadbeefu;
+    MT_BUILD(spv_member_in_padding, NULL, res, pso);
+    bi = mt_buffer(sizeof(in), in, sizeof(in));
+    bo = mt_buffer(sizeof(out), out, sizeof(out));
+    b[0] = bind(0, 0, &bi);
+    b[1] = bind(0, 1, &bo);
+    CHECK(mt_dispatch(pso, &res, b, 2, NULL, 0, 1, 1, 1));
+    CHECK(get_u32(bo.data, 32) == 110u);
+    CHECK(get_u32(bo.data, 0) == 1u && get_u32(bo.data, 16) == 10u && get_u32(bo.data, 20) == 100u);
+    for (k = 1; k < 8; k++)
+        if (k != 4 && k != 5)
+            CHECK(get_u32(bo.data, k * 4) == 0xdeadbeefu);
+    mt_buffer_free(&bi);
+    mt_buffer_free(&bo);
+    pvk_release(pso);
+    pvk_msl_result_free(&res);
+}
+
+/*
  * SPIR-V assembly (spirv-as from the Vulkan SDK): a constant index past the
  * end of a vec3, in a branch never taken (undefined if it ran).
  *
@@ -12614,6 +12734,7 @@ int main(void)
     RUN(test_pointer_array);
     RUN(test_empty_struct_member);
     RUN(test_padded_struct_store);
+    RUN(test_member_in_padding);
     RUN(test_vector_index_past_end);
     RUN(test_wrapping_arithmetic);
     RUN(test_component_stores);

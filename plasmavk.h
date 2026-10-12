@@ -41938,6 +41938,12 @@ struct pvk_spv_member {
     uint32_t pad_before;
     bool runtime; /* runtime array: declared as decl msl[1] */
     uint32_t builtin, location, component, interp; /* stage interface blocks */
+    /* In the padding after the previous member's data (HLSL packing: past
+     * an array's last element): 1 + that member's index, which it shares a
+     * union with, in a struct of the members there; field: its name in that
+     * struct (msl is pvk_ov<index>.field). 0: none. */
+    uint32_t overlay;
+    const char *field;
 };
 
 struct pvk_spv_type {
@@ -41957,6 +41963,7 @@ struct pvk_spv_type {
     uint32_t need_align;    /* explicit layouts: the largest alignment its placements allow (0: any) */
     uint32_t max_size;      /* explicit layouts: the most bytes its placements leave it (0: any) */
     bool packed_attr;       /* struct: declared __attribute__((packed)) (pvk_spv_layout_struct) */
+    bool overlays;          /* struct: members in others' padding (struct pvk_spv_member overlay) */
     bool pad_conflict;
     uint32_t tail_pad;
     uint32_t end;           /* struct: end of the last member */
@@ -44240,9 +44247,25 @@ static void pvk_spv_name_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_sp
     t->msl = buf[0] ? pvk_spv_fmt(ctx, "%s_%u", buf, tid) : pvk_spv_fmt(ctx, "pvk_struct_%u", tid);
 }
 
+/* The bytes of a value of type mt (MSL size `size`) before its trailing
+ * padding: an array's last element ends before its stride, a struct's last
+ * member before its size. */
+static uint32_t pvk_spv_data_size(struct pvk_spv *ctx, const struct pvk_spv_type *mt, uint32_t size, uint32_t depth)
+{
+    if (mt->op == PVK_SPV_OpTypeArray && mt->count && depth < PVK_SPV_MAX_TYPE_DEPTH) {
+        const struct pvk_spv_type *e = pvk_spv_type(ctx, mt->elem);
+        return (mt->count - 1) * mt->stride + pvk_spv_data_size(ctx, e, e->size, depth + 1);
+    }
+    if (mt->op == PVK_SPV_OpTypeStruct && mt->end && mt->end < size)
+        return mt->end;
+    return size;
+}
+
 static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_spv_type *t)
 {
     uint32_t i, k, cur = 0, align = 1, nexplicit = 0, limit = t->need_align;
+    /* the last member not in another's padding (host) and the members in its padding */
+    uint32_t host = UINT32_MAX, host_size = 0, host_align = 1, host_data = 0, ov_end = 0, ov_align = 1;
     char buf[48];
 
     for (i = 0; i < t->nmembers; i++)
@@ -44328,13 +44351,35 @@ static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_
         }
         if (m->offset > (1u << 30) || size > (1u << 30))
             pvk_spv_fail(ctx, "struct %u: member %u is too large or too far", tid, i);
-        if (m->offset < cur)
-            pvk_spv_fail(ctx, "struct %u: member %u at offset %u overlaps the previous member", tid, i, m->offset);
         if (m->offset % a != 0)
             pvk_spv_fail(ctx, "struct %u: member %u offset %u is not aligned for %s", tid, i, m->offset, m->decl);
+        if (m->offset < cur) {
+            /* in the host's padding (HLSL packs scalars past an array's last
+             * element): a union of the host and a struct of such members */
+            const struct pvk_spv_member *h = host < t->nmembers ? &t->members[host] : NULL;
+            uint32_t helper, u;
+            if (!h || m->runtime || m->offset < host_data || m->offset < ov_end || h->offset % a != 0)
+                pvk_spv_fail(ctx, "struct %u: member %u at offset %u overlaps the previous member", tid, i, m->offset);
+            m->overlay = host + 1;
+            m->pad_before = m->offset - (ov_end ? ov_end : h->offset); /* (in that struct) */
+            t->overlays = true;
+            ov_end = m->offset + size;
+            ov_align = a > ov_align ? a : ov_align;
+            helper = pvk_spv_round(ov_end - h->offset, ov_align);
+            u = ov_align > host_align ? ov_align : host_align;
+            cur = h->offset + pvk_spv_round(helper > host_size ? helper : host_size, u);
+            align = u > align ? u : align;
+            continue;
+        }
         m->pad_before = m->offset - cur;
         cur = m->offset + size;
         align = a > align ? a : align;
+        host = i;
+        host_size = size;
+        host_align = a;
+        host_data = m->offset + (m->node ? size : pvk_spv_data_size(ctx, mt, size, 0));
+        ov_end = 0;
+        ov_align = 1;
     }
     t->end = cur;
     t->size = pvk_spv_round(cur, align);
@@ -44365,6 +44410,13 @@ static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_
             if (strcmp(t->members[j].msl, buf) == 0)
                 ok = false;
         m->msl = ok ? pvk_spv_fmt(ctx, "%s", buf) : pvk_spv_fmt(ctx, "pvk_m%u", i);
+    }
+    for (i = 0; i < t->nmembers; i++) {
+        struct pvk_spv_member *m = &t->members[i];
+        if (m->overlay) {
+            m->field = m->msl;
+            m->msl = pvk_spv_fmt(ctx, "pvk_ov%u.%s", m->overlay - 1, m->field);
+        }
     }
 }
 
@@ -44758,8 +44810,10 @@ static const char *pvk_spv_struct_init(struct pvk_spv *ctx, struct pvk_spv_type 
         const char *v = vals[t->order[i]];
         if (m->node)
             v = pvk_spv_storage_expr(ctx, m->node, m->type, v, 0);
-        items[i] = m->pad_before ? pvk_spv_fmt(ctx, "{}, %s", v) : v; /* padding fields come first */
+        items[i] = m->pad_before && !t->overlays ? pvk_spv_fmt(ctx, "{}, %s", v) : v; /* padding fields come first */
     }
+    if (t->overlays) /* (its unions: pvk_spv_emit_types) */
+        return pvk_spv_join(ctx, pvk_spv_fmt(ctx, "pvk_make_%s(", t->msl), items, t->nmembers, ", ", ")");
     return pvk_spv_join(ctx, pvk_spv_fmt(ctx, "%s{", t->msl), items, t->nmembers, ", ", "}");
 }
 
@@ -44891,9 +44945,43 @@ static void pvk_spv_emit_constants(struct pvk_spv *ctx)
         pvk_sb_append(ctx, &ctx->consts, "\n", 1);
 }
 
+/* Whether member h of struct t has members in its padding (overlay). */
+static bool pvk_spv_hosts(const struct pvk_spv_type *t, uint32_t h)
+{
+    uint32_t k;
+    for (k = 0; t->overlays && k < t->nmembers; k++)
+        if (t->members[k].overlay == h + 1)
+            return true;
+    return false;
+}
+
+static void pvk_spv_emit_member(struct pvk_spv *ctx, const struct pvk_spv_type *t, const struct pvk_spv_member *m,
+                                const char *indent, const char *name)
+{
+    if (m->runtime)
+        pvk_sb_printf(ctx, &ctx->types, "%s%s %s[1];", indent, m->decl, name);
+    else
+        pvk_sb_printf(ctx, &ctx->types, "%s%s %s;", indent, m->decl, name);
+    if (m->node) {
+        /* describe the matrix that is stored as an array of lines */
+        const struct pvk_spv_node *n = m->node;
+        uint32_t tid = m->type;
+        while (n->kind == PVK_SPV_N_ARRAY) {
+            n = n->child;
+            tid = pvk_spv_type(ctx, tid)->elem;
+        }
+        pvk_sb_printf(ctx, &ctx->types, " /* offset %u: %s%s, %s %u bytes apart */", m->offset,
+                      m->node->kind == PVK_SPV_N_ARRAY ? "array of " : "", pvk_spv_type(ctx, tid)->msl,
+                      n->row_major ? "row-major, rows" : "columns", n->size / n->count);
+    } else if (t->explicit_layout) {
+        pvk_sb_printf(ctx, &ctx->types, " /* offset %u */", m->offset);
+    }
+    pvk_sb_append(ctx, &ctx->types, "\n", 1);
+}
+
 static void pvk_spv_emit_types(struct pvk_spv *ctx)
 {
-    uint32_t i, j;
+    uint32_t i, j, k;
     if (ctx->use_psb) { /* pointers may name structs declared further down */
         for (i = 0; i < ctx->ntypes; i++)
             if (ctx->ids[ctx->type_order[i]].t->op == PVK_SPV_OpTypeStruct)
@@ -44904,35 +44992,51 @@ static void pvk_spv_emit_types(struct pvk_spv *ctx)
         struct pvk_spv_type *t = ctx->ids[ctx->type_order[i]].t;
         if (t->op != PVK_SPV_OpTypeStruct)
             continue;
+        /* members in another's padding: a struct of them (pvk_ov_<struct>_<member>) */
+        for (j = 0; t->overlays && j < t->nmembers; j++) {
+            uint32_t h = t->order[j];
+            if (!pvk_spv_hosts(t, h))
+                continue;
+            pvk_sb_printf(ctx, &ctx->types, "struct pvk_ov_%s_%u\n{\n", t->msl, h);
+            for (k = 0; k < t->nmembers; k++) {
+                const struct pvk_spv_member *m = &t->members[t->order[k]];
+                if (m->overlay != h + 1)
+                    continue;
+                if (m->pad_before)
+                    pvk_sb_printf(ctx, &ctx->types, "    char pvk_pad%u[%u];\n",
+                                  m->offset - t->members[h].offset - m->pad_before, m->pad_before);
+                pvk_spv_emit_member(ctx, t, m, "    ", m->field);
+            }
+            pvk_sb_append(ctx, &ctx->types, "};\n\n", 4);
+        }
         pvk_sb_printf(ctx, &ctx->types, "struct %s%s\n{\n", t->packed_attr ? "__attribute__((packed)) " : "", t->msl);
         for (j = 0; j < t->nmembers; j++) {
             const struct pvk_spv_member *m = &t->members[t->order[j]];
+            bool hosts = pvk_spv_hosts(t, t->order[j]);
+            if (m->overlay)
+                continue;
             if (m->pad_before)
                 pvk_sb_printf(ctx, &ctx->types, "    char pvk_pad%u[%u];\n", m->offset - m->pad_before,
                               m->pad_before);
-            if (m->runtime)
-                pvk_sb_printf(ctx, &ctx->types, "    %s %s[1];", m->decl, m->msl);
-            else
-                pvk_sb_printf(ctx, &ctx->types, "    %s %s;", m->decl, m->msl);
-            if (m->node) {
-                /* describe the matrix that is stored as an array of lines */
-                const struct pvk_spv_node *n = m->node;
-                uint32_t tid = m->type;
-                while (n->kind == PVK_SPV_N_ARRAY) {
-                    n = n->child;
-                    tid = pvk_spv_type(ctx, tid)->elem;
-                }
-                pvk_sb_printf(ctx, &ctx->types, " /* offset %u: %s%s, %s %u bytes apart */", m->offset,
-                              m->node->kind == PVK_SPV_N_ARRAY ? "array of " : "", pvk_spv_type(ctx, tid)->msl,
-                              n->row_major ? "row-major, rows" : "columns", n->size / n->count);
-            } else if (t->explicit_layout) {
-                pvk_sb_printf(ctx, &ctx->types, " /* offset %u */", m->offset);
-            }
-            pvk_sb_append(ctx, &ctx->types, "\n", 1);
+            if (hosts) /* sharing its bytes with the members in its padding */
+                pvk_sb_printf(ctx, &ctx->types, "    union\n    {\n");
+            pvk_spv_emit_member(ctx, t, m, hosts ? "        " : "    ", m->msl);
+            if (hosts)
+                pvk_sb_printf(ctx, &ctx->types, "        pvk_ov_%s_%u pvk_ov%u;\n    };\n", t->msl, t->order[j],
+                              t->order[j]);
         }
         if (t->tail_pad)
             pvk_sb_printf(ctx, &ctx->types, "    char pvk_pad%u[%u];\n", t->size - t->tail_pad, t->tail_pad);
         pvk_sb_append(ctx, &ctx->types, "};\n\n", 4);
+        if (t->overlays) { /* its aggregate (pvk_spv_struct_init): no braces reach a union's second member */
+            pvk_sb_printf(ctx, &ctx->types, "static inline %s pvk_make_%s(", t->msl, t->msl);
+            for (j = 0; j < t->nmembers; j++)
+                pvk_sb_printf(ctx, &ctx->types, "%s%s a%u", j ? ", " : "", t->members[t->order[j]].decl, j);
+            pvk_sb_printf(ctx, &ctx->types, ")\n{\n    %s r = {};\n", t->msl);
+            for (j = 0; j < t->nmembers; j++)
+                pvk_sb_printf(ctx, &ctx->types, "    r.%s = a%u;\n", t->members[t->order[j]].msl, j);
+            pvk_sb_append(ctx, &ctx->types, "    return r;\n}\n\n", 17);
+        }
     }
 }
 
