@@ -55409,6 +55409,10 @@ struct pvk_render {
     /* Stored depth/stencil attachments to resolve when the pass ends
      * (texture NULL: none); see pvk_render_resolve_ds */
     struct pvk_pass_attachment resolve_depth, resolve_stencil;
+    /* Integer color attachments to resolve when the pass ends (see
+     * pvk_render_resolve_int) */
+    struct pvk_pass_attachment resolve_int[PVK_MAX_COLOR_ATTACHMENTS];
+    uint32_t resolve_int_count;
     /* Depth/stencil copies (section 15, DEPTH/STENCIL INPUT ATTACHMENTS) */
     uint32_t hidden;            /* PVK_HIDDEN_* copies the Metal pass keeps */
     uint8_t hidden_slot[2];     /* their color slots */
@@ -57883,6 +57887,7 @@ static void pvk_encoder_query_available(struct pvk_encoder *e, struct pvk_query_
 
 static void pvk_render_resolve_ds(struct pvk_encoder *e);
 static void pvk_render_split_resolve(struct pvk_encoder *e);
+static void pvk_render_resolve_int(struct pvk_encoder *e);
 
 static void pvk_render_end(struct pvk_encoder *e)
 {
@@ -57894,6 +57899,7 @@ static void pvk_render_end(struct pvk_encoder *e)
         r->enc = NULL;
         pvk_render_split_resolve(e);
         pvk_render_resolve_ds(e);
+        pvk_render_resolve_int(e);
     }
     r->begin = NULL;
     r->split = r->split_resolve = r->no_rebind = false;
@@ -58056,6 +58062,49 @@ static void pvk_render_resolve_ds(struct pvk_encoder *e)
     memset(&r->resolve_stencil, 0, sizeof(r->resolve_stencil));
 }
 
+/* Metal's resolves of 32-bit integer color attachments change even pixels
+ * whose samples are all the same (R32Uint 0x89abcdef: 0x2f88c9ef; Apple M4,
+ * macOS 27.2), where Vulkan takes sample 0 (Render Pass > Multisample
+ * Resolve: integer formats resolve as VK_RESOLVE_MODE_SAMPLE_ZERO_BIT).
+ * pvk_render_open stores all integer ones unresolved (r->resolve_int); when
+ * the pass ends, vkCmdResolveImage's draw resolves the render area of each
+ * layer (multiview: of each view). */
+static void pvk_render_resolve_int(struct pvk_encoder *e)
+{
+    struct pvk_render *r = &e->render;
+    uint32_t n = r->resolve_int_count, mask = r->begin ? r->begin->view_mask : 0, i, l;
+    uint32_t layers = mask ? 32 : r->begin && r->begin->layers ? r->begin->layers : 1;
+    bool ordered = e->queue->ordered;
+
+    r->resolve_int_count = 0;
+    e->queue->ordered = true; /* after the pass's stores */
+    for (i = 0; i < n && r->begin; i++) {
+        const struct pvk_pass_attachment *pa = &r->resolve_int[i];
+        struct pvk_cmd_blit c;
+        memset(&c, 0, sizeof(c));
+        c.src = pa->texture;
+        c.dst = pa->resolve;
+        c.dst_format = pa->fmt->mtl;
+        c.function = (pa->fmt->kind == PVK_FK_UINT ? PVK_RESOLVE_U_MS : PVK_RESOLVE_I_MS) + (pa->array ? 1u : 0u);
+        c.dst_level = pa->resolve_level;
+        c.layers = 1;
+        c.src0[0] = c.dst0[0] = r->area.offset.x;
+        c.src0[1] = c.dst0[1] = r->area.offset.y;
+        c.dst1[0] = r->area.offset.x + (int32_t)r->area.extent.width;
+        c.dst1[1] = r->area.offset.y + (int32_t)r->area.extent.height;
+        c.dst1[2] = 1;
+        pvk_blit_swizzle(pa->fmt, c.swizzle);
+        for (l = 0; l < layers && e->result == VK_SUCCESS; l++) {
+            if (mask && !(mask & (1u << l)))
+                continue;
+            c.src_layer = pa->slice + l;
+            c.dst_layer = pa->resolve_slice + l;
+            pvk_encode_blit(e, &c);
+        }
+    }
+    e->queue->ordered = ordered;
+}
+
 /* What pvk_render_resolve_ds resolves of a stored, resolved depth/stencil
  * attachment (pa becomes Store without the resolve). */
 static void pvk_render_defer_resolve(struct pvk_pass_attachment *pa, struct pvk_pass_attachment *later)
@@ -58101,6 +58150,12 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
         if (load_all)
             pa.load = PVK_MTLLoadActionLoad;
         if (store_all) {
+            pa.store = PVK_MTLStoreActionStore;
+            pa.resolve = NULL;
+        }
+        if (pa.resolve && !pa.memoryless && (pa.fmt->kind == PVK_FK_UINT || pa.fmt->kind == PVK_FK_SINT) &&
+            r->resolve_int_count < PVK_MAX_COLOR_ATTACHMENTS) { /* sample 0 when the pass ends */
+            r->resolve_int[r->resolve_int_count++] = pa;
             pa.store = PVK_MTLStoreActionStore;
             pa.resolve = NULL;
         }

@@ -4631,6 +4631,69 @@ static void test_msaa(void)
     free_img(&depth);
 }
 
+/* Resolves of integer attachments take a sample (sample 0), never a value
+ * between samples: 32-bit R32_UINT, a rectangle whose right edge halves
+ * column 8. */
+static void test_msaa_int_resolve(void)
+{
+    struct img ms = make_img(VK_FORMAT_R32_UINT, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img resolved = make_img(VK_FORMAT_R32_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    const uint32_t drawn = 0x89abcdefu, cleared = 0x12345678u;
+    VkRenderingAttachmentInfo att;
+    VkRenderingInfo info;
+    VkPipeline pipe;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t x, y;
+    float f;
+    int bad = 0;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_uint_fs, sizeof(spv_uint_fs));
+    p.color_formats[0] = VK_FORMAT_R32_UINT;
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    pipe = make_pipe(&p);
+    REQUIRE(pipe);
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = ms.view;
+    att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att.clearValue.color.uint32[0] = cleared;
+    att.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+    att.resolveImageView = resolved.view;
+    att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &att;
+    memcpy(&f, &drawn, 4);
+    cb = begin_cmd();
+    vkCmdBeginRendering(cb, &info);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    rect(cb, -1, -1, 8.5f / W * 2.0f - 1.0f, 1, f, 0, 0, 0, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            uint32_t got = ((const uint32_t *)out.data)[y * W + x];
+            if (x == 8 ? got != drawn && got != cleared : got != (x < 8 ? drawn : cleared)) {
+                if (bad++ < 4)
+                    fprintf(stderr, "integer resolve: pixel (%u, %u) is %08x\n", x, y, got);
+            }
+        }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipe, NULL);
+    free_buf(&out);
+    free_img(&ms);
+    free_img(&resolved);
+}
+
 /* Suspending and resuming dynamic render pass instances across command
  * buffers of one batch, and secondaries continuing render passes (a
  * subpass, and dynamic rendering). */
@@ -6153,6 +6216,7 @@ int main(void)
     RUN(test_ds_subpasses);
     RUN(test_depth_bounds);
     RUN(test_msaa);
+    RUN(test_msaa_int_resolve);
     RUN(test_suspend_secondary);
     RUN(test_imageless_noattachment);
     RUN(test_dual_source);
