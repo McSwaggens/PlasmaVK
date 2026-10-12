@@ -7171,6 +7171,204 @@ static void test_tile_overflow_locations(void)
     }
 }
 
+/* Begins rendering to five R32G32B32A32_SFLOAT attachments (80 bytes of
+ * tile memory a sample: more than Metal has) and, with `pipeline`, draws
+ * spv_write5_fs's colors. */
+static void render_write5(VkCommandBuffer cb, const struct img *imgs, VkPipeline pipeline, VkAttachmentLoadOp load)
+{
+    VkRenderingAttachmentInfo att[5];
+    VkRenderingInfo info;
+    uint32_t i;
+    memset(att, 0, sizeof(att));
+    for (i = 0; i < 5; i++) {
+        att[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att[i].imageView = imgs[i].view;
+        att[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att[i].loadOp = load;
+        att[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    }
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 5;
+    info.pColorAttachments = att;
+    vkCmdBeginRendering(cb, &info);
+    if (pipeline) {
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        rect(cb, -1, -1, 1, 1, 0, 0, 0, 0, 0);
+    }
+}
+
+/* The texels of five R32G32B32A32_SFLOAT images: spv_write5_fs's colors,
+ * attachment 0's (17, 2, 4, 8) with `sum` (the five added). */
+static int count_write5(const struct img *imgs, bool sum, const char *what)
+{
+    static const float want[5][4] = { { 1, 0, 0, 0 }, { 0, 2, 0, 0 }, { 0, 0, 4, 0 }, { 0, 0, 0, 8 }, { 16, 0, 0, 0 } };
+    struct buf out = make_buf(W * H * 16);
+    uint32_t i, k, c;
+    int bad = 0;
+    for (i = 0; i < 5; i++) {
+        VkCommandBuffer cb = begin_cmd();
+        download(cb, &imgs[i], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        for (k = 0; k < W * H; k++) {
+            const float *t = (const float *)out.data + 4 * k;
+            bool ok = true;
+            for (c = 0; c < 4; c++)
+                ok &= t[c] == (i == 0 && sum ? (float)(1u << c) + (c == 0 ? 16.0f : 0.0f) : want[i][c]);
+            if (!ok && bad++ < 4)
+                fprintf(stderr, "%s: attachment %u texel %u is %g %g %g %g\n", what, i, k, t[0], t[1], t[2], t[3]);
+        }
+    }
+    free_buf(&out);
+    return bad;
+}
+
+/* A dynamic rendering pass split for tile memory, begun and ended in a
+ * secondary command buffer: its packets are replayed there. */
+static void test_tile_overflow_secondary(void)
+{
+    struct img imgs[5];
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb, sec;
+    uint32_t i;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_write5_fs, sizeof(spv_write5_fs));
+    p.colors = 5;
+    for (i = 0; i < 5; i++) {
+        p.color_formats[i] = VK_FORMAT_R32G32B32A32_SFLOAT;
+        imgs[i] = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    }
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    sec = begin_secondary();
+    render_write5(sec, imgs, pipeline, VK_ATTACHMENT_LOAD_OP_CLEAR);
+    vkCmdEndRendering(sec);
+    CHECK_VK(vkEndCommandBuffer(sec), VK_SUCCESS);
+    cb = begin_cmd();
+    vkCmdExecuteCommands(cb, 1, &sec);
+    submit(cb);
+    CHECK(count_write5(imgs, false, "tile overflow in a secondary") == 0);
+    vkFreeCommandBuffers(device, cmd_pool, 1, &sec);
+    vkDestroyPipeline(device, pipeline, NULL);
+    for (i = 0; i < 5; i++)
+        free_img(&imgs[i]);
+}
+
+/* Dynamic rendering local read: a pipeline writes attachment 0 of five
+ * R32G32B32A32_SFLOAT ones and reads all five as input attachments. They
+ * take more tile memory than Metal has, so the pass leaves out the four
+ * only read, which the pipeline reads from their textures. */
+static void test_local_read_tile_textures(void)
+{
+    VkDescriptorSetLayoutBinding binds[5];
+    VkDescriptorSetLayoutCreateInfo sli;
+    VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
+    VkPushConstantRange range = { VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(struct pc) };
+    VkPipelineLayoutCreateInfo pli;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkDescriptorPoolSize size = { VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 5 };
+    VkDescriptorPoolCreateInfo dpi;
+    VkDescriptorPool dpool = VK_NULL_HANDLE;
+    VkDescriptorSetAllocateInfo dai;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VkDescriptorImageInfo ii[5];
+    VkWriteDescriptorSet w;
+    VkMemoryBarrier2 mb;
+    VkDependencyInfo dep;
+    struct img imgs[5];
+    VkPipeline p0, p1;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t i;
+
+    for (i = 0; i < 5; i++) {
+        imgs[i] = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+        memset(&binds[i], 0, sizeof(binds[i]));
+        binds[i].binding = i;
+        binds[i].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+        binds[i].descriptorCount = 1;
+        binds[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        ii[i].sampler = VK_NULL_HANDLE;
+        ii[i].imageView = imgs[i].view;
+        ii[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    memset(&sli, 0, sizeof(sli));
+    sli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    sli.bindingCount = 5;
+    sli.pBindings = binds;
+    CHECK_VK(vkCreateDescriptorSetLayout(device, &sli, NULL, &set_layout), VK_SUCCESS);
+    memset(&pli, 0, sizeof(pli));
+    pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pli.setLayoutCount = 1;
+    pli.pSetLayouts = &set_layout;
+    pli.pushConstantRangeCount = 1;
+    pli.pPushConstantRanges = &range;
+    CHECK_VK(vkCreatePipelineLayout(device, &pli, NULL, &layout), VK_SUCCESS);
+    memset(&dpi, 0, sizeof(dpi));
+    dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpi.maxSets = 1;
+    dpi.poolSizeCount = 1;
+    dpi.pPoolSizes = &size;
+    CHECK_VK(vkCreateDescriptorPool(device, &dpi, NULL, &dpool), VK_SUCCESS);
+    memset(&dai, 0, sizeof(dai));
+    dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dai.descriptorPool = dpool;
+    dai.descriptorSetCount = 1;
+    dai.pSetLayouts = &set_layout;
+    CHECK_VK(vkAllocateDescriptorSets(device, &dai, &set), VK_SUCCESS);
+    memset(&w, 0, sizeof(w));
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = set;
+    w.descriptorCount = 5;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    w.pImageInfo = ii;
+    vkUpdateDescriptorSets(device, 1, &w, 0, NULL);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_write5_fs, sizeof(spv_write5_fs));
+    p.colors = 5;
+    for (i = 0; i < 5; i++)
+        p.color_formats[i] = VK_FORMAT_R32G32B32A32_SFLOAT;
+    p0 = make_pipe(&p);
+    p.fs = spv_read5_fs;
+    p.fs_size = sizeof(spv_read5_fs);
+    p.layout = layout;
+    p1 = make_pipe(&p);
+    REQUIRE(p0 && p1);
+    memset(&mb, 0, sizeof(mb));
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
+    memset(&dep, 0, sizeof(dep));
+    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers = &mb;
+    cb = begin_cmd();
+    render_write5(cb, imgs, p0, VK_ATTACHMENT_LOAD_OP_CLEAR);
+    vkCmdEndRendering(cb);
+    vkCmdPipelineBarrier2(cb, &dep);
+    render_write5(cb, imgs, VK_NULL_HANDLE, VK_ATTACHMENT_LOAD_OP_LOAD);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p1);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, NULL);
+    vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16,
+                       (const float[4]){ -1, -1, 1, 1 });
+    vkCmdDraw(cb, 4, 1, 0, 0);
+    vkCmdEndRendering(cb);
+    submit(cb);
+    CHECK(count_write5(imgs, true, "local read from textures") == 0);
+    vkDestroyPipeline(device, p0, NULL);
+    vkDestroyPipeline(device, p1, NULL);
+    vkDestroyDescriptorPool(device, dpool, NULL);
+    vkDestroyPipelineLayout(device, layout, NULL);
+    vkDestroyDescriptorSetLayout(device, set_layout, NULL);
+    for (i = 0; i < 5; i++)
+        free_img(&imgs[i]);
+}
+
 /* Bresenham lines with 4 samples cover pixels whole (Vulkan treats their
  * samples as at the pixel center; Metal covers samples apart): a resolved
  * line strip with a diagonal has only line and background pixels. */
@@ -8638,6 +8836,8 @@ int main(void)
     RUN(test_bresenham_msaa);
     RUN(test_tile_overflow);
     RUN(test_tile_overflow_locations);
+    RUN(test_tile_overflow_secondary);
+    RUN(test_local_read_tile_textures);
     RUN(test_alpha_coverage);
     RUN(test_sample_mask);
     RUN(test_logic_ops);
