@@ -1621,7 +1621,7 @@ struct pipe {
     VkPrimitiveTopology topology;
     VkBool32 restart;
     uint32_t colors;
-    VkFormat color_formats[4], depth_format, stencil_format;
+    VkFormat color_formats[8], depth_format, stencil_format;
     VkSampleCountFlagBits samples;
     VkRenderPass rp;
     uint32_t subpass;
@@ -6687,6 +6687,154 @@ static void test_frag_depth_initializer(void)
     free_img(&target);
 }
 
+/*
+ * #version 450
+ * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
+ * layout(location = 0) out vec4 o0;
+ * layout(location = 1) out vec4 o1;
+ * layout(location = 2) out vec4 o2;
+ * layout(location = 3) out vec4 o3;
+ * layout(location = 4) out vec4 o4;
+ * layout(location = 5) out vec4 o5;
+ * layout(location = 6) out vec4 o6;
+ * layout(location = 7) out vec4 o7;
+ * void main()
+ * {
+ *     o0 = pc.color * 0.125;
+ *     o1 = pc.color * 0.25;
+ *     o2 = pc.color * 0.375;
+ *     o3 = pc.color * 0.5;
+ *     o4 = pc.color * 0.625;
+ *     o5 = pc.color * 0.75;
+ *     o6 = pc.color * 0.875;
+ *     o7 = pc.color;
+ * }
+ */
+static const uint32_t spv_mrt8_fs[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x00000035, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x000d000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x00000014, 0x00000019,
+    0x0000001e, 0x00000023, 0x00000028, 0x0000002d, 0x00000032, 0x00030010, 0x00000004, 0x00000007,
+    0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005,
+    0x00000009, 0x0000306f, 0x00030005, 0x0000000b, 0x00000050, 0x00050006, 0x0000000b, 0x00000000,
+    0x74636572, 0x00000000, 0x00050006, 0x0000000b, 0x00000001, 0x6f6c6f63, 0x00000072, 0x00050006,
+    0x0000000b, 0x00000002, 0x74706564, 0x00000068, 0x00050006, 0x0000000b, 0x00000003, 0x6579616c,
+    0x00000072, 0x00060006, 0x0000000b, 0x00000004, 0x77656976, 0x74726f70, 0x00000000, 0x00030005,
+    0x0000000d, 0x00006370, 0x00030005, 0x00000014, 0x0000316f, 0x00030005, 0x00000019, 0x0000326f,
+    0x00030005, 0x0000001e, 0x0000336f, 0x00030005, 0x00000023, 0x0000346f, 0x00030005, 0x00000028,
+    0x0000356f, 0x00030005, 0x0000002d, 0x0000366f, 0x00030005, 0x00000032, 0x0000376f, 0x00040047,
+    0x00000009, 0x0000001e, 0x00000000, 0x00030047, 0x0000000b, 0x00000002, 0x00050048, 0x0000000b,
+    0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x0000000b, 0x00000001, 0x00000023, 0x00000010,
+    0x00050048, 0x0000000b, 0x00000002, 0x00000023, 0x00000020, 0x00050048, 0x0000000b, 0x00000003,
+    0x00000023, 0x00000024, 0x00050048, 0x0000000b, 0x00000004, 0x00000023, 0x00000028, 0x00040047,
+    0x00000014, 0x0000001e, 0x00000001, 0x00040047, 0x00000019, 0x0000001e, 0x00000002, 0x00040047,
+    0x0000001e, 0x0000001e, 0x00000003, 0x00040047, 0x00000023, 0x0000001e, 0x00000004, 0x00040047,
+    0x00000028, 0x0000001e, 0x00000005, 0x00040047, 0x0000002d, 0x0000001e, 0x00000006, 0x00040047,
+    0x00000032, 0x0000001e, 0x00000007, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002,
+    0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040020,
+    0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008, 0x00000009, 0x00000003, 0x00040015,
+    0x0000000a, 0x00000020, 0x00000001, 0x0007001e, 0x0000000b, 0x00000007, 0x00000007, 0x00000006,
+    0x0000000a, 0x0000000a, 0x00040020, 0x0000000c, 0x00000009, 0x0000000b, 0x0004003b, 0x0000000c,
+    0x0000000d, 0x00000009, 0x0004002b, 0x0000000a, 0x0000000e, 0x00000001, 0x00040020, 0x0000000f,
+    0x00000009, 0x00000007, 0x0004002b, 0x00000006, 0x00000012, 0x3e000000, 0x0004003b, 0x00000008,
+    0x00000014, 0x00000003, 0x0004002b, 0x00000006, 0x00000017, 0x3e800000, 0x0004003b, 0x00000008,
+    0x00000019, 0x00000003, 0x0004002b, 0x00000006, 0x0000001c, 0x3ec00000, 0x0004003b, 0x00000008,
+    0x0000001e, 0x00000003, 0x0004002b, 0x00000006, 0x00000021, 0x3f000000, 0x0004003b, 0x00000008,
+    0x00000023, 0x00000003, 0x0004002b, 0x00000006, 0x00000026, 0x3f200000, 0x0004003b, 0x00000008,
+    0x00000028, 0x00000003, 0x0004002b, 0x00000006, 0x0000002b, 0x3f400000, 0x0004003b, 0x00000008,
+    0x0000002d, 0x00000003, 0x0004002b, 0x00000006, 0x00000030, 0x3f600000, 0x0004003b, 0x00000008,
+    0x00000032, 0x00000003, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8,
+    0x00000005, 0x00050041, 0x0000000f, 0x00000010, 0x0000000d, 0x0000000e, 0x0004003d, 0x00000007,
+    0x00000011, 0x00000010, 0x0005008e, 0x00000007, 0x00000013, 0x00000011, 0x00000012, 0x0003003e,
+    0x00000009, 0x00000013, 0x00050041, 0x0000000f, 0x00000015, 0x0000000d, 0x0000000e, 0x0004003d,
+    0x00000007, 0x00000016, 0x00000015, 0x0005008e, 0x00000007, 0x00000018, 0x00000016, 0x00000017,
+    0x0003003e, 0x00000014, 0x00000018, 0x00050041, 0x0000000f, 0x0000001a, 0x0000000d, 0x0000000e,
+    0x0004003d, 0x00000007, 0x0000001b, 0x0000001a, 0x0005008e, 0x00000007, 0x0000001d, 0x0000001b,
+    0x0000001c, 0x0003003e, 0x00000019, 0x0000001d, 0x00050041, 0x0000000f, 0x0000001f, 0x0000000d,
+    0x0000000e, 0x0004003d, 0x00000007, 0x00000020, 0x0000001f, 0x0005008e, 0x00000007, 0x00000022,
+    0x00000020, 0x00000021, 0x0003003e, 0x0000001e, 0x00000022, 0x00050041, 0x0000000f, 0x00000024,
+    0x0000000d, 0x0000000e, 0x0004003d, 0x00000007, 0x00000025, 0x00000024, 0x0005008e, 0x00000007,
+    0x00000027, 0x00000025, 0x00000026, 0x0003003e, 0x00000023, 0x00000027, 0x00050041, 0x0000000f,
+    0x00000029, 0x0000000d, 0x0000000e, 0x0004003d, 0x00000007, 0x0000002a, 0x00000029, 0x0005008e,
+    0x00000007, 0x0000002c, 0x0000002a, 0x0000002b, 0x0003003e, 0x00000028, 0x0000002c, 0x00050041,
+    0x0000000f, 0x0000002e, 0x0000000d, 0x0000000e, 0x0004003d, 0x00000007, 0x0000002f, 0x0000002e,
+    0x0005008e, 0x00000007, 0x00000031, 0x0000002f, 0x00000030, 0x0003003e, 0x0000002d, 0x00000031,
+    0x00050041, 0x0000000f, 0x00000033, 0x0000000d, 0x0000000e, 0x0004003d, 0x00000007, 0x00000034,
+    0x00000033, 0x0003003e, 0x00000032, 0x00000034, 0x000100fd, 0x00010038,
+};
+
+/* Eight RGBA16F attachments with 4 samples, resolved: 256 bytes a pixel,
+ * twice what Metal's tile memory takes, so the pass renders them in groups
+ * (struct pvk_replay). */
+static void test_tile_overflow(void)
+{
+    struct img ms[8], resolved[8];
+    struct buf out[8];
+    VkRenderingAttachmentInfo att[8];
+    VkRenderingInfo info;
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t i, x, y;
+    int bad = 0;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_mrt8_fs, sizeof(spv_mrt8_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.colors = 8;
+    memset(att, 0, sizeof(att));
+    for (i = 0; i < 8; i++) {
+        p.color_formats[i] = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ms[i] = make_img(VK_FORMAT_R16G16B16A16_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+        resolved[i] = make_img(VK_FORMAT_R16G16B16A16_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+        out[i] = make_buf(W * H * 8);
+        att[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att[i].imageView = ms[i].view;
+        att[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att[i].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att[i].resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        att[i].resolveImageView = resolved[i].view;
+        att[i].resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 8;
+    info.pColorAttachments = att;
+    cb = begin_cmd();
+    vkCmdBeginRendering(cb, &info);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, 0, -1, 1, 1, 1.0f, 0.5f, 0.25f, 1.0f, 0);
+    vkCmdEndRendering(cb);
+    for (i = 0; i < 8; i++)
+        download(cb, &resolved[i], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out[i]);
+    submit(cb);
+    for (i = 0; i < 8; i++)
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++) {
+                const uint16_t *h = (const uint16_t *)out[i].data + (y * W + x) * 4;
+                float k = x < W / 2 ? 0.0f : (float)(i + 1) / 8.0f;
+                if (fabsf(pvk_spv_half_to_float(h[0]) - k) > 0.01f || fabsf(pvk_spv_half_to_float(h[1]) - k * 0.5f) > 0.01f ||
+                    fabsf(pvk_spv_half_to_float(h[3]) - k) > 0.01f) {
+                    if (bad++ < 4)
+                        fprintf(stderr, "tile overflow: attachment %u pixel (%u, %u) is (%g, %g, %g, %g)\n", i, x, y,
+                                pvk_spv_half_to_float(h[0]), pvk_spv_half_to_float(h[1]),
+                                pvk_spv_half_to_float(h[2]), pvk_spv_half_to_float(h[3]));
+                }
+            }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    for (i = 0; i < 8; i++) {
+        free_buf(&out[i]);
+        free_img(&ms[i]);
+        free_img(&resolved[i]);
+    }
+}
+
 /* Bresenham lines with 4 samples cover pixels whole (Vulkan treats their
  * samples as at the pixel center; Metal covers samples apart): a resolved
  * line strip with a diagonal has only line and background pixels. */
@@ -8151,6 +8299,7 @@ int main(void)
     RUN(test_rgb9e5_write_mask);
     RUN(test_stencil_view_attachment);
     RUN(test_bresenham_msaa);
+    RUN(test_tile_overflow);
     RUN(test_alpha_coverage);
     RUN(test_sample_mask);
     RUN(test_logic_ops);

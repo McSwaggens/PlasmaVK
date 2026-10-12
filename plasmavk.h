@@ -54505,6 +54505,7 @@ static void pvk_dynamic_copy(struct pvk_dynamic_state *d, const struct pvk_dynam
  * ATTACHMENTS, section 17): writing the copy, testing depth bounds. */
 enum { PVK_VARIANT_DEPTH, PVK_VARIANT_BOUNDS, PVK_VARIANT_COUNT };
 struct pvk_gfx_variants;
+struct pvk_gfx_groups;
 
 /* A graphics pipeline as the commands see it (made in section 17). */
 struct pvk_gfx_pipeline {
@@ -54517,12 +54518,14 @@ struct pvk_gfx_pipeline {
     bool depth_clamp;
     bool lines;                     /* polygon mode LINE */
     bool bresenham;                 /* lines rasterized Bresenham with several samples (pvk_render_open) */
+    bool fetches;                   /* reads input attachments from tile memory (framebuffer fetch) */
     bool has_fragment;
     bool draw_index;                /* the vertex shader reads DrawIndex (buffer index 28) */
     bool bounds;                    /* may test depth bounds (with the depth copy) */
     uint32_t reads;                 /* PVK_HIDDEN_* copies its input attachments read */
     struct pvk_gfx_variants *variants; /* pipelines that write depth or test depth bounds in a pass
                                         * with a depth copy (section 17); NULL: none */
+    struct pvk_gfx_groups *groups;     /* variants for passes split for tile memory; NULL: none */
     /* Logical color indices of SNORM attachments with logical operations:
      * the Metal pipeline renders them through SINT views of the same bits
      * (pvk_render_rebind); the pipeline's mtl_pipeline_snorm renders them
@@ -56329,6 +56332,7 @@ struct pvk_draw_track {
     struct pvk_query_pool *vis_pool; /* the first occlusion query's pool */
     const struct pvk_gfx_pipeline *gfx; /* the pipeline bound */
     uint32_t draws;      /* bit 0: Bresenham lines with several samples drawn, bit 1: anything else */
+    bool fetches;        /* a pipeline reads input attachments from tile memory */
     uint32_t hidden;     /* PVK_HIDDEN_* copies the pipelines bound read (or depth bounds need) */
     uint32_t int_colors; /* a pipeline renders SNORM attachments through SINT views (pvk_render_rebind) */
     /* The slots the pass's first draw binds through SINT views (first_slots,
@@ -56345,6 +56349,14 @@ struct pvk_render_query {
     bool zero; /* pvk_encoder_query_available */
 };
 
+/* Tile memory a Metal pass's color attachments and depth/stencil copies take
+ * per sample: each its texel size, aligned to that. Metal allows 64 bytes
+ * ("Per sample storage" validation, M4 Max, macOS 27.2), and 32 KB for a
+ * tile of 16x16 pixels, its smallest ("Total allocated tile memory"): 128
+ * bytes a pixel, its samples together. */
+#define PVK_TILE_BYTES 64u
+#define PVK_TILE_PIXEL_BYTES 128u
+
 struct pvk_render {
     id enc;                /* MTL4RenderCommandEncoder; NULL outside render passes */
     bool suspended;        /* ended by a suspending vkCmdEndRendering, still open */
@@ -56353,6 +56365,7 @@ struct pvk_render {
     uint32_t layers;
     uint32_t samples_pass;
     bool centers;          /* every sample at the pixel center: a pass of Bresenham lines only */
+    uint32_t group;        /* tile memory overflow (struct pvk_replay): the color slots bound, 0: all */
     uint32_t color_count;
     pvk_MTLPixelFormat formats[PVK_MAX_COLOR_ATTACHMENTS]; /* Invalid: no attachment */
     uint8_t kinds[PVK_MAX_COLOR_ATTACHMENTS];  /* enum pvk_format_kind */
@@ -56422,6 +56435,31 @@ struct pvk_query_range {
     bool zero; /* timestamp pools: the results stay as reset (0), not resolved */
 };
 
+/* Tile memory overflow: a Metal pass whose color attachments take more tile
+ * memory than Metal has (it makes no encoder for it, PVK_TILE_BYTES) renders
+ * them in groups that fit (pvk_render_groups). Its packets are encoded once
+ * for each group (pvk_encode_commands replays them from the packet after
+ * BEGIN_PASS, the state they began with restored), the group's attachments
+ * bound, the others' logical indices unmapped (pvk_render_set_map) and the
+ * pipelines drawing through variants without them (struct pvk_gfx_groups);
+ * every group starts from the same depth/stencil contents and only the last
+ * stores them, so the tests decide alike for all. Passes with depth/stencil
+ * copies, input attachments in tile memory, occlusion queries, SNORM
+ * rebinds or suspends, or begun in a secondary command buffer, are not
+ * split. */
+struct pvk_replay {
+    uint32_t count, next; /* groups, and the next one to encode (count 0: no replay) */
+    uint32_t groups[PVK_MAX_COLOR_ATTACHMENTS]; /* their color slots */
+    const struct pvk_cmd_begin_pass *begin;
+    const struct pvk_cmd_block *block; /* the packet after BEGIN_PASS */
+    size_t at;
+    struct pvk_draw_track track; /* what the pass's draws need (pvk_prepass_scan) */
+    struct pvk_render render; /* the state the packets began with */
+    pvk_MTLGPUAddress sets[PVK_MAX_BOUND_SETS];
+    unsigned char push[PVK_MAX_PUSH_CONSTANTS_SIZE + 16];
+    uint32_t pp_count, pp_next;
+};
+
 struct pvk_encoder {
     struct pvk_device *device;
     struct pvk_queue *queue;
@@ -56443,6 +56481,7 @@ struct pvk_encoder {
     struct pvk_pp_result *pp;   /* draw preprocessing results of the render pass, in draw order */
     uint32_t pp_count, pp_next, pp_capacity;
     bool prepassed;             /* compute work the next render encoder must wait for */
+    struct pvk_replay replay;   /* tile memory overflow */
     struct pvk_pipeline *pipeline;
     bool pipeline_dirty; /* setComputePipelineState: owed */
     bool push_dirty;     /* push constants changed since they were bound */
@@ -58043,6 +58082,7 @@ static void pvk_track_pipeline(struct pvk_draw_track *t, const struct pvk_pipeli
     if (!p || !p->gfx)
         return;
     t->gfx = p->gfx;
+    t->fetches |= p->gfx->fetches;
     if (!(p->gfx->dynamic & PVK_DYN_BIT(PRIMITIVE_TOPOLOGY)))
         t->topology = p->gfx->state.topology;
     if (!(p->gfx->dynamic & PVK_DYN_BIT(PRIMITIVE_RESTART_ENABLE)))
@@ -59418,39 +59458,68 @@ static void pvk_render_split_resolve(struct pvk_encoder *e)
     pvk_release(enc);
 }
 
-static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_begin_pass *c)
+/* Color slots of BEGIN_PASS packet c in groups that fit tile memory
+ * (struct pvk_replay), in slot order; 0 when all fit together, or one
+ * alone does not. Formats of fewer than 4 bytes count as 8: Metal's tile
+ * memory takes more for them (6 a sample for B5G6R5, M4 Max). */
+static uint32_t pvk_render_groups(const struct pvk_cmd_begin_pass *c, uint32_t *groups)
+{
+    uint32_t s, n = 0, cur = 0, total = 0, samples = 1, b;
+    for (s = 0; s < c->color_count; s++)
+        if (c->colors[s].texture) {
+            b = c->colors[s].fmt->bytes < 4 ? 8u : c->colors[s].fmt->bytes;
+            total = (total + b - 1) / b * b + b;
+            samples = c->colors[s].samples > samples ? c->colors[s].samples : samples;
+        }
+    if (total <= PVK_TILE_BYTES && total * samples <= PVK_TILE_PIXEL_BYTES)
+        return 0;
+    memset(groups, 0, sizeof(*groups) * PVK_MAX_COLOR_ATTACHMENTS);
+    for (s = 0; s < c->color_count; s++) {
+        uint32_t next;
+        if (!c->colors[s].texture)
+            continue;
+        b = c->colors[s].fmt->bytes < 4 ? 8u : c->colors[s].fmt->bytes;
+        if (b > PVK_TILE_BYTES || b * samples > PVK_TILE_PIXEL_BYTES)
+            return 0;
+        next = (cur + b - 1) / b * b + b;
+        if (cur && (next > PVK_TILE_BYTES || next * samples > PVK_TILE_PIXEL_BYTES)) {
+            n++;
+            next = b;
+        }
+        groups[n] |= 1u << s;
+        cur = next;
+    }
+    return n + 1;
+}
+
+/* The Metal pass of BEGIN_PASS packet `packet` (for the draws of track t):
+ * its color attachments in `group` (struct pvk_replay; 0: all), the
+ * depth/stencil ones stored unless another group comes last. */
+static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_begin_pass *packet,
+                                   const struct pvk_draw_track *t, uint32_t group, bool first, bool last)
 {
     struct pvk_render *r = &e->render;
-    struct pvk_draw_track track;
-    struct pvk_pass_attachment depth = c->depth, stencil = c->stencil, resolve_depth, resolve_stencil;
+    struct pvk_cmd_begin_pass masked;
+    const struct pvk_cmd_begin_pass *c = packet;
+    struct pvk_pass_attachment depth, stencil, resolve_depth, resolve_stencil;
     uint32_t s, clears = 0, ds_clears, values[PVK_MAX_COLOR_ATTACHMENTS][4];
     bool memoryless = false, resolves = false;
     id enc;
 
-    if (r->enc && r->suspended && (c->flags & VK_RENDERING_RESUMING_BIT)) {
-        r->suspended = false; /* the same instance goes on */
-        return;
+    if (group) {
+        masked = *packet;
+        for (s = 0; s < masked.color_count; s++)
+            if (!(group & (1u << s)))
+                memset(&masked.colors[s], 0, sizeof(masked.colors[s]));
+        if (!last) { /* (the last loads them as all the others did) */
+            masked.depth.store = masked.stencil.store = PVK_MTLStoreActionDontCare;
+            masked.depth.resolve = masked.stencil.resolve = NULL;
+        }
+        masked.after |= !first;
+        c = &masked;
     }
-    pvk_render_end(e);
-    if (e->result != VK_SUCCESS)
-        return;
-    track = pvk_render_track(r);
-    track.samples = r->pipeline && r->pipeline->gfx ? r->pipeline->gfx->samples : 0;
-    track.int_colors = r->pipeline && r->pipeline->gfx && r->pipeline->gfx->int_colors; /* bound before the pass */
-    track.pipeline_int = r->pipeline && r->pipeline->gfx ? r->pipeline->gfx->int_colors : 0;
-    track.first_slots = 0;
-    track.first_draw = false;
-    track.gfx = r->pipeline ? r->pipeline->gfx : NULL;
-    track.draws = 0;
-    memset(track.map, PVK_NO_SLOT, sizeof(track.map));
-    track.hidden = r->pipeline && r->pipeline->gfx /* the depth/stencil copies its pipelines need */
-                       ? r->pipeline->gfx->reads | (r->pipeline->gfx->bounds ? PVK_HIDDEN_DEPTH : 0u)
-                       : 0;
-    pvk_prepass_scan(e, &track);
-    pvk_encoder_end(e);
-    if (e->result != VK_SUCCESS)
-        return;
-
+    depth = c->depth;
+    stencil = c->stencil;
     memset(r->formats, 0, sizeof(r->formats));
     memset(r->kinds, 0, sizeof(r->kinds));
     memset((void *)r->fmts, 0, sizeof(r->fmts));
@@ -59479,20 +59548,20 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
      * splitting the pass (pvk_render_rebind), unless an attachment is
      * memoryless (it can't be stored and loaded, and has no views): then
      * the pipelines' SNORM variants draw. */
-    r->split = track.int_colors && !memoryless;
+    r->split = t->int_colors && !memoryless;
     r->split_resolve = r->split && resolves;
-    r->no_rebind = track.int_colors && memoryless;
+    r->no_rebind = t->int_colors && memoryless;
     /* the first draw's binding from the start: a pass of such pipelines (and
      * clears) is never split, never loading or storing SNORM views */
-    r->int_slots = r->split && !(track.first_slots & ~r->int_capable) ? track.first_slots : 0;
-    r->begin = c;
+    r->int_slots = r->split && !(t->first_slots & ~r->int_capable) ? t->first_slots : 0;
+    r->begin = packet;
     r->pass_depth = depth;
     r->pass_stencil = stencil;
-    r->vis_pool = e->occ_pool ? e->occ_pool : track.vis_pool;
-    r->samples_pass = track.samples; /* (passes without attachments) */
-    r->centers = track.draws == 1; /* (Vulkan lets those lines sample there) */
+    r->vis_pool = e->occ_pool ? e->occ_pool : t->vis_pool;
+    r->samples_pass = t->samples; /* (passes without attachments) */
+    r->centers = t->draws == 1; /* (Vulkan lets those lines sample there) */
     /* copies of the depth and stencil for input attachments and depth bounds */
-    r->hidden = (c->hidden | track.hidden) &
+    r->hidden = (c->hidden | t->hidden) &
                 ((c->depth.texture ? PVK_HIDDEN_DEPTH : 0u) | (c->stencil.texture ? PVK_HIDDEN_STENCIL : 0u));
     memset(r->hidden_slot, PVK_NO_SLOT, sizeof(r->hidden_slot));
     enc = pvk_render_open(e, c, &depth, &stencil, false, r->split, r->int_slots);
@@ -59546,6 +59615,97 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     if ((r->hidden & PVK_HIDDEN_DEPTH) && c->depth.load == PVK_MTLLoadActionLoad && !c->depth.clear_in_area)
         pvk_render_copy_depth(e, &c->depth); /* the loaded depth into its copy */
     pvk_render_counting(e, true); /* a query active since before the pass */
+    r->group = group;
+}
+
+static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_begin_pass *c)
+{
+    struct pvk_render *r = &e->render;
+    struct pvk_replay *p = &e->replay;
+    struct pvk_draw_track track;
+    uint32_t n = 0;
+
+    if (r->enc && r->suspended && (c->flags & VK_RENDERING_RESUMING_BIT)) {
+        r->suspended = false; /* the same instance goes on */
+        return;
+    }
+    pvk_render_end(e);
+    if (e->result != VK_SUCCESS)
+        return;
+    track = pvk_render_track(r);
+    track.samples = r->pipeline && r->pipeline->gfx ? r->pipeline->gfx->samples : 0;
+    track.int_colors = r->pipeline && r->pipeline->gfx && r->pipeline->gfx->int_colors; /* bound before the pass */
+    track.pipeline_int = r->pipeline && r->pipeline->gfx ? r->pipeline->gfx->int_colors : 0;
+    track.first_slots = 0;
+    track.first_draw = false;
+    track.gfx = r->pipeline ? r->pipeline->gfx : NULL;
+    track.fetches = r->pipeline && r->pipeline->gfx && r->pipeline->gfx->fetches;
+    track.draws = 0;
+    memset(track.map, PVK_NO_SLOT, sizeof(track.map));
+    track.hidden = r->pipeline && r->pipeline->gfx /* the depth/stencil copies its pipelines need */
+                       ? r->pipeline->gfx->reads | (r->pipeline->gfx->bounds ? PVK_HIDDEN_DEPTH : 0u)
+                       : 0;
+    pvk_prepass_scan(e, &track);
+    pvk_encoder_end(e);
+    if (e->result != VK_SUCCESS)
+        return;
+    p->count = 0;
+    pvk_render_begin_group(e, c, &track, 0, true, true); /* the pass whole, unless Metal has no tile memory for it */
+    if (r->enc || e->result != VK_ERROR_OUT_OF_DEVICE_MEMORY)
+        return;
+    if (!e->depth && !(c->flags & (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT)) && !track.vis_pool &&
+        !e->occ_pool && !track.int_colors && !track.fetches &&
+        !((c->hidden | track.hidden) &
+          ((c->depth.texture ? PVK_HIDDEN_DEPTH : 0u) | (c->stencil.texture ? PVK_HIDDEN_STENCIL : 0u))))
+        n = pvk_render_groups(c, p->groups);
+    if (n < 2)
+        return;
+    e->result = VK_SUCCESS;
+    r->resolve_int_count = 0;
+    /* more color attachments than tile memory takes: the packets again for each group */
+    p->count = n;
+    p->next = 1;
+    p->begin = c;
+    p->block = e->cursor.block;
+    p->at = e->cursor.at;
+    p->track = track;
+    pvk_render_begin_group(e, c, &track, p->groups[0], true, false);
+    p->render = *r;
+    memcpy(p->sets, e->sets[0], sizeof(p->sets));
+    memcpy(p->push, e->push, sizeof(p->push));
+    p->pp_count = e->pp_count;
+    p->pp_next = e->pp_next;
+}
+
+/* After the packets of a Metal pass split for tile memory (struct
+ * pvk_replay): true when the next group renders them, from the packet after
+ * BEGIN_PASS. */
+static bool pvk_replay_next(struct pvk_encoder *e)
+{
+    struct pvk_replay *p = &e->replay;
+    uint32_t pp_count = e->pp_count;
+    if (!p->count)
+        return false;
+    if (p->next >= p->count || e->result != VK_SUCCESS) {
+        p->count = 0;
+        return false;
+    }
+    e->render.begin = NULL; /* (the deferred work after the pass: once, by the last group) */
+    pvk_render_end(e);
+    if (e->result != VK_SUCCESS) {
+        p->count = 0;
+        return false;
+    }
+    e->render = p->render;
+    e->render.enc = NULL;
+    memcpy(e->sets[0], p->sets, sizeof(p->sets));
+    memcpy(e->push, p->push, sizeof(p->push));
+    e->push_dirty = true;
+    e->pp_count = pp_count;
+    e->pp_next = p->pp_next;
+    pvk_render_begin_group(e, p->begin, &p->track, p->groups[p->next], false, p->next + 1 == p->count);
+    p->next++;
+    return true;
 }
 
 static void pvk_encode_subpass(struct pvk_encoder *e, const struct pvk_cmd_subpass *c)
@@ -59570,9 +59730,15 @@ static void pvk_encode_subpass(struct pvk_encoder *e, const struct pvk_cmd_subpa
 static void pvk_render_set_map(struct pvk_encoder *e, const uint8_t *map)
 {
     struct pvk_render *r = &e->render;
+    uint8_t grouped[PVK_MAX_COLOR_ATTACHMENTS];
     void *pool;
     id m;
     uint32_t l;
+    if (r->group) { /* slots of other groups unmapped (struct pvk_replay) */
+        for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS; l++)
+            grouped[l] = map[l] != PVK_NO_SLOT && (r->group & (1u << map[l])) ? map[l] : PVK_NO_SLOT;
+        map = grouped;
+    }
     if (r->map_valid && memcmp(r->map_set, map, sizeof(r->map_set)) == 0)
         return;
     pool = objc_autoreleasePoolPush();
@@ -59762,6 +59928,7 @@ static float pvk_clamp01(float x)
 }
 
 static id pvk_gfx_variant(struct pvk_device *device, struct pvk_pipeline *p, unsigned kind);
+static id pvk_gfx_group_variant(struct pvk_device *device, struct pvk_pipeline *p, const uint8_t *map, uint32_t group);
 
 /* Applies what the next draw needs; false when it cannot draw. */
 static bool pvk_render_flush(struct pvk_encoder *e)
@@ -59814,6 +59981,11 @@ static bool pvk_render_flush(struct pvk_encoder *e)
             pso = p->mtl_pipeline;
             variant = -1;
         }
+    }
+    if (r->group && g->groups) { /* a pass split for tile memory: without the other groups' attachments */
+        id gp = pvk_gfx_group_variant(e->device, p, r->map, r->group);
+        if (gp)
+            pso = gp;
     }
     if (dirty & PVK_RD_PIPELINE)
         r->pso_set = NULL;
@@ -60484,16 +60656,26 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
                 pvk_encode_clear(e, (const struct pvk_cmd_clear *)c);
                 break;
             case PVK_CMD_BEGIN_PASS:
+                if (!depth && pvk_replay_next(e)) { /* the pass's packets again, for another group */
+                    b = e->replay.block;
+                    at = e->replay.at;
+                    continue;
+                }
                 pvk_encode_begin_pass(e, (const struct pvk_cmd_begin_pass *)c);
                 break;
             case PVK_CMD_SUBPASS:
                 pvk_encode_subpass(e, (const struct pvk_cmd_subpass *)c);
                 break;
             case PVK_CMD_END_PASS:
-                if (((const struct pvk_cmd_end_pass *)c)->flags & VK_RENDERING_SUSPENDING_BIT)
+                if (((const struct pvk_cmd_end_pass *)c)->flags & VK_RENDERING_SUSPENDING_BIT) {
                     e->render.suspended = true; /* resumed later in this batch */
-                else
+                } else if (!depth && pvk_replay_next(e)) {
+                    b = e->replay.block;
+                    at = e->replay.at;
+                    continue;
+                } else {
                     pvk_render_end(e);
+                }
                 break;
             case PVK_CMD_SET_DYNAMIC:
                 pvk_encode_set_dynamic(e, (const struct pvk_cmd_dynamic *)c);
@@ -62457,6 +62639,7 @@ struct pvk_cache_info {
 #define PVK_GFX_DRAW_INDEX 0x1u    /* the vertex shader reads DrawIndex */
 #define PVK_GFX_READS_DEPTH 0x2u   /* the fragment shader reads the depth copy */
 #define PVK_GFX_READS_STENCIL 0x4u /* ... the stencil copy */
+#define PVK_GFX_FETCHES 0x8u       /* ... color attachments (framebuffer fetch) */
 
 struct pvk_cache_entry {
     struct pvk_cache_entry *next;
@@ -63030,6 +63213,7 @@ static uint32_t pvk_subpass_texture_inputs(const struct pvk_render_pass *rp, con
     { /* color inputs needing more logical indices than its color attachments and the copies leave
        * (8 in all): all from textures (shaders read one input attachment type one way) */
         uint32_t free = 0, need = 0, others = 0, l, k;
+        bool fetched = false; /* an input is one of its color attachments */
         for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS; l++)
             if (l >= sp->color_count || sp->colors[l] == VK_ATTACHMENT_UNUSED)
                 free++;
@@ -63041,15 +63225,32 @@ static uint32_t pvk_subpass_texture_inputs(const struct pvk_render_pass *rp, con
                 continue;
             for (k = 0; k < sp->color_count && sp->colors[k] != a; k++)
                 ;
-            if (k < sp->color_count) /* fetched at its color attachment's index */
+            if (k < sp->color_count) { /* fetched at its color attachment's index */
+                fetched = true;
                 continue;
+            }
             others |= 1u << j;
             for (k = 0; k < j && sp->inputs[k] != a; k++)
                 ;
             need += k == j; /* (else as the earlier input of it) */
         }
-        if (need > free)
+        if (need > free) {
             bits |= others;
+        } else if (others && !fetched) { /* or more than tile memory holds beside them (PVK_TILE_BYTES) */
+            uint32_t total = 0, b;
+            for (k = 0; k < sp->color_count; k++)
+                if (sp->colors[k] < rp->attachment_count && rp->attachments[sp->colors[k]].fmt) {
+                    b = rp->attachments[sp->colors[k]].fmt->bytes;
+                    total = (total + b - 1) / b * b + b;
+                }
+            for (j = 0; j < sp->input_count; j++)
+                if (others & (1u << j)) {
+                    b = rp->attachments[sp->inputs[j]].fmt->bytes;
+                    total = (total + b - 1) / b * b + b;
+                }
+            if (total > PVK_TILE_BYTES || total * (samples ? samples : 1u) > PVK_TILE_PIXEL_BYTES)
+                bits |= others;
+        }
     }
     return bits;
 }
@@ -63074,13 +63275,8 @@ static bool pvk_rp_resolves_into(const struct pvk_rp_pass *mp, uint32_t a)
     return mp->depth_resolve == a;
 }
 
-/* Tile memory a Metal pass's color attachments and depth/stencil copies take
- * per sample: each its texel size, aligned to that. Metal allows 64 bytes
- * ("Per sample storage" validation, M4 Max, macOS 27.2), and 32 KB for a
- * tile of 16x16 pixels, its smallest ("Total allocated tile memory"): 128
- * bytes a pixel, its samples together. */
-#define PVK_TILE_BYTES 64u
-#define PVK_TILE_PIXEL_BYTES 128u
+/* The tile memory a Metal pass's color attachments and depth/stencil copies
+ * take per sample (PVK_TILE_BYTES). */
 static uint32_t pvk_rp_storage(const struct pvk_render_pass *rp, const struct pvk_rp_pass *mp)
 {
     uint32_t s, total = 0, b;
@@ -63878,6 +64074,85 @@ static char *pvk_hidden_fragment_msl(const VkAllocationCallbacks *alloc, uint32_
     return msl;
 }
 
+/* ---- Tile memory group variants ----
+ *
+ * In a Metal pass split for tile memory (struct pvk_replay), a pipeline
+ * draws through a variant without the color attachments of the other
+ * groups: Metal writes the outputs of logical indices whose physical
+ * attachment is absent into the first attachment's tile memory. Kept for
+ * pipelines whose color attachments may take more than tile memory has; a
+ * variant is compiled on first use. */
+#define PVK_GFX_GROUP_VARIANTS 8
+struct pvk_gfx_groups {
+    pthread_mutex_t lock;
+    struct pvk_gfx_desc desc; /* the pipeline's */
+    bool layered, invariant;
+    char *msl[2];
+    char entry[2][64];
+    uint32_t count;
+    uint32_t masks[PVK_GFX_GROUP_VARIANTS]; /* the logical color indices each leaves out */
+    id pso[PVK_GFX_GROUP_VARIANTS];         /* (NULL: Metal could not make it) */
+};
+
+static void pvk_gfx_groups_free(const VkAllocationCallbacks *alloc, struct pvk_gfx_groups *g)
+{
+    uint32_t k;
+    if (!g)
+        return;
+    for (k = 0; k < g->count; k++)
+        pvk_release(g->pso[k]);
+    pvk_free(alloc, g->msl[0]);
+    pvk_free(alloc, g->msl[1]);
+    pthread_mutex_destroy(&g->lock);
+    pvk_free(alloc, g);
+}
+
+static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *d, const char *vs_msl,
+                          const char *vs_entry, const char *fs_msl, const char *fs_entry, bool layered, bool invariant,
+                          const char *label, char *error, size_t error_size);
+
+/* The variant of a pipeline for a Metal pass binding the color slots in
+ * `group`, through color attachment map `map` (not retained): without the
+ * logical indices of the other slots. NULL when it needs none, has no such
+ * variants, or Metal could not make it. */
+static id pvk_gfx_group_variant(struct pvk_device *device, struct pvk_pipeline *p, const uint8_t *map, uint32_t group)
+{
+    struct pvk_gfx_groups *g = p->gfx ? p->gfx->groups : NULL;
+    uint32_t k, l, mask = 0;
+    id pso = NULL;
+    if (!g)
+        return NULL;
+    for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS; l++)
+        if (g->desc.formats[l] && (map[l] == PVK_NO_SLOT || !(group & (1u << map[l]))))
+            mask |= 1u << l;
+    if (!mask)
+        return NULL;
+    pthread_mutex_lock(&g->lock);
+    for (k = 0; k < g->count && g->masks[k] != mask; k++)
+        ;
+    if (k < g->count) {
+        pso = g->pso[k];
+    } else if (k < PVK_GFX_GROUP_VARIANTS) {
+        struct pvk_gfx_desc d = g->desc;
+        char error[256];
+        for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS; l++)
+            if (mask & (1u << l)) {
+                d.formats[l] = 0;
+                d.blend[l][0] = 0;
+            }
+        pso = pvk_gfx_compile(device, &d, g->msl[0], g->entry[0], g->msl[1], g->msl[1] ? g->entry[1] : NULL,
+                              g->layered, g->invariant, "PlasmaVK tile memory group variant", error, sizeof(error));
+        if (!pso)
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-compilation", VK_OBJECT_TYPE_PIPELINE,
+                     (uint64_t)(uintptr_t)p, "a graphics pipeline's tile memory group variant: %s", error);
+        g->masks[k] = mask;
+        g->pso[k] = pso;
+        g->count++;
+    }
+    pthread_mutex_unlock(&g->lock);
+    return pso;
+}
+
 static void pvk_gfx_variants_free(const VkAllocationCallbacks *alloc, struct pvk_gfx_variants *v)
 {
     unsigned k;
@@ -63981,10 +64256,17 @@ static void pvk_gfx_hidden_formats(struct pvk_gfx_desc *d, uint32_t flags)
 /* One Metal render pipeline of a graphics pipeline (retained in *pso), for
  * d and the translator options: from the cache, or translated, compiled and
  * cached. ci: what the pipeline keeps; *hit as pvk_cache_lookup's. */
+/* The MSL a graphics pipeline's Metal pipeline was made from, kept for its
+ * variants in passes split for tile memory (struct pvk_replay). */
+struct pvk_gfx_kept {
+    char *msl[2];
+    char entry[2][64];
+};
+
 static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cache *cache, const struct pvk_gfx_sources *src,
                               const struct pvk_gfx_desc *d, const struct pvk_msl_options *vo,
                               const struct pvk_msl_options *fo, const VkAllocationCallbacks *alloc,
-                              struct pvk_cache_info *ci, id *pso, int *hit)
+                              struct pvk_cache_info *ci, id *pso, int *hit, struct pvk_gfx_kept *kept)
 {
     const VkPipelineShaderStageCreateInfo *vs = src->vs, *fs = src->fs;
     const VkPipelineVertexInputStateCreateInfo *vi = src->vi;
@@ -64056,6 +64338,7 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
         ci->workgroup[0] = (vres.builtins & PVK_MSL_BUILTIN_DRAW_INDEX) ? PVK_GFX_DRAW_INDEX : 0;
         ci->workgroup[0] |= (fres.depth_stencil_fetches & 1u) ? PVK_GFX_READS_DEPTH : 0;
         ci->workgroup[0] |= (fres.depth_stencil_fetches & 2u) ? PVK_GFX_READS_STENCIL : 0;
+        ci->workgroup[0] |= fres.color_fetches ? PVK_GFX_FETCHES : 0;
     }
     sources[0] = *hit ? msl[0] : vres.msl;
     sources[1] = *hit ? msl[1] : (fs ? fres.msl : NULL);
@@ -64089,6 +64372,12 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
         return VK_ERROR_UNKNOWN;
     }
     pvk_cache_insert(cache, &key, ci, names[0], names[1], sources[0], sources[1], *pso);
+    if (kept) { /* (msl NULL when out of memory: no variants) */
+        kept->msl[0] = sources[0] ? pvk_strdup_alloc(alloc, sources[0]) : NULL;
+        kept->msl[1] = sources[1] ? pvk_strdup_alloc(alloc, sources[1]) : NULL;
+        snprintf(kept->entry[0], sizeof(kept->entry[0]), "%s", names[0] ? names[0] : "");
+        snprintf(kept->entry[1], sizeof(kept->entry[1]), "%s", names[1] ? names[1] : "");
+    }
     pvk_free(alloc, msl[0]);
     pvk_free(alloc, msl[1]);
     pvk_msl_result_free(&vres);
@@ -64133,7 +64422,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     const struct pvk_format *depth_fmt = NULL, *stencil_fmt = NULL;
     char *variant_msl[PVK_VARIANT_COUNT] = { NULL, NULL }, *variant_vs = NULL;
     char variant_entry[PVK_VARIANT_COUNT][64], variant_vs_entry[64];
-    uint32_t i, view_mask = 0, dynamic = 0, color_count = 0, readable = 0, reads, want = 0, eager = 0, k;
+    uint32_t i, view_mask = 0, dynamic = 0, color_count = 0, readable = 0, reads, want = 0, eager = 0, k, tile = 0;
+    struct pvk_gfx_kept kept;
     uint32_t undecorated = 0;
     uint8_t hidden_logical[2];
     bool discard;
@@ -64270,6 +64560,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         if (!(f = pvk_format(format)) || !f->mtl)
             continue;
         d.formats[i] = (uint32_t)f->mtl;
+        k = f->bytes < 4 ? 8u : f->bytes; /* (as pvk_render_groups counts) */
+        tile = (tile + k - 1) / k * k + k;
         d.output_types[i] = pvk_output_type(f);
         if (loc_ids[i] == ids[i]) { /* a location the fragment shader writes */
             const VkPipelineColorBlendAttachmentState *a = cb && b < cb->attachmentCount ? &cb->pAttachments[b] : NULL;
@@ -64458,10 +64750,13 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         }
     fo_snorm = fo;
     pvk_gfx_fragment_options(&fo, &d);
-    result = pvk_gfx_build(device, cache, &src, &d, &vo, &fo, alloc, &ci, &pso, &hit);
+    memset(&kept, 0, sizeof(kept));
+        result = pvk_gfx_build(device, cache, &src, &d, &vo, &fo, alloc, &ci, &pso, &hit,
+                           tile > PVK_TILE_BYTES || tile * d.samples > PVK_TILE_PIXEL_BYTES ? &kept : NULL);
     if (result == VK_SUCCESS && gfx.int_colors) {
         pvk_gfx_fragment_options(&fo_snorm, &d_snorm);
-        result = pvk_gfx_build(device, cache, &src, &d_snorm, &vo, &fo_snorm, alloc, &ci_snorm, &pso_snorm, &hit_snorm);
+        result = pvk_gfx_build(device, cache, &src, &d_snorm, &vo, &fo_snorm, alloc, &ci_snorm, &pso_snorm, &hit_snorm,
+                               NULL);
         if (!hit_snorm)
             hit = 0;
     }
@@ -64515,6 +64810,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     pvk_free(alloc, ycbcr);
     if (result != VK_SUCCESS) {
         pvk_release(pso);
+        pvk_free(alloc, kept.msl[0]);
+        pvk_free(alloc, kept.msl[1]);
         return result;
     }
     reads = ((ci.workgroup[0] & PVK_GFX_READS_DEPTH) ? PVK_HIDDEN_DEPTH : 0) |
@@ -64550,11 +64847,32 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         pvk_free(alloc, variant_msl[k]);
     pvk_free(alloc, variant_vs);
 
+    if (kept.msl[0]) { /* (struct pvk_gfx_groups) */
+        struct pvk_gfx_groups *g = pvk_alloc(alloc, sizeof(*g), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+        if (g && pthread_mutex_init(&g->lock, NULL) == 0) {
+            g->desc = d;
+            pvk_gfx_hidden_formats(&g->desc, ci.workgroup[0]);
+            g->layered = ci.dispatch_base != 0;
+            g->invariant = ci.dispatch_base_offset != 0;
+            g->msl[0] = kept.msl[0];
+            g->msl[1] = kept.msl[1];
+            memcpy(g->entry, kept.entry, sizeof(g->entry));
+            g->count = 0;
+            kept.msl[0] = kept.msl[1] = NULL;
+            gfx.groups = g;
+        } else {
+            pvk_free(alloc, g);
+        }
+    }
+    pvk_free(alloc, kept.msl[0]);
+    pvk_free(alloc, kept.msl[1]);
+
     pipeline = pvk_alloc(alloc, sizeof(*pipeline) + sizeof(gfx), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (!pipeline) {
         pvk_release(pso);
         pvk_release(pso_snorm);
         pvk_gfx_variants_free(alloc, gfx.variants);
+        pvk_gfx_groups_free(alloc, gfx.groups);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
     pipeline->bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -64565,6 +64883,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     pipeline->gfx = (struct pvk_gfx_pipeline *)(pipeline + 1);
     gfx.vertex_bindings = ci.vertex_bindings;
     gfx.draw_index = (ci.workgroup[0] & PVK_GFX_DRAW_INDEX) != 0;
+    gfx.fetches = (ci.workgroup[0] & PVK_GFX_FETCHES) != 0;
     gfx.reads = reads;
     gfx.bounds = gfx.variants && gfx.variants->fs_msl[PVK_VARIANT_BOUNDS];
     *pipeline->gfx = gfx;
@@ -64612,8 +64931,10 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
         return;
     pvk_release(pipeline->mtl_pipeline);
     pvk_release(pipeline->mtl_pipeline_snorm);
-    if (pipeline->gfx)
+    if (pipeline->gfx) {
         pvk_gfx_variants_free(alloc, pipeline->gfx->variants);
+        pvk_gfx_groups_free(alloc, pipeline->gfx->groups);
+    }
     pvk_free(alloc, pipeline);
 }
 
