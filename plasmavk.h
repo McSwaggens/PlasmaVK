@@ -48200,6 +48200,14 @@ static void pvk_spv_sg_arith(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     }
     if (s->width == 64)
         fn = NULL; /* Metal's functions take no 64-bit integers */
+    if (fn && fl)
+        /* Metal's compiler merges float simd_sum, simd_product, simd_min
+         * and simd_max (and the scans) of one value under different active
+         * lanes, as in "s = simd_sum(x); if (odd lane) t = simd_sum(x);"
+         * (M4 Max, macOS 27.2): an operand that depends on a ballot of each call's lanes
+         * keeps them apart. */
+        v = pvk_spv_fmt(ctx, "(%s(true) != 0u ? %s : %s)", pvk_spv_helper(ctx, PVK_SPV_H_BALLOT, "pvk_ballot1"), v,
+                        pvk_spv_sg_identity(ctx, op, t, false));
     if (fn)
         e = pvk_spv_fmt(ctx, "%s(%s)", fn, v);
     else
