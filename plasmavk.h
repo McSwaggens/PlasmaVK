@@ -45861,6 +45861,24 @@ static const char *pvk_spv_val(struct pvk_spv *ctx, uint32_t v)
     pvk_spv_fail(ctx, "id %u is not a value here", v);
 }
 
+/* A pointer as OpPtrEqual and OpPtrNotEqual compare it: its value, or for a
+ * location with no MSL object of its type (a matrix stored row-major or as
+ * padded lines, a column of a row-major one) the address of its storage
+ * (a row-major column: its element in the first row). */
+static const char *pvk_spv_cmp_addr(struct pvk_spv *ctx, uint32_t v)
+{
+    struct pvk_spv_id *x = pvk_spv_get(ctx, v);
+    const struct pvk_spv_ptr *p = x->p;
+    if (x->kind != PVK_SPV_K_PTR || !p || !p->expr || x->func != pvk_spv_fidx(ctx) || (!p->node && !p->rm_col) ||
+        p->desc_array || p->vec)
+        return pvk_spv_val(ctx, v);
+    if (p->rm_col)
+        return pvk_spv_fmt(ctx, "((%s void*)((%s uchar*)&%s + %uu * uint(%s)))", pvk_spv_space(ctx, p),
+                           pvk_spv_space(ctx, p), p->expr,
+                           pvk_spv_type(ctx, pvk_spv_type(ctx, p->type)->elem)->size, p->rm_col);
+    return pvk_spv_fmt(ctx, "((%s void*)&%s)", pvk_spv_space(ctx, p), p->expr);
+}
+
 /* Type of a value operand. */
 static struct pvk_spv_type *pvk_spv_vtype(struct pvk_spv *ctx, uint32_t v)
 {
@@ -49131,8 +49149,9 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         return;
     case PVK_SPV_OpPtrEqual: /* variable pointers: address comparisons */
     case PVK_SPV_OpPtrNotEqual:
-        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s %s %s", pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3)),
-                                          op == PVK_SPV_OpPtrEqual ? "==" : "!=", pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 4))));
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s %s %s", pvk_spv_cmp_addr(ctx, pvk_spv_arg(ctx, in, 3)),
+                                          op == PVK_SPV_OpPtrEqual ? "==" : "!=",
+                                          pvk_spv_cmp_addr(ctx, pvk_spv_arg(ctx, in, 4))));
         return;
     case PVK_SPV_OpPtrDiff: /* elements of the pointee type between them */
         if (r->op != PVK_SPV_OpTypeInt)
