@@ -2050,6 +2050,116 @@ static void test_render_pass_ops(void)
     free_img(&target);
 }
 
+/* A load op CLEAR limited to a render area (drawn), with a depth/stencil
+ * attachment the pass loads (its clear value NaN): the color clears in the
+ * area only; then vkCmdClearAttachments of part of it. */
+static void test_render_area_clear_depth(void)
+{
+    static const VkFormat ds_formats[3] = { VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D16_UNORM };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    uint32_t f, x, y;
+    int bad = 0;
+
+    for (f = 0; f < 3; f++) {
+        struct img ds = make_img(ds_formats[f], W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+        VkAttachmentDescription a[2];
+        VkAttachmentReference rc = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+        VkAttachmentReference rd = { 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
+        VkSubpassDescription sp;
+        VkRenderPassCreateInfo info;
+        VkRenderPass rp = VK_NULL_HANDLE;
+        VkImageView views[2];
+        VkFramebuffer fb;
+        VkClearValue clears[2];
+        VkClearColorValue red;
+        VkImageSubresourceRange range;
+        VkCommandBuffer cb;
+
+        memset(a, 0, sizeof(a));
+        a[0].format = VK_FORMAT_R8G8B8A8_UNORM;
+        a[1].format = ds_formats[f];
+        a[0].samples = a[1].samples = VK_SAMPLE_COUNT_1_BIT;
+        a[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        a[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        a[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        a[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        a[0].stencilLoadOp = a[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        a[0].stencilStoreOp = a[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        a[0].initialLayout = a[0].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        a[1].initialLayout = a[1].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        memset(&sp, 0, sizeof(sp));
+        sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sp.colorAttachmentCount = 1;
+        sp.pColorAttachments = &rc;
+        sp.pDepthStencilAttachment = &rd;
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        info.attachmentCount = 2;
+        info.pAttachments = a;
+        info.subpassCount = 1;
+        info.pSubpasses = &sp;
+        CHECK_VK(vkCreateRenderPass(device, &info, NULL, &rp), VK_SUCCESS);
+        views[0] = target.view;
+        views[1] = ds.view;
+        fb = make_fb(rp, views, 2, W, H, 1);
+        memset(clears, 0, sizeof(clears));
+        clears[0].color.float32[1] = clears[0].color.float32[3] = 1.0f; /* green */
+        clears[1].depthStencil.depth = NAN; /* not cleared with (the CTS passes NaN) */
+        memset(&red, 0, sizeof(red));
+        red.float32[0] = red.float32[3] = 1.0f;
+        memset(&range, 0, sizeof(range));
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.levelCount = range.layerCount = 1;
+        cb = begin_cmd();
+        vkCmdClearColorImage(cb, target.image, VK_IMAGE_LAYOUT_GENERAL, &red, 1, &range);
+        {
+            VkClearDepthStencilValue dsv = { 1.0f, 0 };
+            VkImageSubresourceRange dr = range;
+            dr.aspectMask = aspects_of(ds_formats[f]);
+            vkCmdClearDepthStencilImage(cb, ds.image, VK_IMAGE_LAYOUT_GENERAL, &dsv, 1, &dr);
+        }
+        barrier(cb);
+        begin_pass(cb, rp, fb, 3, 5, 8, 6, clears, 2);
+        {
+            VkClearAttachment ca;
+            VkClearRect cr;
+            memset(&ca, 0, sizeof(ca));
+            memset(&cr, 0, sizeof(cr));
+            ca.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            ca.clearValue.color.float32[2] = ca.clearValue.color.float32[3] = 1.0f; /* blue */
+            cr.rect.offset.x = 3;
+            cr.rect.offset.y = 5;
+            cr.rect.extent.width = 4;
+            cr.rect.extent.height = 3;
+            cr.layerCount = 1;
+            vkCmdClearAttachments(cb, 1, &ca, 1, &cr);
+            ca.aspectMask = aspects_of(ds_formats[f]);
+            ca.clearValue.depthStencil.depth = 1.0f / 255.0f;
+            cr.rect.offset.x = 6;
+            vkCmdClearAttachments(cb, 1, &ca, 1, &cr);
+        }
+        vkCmdEndRenderPass(cb);
+        download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++) {
+                uint32_t want = x >= 3 && x < 7 && y >= 5 && y < 8    ? BLUE
+                                : x >= 3 && x < 11 && y >= 5 && y < 11 ? GREEN
+                                                                       : RED;
+                if (px(&out, x, y) != want && bad++ < 4)
+                    fprintf(stderr, "render area clear, depth format %d: pixel (%u, %u) is %08x\n", (int)ds_formats[f],
+                            x, y, px(&out, x, y));
+            }
+        vkDestroyFramebuffer(device, fb, NULL);
+        vkDestroyRenderPass(device, rp, NULL);
+        free_img(&ds);
+    }
+    CHECK(bad == 0);
+    free_buf(&out);
+    free_img(&target);
+}
+
 /* ==========================================================================
  * Pipeline state
  * ========================================================================== */
@@ -6452,6 +6562,7 @@ int main(void)
         return TEST_RESULT();
     RUN(test_dynamic_rendering);
     RUN(test_render_pass_ops);
+    RUN(test_render_area_clear_depth);
     RUN(test_depth_stencil);
     RUN(test_blend);
     RUN(test_cull);

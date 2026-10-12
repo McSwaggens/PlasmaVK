@@ -57556,7 +57556,7 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
         if (!(args = pvk_upload(e, sizeof(*args), 16, NULL, NULL, &address)))
             break;
         memset(args, 0, sizeof(*args));
-        args->depth = depth_value;
+        args->depth = depth ? depth_value : 0.0f; /* (else unused: it may be NaN, which clips the triangle) */
         args->base_layer = rc->baseArrayLayer;
         args->multiview = views != 0;
         memcpy(args->layers, view_layers, sizeof(uint32_t) * views);
@@ -58267,7 +58267,10 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
         } else {
             att = pvk_MTL4RenderPassDescriptor_depthAttachment(pass);
             pvk_pass_set_attachment(att, &pa);
-            pvk_MTLRenderPassDepthAttachmentDescriptor_setClearDepth(att, pa.clear.depthStencil.depth);
+            /* (Metal wants it in [0, 1] also when the pass does not clear: then it may be NaN) */
+            pvk_MTLRenderPassDepthAttachmentDescriptor_setClearDepth(att, pa.load == PVK_MTLLoadActionClear
+                                                                              ? pa.clear.depthStencil.depth
+                                                                              : 0.0);
             if (pa.resolve)
                 pvk_MTLRenderPassDepthAttachmentDescriptor_setDepthResolveFilter(att, pa.resolve_filter);
         }
