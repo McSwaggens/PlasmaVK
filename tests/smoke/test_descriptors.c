@@ -2298,6 +2298,255 @@ static void test_images(void)
     scene_free(&s);
 }
 
+/*
+ * #version 450
+ * layout(local_size_x = 4, local_size_y = 4) in;
+ * layout(set = 0, binding = 0, r32ui) uniform uimageCube cube;
+ * layout(set = 0, binding = 1, r32ui) uniform uimageCubeArray cubes;
+ * layout(std430, set = 0, binding = 2) buffer Out { uint old[16]; ivec4 sizes; };
+ * void main()
+ * {
+ *     ivec2 p = ivec2(gl_LocalInvocationID.xy);
+ *     for (int f = 0; f < 6; f++)
+ *         imageAtomicAdd(cube, ivec3(p, f), uint(f + 1));
+ *     memoryBarrierImage();
+ *     barrier();
+ *     for (int z = 0; z < 12; z++)
+ *         imageAtomicOr(cubes, ivec3(p, z), 0x100u << z);
+ *     old[p.x + 4 * p.y] = imageAtomicExchange(cube, ivec3(p, 5), 7u);
+ *     if (p == ivec2(0))
+ *         sizes = ivec4(imageSize(cube), imageSize(cubes).xz);
+ * }
+ */
+static const uint32_t spv_cube_atomics[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000079, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000022, 0x00020011, 0x00000032, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e,
+    0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x0009000f, 0x00000005, 0x00000004, 0x6e69616d,
+    0x00000000, 0x0000000d, 0x00000020, 0x00000040, 0x00000052, 0x00060010, 0x00000004, 0x00000011,
+    0x00000004, 0x00000004, 0x00000001, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004,
+    0x6e69616d, 0x00000000, 0x00030005, 0x00000009, 0x00000070, 0x00080005, 0x0000000d, 0x4c5f6c67,
+    0x6c61636f, 0x6f766e49, 0x69746163, 0x44496e6f, 0x00000000, 0x00030005, 0x00000013, 0x00000066,
+    0x00040005, 0x00000020, 0x65627563, 0x00000000, 0x00030005, 0x00000035, 0x0000007a, 0x00040005,
+    0x00000040, 0x65627563, 0x00000073, 0x00030005, 0x00000050, 0x0074754f, 0x00040006, 0x00000050,
+    0x00000000, 0x00646c6f, 0x00050006, 0x00000050, 0x00000001, 0x657a6973, 0x00000073, 0x00030005,
+    0x00000052, 0x00000000, 0x00040047, 0x0000000d, 0x0000000b, 0x0000001b, 0x00040047, 0x00000020,
+    0x00000021, 0x00000000, 0x00040047, 0x00000020, 0x00000022, 0x00000000, 0x00040047, 0x00000040,
+    0x00000021, 0x00000001, 0x00040047, 0x00000040, 0x00000022, 0x00000000, 0x00040047, 0x0000004e,
+    0x00000006, 0x00000004, 0x00030047, 0x00000050, 0x00000002, 0x00050048, 0x00000050, 0x00000000,
+    0x00000023, 0x00000000, 0x00050048, 0x00000050, 0x00000001, 0x00000023, 0x00000040, 0x00040047,
+    0x00000052, 0x00000021, 0x00000002, 0x00040047, 0x00000052, 0x00000022, 0x00000000, 0x00020013,
+    0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000001,
+    0x00040017, 0x00000007, 0x00000006, 0x00000002, 0x00040020, 0x00000008, 0x00000007, 0x00000007,
+    0x00040015, 0x0000000a, 0x00000020, 0x00000000, 0x00040017, 0x0000000b, 0x0000000a, 0x00000003,
+    0x00040020, 0x0000000c, 0x00000001, 0x0000000b, 0x0004003b, 0x0000000c, 0x0000000d, 0x00000001,
+    0x00040017, 0x0000000e, 0x0000000a, 0x00000002, 0x00040020, 0x00000012, 0x00000007, 0x00000006,
+    0x0004002b, 0x00000006, 0x00000014, 0x00000000, 0x0004002b, 0x00000006, 0x0000001b, 0x00000006,
+    0x00020014, 0x0000001c, 0x00090019, 0x0000001e, 0x0000000a, 0x00000003, 0x00000000, 0x00000000,
+    0x00000000, 0x00000002, 0x00000021, 0x00040020, 0x0000001f, 0x00000000, 0x0000001e, 0x0004003b,
+    0x0000001f, 0x00000020, 0x00000000, 0x00040017, 0x00000023, 0x00000006, 0x00000003, 0x0004002b,
+    0x00000006, 0x00000028, 0x00000001, 0x0004002b, 0x0000000a, 0x0000002b, 0x00000000, 0x00040020,
+    0x0000002c, 0x0000000b, 0x0000000a, 0x0004002b, 0x0000000a, 0x0000002e, 0x00000001, 0x0004002b,
+    0x0000000a, 0x00000032, 0x00000808, 0x0004002b, 0x0000000a, 0x00000033, 0x00000002, 0x0004002b,
+    0x0000000a, 0x00000034, 0x00000108, 0x0004002b, 0x00000006, 0x0000003c, 0x0000000c, 0x00090019,
+    0x0000003e, 0x0000000a, 0x00000003, 0x00000000, 0x00000001, 0x00000000, 0x00000002, 0x00000021,
+    0x00040020, 0x0000003f, 0x00000000, 0x0000003e, 0x0004003b, 0x0000003f, 0x00000040, 0x00000000,
+    0x0004002b, 0x0000000a, 0x00000046, 0x00000100, 0x0004002b, 0x0000000a, 0x0000004d, 0x00000010,
+    0x0004001c, 0x0000004e, 0x0000000a, 0x0000004d, 0x00040017, 0x0000004f, 0x00000006, 0x00000004,
+    0x0004001e, 0x00000050, 0x0000004e, 0x0000004f, 0x00040020, 0x00000051, 0x0000000c, 0x00000050,
+    0x0004003b, 0x00000051, 0x00000052, 0x0000000c, 0x0004002b, 0x00000006, 0x00000055, 0x00000004,
+    0x0004002b, 0x00000006, 0x0000005b, 0x00000005, 0x0004002b, 0x0000000a, 0x0000005f, 0x00000007,
+    0x00040020, 0x00000062, 0x0000000c, 0x0000000a, 0x0005002c, 0x00000007, 0x00000065, 0x00000014,
+    0x00000014, 0x00040017, 0x00000066, 0x0000001c, 0x00000002, 0x00040020, 0x00000075, 0x0000000c,
+    0x0000004f, 0x0004002b, 0x0000000a, 0x00000077, 0x00000004, 0x0006002c, 0x0000000b, 0x00000078,
+    0x00000077, 0x00000077, 0x0000002e, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
+    0x000200f8, 0x00000005, 0x0004003b, 0x00000008, 0x00000009, 0x00000007, 0x0004003b, 0x00000012,
+    0x00000013, 0x00000007, 0x0004003b, 0x00000012, 0x00000035, 0x00000007, 0x0004003d, 0x0000000b,
+    0x0000000f, 0x0000000d, 0x0007004f, 0x0000000e, 0x00000010, 0x0000000f, 0x0000000f, 0x00000000,
+    0x00000001, 0x0004007c, 0x00000007, 0x00000011, 0x00000010, 0x0003003e, 0x00000009, 0x00000011,
+    0x0003003e, 0x00000013, 0x00000014, 0x000200f9, 0x00000015, 0x000200f8, 0x00000015, 0x000400f6,
+    0x00000017, 0x00000018, 0x00000000, 0x000200f9, 0x00000019, 0x000200f8, 0x00000019, 0x0004003d,
+    0x00000006, 0x0000001a, 0x00000013, 0x000500b1, 0x0000001c, 0x0000001d, 0x0000001a, 0x0000001b,
+    0x000400fa, 0x0000001d, 0x00000016, 0x00000017, 0x000200f8, 0x00000016, 0x0004003d, 0x00000007,
+    0x00000021, 0x00000009, 0x0004003d, 0x00000006, 0x00000022, 0x00000013, 0x00050051, 0x00000006,
+    0x00000024, 0x00000021, 0x00000000, 0x00050051, 0x00000006, 0x00000025, 0x00000021, 0x00000001,
+    0x00060050, 0x00000023, 0x00000026, 0x00000024, 0x00000025, 0x00000022, 0x0004003d, 0x00000006,
+    0x00000027, 0x00000013, 0x00050080, 0x00000006, 0x00000029, 0x00000027, 0x00000028, 0x0004007c,
+    0x0000000a, 0x0000002a, 0x00000029, 0x0006003c, 0x0000002c, 0x0000002d, 0x00000020, 0x00000026,
+    0x0000002b, 0x000700ea, 0x0000000a, 0x0000002f, 0x0000002d, 0x0000002e, 0x0000002b, 0x0000002a,
+    0x000200f9, 0x00000018, 0x000200f8, 0x00000018, 0x0004003d, 0x00000006, 0x00000030, 0x00000013,
+    0x00050080, 0x00000006, 0x00000031, 0x00000030, 0x00000028, 0x0003003e, 0x00000013, 0x00000031,
+    0x000200f9, 0x00000015, 0x000200f8, 0x00000017, 0x000300e1, 0x0000002e, 0x00000032, 0x000400e0,
+    0x00000033, 0x00000033, 0x00000034, 0x0003003e, 0x00000035, 0x00000014, 0x000200f9, 0x00000036,
+    0x000200f8, 0x00000036, 0x000400f6, 0x00000038, 0x00000039, 0x00000000, 0x000200f9, 0x0000003a,
+    0x000200f8, 0x0000003a, 0x0004003d, 0x00000006, 0x0000003b, 0x00000035, 0x000500b1, 0x0000001c,
+    0x0000003d, 0x0000003b, 0x0000003c, 0x000400fa, 0x0000003d, 0x00000037, 0x00000038, 0x000200f8,
+    0x00000037, 0x0004003d, 0x00000007, 0x00000041, 0x00000009, 0x0004003d, 0x00000006, 0x00000042,
+    0x00000035, 0x00050051, 0x00000006, 0x00000043, 0x00000041, 0x00000000, 0x00050051, 0x00000006,
+    0x00000044, 0x00000041, 0x00000001, 0x00060050, 0x00000023, 0x00000045, 0x00000043, 0x00000044,
+    0x00000042, 0x0004003d, 0x00000006, 0x00000047, 0x00000035, 0x000500c4, 0x0000000a, 0x00000048,
+    0x00000046, 0x00000047, 0x0006003c, 0x0000002c, 0x00000049, 0x00000040, 0x00000045, 0x0000002b,
+    0x000700f1, 0x0000000a, 0x0000004a, 0x00000049, 0x0000002e, 0x0000002b, 0x00000048, 0x000200f9,
+    0x00000039, 0x000200f8, 0x00000039, 0x0004003d, 0x00000006, 0x0000004b, 0x00000035, 0x00050080,
+    0x00000006, 0x0000004c, 0x0000004b, 0x00000028, 0x0003003e, 0x00000035, 0x0000004c, 0x000200f9,
+    0x00000036, 0x000200f8, 0x00000038, 0x00050041, 0x00000012, 0x00000053, 0x00000009, 0x0000002b,
+    0x0004003d, 0x00000006, 0x00000054, 0x00000053, 0x00050041, 0x00000012, 0x00000056, 0x00000009,
+    0x0000002e, 0x0004003d, 0x00000006, 0x00000057, 0x00000056, 0x00050084, 0x00000006, 0x00000058,
+    0x00000055, 0x00000057, 0x00050080, 0x00000006, 0x00000059, 0x00000054, 0x00000058, 0x0004003d,
+    0x00000007, 0x0000005a, 0x00000009, 0x00050051, 0x00000006, 0x0000005c, 0x0000005a, 0x00000000,
+    0x00050051, 0x00000006, 0x0000005d, 0x0000005a, 0x00000001, 0x00060050, 0x00000023, 0x0000005e,
+    0x0000005c, 0x0000005d, 0x0000005b, 0x0006003c, 0x0000002c, 0x00000060, 0x00000020, 0x0000005e,
+    0x0000002b, 0x000700e5, 0x0000000a, 0x00000061, 0x00000060, 0x0000002e, 0x0000002b, 0x0000005f,
+    0x00060041, 0x00000062, 0x00000063, 0x00000052, 0x00000014, 0x00000059, 0x0003003e, 0x00000063,
+    0x00000061, 0x0004003d, 0x00000007, 0x00000064, 0x00000009, 0x000500aa, 0x00000066, 0x00000067,
+    0x00000064, 0x00000065, 0x0004009b, 0x0000001c, 0x00000068, 0x00000067, 0x000300f7, 0x0000006a,
+    0x00000000, 0x000400fa, 0x00000068, 0x00000069, 0x0000006a, 0x000200f8, 0x00000069, 0x0004003d,
+    0x0000001e, 0x0000006b, 0x00000020, 0x00040068, 0x00000007, 0x0000006c, 0x0000006b, 0x0004003d,
+    0x0000003e, 0x0000006d, 0x00000040, 0x00040068, 0x00000023, 0x0000006e, 0x0000006d, 0x0007004f,
+    0x00000007, 0x0000006f, 0x0000006e, 0x0000006e, 0x00000000, 0x00000002, 0x00050051, 0x00000006,
+    0x00000070, 0x0000006c, 0x00000000, 0x00050051, 0x00000006, 0x00000071, 0x0000006c, 0x00000001,
+    0x00050051, 0x00000006, 0x00000072, 0x0000006f, 0x00000000, 0x00050051, 0x00000006, 0x00000073,
+    0x0000006f, 0x00000001, 0x00070050, 0x0000004f, 0x00000074, 0x00000070, 0x00000071, 0x00000072,
+    0x00000073, 0x00050041, 0x00000075, 0x00000076, 0x00000052, 0x00000028, 0x0003003e, 0x00000076,
+    0x00000074, 0x000200f9, 0x0000006a, 0x000200f8, 0x0000006a, 0x000100fd, 0x00010038,
+};
+
+/* Atomics on cube and cube-array storage images (Metal has no cube texture
+ * atomics: storage descriptors of cube views hold 2D-array views): faces
+ * address layers, both views alias layers 0-5, imageSize counts cubes. */
+static void test_cube_atomics(void)
+{
+    VkDescriptorSetLayoutBinding b[3];
+    VkDescriptorPoolSize sizes[2];
+    VkWriteDescriptorSet w[3];
+    VkDescriptorImageInfo ii[2];
+    VkDescriptorBufferInfo out_info;
+    VkImageCreateInfo info;
+    VkImageViewCreateInfo vi;
+    VkMemoryAllocateInfo alloc;
+    VkMemoryRequirements req;
+    VkImage image;
+    VkDeviceMemory memory;
+    VkImageView views[2];
+    VkDescriptorSetLayout sl;
+    VkPipelineLayout pl;
+    VkDescriptorPool pool;
+    VkDescriptorSet set;
+    VkPipeline p;
+    VkCommandBuffer cb;
+    VkClearColorValue zero;
+    VkImageSubresourceRange range;
+    VkBufferImageCopy r;
+    struct buf out = make_buf(16 * 4 + 16), texels = make_buf(12 * 16 * 4);
+    uint32_t t = 0, i, z, bad = 0;
+
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    info.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    info.imageType = VK_IMAGE_TYPE_2D;
+    info.format = VK_FORMAT_R32_UINT;
+    info.extent.width = info.extent.height = 4;
+    info.extent.depth = 1;
+    info.mipLevels = 1;
+    info.arrayLayers = 12;
+    info.samples = VK_SAMPLE_COUNT_1_BIT;
+    info.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &image));
+    vkGetImageMemoryRequirements(device, image, &req);
+    while (!(req.memoryTypeBits & (1u << t)))
+        t++;
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = t;
+    REQUIRE_VK(vkAllocateMemory(device, &alloc, NULL, &memory));
+    REQUIRE_VK(vkBindImageMemory(device, image, memory, 0));
+    memset(&vi, 0, sizeof(vi));
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+    vi.format = VK_FORMAT_R32_UINT;
+    vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    vi.subresourceRange.levelCount = 1;
+    vi.subresourceRange.layerCount = 6;
+    REQUIRE_VK(vkCreateImageView(device, &vi, NULL, &views[0]));
+    vi.viewType = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+    vi.subresourceRange.layerCount = 12;
+    REQUIRE_VK(vkCreateImageView(device, &vi, NULL, &views[1]));
+
+    b[0] = lb(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1);
+    b[1] = lb(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1);
+    b[2] = lb(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1);
+    sl = make_set_layout(b, 3, 0, NULL);
+    pl = make_pipeline_layout(&sl, 1, 0);
+    p = make_pipeline(spv_cube_atomics, sizeof(spv_cube_atomics), pl);
+    REQUIRE(sl && pl && p);
+    sizes[0] = ps(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2);
+    sizes[1] = ps(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1);
+    pool = make_pool(1, sizes, 2, 0, NULL);
+    REQUIRE(pool);
+    set = alloc_set(pool, sl);
+    REQUIRE(set);
+    for (i = 0; i < 2; i++) {
+        ii[i].sampler = VK_NULL_HANDLE;
+        ii[i].imageView = views[i];
+        ii[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        w[i] = buffer_write(set, i, 0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, NULL, 1);
+        w[i].pImageInfo = &ii[i];
+    }
+    out_info = bi(&out, 0, VK_WHOLE_SIZE);
+    w[2] = buffer_write(set, 2, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, &out_info, 1);
+    vkUpdateDescriptorSets(device, 3, w, 0, NULL);
+
+    memset(&zero, 0, sizeof(zero));
+    memset(&range, 0, sizeof(range));
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 12;
+    memset(&r, 0, sizeof(r));
+    r.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    r.imageSubresource.layerCount = 12;
+    r.imageExtent.width = r.imageExtent.height = 4;
+    r.imageExtent.depth = 1;
+    cb = begin();
+    image_barrier(cb, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    vkCmdClearColorImage(cb, image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+    image_barrier(cb, image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
+    vkCmdDispatch(cb, 1, 1, 1);
+    image_barrier(cb, image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                  VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+    vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_GENERAL, texels.buffer, 1, &r);
+    host_barrier(cb);
+    REQUIRE_VK(finish(cb));
+
+    for (z = 0; z < 12; z++)
+        for (i = 0; i < 16; i++) {
+            uint32_t want = z == 5 ? 7u : (z < 6 ? z + 1 : 0u) | (0x100u << z);
+            if (word(&texels, z * 16 + i) != want && bad++ < 4)
+                PVK_TEST_FAIL("layer %u texel %u: %#x, want %#x", z, i, word(&texels, z * 16 + i), want);
+        }
+    for (i = 0; i < 16; i++)
+        if (word(&out, i) != (6u | (0x100u << 5)) && bad++ < 8)
+            PVK_TEST_FAIL("exchange %u returned %#x", i, word(&out, i));
+    CHECK(bad == 0);
+    CHECK(word(&out, 16) == 4 && word(&out, 17) == 4 && word(&out, 18) == 4 && word(&out, 19) == 2);
+
+    vkDestroyPipeline(device, p, NULL);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyPipelineLayout(device, pl, NULL);
+    vkDestroyDescriptorSetLayout(device, sl, NULL);
+    vkDestroyImageView(device, views[0], NULL);
+    vkDestroyImageView(device, views[1], NULL);
+    vkDestroyImage(device, image, NULL);
+    vkFreeMemory(device, memory, NULL);
+    free_buf(&out);
+    free_buf(&texels);
+}
+
 int main(void)
 {
     setup();
@@ -2317,6 +2566,7 @@ int main(void)
     RUN(test_push_descriptors);
     RUN(test_layout_lifetime);
     RUN(test_images);
+    RUN(test_cube_atomics);
     teardown();
     return TEST_RESULT();
 }

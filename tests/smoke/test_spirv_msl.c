@@ -6798,36 +6798,6 @@ static const uint32_t spv_reject_fatomic[] = {
 
 /*
  * #version 450
- * layout(local_size_x = 16) in;
- * layout(set = 0, binding = 0, r32ui) uniform uimageCube img;
- * void main()
- * {
- *     imageAtomicAdd(img, ivec3(0, 0, 2), 1u);
- * }
- */
-static const uint32_t spv_reject_cube_atomic[] = {
-    0x07230203, 0x00010600, 0x0008000b, 0x00000017, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
-    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
-    0x0006000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x00060010, 0x00000004,
-    0x00000011, 0x00000010, 0x00000001, 0x00000001, 0x00030003, 0x00000002, 0x000001c2, 0x00040005,
-    0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000009, 0x00676d69, 0x00040047, 0x00000009,
-    0x00000021, 0x00000000, 0x00040047, 0x00000009, 0x00000022, 0x00000000, 0x00020013, 0x00000002,
-    0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000000, 0x00090019,
-    0x00000007, 0x00000006, 0x00000003, 0x00000000, 0x00000000, 0x00000000, 0x00000002, 0x00000021,
-    0x00040020, 0x00000008, 0x00000000, 0x00000007, 0x0004003b, 0x00000008, 0x00000009, 0x00000000,
-    0x00040015, 0x0000000a, 0x00000020, 0x00000001, 0x00040017, 0x0000000b, 0x0000000a, 0x00000003,
-    0x0004002b, 0x0000000a, 0x0000000c, 0x00000000, 0x0004002b, 0x0000000a, 0x0000000d, 0x00000002,
-    0x0006002c, 0x0000000b, 0x0000000e, 0x0000000c, 0x0000000c, 0x0000000d, 0x0004002b, 0x00000006,
-    0x0000000f, 0x00000001, 0x0004002b, 0x00000006, 0x00000010, 0x00000000, 0x00040020, 0x00000011,
-    0x0000000b, 0x00000006, 0x00040017, 0x00000014, 0x00000006, 0x00000003, 0x0004002b, 0x00000006,
-    0x00000015, 0x00000010, 0x0006002c, 0x00000014, 0x00000016, 0x00000015, 0x0000000f, 0x0000000f,
-    0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0006003c,
-    0x00000011, 0x00000012, 0x00000009, 0x0000000e, 0x00000010, 0x000700ea, 0x00000006, 0x00000013,
-    0x00000012, 0x0000000f, 0x00000010, 0x0000000f, 0x000100fd, 0x00010038,
-};
-
-/*
- * #version 450
  * #extension GL_EXT_samplerless_texture_functions : require
  * layout(local_size_x = 16) in;
  * layout(set = 0, binding = 0) uniform sampler2D tex;
@@ -10077,11 +10047,11 @@ static void run_image_storage(const uint32_t *words, size_t count, bool as_2d)
     t_dst = mt_texture(PVK_MTLTextureType2D, PVK_MTLPixelFormatRGBA32Float, 4, 4, 1, 1, 1, 1);
     t_vol = mt_texture(PVK_MTLTextureType3D, PVK_MTLPixelFormatR32Uint, 4, 4, 4, 1, 1, 1);
     t_layers = mt_texture(PVK_MTLTextureType2DArray, PVK_MTLPixelFormatRGBA16Float, 4, 4, 1, 3, 1, 1);
-    t_cube = mt_texture(PVK_MTLTextureTypeCube, PVK_MTLPixelFormatRGBA8Unorm, 4, 4, 1, 1, 1, 1);
+    t_cube = mt_texture(PVK_MTLTextureType2DArray, PVK_MTLPixelFormatRGBA8Unorm, 4, 4, 1, 6, 1, 1); /* cubes: 2D arrays */
     t_line = as_2d ? mt_texture(PVK_MTLTextureType2D, PVK_MTLPixelFormatR32Sint, 16, 1, 1, 1, 1, 1)
                    : mt_texture(PVK_MTLTextureType1D, PVK_MTLPixelFormatR32Sint, 16, 1, 1, 1, 1, 1);
     t_noformat = mt_texture(PVK_MTLTextureType2D, PVK_MTLPixelFormatRGBA32Float, 4, 4, 1, 1, 1, 1);
-    t_cubes = mt_texture(PVK_MTLTextureTypeCubeArray, PVK_MTLPixelFormatRGBA32Float, 2, 2, 1, 2, 1, 1);
+    t_cubes = mt_texture(PVK_MTLTextureType2DArray, PVK_MTLPixelFormatRGBA32Float, 2, 2, 1, 12, 1, 1);
     mt_upload(t_src, 0, 0, 4, 4, 1, 16, src);
     mt_upload(t_vol, 0, 0, 4, 4, 4, 4, vol);
     for (l = 0; l < 3; l++)
@@ -10864,7 +10834,6 @@ static void test_reject_image_ops(void)
 {
     CHECK(fails_with(spv_reject_deriv, PVK_ARRAY_SIZE(spv_reject_deriv), "derivatives"));
     CHECK(fails_with(spv_reject_fatomic, PVK_ARRAY_SIZE(spv_reject_fatomic), "float image atomics"));
-    CHECK(fails_with(spv_reject_cube_atomic, PVK_ARRAY_SIZE(spv_reject_cube_atomic), "cube images"));
 }
 
 int main(void)

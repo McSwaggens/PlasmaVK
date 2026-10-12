@@ -37551,9 +37551,10 @@ struct pvk_ycbcr {
 };
 
 struct pvk_image_view {
-    id mtl_texture; /* MTLTexture view of the image */
-    id mtl_residency; /* storage views of images with a residency texture: the same view of it */
-    id planes[2];   /* views with a Y'CbCr conversion of multi-planar images: planes 1 and 2 */
+    id mtl_texture;   /* MTLTexture view of the image */
+    id mtl_storage;   /* cube storage views: a 2D-array view, which storage descriptors hold (section 13) */
+    id mtl_residency; /* storage views of images with a residency texture: the same view of it (2D array for cubes) */
+    id planes[2];     /* views with a Y'CbCr conversion of multi-planar images: planes 1 and 2 */
     /* section 11: */
     struct pvk_image *image;
     VkFormat format;
@@ -38659,7 +38660,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
     const struct pvk_format *f = pvk_format(pCreateInfo->format);
     struct pvk_image_view *view;
     pvk_MTLPixelFormat format;
-    pvk_MTLTextureType type;
+    pvk_MTLTextureType type, storage_type;
     pvk_MTLTextureSwizzleChannels swizzle;
     pvk_NSRange levels, slices;
     uint32_t depth, p;
@@ -38747,10 +38748,22 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
                 view->mtl_texture = NULL;
             }
         }
-        /* the same view of the residency texture (SPARSE IMAGES) */
+        /* Cube storage views: a 2D-array view (shaders see texture2d_array) */
+        storage_type = type;
+        if (view->mtl_texture && (image->usage & VK_IMAGE_USAGE_STORAGE_BIT) &&
+            (type == PVK_MTLTextureTypeCube || type == PVK_MTLTextureTypeCubeArray)) {
+            storage_type = PVK_MTLTextureType2DArray;
+            view->mtl_storage = pvk_MTLTexture_newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(
+                base, format, storage_type, levels, slices, swizzle);
+            if (!view->mtl_storage) {
+                pvk_release(view->mtl_texture);
+                view->mtl_texture = NULL;
+            }
+        }
+        /* the same storage view of the residency texture (SPARSE IMAGES) */
         if (view->mtl_texture && image->sparse && image->sparse->residency)
             view->mtl_residency = pvk_MTLTexture_newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(
-                image->sparse->residency, format, type, levels, slices, swizzle);
+                image->sparse->residency, format, storage_type, levels, slices, swizzle);
         objc_autoreleasePoolPop(pool);
     }
     if (!view->mtl_texture) {
@@ -38793,6 +38806,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
     }
     if (!view->mtl_attachment) {
         pvk_release(view->mtl_texture);
+        pvk_release(view->mtl_storage);
+        pvk_release(view->mtl_residency);
+        pvk_release(view->planes[0]);
+        pvk_release(view->planes[1]);
         pvk_free(alloc, view);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -38804,6 +38821,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
         for (p = 0; p < 2; p++)
             if (view->planes[p])
                 pvk_device_make_resident(device, view->planes[p]);
+        if (view->mtl_storage)
+            pvk_device_make_resident(device, view->mtl_storage);
         if (view->mtl_residency)
             pvk_device_make_resident(device, view->mtl_residency);
         view->resident = true;
@@ -38827,6 +38846,9 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyImageView(VkDevice device, VkImageView image
     if (view->resident && view->mtl_residency)
         pvk_device_evict((struct pvk_device *)device, view->mtl_residency);
     pvk_release(view->mtl_residency);
+    if (view->resident && view->mtl_storage)
+        pvk_device_evict((struct pvk_device *)device, view->mtl_storage);
+    pvk_release(view->mtl_storage);
     if (view->resident)
         pvk_device_evict((struct pvk_device *)device, view->mtl_texture);
     pvk_release(view->mtl_texture);
@@ -40246,7 +40268,10 @@ static void pvk_descriptor_write(char *dst, VkDescriptorType type, const void *i
     case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
         const VkDescriptorImageInfo *ii = (const VkDescriptorImageInfo *)info;
         const struct pvk_image_view *view = (const struct pvk_image_view *)ii->imageView;
-        pvk_MTLResourceID texture = pvk_texture_id(view ? view->mtl_texture : NULL);
+        id t = view && type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE && view->mtl_storage ? view->mtl_storage /* cubes */
+               : view                                                            ? view->mtl_texture
+                                                                                 : NULL;
+        pvk_MTLResourceID texture = pvk_texture_id(t);
         memcpy(dst, &texture, 8);
         if (type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) { /* its residency texture (SPARSE IMAGES), else itself */
             pvk_MTLResourceID residency = view && view->mtl_residency ? pvk_texture_id(view->mtl_residency) : texture;
@@ -40535,7 +40560,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   lists every binding used, sorted by (set, binding), with its layout;
  *   result->set_mask has bit N for each set used. Images: 1D images are
  *   texture1d (Metal: one mip level), or with options->image_1d_as_2d 2D
- *   textures of height 1; cube storage images are texturecube(_array).
+ *   textures of height 1; cube storage images are texture2d_array (face, or
+ *   face + 6 * cube, is the layer: Apple GPUs up to M4 have no atomics on
+ *   cube textures), and their descriptors 2D-array views (section 11).
  *
  *   Push constants: `constant T& [[buffer(30)]]` (options->push_constant_
  *   buffer), the push-constant bytes from Vulkan offset 0. The shader reads
@@ -40843,10 +40870,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   (code 0). A robust read outside the image reads nothing (code 0, zero
  *   texel).
  *   Not supported: implicit LOD and derivatives outside fragment shaders,
- *   OpImageSparseSampleProj* (Vulkan forbids them), atomics on cube images
- *   (not on Apple GPUs up to M4) and on float or 64-bit images, image atomic
- *   min/max of the other signedness than the image, writes to multisampled
- *   images; tessellation,
+ *   OpImageSparseSampleProj* (Vulkan forbids them), atomics on float or
+ *   64-bit images, image atomic min/max of the other signedness than the
+ *   image, writes to multisampled images; tessellation,
  *   geometry and mesh shaders, transform feedback; CullDistance (Metal has
  *   none), 64-bit and 8-bit stage inputs and outputs. A texture1d has one
  *   mip level (image_1d_as_2d for mipmapped 1D images).
@@ -44029,6 +44055,12 @@ static bool pvk_spv_image_as_2d(struct pvk_spv *ctx, const struct pvk_spv_type *
     return t->img.dim == PVK_SPV_Dim1D && ctx->image_1d_as_2d;
 }
 
+/* Cube storage images are texture2d_array: the layer is the face, or face + 6 * cube. */
+static bool pvk_spv_cube_as_array(const struct pvk_spv_type *t)
+{
+    return t->img.dim == PVK_SPV_DimCube && t->img.sampled == 2;
+}
+
 /* depth2d... for depth images that are sampled (Depth 1); Depth 2
  * (unknown) is a color texture, reinterpreted where a Dref needs a depth one. */
 static const char *pvk_spv_image_msl(struct pvk_spv *ctx, const struct pvk_spv_type *t, bool depth)
@@ -44048,7 +44080,7 @@ static const char *pvk_spv_image_msl(struct pvk_spv *ctx, const struct pvk_spv_t
         base = "texture3d";
         break;
     case PVK_SPV_DimCube:
-        base = arr ? "cube_array" : "cube";
+        base = pvk_spv_cube_as_array(t) ? "2d_array" : arr ? "cube_array" : "cube";
         break;
     default:
         base = "texture_buffer";
@@ -46351,8 +46383,6 @@ static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn 
         pvk_spv_fail(ctx, "image atomics need a 32-bit integer image");
     if (it->img.sampled != 2 || it->img.ms || it->img.access != (PVK_SPV_ACCESS_READ | PVK_SPV_ACCESS_WRITE))
         pvk_spv_fail(ctx, "image atomics need a readable and writable storage image");
-    if (it->img.dim == PVK_SPV_DimCube) /* MSL 4 has them, Apple GPUs up to M4 do not */
-        pvk_spv_fail(ctx, "atomics on cube images are not supported");
     if (!store && pvk_spv_get(ctx, rid)->type != p->type)
         pvk_spv_fail(ctx, "atomic result type differs from the pointee type");
     scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 2 : 4));
@@ -46998,7 +47028,10 @@ static const char *pvk_spv_texel_bounds(struct pvk_spv *ctx, const struct pvk_sp
     else
         e = pvk_spv_fmt(ctx, "%sall(%s < uint3(%s.get_width(%s), %s.get_height(%s), %s.get_depth(%s)))", e, c, tex, l, tex,
                         l, tex, l);
-    if (it->img.dim == PVK_SPV_DimCube) { /* face, or face + 6 * cube */
+    if (pvk_spv_cube_as_array(it)) { /* face, or face + 6 * cube: the layer */
+        z = pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_comps(ctx, coord, 2, 1));
+        e = pvk_spv_fmt(ctx, "%s && %s < %s.get_array_size()", e, z, tex);
+    } else if (it->img.dim == PVK_SPV_DimCube) { /* face, or face + 6 * cube */
         z = pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_comps(ctx, coord, 2, 1));
         e = it->img.arrayed ? pvk_spv_fmt(ctx, "%s && %s / 6u < %s.get_array_size()", e, z, tex)
                             : pvk_spv_fmt(ctx, "%s && %s < 6u", e, z);
@@ -47020,7 +47053,8 @@ static const char *pvk_spv_texel_args(struct pvk_spv *ctx, const struct pvk_spv_
         e = pvk_spv_fmt(ctx, "uint2(%s, 0u)", e);
     if (it->img.dim == PVK_SPV_DimCube) {
         const char *z = pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_comps(ctx, coord, 2, 1));
-        return it->img.arrayed ? pvk_spv_fmt(ctx, "%s, %s %% 6u, %s / 6u", e, z, z) : pvk_spv_fmt(ctx, "%s, %s", e, z);
+        return it->img.arrayed && !pvk_spv_cube_as_array(it) ? pvk_spv_fmt(ctx, "%s, %s %% 6u, %s / 6u", e, z, z)
+                                                             : pvk_spv_fmt(ctx, "%s, %s", e, z);
     }
     if (it->img.arrayed)
         return pvk_spv_fmt(ctx, "%s, uint(%s)", e, pvk_spv_comps(ctx, coord, n, 1));
@@ -47700,7 +47734,7 @@ static void pvk_spv_image_query(struct pvk_spv *ctx, const struct pvk_spv_insn *
         if (it->img.dim == PVK_SPV_Dim3D)
             parts[n++] = pvk_spv_fmt(ctx, "%s.get_depth(%s)", tex, lod);
         if (it->img.arrayed)
-            parts[n++] = pvk_spv_fmt(ctx, "%s.get_array_size()", tex);
+            parts[n++] = pvk_spv_fmt(ctx, pvk_spv_cube_as_array(it) ? "%s.get_array_size() / 6u" : "%s.get_array_size()", tex);
         e = n == 1 ? parts[0] : pvk_spv_fmt(ctx, "uint%u(", n);
         for (i = 0; n > 1 && i < n; i++)
             e = pvk_spv_fmt(ctx, "%s%s%s", e, i ? ", " : "", parts[i]);
