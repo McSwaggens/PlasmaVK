@@ -40752,7 +40752,8 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *     floats, for passes that cannot bind SINT views (section 16).
  *   Alpha to coverage and to one (options->alpha_to_coverage/alpha_to_one,
  *     with logical operations, which would change the alpha Metal's fixed
- *     functions read): location 0's alpha covers round(alpha x samples)
+ *     functions read, or without an attachment at location 0, whose output
+ *     Metal drops): location 0's alpha covers round(alpha x samples)
  *     samples (ANDed into [[sample_mask]]), then float outputs get alpha 1,
  *     both before the logical operations.
  *
@@ -50546,7 +50547,7 @@ static const char *const pvk_spv_logic_ops[16] = {
  * already read as parameters pvk_color<n>. Writes the parameters to add to
  * params (up to 8) and returns their number. */
 static uint32_t pvk_spv_fragment_ops(struct pvk_spv *ctx, uint32_t colors, const enum pvk_msl_scalar_type *types,
-                                     uint32_t fetched, struct pvk_sb *outs, const char **params)
+                                     uint32_t fetched, bool a2c_src, struct pvk_sb *outs, const char **params)
 {
     const struct pvk_msl_options *o = ctx->options;
     const char *coverage = NULL, *color[8];
@@ -50557,10 +50558,11 @@ static uint32_t pvk_spv_fragment_ops(struct pvk_spv *ctx, uint32_t colors, const
                            (colors & (1u << n))
                        ? pvk_spv_fmt(ctx, "pvk_lsrc%u", n)
                        : pvk_spv_fmt(ctx, "pvk_out.pvk_color%u", n);
-    if (o->alpha_to_coverage && (colors & 1u) && types[0] == PVK_MSL_SCALAR_FLOAT) {
+    if (o->alpha_to_coverage && (((colors & 1u) && types[0] == PVK_MSL_SCALAR_FLOAT) || a2c_src)) {
         /* location 0's alpha covers that fraction of the samples (monotonic, as Vulkan asks) */
         uint32_t samples = o->samples ? o->samples : 1;
-        pvk_spv_line(ctx, "uint pvk_a2c = (1u << uint(rint(saturate(%s.a) * %u.0f))) - 1u;", color[0], samples);
+        pvk_spv_line(ctx, "uint pvk_a2c = (1u << uint(rint(saturate(%s.a) * %u.0f))) - 1u;",
+                     (colors & 1u) ? color[0] : "pvk_a2c_src", samples);
         coverage = "pvk_a2c";
     }
     for (n = 0; o->alpha_to_one && n < 8; n++)
@@ -50668,6 +50670,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     uint32_t nparams = 0, cap = 0, nargs = 0, cap_args = 0, g, i, loc, idx, set, need = 0;
     uint32_t fetch_colors = 0, sample_inputs = 0, nin = 0, nout = 0, colors = 0;
     uint64_t ia_textures = 0; /* [[texture(i)]] parameters of input attachments read from textures */
+    bool a2c_src = false;     /* pvk_a2c_src holds location 0's value, which no attachment takes */
     enum pvk_msl_scalar_type in_type[PVK_MSL_MAX_LOCATIONS], out_type[2][PVK_MSL_MAX_LOCATIONS];
     uint32_t loc_interp[PVK_MSL_MAX_LOCATIONS];
     struct pvk_msl_varying vin[PVK_MSL_MAX_LOCATIONS], vout[PVK_MSL_MAX_LOCATIONS + 1];
@@ -51033,8 +51036,20 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
                   o->logic_targets[loc].kind == PVK_MSL_LOGIC_SNORM_INT && k == PVK_MSL_SCALAR_FLOAT &&
                   o->color_attachment_types[loc] == PVK_MSL_SCALAR_INT;
             if (!vertex && o && o->color_attachments_valid && !raw &&
-                (!(o->color_attachments & (1u << loc)) || o->color_attachment_types[loc] != k))
-                continue; /* no attachment of this type: Metal rejects the output */
+                (!(o->color_attachments & (1u << loc)) || o->color_attachment_types[loc] != k)) {
+                /* no attachment of this type: Metal rejects the output; location 0's alpha is still
+                 * alpha to coverage's (FRAGMENT OPERATIONS) */
+                if (o->alpha_to_coverage && !loc && !idx && k == PVK_MSL_SCALAR_FLOAT) {
+                    pvk_spv_line(ctx, "float4 pvk_a2c_src = {};");
+                    for (i = 0; i < out.nleaves; i++)
+                        if (!out.leaves[i].location && !out.leaves[i].index)
+                            pvk_spv_line(ctx, "%s = %s;",
+                                         pvk_spv_swizzle(ctx, "pvk_a2c_src", out.leaves[i].component, out.leaves[i].ncomp),
+                                         pvk_spv_to_slot(ctx, out.leaves[i].lvalue, k, &out.leaves[i]));
+                    a2c_src = true;
+                }
+                continue;
+            }
             member = vertex ? pvk_spv_fmt(ctx, "pvk_l%u", loc)
                      : idx  ? pvk_spv_fmt(ctx, "pvk_color%u_1", loc)
                             : pvk_spv_fmt(ctx, "pvk_color%u", loc);
@@ -51068,7 +51083,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     }
     if (!vertex && o) { /* the pipeline's fragment operations */
         const char *extra[8];
-        uint32_t nextra = pvk_spv_fragment_ops(ctx, colors, out_type[0], fetch_colors, &outs, extra), e;
+        uint32_t nextra = pvk_spv_fragment_ops(ctx, colors, out_type[0], fetch_colors, a2c_src, &outs, extra), e;
         for (e = 0; e < nextra; e++)
             PVK_SPV_PUSH(ctx, params, nparams, cap, extra[e]);
     }
@@ -63685,6 +63700,10 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
             d.alpha_to_coverage = d.alpha_to_one = 0;
             break;
         }
+    if (d.alpha_to_coverage && !(d.outputs & 1u)) { /* no attachment at location 0: the alpha is in no Metal color */
+        d.shader_alpha_to_coverage = 1;
+        d.alpha_to_coverage = 0;
+    }
     /* Rasterizer discard skips the draws (pvk_render_discards): a Metal
      * pipeline without rasterization needs a vertex function returning void */
     d.rasterization = 1;

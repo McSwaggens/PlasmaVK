@@ -5116,6 +5116,56 @@ static void test_ds_resolve_stencil(void)
     free_img(&res);
 }
 
+/* Alpha to coverage without a color attachment (4 samples, depth only):
+ * location 0's alpha still sets the coverage, counted by occlusion queries
+ * of an 8 x 8 rectangle with alpha 0, 0.5 and 1 (0, 2 and 4 samples a pixel). */
+static void test_alpha_to_coverage_no_color(void)
+{
+    struct img ds = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool pool;
+    VkPipeline pl;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint64_t samples[3];
+    static const float alpha[3] = { 0.0f, 0.5f, 1.0f };
+    uint32_t i;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.colors = 0;
+    p.depth_format = VK_FORMAT_D32_SFLOAT;
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.alpha_to_coverage = VK_TRUE;
+    pl = make_pipe(&p);
+    REQUIRE(pl);
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_OCCLUSION;
+    qi.queryCount = 3;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &pool));
+    cb = begin_cmd();
+    vkCmdResetQueryPool(cb, pool, 0, 3);
+    begin_rendering(cb, NULL, 0, NULL, &ds);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pl);
+    for (i = 0; i < 3; i++) {
+        vkCmdBeginQuery(cb, pool, i, VK_QUERY_CONTROL_PRECISE_BIT);
+        rect(cb, -1, -1, 0, 0, 1, 0, 0, alpha[i], 0.5f);
+        vkCmdEndQuery(cb, pool, i);
+    }
+    vkCmdEndRendering(cb);
+    submit(cb);
+    CHECK_VK(vkGetQueryPoolResults(device, pool, 0, 3, sizeof(samples), samples, 8,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+             VK_SUCCESS);
+    for (i = 0; i < 3; i++)
+        if (samples[i] != 64u * 2u * i)
+            PVK_TEST_FAIL("alpha %g covered %llu samples, want %u", (double)alpha[i], (unsigned long long)samples[i],
+                          64u * 2u * i);
+    vkDestroyQueryPool(device, pool, NULL);
+    vkDestroyPipeline(device, pl, NULL);
+    free_img(&ds);
+}
+
 static uint32_t expect_msaa(uint32_t x, uint32_t y)
 {
     if (y < H / 2)
@@ -6876,6 +6926,7 @@ int main(void)
     RUN(test_ds_subpasses);
     RUN(test_stencil_input);
     RUN(test_ds_resolve_stencil);
+    RUN(test_alpha_to_coverage_no_color);
     RUN(test_depth_bounds);
     RUN(test_msaa);
     RUN(test_msaa_int_resolve);
