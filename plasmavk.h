@@ -53449,7 +53449,7 @@ struct pvk_cmd_copy_image {
     uint32_t sx, sy, sz, dx, dy, dz, w, h, d;
     uint32_t staged;
     uint32_t src_options, dst_options; /* pvk_MTLBlitOption: the aspect of a depth/stencil format */
-    uint32_t bytes;                    /* staged: bytes per texel block of the aspect */
+    uint32_t bytes;                    /* staged: bytes per texel block of the aspect (times samples) */
     uint32_t sbw, sbh, dbw, dbh;       /* staged: block sizes */
     uint32_t dst_w, dst_h;             /* staged: destination level extent */
 };
@@ -53676,7 +53676,8 @@ static void pvk_cmd_image_copy(struct pvk_command_buffer *cb, const struct pvk_i
     }
     if (sf->mtl != df->mtl && src->samples == 1) /* multisampled: no buffer copies */
         c->staged = 1;
-    c->bytes = pvk_aspect_bytes(sf, r->srcSubresource.aspectMask);
+    c->bytes = pvk_aspect_bytes(sf, r->srcSubresource.aspectMask) * (src->samples ? src->samples : 1);
+    /* (a multisampled texel takes its samples' bytes in a buffer: Metal validation) */
     c->sbw = sf->block_w;
     c->sbh = sf->block_h;
     c->dbw = df->block_w;

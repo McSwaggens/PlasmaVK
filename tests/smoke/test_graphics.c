@@ -6451,6 +6451,92 @@ static void test_dual_source_unwritten(void)
     free_img(&target);
 }
 
+static uint32_t expect_red_all(uint32_t x, uint32_t y)
+{
+    (void)x, (void)y;
+    return RED;
+}
+
+/* A copy of the depth of a multisampled combined depth/stencil image (staged
+ * through a buffer: a multisampled texel takes its samples' bytes), then
+ * depth-tested against: A's 0.75 copied over B's 0.25 lets a draw at 0.5 pass
+ * LESS. */
+static void test_copy_ms_depth(void)
+{
+    struct img a = make_img(VK_FORMAT_D32_SFLOAT_S8_UINT, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img b = make_img(VK_FORMAT_D32_SFLOAT_S8_UINT, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img ms = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img resolved = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkClearDepthStencilValue va = { 0.75f, 0 }, vb = { 0.25f, 0 };
+    VkImageSubresourceRange range = { VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1 };
+    VkRenderingAttachmentInfo att, dsa;
+    VkRenderingInfo info;
+    VkImageCopy copy;
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.depth_format = p.stencil_format = VK_FORMAT_D32_SFLOAT_S8_UINT;
+    p.has_ds = true;
+    memset(&p.ds, 0, sizeof(p.ds));
+    p.ds.depthTestEnable = VK_TRUE;
+    p.ds.depthCompareOp = VK_COMPARE_OP_LESS;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    memset(&copy, 0, sizeof(copy));
+    copy.srcSubresource.aspectMask = copy.dstSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    copy.srcSubresource.layerCount = copy.dstSubresource.layerCount = 1;
+    copy.extent.width = W;
+    copy.extent.height = H;
+    copy.extent.depth = 1;
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = ms.view;
+    att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att.clearValue.color.float32[3] = 1.0f;
+    att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+    att.resolveImageView = resolved.view;
+    att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    memset(&dsa, 0, sizeof(dsa));
+    dsa.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    dsa.imageView = b.view;
+    dsa.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    dsa.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    dsa.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &att;
+    info.pDepthAttachment = info.pStencilAttachment = &dsa;
+    cb = begin_cmd();
+    vkCmdClearDepthStencilImage(cb, a.image, VK_IMAGE_LAYOUT_GENERAL, &va, 1, &range);
+    vkCmdClearDepthStencilImage(cb, b.image, VK_IMAGE_LAYOUT_GENERAL, &vb, 1, &range);
+    barrier(cb);
+    vkCmdCopyImage(cb, a.image, VK_IMAGE_LAYOUT_GENERAL, b.image, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
+    barrier(cb);
+    vkCmdBeginRendering(cb, &info);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -1, -1, 1, 1, 1, 0, 0, 1, 0.5f);
+    vkCmdEndRendering(cb);
+    download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    CHECK(count_bad(&out, expect_red_all, "multisampled depth copy") == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&a);
+    free_img(&b);
+    free_img(&ms);
+    free_img(&resolved);
+}
+
 /* Alpha to coverage (alpha 0.5 covers about half the samples) and alpha to
  * one, resolved. */
 static void test_alpha_coverage(void)
@@ -7684,6 +7770,7 @@ int main(void)
     RUN(test_imageless_noattachment);
     RUN(test_dual_source);
     RUN(test_dual_source_unwritten);
+    RUN(test_copy_ms_depth);
     RUN(test_alpha_coverage);
     RUN(test_sample_mask);
     RUN(test_logic_ops);
