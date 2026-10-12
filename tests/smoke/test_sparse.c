@@ -2660,6 +2660,8 @@ static int storage_check(const uint32_t *out, uint32_t n, int resident, uint32_t
  * - 256x256, level 2 (64x64, in the Vulkan tail; ShaderWrite puts it before
  *   Metal's tail) and level 4 (in Metal's tail): resident once the tail is
  *   bound, level 0 not;
+ * - 64x64, level 0 smaller than a block but before ShaderWrite's Metal tail
+ *   (a hang too): resident while the tail is bound;
  * - 11x37 without residency (sparse binding only), and not sparse: always
  *   resident. */
 static void test_sparse_storage_reads(void)
@@ -2708,6 +2710,26 @@ static void test_sparse_storage_reads(void)
     CHECK(storage_check(out, 16 * 16, 1, 54, "256x256 level 4"));
     storage_read(image, 0, 256, 256, out);
     CHECK(storage_check(out, 256 * 256, 0, 0, "256x256 level 0 unbound"));
+    vkDestroyImage(device, image, NULL);
+    vkFreeMemory(device, memory, NULL);
+
+    /* 64x64: level 0 is smaller than a block but before ShaderWrite's Metal tail */
+    info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UINT, 64, 64, 1, 7, 1, usage, residency);
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &image));
+    sr = sparse_requirements(image);
+    REQUIRE(sr.imageMipTailFirstLod == 0);
+    memory = allocate(private_type, sr.imageMipTailSize);
+    REQUIRE(memory);
+    bind_opaque(image, sr.imageMipTailOffset, sr.imageMipTailSize, memory, 0);
+    upload_level(image, 0, 64, 64, 55);
+    storage_read(image, 0, 64, 64, out);
+    CHECK(storage_check(out, 64 * 64, 1, 55, "64x64 bound"));
+    upload_level(image, 2, 16, 16, 56);
+    storage_read(image, 2, 16, 16, out);
+    CHECK(storage_check(out, 16 * 16, 1, 56, "64x64 level 2"));
+    bind_opaque(image, sr.imageMipTailOffset, sr.imageMipTailSize, VK_NULL_HANDLE, 0);
+    storage_read(image, 0, 64, 64, out);
+    CHECK(storage_check(out, 64 * 64, 0, 55, "64x64 unbound"));
     vkDestroyImage(device, image, NULL);
     vkFreeMemory(device, memory, NULL);
 

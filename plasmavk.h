@@ -34418,10 +34418,11 @@ static uint32_t pvk_mip_levels(uint32_t w, uint32_t h, uint32_t d)
  *     queries (sparse_read) are wrong for levels smaller than a tile: mapped
  *     texels read not resident. A shader with any sparse read hangs the GPU
  *     (MTL4CommandQueueErrorTimeout, macOS 27.2 beta) when it reads such a
- *     texture whose every level is in the tail, sparse read or not. Without
+ *     texture whose every level is in the tail, or whose first level is
+ *     smaller than a tile though before the tail, sparse read or not. Without
  *     ShaderWrite all is right. So a sparse image with storage usage has a
  *     residency texture without it, mapped along, that storage image reads
- *     ask (section 13), and one entirely in the tail is an ordinary texture
+ *     ask (section 13), and one entirely in the Vulkan tail is an ordinary texture
  *     (section 11, SPARSE IMAGES).
  *   - Metal makes no texture buffer over a placement sparse buffer: texel
  *     buffer views of sparse buffers are sparse texture buffers of their own
@@ -37625,7 +37626,7 @@ struct pvk_sparse_layout {
     uint32_t res_metal_tail;
     uint32_t res_tail_tiles;
     id res_heap;
-    bool dedicated; /* storage images entirely in Metal's tail: the texture is not sparse */
+    bool dedicated; /* storage images entirely in the Vulkan tail: the texture is not sparse */
 };
 
 struct pvk_image {
@@ -37926,7 +37927,7 @@ static uint32_t pvk_image_memory_type_bits(const struct pvk_physical_device *pd,
  *   Vulkan tail (its levels up to its Metal tail, which comes earlier than
  *   the image's, and that tail) onto a scratch heap of its own, whole, when
  *   the bind of the Vulkan tail's first block maps or unmaps it. A sparse
- *   storage image entirely in Metal's tail is an ordinary texture with
+ *   storage image entirely in the Vulkan tail is an ordinary texture with
  *   memory of its own instead (a shader with a sparse read hangs reading
  *   such a ShaderWrite sparse texture): binds map only its residency
  *   texture, it does not alias the memory bound to it, and its texels stay
@@ -38106,7 +38107,7 @@ static void pvk_sparse_residency_free(struct pvk_device *device, struct pvk_spar
     }
 }
 
-/* Makes the texture of a storage image entirely in Metal's tail an ordinary
+/* Makes the texture of a storage image entirely in the Vulkan tail an ordinary
  * one with memory of its own (SPARSE IMAGES): a shader with a sparse read
  * hangs the GPU reading such a ShaderWrite sparse texture. Binds then map
  * only its residency texture. */
@@ -38236,7 +38237,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImage(VkDevice _device, const VkImageCrea
             pvk_free(alloc, image);
             return VK_ERROR_OUT_OF_DEVICE_MEMORY;
         }
-        if ((image->usage & VK_IMAGE_USAGE_STORAGE_BIT) && image->sparse->metal_tail == 0 &&
+        if ((image->usage & VK_IMAGE_USAGE_STORAGE_BIT) && image->sparse->tail_first == 0 &&
             !pvk_sparse_dedicate(device, image)) {
             pvk_sparse_residency_free(device, image->sparse);
             pvk_device_evict(device, image->mtl_texture);
@@ -60079,7 +60080,7 @@ static uint32_t pvk_sparse_opaque_ops(const struct pvk_image *image, const VkSpa
         if (run > left)
             run = left;
         i = local - l->level_offset[lv] / PVK_SPARSE_BLOCK;
-        if (i >= (VkDeviceSize)w * h * d)
+        if (i >= (VkDeviceSize)w * h * d || l->dedicated) /* (dedicated: levels of the Vulkan tail) */
             continue;
         for (k = run < (VkDeviceSize)w * h * d - i ? run : (VkDeviceSize)w * h * d - i, t = tile; k;) {
             uint32_t x = (uint32_t)(i % w), y = (uint32_t)(i / w % h), z = (uint32_t)(i / ((VkDeviceSize)w * h));
@@ -60116,7 +60117,7 @@ static uint32_t pvk_sparse_image_op(const struct pvk_image *image, const VkSpars
     const struct pvk_sparse_layout *l = image->sparse;
     uint32_t x, y, z;
     bool residency = l && l->residency && b->subresource.mipLevel < l->tail_first;
-    if (!l || b->subresource.mipLevel >= l->metal_tail) /* (tail levels: opaque binds only) */
+    if (!l || l->dedicated || b->subresource.mipLevel >= l->metal_tail) /* (tail levels: opaque binds only) */
         return 0;
     if (op) {
         x = (uint32_t)b->offset.x / l->block.width;
