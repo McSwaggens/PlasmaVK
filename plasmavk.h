@@ -40319,8 +40319,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   glslang emits for separate shadow samplers; a sampled image of a texel
  *   buffer, GLSL's samplerBuffer, is the texel buffer); explicit-LOD
  *   sampling with Lod or Grad, ConstOffset or Offset (not on cubes), MinLod,
- *   Proj and Dref variants; in fragment shaders implicit-LOD sampling (Bias, MinLod, the
- *   same variants) and OpImageQueryLod (calculate_clamped/unclamped_lod),
+ *   Proj and Dref variants; in fragment shaders implicit-LOD sampling (Bias,
+ *   MinLod, the same variants) and OpImageQueryLod
+ *   (calculate_clamped/unclamped_lod),
  *   derivatives (OpDPdx/y and Fwidth: Metal has no fine/coarse choice, its
  *   dfdx/dfdy serve both); OpImageFetch (Lod, Sample, offsets); OpImageGather and
  *   OpImageDrefGather (ConstOffsets: four gathers); OpImageRead/Write with a
