@@ -1378,12 +1378,11 @@ static void test_format_properties(void)
         CHECK(!(p3.optimalTilingFeatures & (VK_FORMAT_FEATURE_2_BLIT_SRC_BIT | VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT |
                                             VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT)));
         CHECK(!!(p3.optimalTilingFeatures & VK_FORMAT_FEATURE_2_DISJOINT_BIT) == (f->planes > 1));
-        if (f->planes == 1)
+        if (f->planes == 1) /* explicit, and so forceable (a spec rule) */
             CHECK(p3.optimalTilingFeatures &
                   VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_BIT);
-        else
-            CHECK(p3.optimalTilingFeatures &
-                  VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_FORCEABLE_BIT);
+        CHECK(p3.optimalTilingFeatures &
+              VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_FORCEABLE_BIT);
         CHECK(descriptor_count(f->format, VK_IMAGE_TILING_OPTIMAL, 0) == f->planes);
 
         memset(&info, 0, sizeof(info));

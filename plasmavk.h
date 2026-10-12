@@ -34163,8 +34163,9 @@ static VkFormatFeatureFlags2 pvk_format_image_features(const struct pvk_physical
         if (pvk_ycbcr_format(f)->planes > 1)
             r |= VK_FORMAT_FEATURE_2_DISJOINT_BIT |
                  VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_FORCEABLE_BIT;
-        else
-            r |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_BIT;
+        else /* always explicit, so forcing it is honoured (the spec requires both bits) */
+            r |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_BIT |
+                 VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_FORCEABLE_BIT;
         return r;
     }
     if (linear && (!pvk_format_is_color(f) || f->block_w > 1))
