@@ -11536,6 +11536,78 @@ static void test_empty_struct_member(void)
 
 /*
  * #version 450
+ * layout(local_size_x = 1) in;
+ * struct A { int a; };
+ * layout(std140, set = 0, binding = 0) buffer In { A v[2]; } i;
+ * layout(std140, set = 0, binding = 1) buffer Out { A v[2]; } o;
+ * void main()
+ * {
+ *     o.v[1] = i.v[1];
+ * }
+ */
+static const uint32_t spv_padded_struct_copy[] = {
+    0x07230203, 0x00010300, 0x0008000b, 0x0000001b, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0005000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x00060010, 0x00000004, 0x00000011,
+    0x00000001, 0x00000001, 0x00000001, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004,
+    0x6e69616d, 0x00000000, 0x00030005, 0x00000007, 0x00000041, 0x00040006, 0x00000007, 0x00000000,
+    0x00000061, 0x00030005, 0x0000000b, 0x0074754f, 0x00040006, 0x0000000b, 0x00000000, 0x00000076,
+    0x00030005, 0x0000000d, 0x0000006f, 0x00030005, 0x00000011, 0x00006e49, 0x00040006, 0x00000011,
+    0x00000000, 0x00000076, 0x00030005, 0x00000013, 0x00000069, 0x00050048, 0x00000007, 0x00000000,
+    0x00000023, 0x00000000, 0x00040047, 0x0000000a, 0x00000006, 0x00000010, 0x00030047, 0x0000000b,
+    0x00000002, 0x00050048, 0x0000000b, 0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x0000000d,
+    0x00000021, 0x00000001, 0x00040047, 0x0000000d, 0x00000022, 0x00000000, 0x00040047, 0x00000010,
+    0x00000006, 0x00000010, 0x00030047, 0x00000011, 0x00000002, 0x00050048, 0x00000011, 0x00000000,
+    0x00000023, 0x00000000, 0x00040047, 0x00000013, 0x00000021, 0x00000000, 0x00040047, 0x00000013,
+    0x00000022, 0x00000000, 0x00040047, 0x0000001a, 0x0000000b, 0x00000019, 0x00020013, 0x00000002,
+    0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000001, 0x0003001e,
+    0x00000007, 0x00000006, 0x00040015, 0x00000008, 0x00000020, 0x00000000, 0x0004002b, 0x00000008,
+    0x00000009, 0x00000002, 0x0004001c, 0x0000000a, 0x00000007, 0x00000009, 0x0003001e, 0x0000000b,
+    0x0000000a, 0x00040020, 0x0000000c, 0x0000000c, 0x0000000b, 0x0004003b, 0x0000000c, 0x0000000d,
+    0x0000000c, 0x0004002b, 0x00000006, 0x0000000e, 0x00000000, 0x0004002b, 0x00000006, 0x0000000f,
+    0x00000001, 0x0004001c, 0x00000010, 0x00000007, 0x00000009, 0x0003001e, 0x00000011, 0x00000010,
+    0x00040020, 0x00000012, 0x0000000c, 0x00000011, 0x0004003b, 0x00000012, 0x00000013, 0x0000000c,
+    0x00040020, 0x00000014, 0x0000000c, 0x00000007, 0x00040017, 0x00000018, 0x00000008, 0x00000003,
+    0x0004002b, 0x00000008, 0x00000019, 0x00000001, 0x0006002c, 0x00000018, 0x0000001a, 0x00000019,
+    0x00000019, 0x00000019, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8,
+    0x00000005, 0x00060041, 0x00000014, 0x00000015, 0x00000013, 0x0000000e, 0x0000000f, 0x0004003d,
+    0x00000007, 0x00000016, 0x00000015, 0x00060041, 0x00000014, 0x00000017, 0x0000000d, 0x0000000e,
+    0x0000000f, 0x0003003e, 0x00000017, 0x00000016, 0x000100fd, 0x00010038,
+};
+
+/* A store of a struct with padding (std140: 12 bytes after A.a) writes its
+ * members only, never the padding (the Vulkan memory model's rule, which
+ * the Khronos CTS's memory_model.padding checks). */
+static void test_padded_struct_store(void)
+{
+    uint32_t in[8], out[8], k;
+    struct pvk_msl_result res;
+    struct mt_buffer bi, bo;
+    struct mt_binding b[2];
+    id pso;
+
+    for (k = 0; k < 8; k++) {
+        in[k] = 0x100u + k;
+        out[k] = 0xdeadbeefu;
+    }
+    MT_BUILD(spv_padded_struct_copy, NULL, res, pso);
+    bi = mt_buffer(sizeof(in), in, sizeof(in));
+    bo = mt_buffer(sizeof(out), out, sizeof(out));
+    b[0] = bind(0, 0, &bi);
+    b[1] = bind(0, 1, &bo);
+    CHECK(mt_dispatch(pso, &res, b, 2, NULL, 0, 1, 1, 1));
+    CHECK(get_u32(bo.data, 16) == 0x104u);
+    for (k = 0; k < 8; k++)
+        if (k != 4)
+            CHECK(get_u32(bo.data, k * 4) == 0xdeadbeefu);
+    mt_buffer_free(&bi);
+    mt_buffer_free(&bo);
+    pvk_release(pso);
+    pvk_msl_result_free(&res);
+}
+
+/*
+ * #version 450
  * layout(local_size_x = 4) in;
  * shared uvec4 s[1];
  * layout(std430, binding = 0) buffer B { uvec4 o; };
@@ -12263,6 +12335,7 @@ int main(void)
     RUN(test_ptr_compare_rows);
     RUN(test_pointer_array);
     RUN(test_empty_struct_member);
+    RUN(test_padded_struct_store);
     RUN(test_atomic_components);
     RUN(test_ieee_specials);
     RUN(test_layout_odds);

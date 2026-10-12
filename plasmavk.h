@@ -42174,6 +42174,7 @@ struct pvk_spv {
     struct pvk_sb head, types, consts, text, body; /* text: functions; body: the one being emitted */
     struct pvk_sb *out; /* where pvk_spv_line writes */
     uint32_t indent;
+    bool keep_pad;              /* pvk_spv_copy: stores to memory others see leave padding alone */
     bool use_array, use_padded; /* emit the pvk_array / pvk_padded templates */
     bool use_sampled, use_cast; /* emit pvk_sampled / pvk_tex_cast */
     bool use_storage;           /* emit pvk_storage */
@@ -45961,8 +45962,30 @@ static const char *pvk_spv_mat_elem(struct pvk_spv *ctx, const char *e, const st
     return pvk_spv_fmt(ctx, "%s[%u]%s[%u]", e, c, n && n->padded ? ".v" : "", r);
 }
 
+/* Whether type tid's MSL declaration has padding bytes (pad fields, padded
+ * array slots, or alignment past its last member). */
+static bool pvk_spv_has_pad(struct pvk_spv *ctx, uint32_t tid, uint32_t depth)
+{
+    struct pvk_spv_type *t = pvk_spv_type(ctx, tid);
+    uint32_t i;
+    if (depth > PVK_SPV_MAX_TYPE_DEPTH)
+        return false;
+    if (t->op == PVK_SPV_OpTypeArray)
+        return t->slot_padded || pvk_spv_has_pad(ctx, t->elem, depth + 1);
+    if (t->op != PVK_SPV_OpTypeStruct)
+        return false;
+    if (t->tail_pad || (t->explicit_layout && t->end < t->size))
+        return true;
+    for (i = 0; i < t->nmembers; i++)
+        if (t->members[i].pad_before || pvk_spv_has_pad(ctx, t->members[i].type, depth + 1))
+            return true;
+    return false;
+}
+
 /* dst = src between representations (storage nodes, or logically matching
- * types for OpCopyLogical). */
+ * types for OpCopyLogical). With ctx->keep_pad it goes member by member
+ * around dst's padding: a store to memory others see writes no padding
+ * bytes. */
 static void pvk_spv_copy(struct pvk_spv *ctx, const char *dst, const struct pvk_spv_node *dn, uint32_t dtype,
                          const char *src, const struct pvk_spv_node *sn, uint32_t stype, uint32_t depth)
 {
@@ -45971,7 +45994,8 @@ static void pvk_spv_copy(struct pvk_spv *ctx, const char *dst, const struct pvk_
 
     if (depth > PVK_SPV_MAX_TYPE_DEPTH)
         pvk_spv_fail(ctx, "copy nested too deeply");
-    if (!dn && !sn && (dtype == stype || (d->msl && s->msl && strcmp(d->msl, s->msl) == 0))) {
+    if (!dn && !sn && (dtype == stype || (d->msl && s->msl && strcmp(d->msl, s->msl) == 0)) &&
+        !(ctx->keep_pad && pvk_spv_has_pad(ctx, dtype, 0))) {
         pvk_spv_line(ctx, "%s = %s;", dst, src);
         return;
     }
@@ -46234,6 +46258,13 @@ static bool pvk_spv_writable(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
     }
 }
 
+/* Whether p points at memory other invocations see (buffers, workgroup). */
+static bool pvk_spv_shared(const struct pvk_spv_ptr *p)
+{
+    return p->storage == PVK_SPV_StorageStorageBuffer || p->storage == PVK_SPV_StoragePhysicalStorageBuffer ||
+           p->storage == PVK_SPV_StorageUniform || p->storage == PVK_SPV_StorageWorkgroup;
+}
+
 /* *p = val (discarded outside a robust buffer). */
 static void pvk_spv_store(struct pvk_spv *ctx, const struct pvk_spv_ptr *p, const char *val, uint32_t vtype)
 {
@@ -46251,7 +46282,9 @@ static void pvk_spv_store(struct pvk_spv *ctx, const struct pvk_spv_ptr *p, cons
         for (r = 0; r < t->count; r++)
             pvk_spv_line(ctx, "%s[%u]%s[%s] = %s[%u];", p->expr, r, p->node->padded ? ".v" : "", p->rm_col, val, r);
     } else {
+        ctx->keep_pad = pvk_spv_shared(p);
         pvk_spv_copy(ctx, p->expr, p->node, p->type, val, NULL, vtype, 0);
+        ctx->keep_pad = false;
     }
     pvk_spv_if_close(ctx, ok);
 }
@@ -48807,7 +48840,9 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         b = pvk_spv_bounds(ctx, sp);
         pvk_spv_if_open(ctx, a); /* robust buffer access: no write outside the range */
         pvk_spv_if_open(ctx, b);
+        ctx->keep_pad = pvk_spv_shared(d);
         pvk_spv_copy(ctx, d->expr, d->node, d->type, sp->expr, sp->node, sp->type, 0);
+        ctx->keep_pad = false;
         pvk_spv_if_close(ctx, b);
         if (b) { /* a source outside the range reads zero */
             pvk_spv_line(ctx, "else");
