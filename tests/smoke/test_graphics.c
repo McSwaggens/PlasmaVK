@@ -2520,7 +2520,8 @@ static void test_viewports_layers(void)
 /* Multiview by vertex amplification: dynamic rendering with view mask 0b11
  * and a render pass with 0b101 (VkRenderPassMultiviewCreateInfo). The
  * shader moves view 0 to the left half and other views to the right, and
- * writes (view + 1) / 4. */
+ * writes (view + 1) / 4. Then view mask 0b10 alone: a single view still goes
+ * to its layer (layer 0 keeps the render pass's picture). */
 static void test_multiview(void)
 {
     struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 3, VK_SAMPLE_COUNT_1_BIT);
@@ -2535,7 +2536,7 @@ static void test_multiview(void)
     VkRenderPass rp = VK_NULL_HANDLE;
     VkFramebuffer fb;
     VkClearValue clear;
-    VkPipeline dyn_pipe, rp_pipe;
+    VkPipeline dyn_pipe, rp_pipe, one_pipe;
     struct pipe p;
     VkCommandBuffer cb;
     uint32_t i, x, y, mask = 0x5;
@@ -2546,6 +2547,8 @@ static void test_multiview(void)
     pipe_init(&p, spv_multiview_vs, sizeof(spv_multiview_vs), spv_multiview_fs, sizeof(spv_multiview_fs));
     p.view_mask = 0x3;
     dyn_pipe = make_pipe(&p);
+    p.view_mask = 0x2;
+    one_pipe = make_pipe(&p);
     memset(&a, 0, sizeof(a));
     a.format = VK_FORMAT_R8G8B8A8_UNORM;
     a.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -2574,7 +2577,7 @@ static void test_multiview(void)
     p.view_mask = 0;
     p.rp = rp;
     rp_pipe = make_pipe(&p);
-    REQUIRE(dyn_pipe && rp_pipe);
+    REQUIRE(dyn_pipe && rp_pipe && one_pipe);
 
     memset(&att, 0, sizeof(att));
     att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -2592,17 +2595,18 @@ static void test_multiview(void)
     info.pColorAttachments = &att;
     memset(&clear, 0, sizeof(clear));
     clear.color.float32[3] = 1.0f;
-    for (l = 0; l < 2; l++) {
+    for (l = 0; l < 3; l++) {
         cb = begin_cmd();
-        if (l == 0) {
+        info.viewMask = l == 2 ? 0x2 : 0x3;
+        if (l != 1) {
             vkCmdBeginRendering(cb, &info);
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, dyn_pipe);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, l ? one_pipe : dyn_pipe);
         } else {
             begin_pass(cb, rp, fb, 0, 0, W, H, &clear, 1);
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, rp_pipe);
         }
         rect(cb, -1, -1, 1, 1, 0, 0, 0, 0, 0);
-        if (l == 0)
+        if (l != 1)
             vkCmdEndRendering(cb);
         else
             vkCmdEndRenderPass(cb);
@@ -2610,7 +2614,7 @@ static void test_multiview(void)
             download(cb, &target, i, VK_IMAGE_ASPECT_COLOR_BIT, &out[i]);
         submit(cb);
         for (i = 0; i < 3; i++) {
-            uint32_t views = l ? mask : 0x3u;
+            uint32_t views = l == 1 ? mask : 0x3u; /* (l == 2: layer 0 as l == 1 left it) */
             if (!(views & (1u << i)))
                 continue; /* not rendered: left as it was */
             for (y = 0; y < H; y++)
@@ -2629,6 +2633,7 @@ static void test_multiview(void)
     CHECK(bad == 0);
     vkDestroyPipeline(device, dyn_pipe, NULL);
     vkDestroyPipeline(device, rp_pipe, NULL);
+    vkDestroyPipeline(device, one_pipe, NULL);
     vkDestroyFramebuffer(device, fb, NULL);
     vkDestroyRenderPass(device, rp, NULL);
     for (i = 0; i < 3; i++)

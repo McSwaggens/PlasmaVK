@@ -53340,8 +53340,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
  *
  *   Load and store ops become the Metal attachments' load and store actions
  *   (pvk_pass_att_actions), except that a render area smaller than the
- *   attachment clears by drawing (Metal clears the whole attachment) and
- *   always stores (DONT_CARE would lose what lies outside), memoryless
+ *   attachment, or a view mask missing views below its last, clears by
+ *   drawing (Metal clears the whole attachment, every layer up to the last
+ *   view's) and always stores (DONT_CARE would lose what lies outside), memoryless
  *   (transient) attachments neither load nor store, and an attachment used
  *   by subpasses of several encoders is stored and loaded between them.
  *   Color, depth and stencil resolves are store actions of their encoder,
@@ -53693,7 +53694,7 @@ struct pvk_cmd_begin_pass {
     uint32_t layers;      /* renderTargetArrayLength; 0: one layer */
     uint32_t flags;       /* VkRenderingFlags of vkCmdBeginRendering */
     uint32_t hidden;      /* render passes: PVK_HIDDEN_* copies the subpasses read */
-    uint32_t pad;
+    uint32_t view_mask;   /* multiview: the views (load-op clears clear their layers only) */
 };
 
 /* The subpass, or local-read mapping, of the draws that follow. */
@@ -53937,10 +53938,11 @@ static bool pvk_area_partial(const VkRect2D *area, const struct pvk_pass_attachm
 /* The Metal load and store actions (RENDER PASSES above). first/last: this
  * Metal pass has the attachment's first/last use in the instance. */
 static void pvk_pass_att_actions(struct pvk_pass_attachment *pa, VkAttachmentLoadOp load, VkAttachmentStoreOp store,
-                                 bool first, bool last, const VkRect2D *area, bool memoryless)
+                                 bool first, bool last, const VkRect2D *area, uint32_t view_mask, bool memoryless)
 {
     uint32_t l = PVK_MTLLoadActionLoad, s = PVK_MTLStoreActionStore;
-    bool partial = pvk_area_partial(area, pa);
+    /* (views missing below the last view: those layers keep their texels) */
+    bool partial = pvk_area_partial(area, pa) || (view_mask & (view_mask + 1)) != 0;
     if (!pa->texture)
         return;
     if (first && load == VK_ATTACHMENT_LOAD_OP_CLEAR) {
@@ -53999,6 +54001,7 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
     c->width = r->width;
     c->height = r->height;
     c->layers = pvk_pass_layers(mp->view_mask, r->layers);
+    c->view_mask = mp->view_mask;
     c->color_count = mp->color_count;
     c->hidden = mp->hidden;
     for (s = 0; s < mp->color_count; s++) {
@@ -54009,7 +54012,7 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
         if (mp->resolves[s] != VK_ATTACHMENT_UNUSED)
             pvk_pass_att_resolve(pa, r->views[mp->resolves[s]]);
         pvk_pass_att_actions(pa, att->load_op, att->store_op, att->first_use >= mp->first, att->last_use <= mp->last,
-                             &r->area, r->views[a] && r->views[a]->image->memoryless);
+                             &r->area, mp->view_mask, r->views[a] && r->views[a]->image->memoryless);
         pa->clear = r->clears[a];
     }
     if (mp->depth != VK_ATTACHMENT_UNUSED) {
@@ -54023,7 +54026,8 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
                 pvk_pass_att_resolve(&c->depth, r->views[mp->depth_resolve]);
                 c->depth.resolve_filter = pvk_depth_resolve_filter(mp->depth_resolve_mode);
             }
-            pvk_pass_att_actions(&c->depth, att->load_op, att->store_op, first, last, &r->area, memoryless);
+            pvk_pass_att_actions(&c->depth, att->load_op, att->store_op, first, last, &r->area, mp->view_mask,
+                                 memoryless);
             c->depth.clear = r->clears[mp->depth];
         }
         if (pvk_format_has_stencil(att->fmt)) {
@@ -54031,7 +54035,7 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
             if (mp->depth_resolve != VK_ATTACHMENT_UNUSED && mp->stencil_resolve_mode != VK_RESOLVE_MODE_NONE)
                 pvk_pass_att_resolve(&c->stencil, r->views[mp->depth_resolve]);
             pvk_pass_att_actions(&c->stencil, att->stencil_load_op, att->stencil_store_op, first, last, &r->area,
-                                 memoryless);
+                                 mp->view_mask, memoryless);
             c->stencil.clear = r->clears[mp->depth];
         }
     }
@@ -54214,6 +54218,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
     c->width = (uint32_t)info->renderArea.offset.x + info->renderArea.extent.width;
     c->height = (uint32_t)info->renderArea.offset.y + info->renderArea.extent.height;
     c->layers = pvk_pass_layers(info->viewMask, info->layerCount);
+    c->view_mask = info->viewMask;
     c->flags = info->flags;
     c->color_count = r->color_count;
     for (i = 0; i < r->color_count; i++) {
@@ -54223,7 +54228,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
         pvk_pass_att_view(pa, view);
         if (a->resolveMode != VK_RESOLVE_MODE_NONE)
             pvk_pass_att_resolve(pa, (const struct pvk_image_view *)a->resolveImageView);
-        pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, view && view->image->memoryless);
+        pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, info->viewMask,
+                             view && view->image->memoryless);
         pa->clear = a->clearValue;
     }
     ds[0] = info->pDepthAttachment;
@@ -54242,7 +54248,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
             if (!k)
                 pa->resolve_filter = pvk_depth_resolve_filter(a->resolveMode);
         }
-        pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, view->image->memoryless);
+        pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, info->viewMask,
+                             view->image->memoryless);
         pa->clear = a->clearValue;
     }
     pvk_cmd_subpass_dynamic(cb, r);
@@ -55389,7 +55396,7 @@ struct pvk_render {
     id ds_state;           /* the MTLDepthStencilState set */
     uint8_t map_set[PVK_MAX_COLOR_ATTACHMENTS]; /* the color attachment map set */
     bool map_valid;
-    uint32_t amplification; /* vertex amplification count set (0: never set) */
+    uint32_t views_set;     /* the view mask vertex amplification maps (0: none, Metal's default) */
     uint32_t draw_index;    /* DrawIndex bound at buffer index 28 (UINT32_MAX: none) */
     /* Occlusion queries: the pass's visibility result buffer is vis_pool's */
     struct pvk_query_pool *vis_pool;
@@ -57439,9 +57446,9 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
     pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(enc, 0.0f, 0.0f, 0.0f);
     pvk_MTL4RenderCommandEncoder_setDepthClipMode(enc, PVK_MTLDepthClipModeClip);
     pvk_MTL4RenderCommandEncoder_setTriangleFillMode(enc, PVK_MTLTriangleFillModeFill);
-    if (r->amplification > 1) {
+    if (r->views_set) {
         pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, 1, NULL);
-        r->amplification = 1;
+        r->views_set = 0;
     }
     pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->render_table,
                                                            PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
@@ -57756,9 +57763,9 @@ static void pvk_render_internal_begin(struct pvk_encoder *e, id pso, uint32_t sl
     pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(enc, 0.0f, 0.0f, 0.0f);
     pvk_MTL4RenderCommandEncoder_setDepthClipMode(enc, PVK_MTLDepthClipModeClip);
     pvk_MTL4RenderCommandEncoder_setTriangleFillMode(enc, PVK_MTLTriangleFillModeFill);
-    if (r->amplification > 1) {
+    if (r->views_set) {
         pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, 1, NULL);
-        r->amplification = 1;
+        r->views_set = 0;
     }
     vp.originX = (double)x0;
     vp.originY = (double)y0;
@@ -58211,7 +58218,7 @@ static void pvk_render_takeover(struct pvk_encoder *e, id enc)
     r->ds_state = NULL;
     r->pso_set = NULL;
     r->map_valid = false;
-    r->amplification = 0;
+    r->views_set = 0;
     r->draw_index = UINT32_MAX;
     r->bounds_valid = false;
     r->counting = false;
@@ -58371,9 +58378,11 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
         rect.rect = c->area;
         rect.baseArrayLayer = 0;
         rect.layerCount = c->layers ? c->layers : 1;
+        r->view_mask = c->view_mask; /* multiview: the views' layers */
         pvk_render_clear(e, clears, (const uint32_t(*)[4])values, c->depth.clear_in_area != 0,
                          c->depth.clear.depthStencil.depth, c->stencil.clear_in_area != 0,
                          c->stencil.clear.depthStencil.stencil, &rect, 1);
+        r->view_mask = 0;
     }
     if ((r->hidden & PVK_HIDDEN_DEPTH) && c->depth.load == PVK_MTLLoadActionLoad && !c->depth.clear_in_area)
         pvk_render_copy_depth(e, &c->depth); /* the loaded depth into its copy */
@@ -58680,7 +58689,8 @@ static bool pvk_render_flush(struct pvk_encoder *e)
     if ((r->hidden & PVK_HIDDEN_STENCIL) && r->stencil && d->stencil_test &&
         ((d->stencil[0].write_mask | d->stencil[1].write_mask) & 0xffu))
         r->stencil_dirty = true; /* this draw may change the stencil */
-    if (dirty & PVK_RD_AMPLIFICATION) {
+    if ((dirty & PVK_RD_AMPLIFICATION) && r->view_mask != r->views_set) {
+        /* each view's layer, a single view's too */
         pvk_MTLVertexAmplificationViewMapping views[32];
         n = 0;
         for (i = 0; r->view_mask >> i; i++)
@@ -58688,13 +58698,8 @@ static bool pvk_render_flush(struct pvk_encoder *e)
                 views[n].viewportArrayIndexOffset = 0;
                 views[n++].renderTargetArrayIndexOffset = i;
             }
-        if (n && n != r->amplification) {
-            pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, n, views);
-            r->amplification = n;
-        } else if (!n && r->amplification > 1) {
-            pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, 1, NULL);
-            r->amplification = 1;
-        }
+        pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, n ? n : 1, n ? views : NULL);
+        r->views_set = r->view_mask;
     }
     if (dirty & PVK_RD_VIEWPORT) {
         pvk_MTLViewport vp[PVK_MAX_VIEWPORTS];
@@ -62494,8 +62499,10 @@ static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *
         pvk_MTL4RenderPipelineDescriptor_setAlphaToOneState(
             desc, d->alpha_to_one ? PVK_MTL4AlphaToOneStateEnabled : PVK_MTL4AlphaToOneStateDisabled);
         pvk_MTL4RenderPipelineDescriptor_setRasterizationEnabled(desc, d->rasterization != 0);
-        if (d->amplification > 1)
-            pvk_MTL4RenderPipelineDescriptor_setMaxVertexAmplificationCount(desc, d->amplification);
+        /* (a single view but view 0: Metal maps it to its layer only with a count over 1) */
+        if (d->amplification > 1 || d->view_mask > 1)
+            pvk_MTL4RenderPipelineDescriptor_setMaxVertexAmplificationCount(desc, d->amplification > 1 ? d->amplification
+                                                                                                        : 2);
         if (layered)
             pvk_MTL4RenderPipelineDescriptor_setInputPrimitiveTopology(desc, d->topology_class);
         pvk_MTL4RenderPipelineDescriptor_setColorAttachmentMappingState(
