@@ -43785,7 +43785,10 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         if ((storage == PVK_SPV_StorageUniformConstant) != (pvk_spv_type(ctx, x->p->type)->opaque || x->p->value))
             pvk_spv_fail(ctx, "variable %u: images and samplers must be UniformConstant variables (and only they)", rid);
         if (in->wc > 4) {
-            pvk_spv_const(ctx, in->w[4]);
+            const struct pvk_spv_id *init = pvk_spv_get(ctx, in->w[4]);
+            if (storage != PVK_SPV_StoragePrivate || init->kind != PVK_SPV_K_VAR || init->func ||
+                !pvk_spv_is_vptr(pvk_spv_type(ctx, x->p->type))) /* (else a variable pointer to a global variable) */
+                pvk_spv_const(ctx, in->w[4]);
             if (storage != PVK_SPV_StoragePrivate && storage != PVK_SPV_StorageOutput && storage != PVK_SPV_StorageWorkgroup)
                 pvk_spv_fail(ctx, "variable %u: initializers are only supported for Private, Output and Workgroup variables",
                              rid);
@@ -45001,8 +45004,14 @@ static void pvk_spv_use(struct pvk_spv *ctx, struct pvk_spv_func *fn, uint32_t f
     x = pvk_spv_get(ctx, v);
     if ((x->kind == PVK_SPV_K_VALUE || x->kind == PVK_SPV_K_PTR) && x->func == fidx && x->block != block)
         x->flags |= PVK_SPV_F_CROSS_BLOCK;
-    if (x->kind == PVK_SPV_K_VAR && x->func == 0)
+    if (x->kind == PVK_SPV_K_VAR && x->func == 0) {
         fn->globals[x->global / 32] |= 1u << (x->global % 32);
+        if (x->p && x->p->storage == PVK_SPV_StoragePrivate) { /* initialized with a variable's address */
+            struct pvk_spv_insn in = pvk_spv_insn_at(ctx, x->insn);
+            if (in.wc > 4 && pvk_spv_get(ctx, in.w[4])->kind == PVK_SPV_K_VAR)
+                pvk_spv_use(ctx, fn, fidx, in.w[4], block);
+        }
+    }
 }
 
 static uint32_t pvk_spv_label_block(struct pvk_spv *ctx, uint32_t fidx, uint32_t label)
@@ -49880,7 +49889,9 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             }
             case PVK_SPV_StoragePrivate: {
                 struct pvk_spv_insn in = pvk_spv_insn_at(ctx, x->insn);
-                if (in.wc > 4)
+                if (in.wc > 4 && pvk_spv_get(ctx, in.w[4])->kind == PVK_SPV_K_VAR) /* its address */
+                    pvk_spv_line(ctx, "%s %s = %s;", t->msl, x->msl, pvk_spv_val(ctx, in.w[4]));
+                else if (in.wc > 4)
                     pvk_spv_line(ctx, "%s %s = %s;", t->msl, x->msl, pvk_spv_const_expr(ctx, in.w[4], 0));
                 else
                     pvk_spv_line(ctx, "%s %s;", t->msl, x->msl);
