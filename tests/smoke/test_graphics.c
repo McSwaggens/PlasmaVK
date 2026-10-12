@@ -4977,6 +4977,145 @@ static void test_stencil_input(void)
     free_img(&st);
 }
 
+/* Depth/stencil resolves of a 4-sample D32_SFLOAT_S8_UINT attachment. Four
+ * render passes draw (writing FragDepth) with pSampleMask 1, 2, 4 and 8 and
+ * stencil references 1, 1, 255 and 255 (REPLACE), resolving stencil from
+ * sample 0: 1, as the later masks keep it (Metal's stencil writes do not
+ * always heed [[sample_mask]]). Then depth resolved alone: the resolve attachment's
+ * stencil load op clears its stencil to 0x5a in the render area (2, 2, 8,
+ * 8) and keeps the 0x33 written before outside. */
+static void test_ds_resolve_stencil(void)
+{
+    static const VkDynamicState dyn = VK_DYNAMIC_STATE_STENCIL_REFERENCE;
+    struct img ms = make_img(VK_FORMAT_D32_SFLOAT_S8_UINT, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img res = make_img(VK_FORMAT_D32_SFLOAT_S8_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H);
+    VkAttachmentDescription2 a[2];
+    VkAttachmentReference2 refs[2];
+    VkSubpassDescriptionDepthStencilResolve dsr;
+    VkSubpassDescription2 sp;
+    VkRenderPassCreateInfo2 rpi;
+    VkRenderPass rp[3] = { VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE };
+    VkFramebuffer fb[3];
+    VkImageView views[2];
+    VkClearValue clears[2];
+    VkClearDepthStencilValue garbage;
+    VkImageSubresourceRange range;
+    VkSampleMask masks[4];
+    VkPipeline pl[4];
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t i, k, x, y;
+    int bad = 0;
+
+    memset(refs, 0, sizeof(refs));
+    for (i = 0; i < 2; i++) {
+        refs[i].sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2;
+        refs[i].attachment = i;
+        refs[i].layout = VK_IMAGE_LAYOUT_GENERAL;
+        refs[i].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+    }
+    views[0] = ms.view;
+    views[1] = res.view;
+    for (k = 0; k < 3; k++) { /* 0: clear, stencil resolved; 1: load, stencil resolved; 2: clear, depth resolved */
+        memset(a, 0, sizeof(a));
+        for (i = 0; i < 2; i++) {
+            a[i].sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2;
+            a[i].format = VK_FORMAT_D32_SFLOAT_S8_UINT;
+            a[i].samples = i ? VK_SAMPLE_COUNT_1_BIT : VK_SAMPLE_COUNT_4_BIT;
+            a[i].loadOp = i ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : k == 1 ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            a[i].stencilLoadOp = !i && k == 1 ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            a[i].storeOp = a[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+            a[i].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+            a[i].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+        memset(&dsr, 0, sizeof(dsr));
+        dsr.sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE;
+        dsr.depthResolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+        dsr.stencilResolveMode = k == 2 ? VK_RESOLVE_MODE_NONE : VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+        dsr.pDepthStencilResolveAttachment = &refs[1];
+        memset(&sp, 0, sizeof(sp));
+        sp.sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2;
+        sp.pNext = &dsr;
+        sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sp.pDepthStencilAttachment = &refs[0];
+        memset(&rpi, 0, sizeof(rpi));
+        rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2;
+        rpi.attachmentCount = 2;
+        rpi.pAttachments = a;
+        rpi.subpassCount = 1;
+        rpi.pSubpasses = &sp;
+        CHECK_VK(vkCreateRenderPass2(device, &rpi, NULL, &rp[k]), VK_SUCCESS);
+        fb[k] = make_fb(rp[k], views, 2, W, H, 1);
+    }
+    for (i = 0; i < 4; i++) {
+        masks[i] = 1u << i;
+        pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_frag_depth_fs, sizeof(spv_frag_depth_fs));
+        p.samples = VK_SAMPLE_COUNT_4_BIT;
+        p.colors = 0;
+        p.rp = rp[0];
+        p.sample_mask = &masks[i];
+        p.dynamic = &dyn;
+        p.dynamic_count = 1;
+        p.has_ds = true;
+        p.ds.depthTestEnable = p.ds.depthWriteEnable = VK_TRUE;
+        p.ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+        p.ds.stencilTestEnable = VK_TRUE;
+        p.ds.front.compareOp = p.ds.back.compareOp = VK_COMPARE_OP_ALWAYS;
+        p.ds.front.failOp = p.ds.back.failOp = VK_STENCIL_OP_REPLACE;
+        p.ds.front.passOp = p.ds.back.passOp = VK_STENCIL_OP_REPLACE;
+        p.ds.front.depthFailOp = p.ds.back.depthFailOp = VK_STENCIL_OP_REPLACE;
+        p.ds.front.compareMask = p.ds.back.compareMask = 0xffu;
+        p.ds.front.writeMask = p.ds.back.writeMask = 0xffu;
+        pl[i] = make_pipe(&p);
+        REQUIRE(pl[i]);
+    }
+    memset(clears, 0, sizeof(clears));
+    clears[1].depthStencil.stencil = 0x5a;
+    memset(&garbage, 0, sizeof(garbage));
+    garbage.stencil = 0x33;
+    memset(&range, 0, sizeof(range));
+    range.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+    for (k = 0; k < 2; k++) {
+        cb = begin_cmd();
+        vkCmdClearDepthStencilImage(cb, res.image, VK_IMAGE_LAYOUT_GENERAL, &garbage, 1, &range);
+        barrier(cb);
+        for (i = 0; i < (k ? 1u : 4u); i++) {
+            if (k)
+                begin_pass(cb, rp[2], fb[2], 2, 2, 8, 8, clears, 2);
+            else
+                begin_pass(cb, rp[i ? 1 : 0], fb[i ? 1 : 0], 0, 0, W, H, clears, 2);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pl[i]);
+            vkCmdSetStencilReference(cb, VK_STENCIL_FACE_FRONT_AND_BACK, i < 2 ? 1u : 255u);
+            rect(cb, -1, -1, 1, 1, 0, 0, 0, 0, 0.5f);
+            vkCmdEndRenderPass(cb);
+            barrier(cb);
+        }
+        download(cb, &res, 0, VK_IMAGE_ASPECT_STENCIL_BIT, &out);
+        submit(cb);
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++) {
+                bool in = x >= 2 && x < 10 && y >= 2 && y < 10;
+                uint8_t want = !k ? 1 : in ? 0x5a : 0x33, got = out.data[y * W + x];
+                if (got != want && bad++ < 4)
+                    fprintf(stderr, "%s: stencil at (%u, %u) is 0x%02x, want 0x%02x\n",
+                            k ? "depth resolved alone" : "stencil resolved under sample masks", x, y, got, want);
+            }
+    }
+    CHECK(bad == 0);
+    for (i = 0; i < 4; i++)
+        vkDestroyPipeline(device, pl[i], NULL);
+    for (k = 0; k < 3; k++) {
+        vkDestroyFramebuffer(device, fb[k], NULL);
+        vkDestroyRenderPass(device, rp[k], NULL);
+    }
+    free_buf(&out);
+    free_img(&ms);
+    free_img(&res);
+}
+
 static uint32_t expect_msaa(uint32_t x, uint32_t y)
 {
     if (y < H / 2)
@@ -6736,6 +6875,7 @@ int main(void)
     RUN(test_ds_split);
     RUN(test_ds_subpasses);
     RUN(test_stencil_input);
+    RUN(test_ds_resolve_stencil);
     RUN(test_depth_bounds);
     RUN(test_msaa);
     RUN(test_msaa_int_resolve);

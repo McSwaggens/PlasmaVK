@@ -40718,7 +40718,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   function after the entry point returns, in Vulkan's order:
  *   Sample mask (options->sample_mask_enable: pSampleMask): [[sample_mask]]
  *     is the shader's SampleMask output (or all ones) & sample_mask; Metal
- *     ANDs it into the rasterized coverage, for color, depth and stencil.
+ *     ANDs it into the rasterized coverage for color and depth, and the
+ *     function runs per sample, discarding the samples the mask clears
+ *     (Metal's stencil writes do not always heed [[sample_mask]]).
  *     The test comes before shading in Vulkan, so a SampleMask input reads
  *     the coverage & sample_mask, and a shader with stores or atomics (a
  *     writable resource or physical pointers) runs per sample ([[sample_id]])
@@ -50662,7 +50664,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     bool depth_copy = false;
     struct pvk_spv_iface in, out;
     struct pvk_sb outs, ins;
-    const char **params = NULL, **args = NULL, *depth_mode = "any", *call_guard = NULL;
+    const char **params = NULL, **args = NULL, *depth_mode = "any", *call_guard = NULL, *mask_discard = NULL;
     uint32_t nparams = 0, cap = 0, nargs = 0, cap_args = 0, g, i, loc, idx, set, need = 0;
     uint32_t fetch_colors = 0, sample_inputs = 0, nin = 0, nout = 0, colors = 0;
     uint64_t ia_textures = 0; /* [[texture(i)]] parameters of input attachments read from textures */
@@ -50931,10 +50933,14 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         bool effects = ctx->use_psb;
         for (i = 0; i < res->resource_count; i++)
             effects |= res->resources[i].writable;
-        if (effects) {
-            need |= PVK_SPV_NEED_SAMPLE_ID;
+        if (effects)
             call_guard = pvk_spv_fmt(ctx, "if ((0x%xu & (1u << pvk_sample_id)) != 0u)", o->sample_mask);
-        }
+        /* Metal's [[sample_mask]] masks color and depth writes but not always
+         * stencil ones (M4 Max, macOS 27.2: of four passes with masks 1, 2, 4
+         * and 8, the third wrote sample 0's stencil): the function runs per
+         * sample and discards the samples the mask clears. */
+        need |= PVK_SPV_NEED_SAMPLE_ID;
+        mask_discard = pvk_spv_fmt(ctx, "if ((0x%xu & (1u << pvk_sample_id)) == 0u)", o->sample_mask);
         /* Metal's early tests write depth and stencil before the function
          * runs, unmasked. Without stores, atomics or discards (and with
          * FragDepth ignored, as early tests make it) late tests give the
@@ -50960,6 +50966,10 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         pvk_spv_line(ctx, "bool pvk_killed = false;");
     if (entry->implicit & PVK_SPV_I_LANE)
         need |= PVK_SPV_NEED_LANE;
+    if (mask_discard) {
+        pvk_spv_line(ctx, "%s", mask_discard);
+        pvk_spv_line(ctx, "    discard_fragment();");
+    }
     if (call_guard)
         pvk_spv_line(ctx, "%s", call_guard);
     pvk_spv_line(ctx, "%s%s(%s);", call_guard ? "    " : "", entry->msl, pvk_spv_join(ctx, "", args, nargs, ", ", ""));
@@ -54019,6 +54029,14 @@ struct pvk_cmd_begin_pass {
     uint32_t flags;       /* VkRenderingFlags of vkCmdBeginRendering */
     uint32_t hidden;      /* render passes: PVK_HIDDEN_* copies the subpasses read */
     uint32_t view_mask;   /* multiview: the views (load-op clears clear their layers only) */
+    /* Render passes: the aspects of the depth/stencil resolve attachment
+     * that its load ops clear and the subpass does not resolve (mode NONE),
+     * cleared in the render area when the pass ends (pvk_render_resolve_clear) */
+    id resolve_clear;       /* its image's texture (NULL: none) */
+    uint32_t resolve_clear_aspects, resolve_clear_level, resolve_clear_layer;
+    uint32_t resolve_clear_depth_bytes; /* 4: float, 2: 16-bit unorm */
+    uint32_t resolve_clear_combined;    /* a depth/stencil format (else depth or stencil only) */
+    VkClearDepthStencilValue resolve_clear_value;
 };
 
 /* The subpass, or local-read mapping, of the draws that follow. */
@@ -54330,6 +54348,27 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
     c->view_mask = mp->view_mask;
     c->color_count = mp->color_count;
     c->hidden = mp->hidden;
+    if (mp->depth_resolve != VK_ATTACHMENT_UNUSED && r->views[mp->depth_resolve] &&
+        pass->attachments[mp->depth_resolve].first_use >= mp->first) {
+        const struct pvk_rp_attachment *ra = &pass->attachments[mp->depth_resolve];
+        const struct pvk_image_view *rv = r->views[mp->depth_resolve];
+        if (pvk_format_has_depth(ra->fmt) && mp->depth_resolve_mode == VK_RESOLVE_MODE_NONE &&
+            ra->load_op == VK_ATTACHMENT_LOAD_OP_CLEAR)
+            c->resolve_clear_aspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
+        if (pvk_format_has_stencil(ra->fmt) && mp->stencil_resolve_mode == VK_RESOLVE_MODE_NONE &&
+            ra->stencil_load_op == VK_ATTACHMENT_LOAD_OP_CLEAR)
+            c->resolve_clear_aspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+        if (c->resolve_clear_aspects && !rv->image->memoryless) {
+            c->resolve_clear = rv->image->mtl_texture;
+            c->resolve_clear_level = rv->base_level;
+            c->resolve_clear_layer = rv->base_layer;
+            c->resolve_clear_depth_bytes = ra->fmt->mtl == PVK_MTLPixelFormatDepth16Unorm ? 2u : 4u;
+            c->resolve_clear_combined = ra->fmt->kind == PVK_FK_DEPTH_STENCIL;
+            c->resolve_clear_value = r->clears[mp->depth_resolve].depthStencil;
+        } else {
+            c->resolve_clear_aspects = 0;
+        }
+    }
     for (s = 0; s < mp->color_count; s++) {
         uint32_t a = mp->colors[s];
         const struct pvk_rp_attachment *att = &pass->attachments[a];
@@ -58220,6 +58259,7 @@ static void pvk_encoder_query_available(struct pvk_encoder *e, struct pvk_query_
                                         uint32_t count, bool zero);
 
 static void pvk_render_resolve_ds(struct pvk_encoder *e);
+static void pvk_render_resolve_clear(struct pvk_encoder *e);
 static void pvk_render_split_resolve(struct pvk_encoder *e);
 static void pvk_render_resolve_int(struct pvk_encoder *e);
 
@@ -58234,6 +58274,7 @@ static void pvk_render_end(struct pvk_encoder *e)
         pvk_render_split_resolve(e);
         pvk_render_resolve_ds(e);
         pvk_render_resolve_int(e);
+        pvk_render_resolve_clear(e);
     }
     r->begin = NULL;
     r->split = r->split_resolve = r->no_rebind = false;
@@ -58394,6 +58435,68 @@ static void pvk_render_resolve_ds(struct pvk_encoder *e)
     objc_autoreleasePoolPop(pool);
     memset(&r->resolve_depth, 0, sizeof(r->resolve_depth));
     memset(&r->resolve_stencil, 0, sizeof(r->resolve_stencil));
+}
+
+/* The load-op clears of the aspects of a depth/stencil resolve attachment
+ * that the subpass does not resolve (struct pvk_cmd_begin_pass): Metal has
+ * the attachment only as a resolve texture, so the render area of each of
+ * its layers is copied in from upload memory filled with the clear value. */
+static void pvk_render_resolve_clear(struct pvk_encoder *e)
+{
+    const struct pvk_cmd_begin_pass *b = e->render.begin;
+    uint32_t layers, w, h, a, l;
+    bool ordered = e->queue->ordered;
+    pvk_MTLOrigin o;
+    pvk_MTLSize s;
+    id enc;
+
+    if (!b || !b->resolve_clear || !b->area.extent.width || !b->area.extent.height)
+        return;
+    layers = b->layers ? b->layers : 1;
+    w = b->area.extent.width;
+    h = b->area.extent.height;
+    o.x = (unsigned long)b->area.offset.x;
+    o.y = (unsigned long)b->area.offset.y;
+    o.z = 0;
+    s.width = w;
+    s.height = h;
+    s.depth = 1;
+    e->queue->ordered = true; /* after the pass */
+    enc = pvk_encoder_get(e);
+    e->queue->ordered = ordered;
+    for (a = 0; a < 2 && enc; a++) {
+        uint32_t aspect = a ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
+        uint32_t bytes = a ? 1u : b->resolve_clear_depth_bytes, i;
+        size_t size = (size_t)w * h * bytes;
+        VkDeviceSize offset;
+        pvk_MTLGPUAddress address;
+        uint8_t *p;
+        id buffer;
+        if (!(b->resolve_clear_aspects & aspect))
+            continue;
+        if (!(p = pvk_upload(e, size, 16, &buffer, &offset, &address))) {
+            e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+            break;
+        }
+        for (i = 0; i < w * h; i++) {
+            if (a) {
+                p[i] = (uint8_t)b->resolve_clear_value.stencil;
+            } else if (bytes == 2) {
+                float d = b->resolve_clear_value.depth;
+                uint16_t v = (uint16_t)((d < 0.0f ? 0.0f : d > 1.0f ? 1.0f : d) * 65535.0f + 0.5f);
+                memcpy(p + 2 * i, &v, 2);
+            } else {
+                memcpy(p + 4 * i, &b->resolve_clear_value.depth, 4);
+            }
+        }
+        for (l = 0; l < layers; l++)
+            pvk_MTL4ComputeCommandEncoder_copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin_options(
+                enc, buffer, offset, w * bytes, 0, s, b->resolve_clear, b->resolve_clear_layer + l,
+                b->resolve_clear_level, o,
+                !b->resolve_clear_combined ? PVK_MTLBlitOptionNone
+                : a                        ? PVK_MTLBlitOptionStencilFromDepthStencil
+                                           : PVK_MTLBlitOptionDepthFromDepthStencil);
+    }
 }
 
 /* Metal's resolves of 32-bit integer color attachments change even pixels
@@ -62972,12 +63075,13 @@ static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *
     id vs_lib = pvk_msl_library(device, vs_msl, invariant, error, error_size), fs_lib = NULL, desc = NULL, vf = NULL;
     id ff = NULL, pso = NULL;
     uint32_t l;
-    char mask_msl[256];
+    char mask_msl[512];
     if (!fs_msl && d->sample_mask_enable) { /* no fragment shader: a fragment function applying the sample mask */
         snprintf(mask_msl, sizeof(mask_msl),
                  "#include <metal_stdlib>\nusing namespace metal;\n\nstruct pvk_mask_out\n{\n"
-                 "    uint mask [[sample_mask]];\n};\n\nfragment pvk_mask_out pvk_sample_mask()\n{\n"
-                 "    pvk_mask_out out = { 0x%xu };\n    return out;\n}\n", d->sample_mask);
+                 "    uint mask [[sample_mask]];\n};\n\nfragment pvk_mask_out pvk_sample_mask(uint id [[sample_id]])\n{\n"
+                 "    pvk_mask_out out = { 0x%xu };\n    if ((out.mask & (1u << id)) == 0u)\n        discard_fragment();\n"
+                 "    return out;\n}\n", d->sample_mask);
         fs_msl = mask_msl;
         fs_entry = "pvk_sample_mask";
     }
