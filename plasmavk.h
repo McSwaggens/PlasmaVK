@@ -54839,12 +54839,13 @@ VKAPI_ATTR void VKAPI_CALL vkCmdResetQueryPool(VkCommandBuffer commandBuffer, Vk
 
 /* Whatever the stage, the timestamp is taken once all earlier work is done
  * (section 14), which Vulkan allows: "it may instead do so at any logically
- * later stage". */
+ * later stage". In a multiview render pass it takes one query per view. */
 VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp2(VkCommandBuffer commandBuffer, VkPipelineStageFlags2 stage,
                                                 VkQueryPool queryPool, uint32_t query)
 {
     (void)stage;
-    pvk_cmd_query(commandBuffer, PVK_QUERY_TIMESTAMP, queryPool, query, 1);
+    pvk_cmd_query(commandBuffer, PVK_QUERY_TIMESTAMP, queryPool, query,
+                  pvk_cb_query_views((struct pvk_command_buffer *)commandBuffer));
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp(VkCommandBuffer commandBuffer, VkPipelineStageFlagBits pipelineStage,
@@ -55366,6 +55367,7 @@ struct pvk_draw_track {
 struct pvk_render_query {
     struct pvk_query_pool *pool;
     uint32_t first, count;
+    bool zero; /* pvk_encoder_query_available */
 };
 
 struct pvk_render {
@@ -55437,6 +55439,7 @@ struct pvk_cursor {
 struct pvk_query_range {
     struct pvk_query_pool *pool;
     uint32_t first, count;
+    bool zero; /* timestamp pools: the results stay as reset (0), not resolved */
 };
 
 struct pvk_encoder {
@@ -57875,7 +57878,7 @@ static void pvk_render_rebuild_stencil(struct pvk_encoder *e)
 /* ---- Render passes ---- */
 
 static void pvk_encoder_query_available(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t first,
-                                        uint32_t count);
+                                        uint32_t count, bool zero);
 
 static void pvk_render_resolve_ds(struct pvk_encoder *e);
 static void pvk_render_split_resolve(struct pvk_encoder *e);
@@ -57899,21 +57902,24 @@ static void pvk_render_end(struct pvk_encoder *e)
     r->vis_pool = NULL;
     e->pp_count = e->pp_next = 0;
     for (i = 0; i < r->pending_count; i++) /* now that the pass's counts and timestamps are written */
-        pvk_encoder_query_available(e, r->pending[i].pool, r->pending[i].first, r->pending[i].count);
+        pvk_encoder_query_available(e, r->pending[i].pool, r->pending[i].first, r->pending[i].count,
+                                    r->pending[i].zero);
     r->pending_count = 0;
 }
 
 /* Queries the render encoder makes available when it ends. */
-static void pvk_render_pending(struct pvk_render *r, struct pvk_query_pool *pool, uint32_t first, uint32_t count)
+static void pvk_render_pending(struct pvk_render *r, struct pvk_query_pool *pool, uint32_t first, uint32_t count,
+                               bool zero)
 {
     struct pvk_render_query *q = r->pending_count ? &r->pending[r->pending_count - 1] : NULL;
-    if (q && q->pool == pool && q->first + q->count == first) {
+    if (q && q->pool == pool && q->first + q->count == first && q->zero == zero) {
         q->count += count;
     } else if (r->pending_count < PVK_ARRAY_SIZE(r->pending)) {
         q = &r->pending[r->pending_count++];
         q->pool = pool;
         q->first = first;
         q->count = count;
+        q->zero = zero;
     } else {
         static int warned;
         if (!warned++)
@@ -57955,18 +57961,21 @@ static void pvk_encode_occlusion(struct pvk_encoder *e, const struct pvk_cmd_que
     pvk_render_counting(e, false);
     e->occ_pool = NULL;
     if (r->enc)
-        pvk_render_pending(r, c->pool, c->first, c->count);
+        pvk_render_pending(r, c->pool, c->first, c->count, false);
     else
-        pvk_encoder_query_available(e, c->pool, c->first, c->count);
+        pvk_encoder_query_available(e, c->pool, c->first, c->count, false);
 }
 
 /* A timestamp inside a render pass: written by the render encoder after its
- * fragment work so far, made available when it ends. */
-static void pvk_render_timestamp(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t query)
+ * fragment work so far, made available when it ends. Multiview: one query
+ * per view, the others 0 (Queries > Timestamp Queries). */
+static void pvk_render_timestamp(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t query, uint32_t views)
 {
     pvk_MTL4RenderCommandEncoder_writeTimestampWithGranularity_afterStage_intoHeap_atIndex(
         e->render.enc, PVK_MTL4TimestampGranularityPrecise, PVK_MTLRenderStageFragment, pool->heap, query);
-    pvk_render_pending(&e->render, pool, query, 1);
+    pvk_render_pending(&e->render, pool, query, 1, false);
+    if (views > 1)
+        pvk_render_pending(&e->render, pool, query + 1, views - 1, true);
 }
 
 /* The encoder's view of a draw's preprocessing state. */
@@ -59086,7 +59095,7 @@ static void pvk_encode_query_flush(struct pvk_encoder *e)
         const struct pvk_query_range *r = &e->queries[i];
         pvk_NSRange range;
         pvk_MTL4BufferRange dst;
-        if (!r->pool->heap)
+        if (!r->pool->heap || r->zero)
             continue;
         range.location = r->first;
         range.length = r->count;
@@ -59105,12 +59114,13 @@ static void pvk_encode_query_flush(struct pvk_encoder *e)
 
 /* Queries [first, first + count) of a pool become available once the work
  * encoded so far is done (a timestamp pool's heap entries: written, to be
- * resolved). No encoder other than e->enc may be open. */
+ * resolved; zero: not written, their results stay as reset, 0). No encoder
+ * other than e->enc may be open. */
 static void pvk_encoder_query_available(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t first,
-                                        uint32_t count)
+                                        uint32_t count, bool zero)
 {
     struct pvk_query_range *r = e->query_count ? &e->queries[e->query_count - 1] : NULL;
-    if (r && r->pool == pool && r->first + r->count == first) {
+    if (r && r->pool == pool && r->first + r->count == first && r->zero == zero) {
         r->count += count;
         return;
     }
@@ -59120,6 +59130,7 @@ static void pvk_encoder_query_available(struct pvk_encoder *e, struct pvk_query_
     r->pool = pool;
     r->first = first;
     r->count = count;
+    r->zero = zero;
 }
 
 /* No encoder other than e->enc may be open. */
@@ -59129,7 +59140,7 @@ static void pvk_encode_timestamp(struct pvk_encoder *e, struct pvk_query_pool *p
         return;
     pvk_encoder_end(e);
     pvk_MTL4CommandBuffer_writeTimestampIntoHeap_atIndex(e->cb, pool->heap, query);
-    pvk_encoder_query_available(e, pool, query, 1);
+    pvk_encoder_query_available(e, pool, query, 1, false);
 }
 
 static void pvk_encode_query_reset(struct pvk_encoder *e, const struct pvk_cmd_query *c)
@@ -59194,7 +59205,7 @@ static void pvk_encode_query(struct pvk_encoder *e, const struct pvk_cmd_query *
         break;
     case PVK_QUERY_TIMESTAMP:
         if (e->render.enc) /* in a render pass (section 16's "Graphics") */
-            pvk_render_timestamp(e, c->pool, c->first);
+            pvk_render_timestamp(e, c->pool, c->first, c->count);
         else
             pvk_encode_timestamp(e, c->pool, c->first);
         break;

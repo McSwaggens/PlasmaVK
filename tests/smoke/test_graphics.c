@@ -2641,6 +2641,52 @@ static void test_multiview(void)
     free_img(&target);
 }
 
+/* A timestamp in a multiview pass takes one query per view: the first gets
+ * the time, the others 0, all available. */
+static void test_multiview_timestamps(void)
+{
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 3, VK_SAMPLE_COUNT_1_BIT);
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool pool;
+    VkRenderingAttachmentInfo att;
+    VkRenderingInfo info;
+    VkCommandBuffer cb;
+    uint64_t r[8];
+
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    qi.queryCount = 4;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &pool));
+    vkResetQueryPool(device, pool, 0, 4);
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = target.view;
+    att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.viewMask = 0x5;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &att;
+    cb = begin_cmd();
+    vkCmdBeginRendering(cb, &info);
+    vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 1);
+    vkCmdEndRendering(cb);
+    submit(cb);
+    memset(r, 0xab, sizeof(r));
+    CHECK_VK(vkGetQueryPoolResults(device, pool, 0, 4, sizeof(r), r, 16,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
+             VK_NOT_READY);
+    CHECK(r[1] == 0 && r[3] == 1 && r[5] == 1 && r[7] == 0);
+    CHECK(r[2] != 0 && r[4] == 0);
+    vkDestroyQueryPool(device, pool, NULL);
+    free_img(&target);
+}
+
 /* Occlusion queries: samples passing in a render pass, none for a draw that
  * fails the depth test, and a query spanning two render passes. */
 static void test_occlusion(void)
@@ -6091,6 +6137,7 @@ int main(void)
     RUN(test_depth_bias_clamp);
     RUN(test_viewports_layers);
     RUN(test_multiview);
+    RUN(test_multiview_timestamps);
     RUN(test_occlusion);
     RUN(test_draw_kinds);
     RUN(test_draw_kinds_secondary);
