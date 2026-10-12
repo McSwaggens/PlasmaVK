@@ -43463,8 +43463,6 @@ static void pvk_spv_apply_member_insns(struct pvk_spv *ctx)
             mb->flags |= PVK_SPV_M_NON_WRITABLE;
             break;
         case PVK_SPV_DecoBuiltIn:
-            if (!ctx->graphics)
-                pvk_spv_fail(ctx, "built-in struct members are not supported in compute shaders");
             mb->flags |= PVK_SPV_M_BUILTIN;
             mb->builtin = pvk_spv_arg(ctx, &in, 4);
             break;
@@ -43725,8 +43723,6 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         case PVK_SPV_StorageUniformConstant:
             break;
         case PVK_SPV_StorageOutput:
-            if (ctx->entry_found && !ctx->graphics) /* (else "no entry point" follows) */
-                pvk_spv_fail(ctx, "output variables are not supported in compute shaders");
             break;
         default:
             pvk_spv_fail(ctx, "unsupported storage class %u", storage);
