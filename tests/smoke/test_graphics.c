@@ -4845,6 +4845,138 @@ static void test_ds_subpasses(void)
     ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, false, true);
 }
 
+/*
+ * #version 450
+ * layout(input_attachment_index = 0, set = 0, binding = 0) uniform usubpassInput u_stencil;
+ * layout(location = 0) out uint o_color;
+ * void main()
+ * {
+ *     o_color = subpassLoad(u_stencil).r;
+ * }
+ */
+static const uint32_t spv_stencil_input_fs[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x00000015, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000028, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
+    0x00000000, 0x00000001, 0x0006000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000008,
+    0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004,
+    0x6e69616d, 0x00000000, 0x00040005, 0x00000008, 0x6f635f6f, 0x00726f6c, 0x00050005, 0x0000000b,
+    0x74735f75, 0x69636e65, 0x0000006c, 0x00040047, 0x00000008, 0x0000001e, 0x00000000, 0x00040047,
+    0x0000000b, 0x00000021, 0x00000000, 0x00040047, 0x0000000b, 0x00000022, 0x00000000, 0x00040047,
+    0x0000000b, 0x0000002b, 0x00000000, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002,
+    0x00040015, 0x00000006, 0x00000020, 0x00000000, 0x00040020, 0x00000007, 0x00000003, 0x00000006,
+    0x0004003b, 0x00000007, 0x00000008, 0x00000003, 0x00090019, 0x00000009, 0x00000006, 0x00000006,
+    0x00000000, 0x00000000, 0x00000000, 0x00000002, 0x00000000, 0x00040020, 0x0000000a, 0x00000000,
+    0x00000009, 0x0004003b, 0x0000000a, 0x0000000b, 0x00000000, 0x00040015, 0x0000000d, 0x00000020,
+    0x00000001, 0x0004002b, 0x0000000d, 0x0000000e, 0x00000000, 0x00040017, 0x0000000f, 0x0000000d,
+    0x00000002, 0x0005002c, 0x0000000f, 0x00000010, 0x0000000e, 0x0000000e, 0x00040017, 0x00000011,
+    0x00000006, 0x00000004, 0x0004002b, 0x00000006, 0x00000013, 0x00000000, 0x00050036, 0x00000002,
+    0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003d, 0x00000009, 0x0000000c,
+    0x0000000b, 0x00050062, 0x00000011, 0x00000012, 0x0000000c, 0x00000010, 0x00050051, 0x00000006,
+    0x00000014, 0x00000012, 0x00000000, 0x0003003e, 0x00000008, 0x00000014, 0x000100fd, 0x00010038,
+};
+
+/* A stencil-only attachment (S8_UINT) that a subpass only reads, as an
+ * input attachment: its stencil, copied in from a buffer, comes out as an
+ * R8_UINT color. It is loaded although its stencilLoadOp is DONT_CARE (as
+ * the Khronos CTS loads one). */
+static void test_stencil_input(void)
+{
+    VkAttachmentDescription a[2];
+    VkAttachmentReference rc = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+    VkAttachmentReference rin = { 1, VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL };
+    VkSubpassDescription sp;
+    VkRenderPassCreateInfo info;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    struct img out = make_img(VK_FORMAT_R8_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img st = make_img(VK_FORMAT_S8_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf src = make_buf(W * H), got = make_buf(W * H);
+    VkImageView views[2];
+    VkFramebuffer fb;
+    VkDescriptorPool dpool = VK_NULL_HANDLE;
+    VkDescriptorSet set;
+    VkClearValue clears[2];
+    VkBufferImageCopy r;
+    VkPipeline pl;
+    struct pipe p;
+    struct pc pc;
+    VkCommandBuffer cb;
+    uint32_t x, y;
+    int bad = 0;
+
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++)
+            ((uint8_t *)src.data)[y * W + x] = (uint8_t)(y * 16 + x + 3);
+    memset(a, 0, sizeof(a));
+    a[0].format = VK_FORMAT_R8_UINT;
+    a[1].format = VK_FORMAT_S8_UINT;
+    a[0].samples = a[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    a[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    a[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    a[0].stencilLoadOp = a[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    a[0].stencilStoreOp = a[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    a[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    a[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+    a[0].initialLayout = a[1].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+    a[0].finalLayout = a[1].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    memset(&sp, 0, sizeof(sp));
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &rc;
+    sp.inputAttachmentCount = 1;
+    sp.pInputAttachments = &rin;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    info.attachmentCount = 2;
+    info.pAttachments = a;
+    info.subpassCount = 1;
+    info.pSubpasses = &sp;
+    CHECK_VK(vkCreateRenderPass(device, &info, NULL, &rp), VK_SUCCESS);
+    views[0] = out.view;
+    views[1] = st.view;
+    fb = make_fb(rp, views, 2, W, H, 1);
+    set = input_set(&dpool, st.view, VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_stencil_input_fs, sizeof(spv_stencil_input_fs));
+    p.layout = input_layout;
+    p.rp = rp;
+    pl = make_pipe(&p);
+    REQUIRE(pl);
+    cb = begin_cmd();
+    memset(&r, 0, sizeof(r));
+    r.imageSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
+    r.imageSubresource.layerCount = 1;
+    r.imageExtent.width = W;
+    r.imageExtent.height = H;
+    r.imageExtent.depth = 1;
+    vkCmdCopyBufferToImage(cb, src.buffer, st.image, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
+    barrier(cb);
+    memset(clears, 0, sizeof(clears));
+    begin_pass(cb, rp, fb, 0, 0, W, H, clears, 2);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pl);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, input_layout, 0, 1, &set, 0, NULL);
+    memset(&pc, 0, sizeof(pc));
+    pc.rect[0] = pc.rect[1] = -1;
+    pc.rect[2] = pc.rect[3] = 1;
+    vkCmdPushConstants(cb, input_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cb, 4, 1, 0, 0);
+    vkCmdEndRenderPass(cb);
+    download(cb, &out, 0, VK_IMAGE_ASPECT_COLOR_BIT, &got);
+    submit(cb);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++)
+            if (((uint8_t *)got.data)[y * W + x] != ((uint8_t *)src.data)[y * W + x] && bad++ < 4)
+                fprintf(stderr, "stencil input: pixel (%u, %u) is %u, want %u\n", x, y,
+                        ((uint8_t *)got.data)[y * W + x], ((uint8_t *)src.data)[y * W + x]);
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pl, NULL);
+    vkDestroyDescriptorPool(device, dpool, NULL);
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+    free_buf(&src);
+    free_buf(&got);
+    free_img(&out);
+    free_img(&st);
+}
+
 static uint32_t expect_msaa(uint32_t x, uint32_t y)
 {
     if (y < H / 2)
@@ -6603,6 +6735,7 @@ int main(void)
     RUN(test_ds_local_read);
     RUN(test_ds_split);
     RUN(test_ds_subpasses);
+    RUN(test_stencil_input);
     RUN(test_depth_bounds);
     RUN(test_msaa);
     RUN(test_msaa_int_resolve);

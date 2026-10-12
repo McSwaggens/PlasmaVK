@@ -62536,6 +62536,24 @@ static VkResult pvk_render_pass_create(struct pvk_device *device, const VkRender
         }
         sp->view_mask = d->viewMask;
     }
+    /* An attachment first used as an input attachment is loaded even when
+     * its load op is DONT_CARE (which allows the old contents): tile memory
+     * would otherwise start undefined where other GPUs keep them, and
+     * applications (the Khronos CTS's none_stage tests among them, loading a
+     * stencil-only attachment with loadOp LOAD but stencilLoadOp DONT_CARE)
+     * read them. */
+    for (i = 0; i < ns; i++) {
+        const struct pvk_subpass *sp = &rp->subpasses[i];
+        for (j = 0; j < sp->input_count; j++) {
+            struct pvk_rp_attachment *ra = sp->inputs[j] < na ? &rp->attachments[sp->inputs[j]] : NULL;
+            if (!ra || ra->first_use != i)
+                continue;
+            if (ra->load_op == VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+                ra->load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
+            if (ra->stencil_load_op == VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+                ra->stencil_load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
+        }
+    }
     /* Groups of subpasses */
     for (i = 0; i < ns; i++) {
         struct pvk_rp_pass *mp = rp->pass_count ? &rp->passes[rp->pass_count - 1] : NULL;
