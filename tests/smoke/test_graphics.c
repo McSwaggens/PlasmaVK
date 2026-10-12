@@ -4841,6 +4841,8 @@ static void test_ds_subpasses(void)
     ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_1_BIT, true, true);
     ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, true, false);
     ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, true, true);
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, false, false); /* read from textures */
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, false, true);
 }
 
 static uint32_t expect_msaa(uint32_t x, uint32_t y)
