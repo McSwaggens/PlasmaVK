@@ -7914,6 +7914,10 @@ static void test_atan2_tanh(void)
         0x1.f7bab2p126f, 0x1.897840p127f, -2.0f, -0x1.0p-148f, /* x */
         0x1.bd8902p5f, -0x1.3df360p6f, 0.5f, 10.5f,           /* tanh */
     };
+    static const float in2[8] = {
+        -0x1.fffffep109f, 0x1.aad8acp119f, -0x1.62db9ep125f, 0x1.fffffep89f, /* y */
+        -0x1.0p-115f, -0x1.000002p-72f, -0x1.a70020p-107f, -0x1.11b382p-70f, /* x */
+    };
     struct pvk_msl_result res;
     struct mt_buffer buf;
     struct mt_binding b;
@@ -7934,6 +7938,16 @@ static void test_atan2_tanh(void)
     CHECK(mt_near(a[2], -2.6779450446f, 1e-5)); /* atan2(-1, -2) */
     CHECK(mt_near(a[3], -1.5707963268f, 1e-5)); /* x subnormal */
     CHECK(h[0] == 1.0f && h[1] == -1.0f && mt_near(h[2], 0.4621171573f, 1e-5) && h[3] == 1.0f);
+    mt_buffer_free(&buf);
+    /* a huge y over a negative x the scaling flushes: +-pi/2 by y's sign */
+    memset(io, 0, sizeof(io));
+    memcpy(io, in2, sizeof(in2));
+    buf = mt_buffer(sizeof(io), io, sizeof(io));
+    b = bind(0, 0, &buf);
+    CHECK(mt_dispatch(pso, &res, &b, 1, NULL, 0, 1, 1, 1));
+    a = (const float *)buf.data + 12;
+    CHECK(mt_near(a[0], -1.5707963268f, 1e-5) && mt_near(a[1], 1.5707963268f, 1e-5));
+    CHECK(mt_near(a[2], -1.5707963268f, 1e-5) && mt_near(a[3], 1.5707963268f, 1e-5));
     mt_buffer_free(&buf);
     pvk_release(pso);
     pvk_msl_result_free(&res);
