@@ -2300,6 +2300,138 @@ static void test_images(void)
 
 /*
  * #version 450
+ * #extension GL_EXT_nonuniform_qualifier : require
+ * layout(local_size_x = 1) in;
+ * layout(set = 0, binding = 0) buffer Out { float o[2]; } outb;
+ * layout(set = 0, binding = 1) uniform sampler2D tex[];
+ * void main()
+ * {
+ *     outb.o[0] = textureLod(tex[0], vec2(0.5), 0.0).r;
+ *     outb.o[1] = textureLod(tex[1], vec2(0.5), 0.0).r;
+ * }
+ */
+static const uint32_t spv_variable_constant_index[] = {
+    0x07230203, 0x00010500, 0x0008000b, 0x0000002a, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0007000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000c, 0x00000013, 0x00060010,
+    0x00000004, 0x00000011, 0x00000001, 0x00000001, 0x00000001, 0x00030003, 0x00000002, 0x000001c2,
+    0x00080004, 0x455f4c47, 0x6e5f5458, 0x6e756e6f, 0x726f6669, 0x75715f6d, 0x66696c61, 0x00726569,
+    0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x0000000a, 0x0074754f, 0x00040006,
+    0x0000000a, 0x00000000, 0x0000006f, 0x00040005, 0x0000000c, 0x6274756f, 0x00000000, 0x00030005,
+    0x00000013, 0x00786574, 0x00040047, 0x00000009, 0x00000006, 0x00000004, 0x00030047, 0x0000000a,
+    0x00000002, 0x00050048, 0x0000000a, 0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x0000000c,
+    0x00000021, 0x00000000, 0x00040047, 0x0000000c, 0x00000022, 0x00000000, 0x00040047, 0x00000013,
+    0x00000021, 0x00000001, 0x00040047, 0x00000013, 0x00000022, 0x00000000, 0x00040047, 0x00000029,
+    0x0000000b, 0x00000019, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016,
+    0x00000006, 0x00000020, 0x00040015, 0x00000007, 0x00000020, 0x00000000, 0x0004002b, 0x00000007,
+    0x00000008, 0x00000002, 0x0004001c, 0x00000009, 0x00000006, 0x00000008, 0x0003001e, 0x0000000a,
+    0x00000009, 0x00040020, 0x0000000b, 0x0000000c, 0x0000000a, 0x0004003b, 0x0000000b, 0x0000000c,
+    0x0000000c, 0x00040015, 0x0000000d, 0x00000020, 0x00000001, 0x0004002b, 0x0000000d, 0x0000000e,
+    0x00000000, 0x00090019, 0x0000000f, 0x00000006, 0x00000001, 0x00000000, 0x00000000, 0x00000000,
+    0x00000001, 0x00000000, 0x0003001b, 0x00000010, 0x0000000f, 0x0004001c, 0x00000011, 0x00000010,
+    0x00000008, 0x00040020, 0x00000012, 0x00000000, 0x00000011, 0x0004003b, 0x00000012, 0x00000013,
+    0x00000000, 0x00040020, 0x00000014, 0x00000000, 0x00000010, 0x00040017, 0x00000017, 0x00000006,
+    0x00000002, 0x0004002b, 0x00000006, 0x00000018, 0x3f000000, 0x0005002c, 0x00000017, 0x00000019,
+    0x00000018, 0x00000018, 0x0004002b, 0x00000006, 0x0000001a, 0x00000000, 0x00040017, 0x0000001b,
+    0x00000006, 0x00000004, 0x0004002b, 0x00000007, 0x0000001d, 0x00000000, 0x00040020, 0x0000001f,
+    0x0000000c, 0x00000006, 0x0004002b, 0x0000000d, 0x00000021, 0x00000001, 0x00040017, 0x00000027,
+    0x00000007, 0x00000003, 0x0004002b, 0x00000007, 0x00000028, 0x00000001, 0x0006002c, 0x00000027,
+    0x00000029, 0x00000028, 0x00000028, 0x00000028, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200f8, 0x00000005, 0x00050041, 0x00000014, 0x00000015, 0x00000013, 0x0000000e,
+    0x0004003d, 0x00000010, 0x00000016, 0x00000015, 0x00070058, 0x0000001b, 0x0000001c, 0x00000016,
+    0x00000019, 0x00000002, 0x0000001a, 0x00050051, 0x00000006, 0x0000001e, 0x0000001c, 0x00000000,
+    0x00060041, 0x0000001f, 0x00000020, 0x0000000c, 0x0000000e, 0x0000000e, 0x0003003e, 0x00000020,
+    0x0000001e, 0x00050041, 0x00000014, 0x00000022, 0x00000013, 0x00000021, 0x0004003d, 0x00000010,
+    0x00000023, 0x00000022, 0x00070058, 0x0000001b, 0x00000024, 0x00000023, 0x00000019, 0x00000002,
+    0x0000001a, 0x00050051, 0x00000006, 0x00000025, 0x00000024, 0x00000000, 0x00060041, 0x0000001f,
+    0x00000026, 0x0000000c, 0x0000000e, 0x00000021, 0x0003003e, 0x00000026, 0x00000025, 0x000100fd,
+    0x00010038,
+};
+
+/* A variable-count array of combined image samplers indexed by constants
+ * past 0 (declared at the layout's maximum: Metal's compiler crashed on
+ * constant indices past a declared length of 1). */
+static void test_variable_constant_index(void)
+{
+    static const VkClearColorValue values[2] = { { { 3.0f, 0, 0, 0 } }, { { 5.0f, 0, 0, 0 } } };
+    VkDescriptorBindingFlags flags[2] = { 0, VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT };
+    VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    struct img imgs[2];
+    struct buf out = make_buf(8);
+    VkDescriptorSetLayoutBinding b[2];
+    VkDescriptorPoolSize sizes[2];
+    VkDescriptorSetLayout sl;
+    VkPipelineLayout pl;
+    VkDescriptorPool pool;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VkSamplerCreateInfo si;
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkDescriptorImageInfo ii[2];
+    VkWriteDescriptorSet w;
+    VkPipeline p;
+    VkCommandBuffer cb;
+    uint32_t i, variable = 2;
+    float got[2];
+
+    memset(&si, 0, sizeof(si));
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    REQUIRE_VK(vkCreateSampler(device, &si, NULL, &sampler));
+    b[0] = lb(0, SSBO, 1);
+    b[1] = lb(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8);
+    sl = make_set_layout(b, 2, 0, flags);
+    pl = make_pipeline_layout(&sl, 1, 0);
+    p = make_pipeline(spv_variable_constant_index, sizeof(spv_variable_constant_index), pl);
+    sizes[0] = ps(SSBO, 1);
+    sizes[1] = ps(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8);
+    pool = make_pool(1, sizes, 2, 0, NULL);
+    REQUIRE(sl && pl && p && pool && out.data);
+    CHECK_VK(alloc_sets(pool, &sl, 1, &variable, &set), VK_SUCCESS);
+    REQUIRE(set);
+    write_buffer(set, 0, 0, SSBO, &out, 0, VK_WHOLE_SIZE);
+    memset(ii, 0, sizeof(ii));
+    for (i = 0; i < 2; i++) {
+        imgs[i] = make_image(VK_IMAGE_TYPE_2D, 1, 1);
+        REQUIRE(imgs[i].view);
+        ii[i].sampler = sampler;
+        ii[i].imageView = imgs[i].view;
+        ii[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    memset(&w, 0, sizeof(w));
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = set;
+    w.dstBinding = 1;
+    w.descriptorCount = 2;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = ii;
+    vkUpdateDescriptorSets(device, 1, &w, 0, NULL);
+    cb = begin();
+    for (i = 0; i < 2; i++) {
+        image_barrier(cb, imgs[i].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                      VK_ACCESS_TRANSFER_WRITE_BIT);
+        vkCmdClearColorImage(cb, imgs[i].image, VK_IMAGE_LAYOUT_GENERAL, &values[i], 1, &range);
+        image_barrier(cb, imgs[i].image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    }
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
+    vkCmdDispatch(cb, 1, 1, 1);
+    REQUIRE_VK(finish(cb));
+    memcpy(got, out.data, sizeof(got));
+    CHECK(got[0] == 3.0f && got[1] == 5.0f);
+    vkDestroyPipeline(device, p, NULL);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyPipelineLayout(device, pl, NULL);
+    vkDestroyDescriptorSetLayout(device, sl, NULL);
+    vkDestroySampler(device, sampler, NULL);
+    for (i = 0; i < 2; i++)
+        free_image(&imgs[i]);
+    free_buf(&out);
+}
+
+/*
+ * #version 450
  * layout(local_size_x = 4, local_size_y = 4) in;
  * layout(set = 0, binding = 0, r32ui) uniform uimageCube cube;
  * layout(set = 0, binding = 1, r32ui) uniform uimageCubeArray cubes;
@@ -2566,6 +2698,7 @@ int main(void)
     RUN(test_push_descriptors);
     RUN(test_layout_lifetime);
     RUN(test_images);
+    RUN(test_variable_constant_index);
     RUN(test_cube_atomics);
     teardown();
     return TEST_RESULT();

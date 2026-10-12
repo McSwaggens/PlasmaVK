@@ -45858,9 +45858,10 @@ static void pvk_spv_emit_sets(struct pvk_spv *ctx)
                 continue;
             if (l->offset > cur)
                 pvk_sb_printf(ctx, &ctx->types, "    char pvk_unused%u[%u];\n", cur, l->offset - cur);
-            if (b->array && (l->variable_count || !l->count))
-                pvk_sb_printf(ctx, &ctx->types, "    %s b%u[1]; /* binding %u, offset %u, stride %u, variable count */\n",
-                              b->elem, l->binding, l->binding, l->offset, l->stride);
+            if (b->array && (l->variable_count || !l->count)) /* (at its maximum: Metal's compiler crashes on
+                                                               * constant indices past a declared length) */
+                pvk_sb_printf(ctx, &ctx->types, "    %s b%u[%u]; /* binding %u, offset %u, stride %u, variable count */\n",
+                              b->elem, l->binding, l->count ? l->count : 1, l->binding, l->offset, l->stride);
             else if (b->array)
                 pvk_sb_printf(ctx, &ctx->types, "    %s b%u[%u]; /* binding %u, offset %u, stride %u */\n", b->elem,
                               l->binding, l->count, l->binding, l->offset, l->stride);
