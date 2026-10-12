@@ -1640,6 +1640,7 @@ struct pipe {
     uint32_t dynamic_count;
     uint32_t view_mask;
     const void *next; /* chained after VkPipelineRenderingCreateInfo */
+    const void *rs_next; /* chained after VkPipelineRasterizationStateCreateInfo */
     VkBool32 sample_shading, alpha_to_coverage, alpha_to_one;
     float min_sample_shading;
     const VkSampleMask *sample_mask;
@@ -1718,6 +1719,7 @@ static VkResult make_pipe_result(const struct pipe *p, VkPipeline *out)
     vp.pScissors = p->viewports ? p->scissor : &scissor;
     memset(&rs, 0, sizeof(rs));
     rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.pNext = p->rs_next;
     rs.polygonMode = p->polygon;
     rs.cullMode = p->cull;
     rs.frontFace = p->front;
@@ -6685,6 +6687,72 @@ static void test_frag_depth_initializer(void)
     free_img(&target);
 }
 
+/* Bresenham lines with 4 samples cover pixels whole (Vulkan treats their
+ * samples as at the pixel center; Metal covers samples apart): a resolved
+ * line strip with a diagonal has only line and background pixels. */
+static void test_bresenham_msaa(void)
+{
+    struct img ms = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img resolved = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkPipelineRasterizationLineStateCreateInfo line;
+    VkRenderingAttachmentInfo att;
+    VkRenderingInfo info;
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t x, y, lit = 0, partial = 0;
+
+    memset(&line, 0, sizeof(line));
+    line.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO;
+    line.lineRasterizationMode = VK_LINE_RASTERIZATION_MODE_BRESENHAM;
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.topology = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+    p.rs_next = &line;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = ms.view;
+    att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att.clearValue.color.float32[3] = 1.0f;
+    att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+    att.resolveImageView = resolved.view;
+    att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &att;
+    cb = begin_cmd();
+    vkCmdBeginRendering(cb, &info);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -0.9f, -0.8f, 0.85f, 0.7f, 1, 0, 0, 1, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            uint32_t v = px(&out, x, y);
+            if (v == RED)
+                lit++;
+            else if (v != BLACK)
+                partial++;
+        }
+    CHECK(lit > W && partial == 0);
+    if (partial)
+        fprintf(stderr, "bresenham msaa: %u partially covered pixels\n", partial);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&ms);
+    free_img(&resolved);
+}
+
 /* A depth/stencil render pass attachment through a stencil-only view
  * (X32_Stencil8 to Metal, which renders to no such view: attachments take
  * the image's own format), over two render passes and many tiles: the first
@@ -8082,6 +8150,7 @@ int main(void)
     RUN(test_frag_depth_initializer);
     RUN(test_rgb9e5_write_mask);
     RUN(test_stencil_view_attachment);
+    RUN(test_bresenham_msaa);
     RUN(test_alpha_coverage);
     RUN(test_sample_mask);
     RUN(test_logic_ops);

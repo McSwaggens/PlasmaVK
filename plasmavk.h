@@ -31545,6 +31545,7 @@ static inline void pvk_MTLRenderPipelineColorAttachmentDescriptor_setPixelFormat
 static inline void pvk_MTL4RenderPassDescriptor_setRenderTargetWidth(id self, unsigned long renderTargetWidth) { PVK_SEL_CACHE("setRenderTargetWidth:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, renderTargetWidth); }
 static inline void pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(id self, unsigned long renderTargetHeight) { PVK_SEL_CACHE("setRenderTargetHeight:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, renderTargetHeight); }
 static inline void pvk_MTL4RenderPassDescriptor_setDefaultRasterSampleCount(id self, unsigned long defaultRasterSampleCount) { PVK_SEL_CACHE("setDefaultRasterSampleCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, defaultRasterSampleCount); }
+static inline void pvk_MTL4RenderPassDescriptor_setSamplePositions_count(id self, const pvk_MTLSamplePosition * positions, unsigned long count) { PVK_SEL_CACHE("setSamplePositions:count:"); PVK_MSG(void, (id, SEL, const pvk_MTLSamplePosition *, unsigned long))(self, pvk_sel_, positions, count); }
 static inline void pvk_MTL4RenderPassDescriptor_setVisibilityResultBuffer(id self, id visibilityResultBuffer) { PVK_SEL_CACHE("setVisibilityResultBuffer:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, visibilityResultBuffer); }
 static inline void pvk_MTL4RenderPassDescriptor_setVisibilityResultType(id self, pvk_MTLVisibilityResultType visibilityResultType) { PVK_SEL_CACHE("setVisibilityResultType:"); PVK_MSG(void, (id, SEL, pvk_MTLVisibilityResultType))(self, pvk_sel_, visibilityResultType); }
 static inline void pvk_MTL4RenderPassDescriptor_setSupportColorAttachmentMapping(id self, bool supportColorAttachmentMapping) { PVK_SEL_CACHE("setSupportColorAttachmentMapping:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, supportColorAttachmentMapping); }
@@ -54514,6 +54515,7 @@ struct pvk_gfx_pipeline {
     uint32_t view_mask;
     bool depth_clamp;
     bool lines;                     /* polygon mode LINE */
+    bool bresenham;                 /* lines rasterized Bresenham with several samples (pvk_render_open) */
     bool has_fragment;
     bool draw_index;                /* the vertex shader reads DrawIndex (buffer index 28) */
     bool bounds;                    /* may test depth bounds (with the depth copy) */
@@ -56324,6 +56326,8 @@ struct pvk_draw_track {
     uint32_t index_type; /* VkIndexType */
     uint32_t samples;    /* the first graphics pipeline's (passes without attachments) */
     struct pvk_query_pool *vis_pool; /* the first occlusion query's pool */
+    const struct pvk_gfx_pipeline *gfx; /* the pipeline bound */
+    uint32_t draws;      /* bit 0: Bresenham lines with several samples drawn, bit 1: anything else */
     uint32_t hidden;     /* PVK_HIDDEN_* copies the pipelines bound read (or depth bounds need) */
     uint32_t int_colors; /* a pipeline renders SNORM attachments through SINT views (pvk_render_rebind) */
     /* The slots the pass's first draw binds through SINT views (first_slots,
@@ -56347,6 +56351,7 @@ struct pvk_render {
     uint32_t width, height; /* its render target (scissors are clamped to it) */
     uint32_t layers;
     uint32_t samples_pass;
+    bool centers;          /* every sample at the pixel center: a pass of Bresenham lines only */
     uint32_t color_count;
     pvk_MTLPixelFormat formats[PVK_MAX_COLOR_ATTACHMENTS]; /* Invalid: no attachment */
     uint8_t kinds[PVK_MAX_COLOR_ATTACHMENTS];  /* enum pvk_format_kind */
@@ -58036,6 +58041,7 @@ static void pvk_track_pipeline(struct pvk_draw_track *t, const struct pvk_pipeli
 {
     if (!p || !p->gfx)
         return;
+    t->gfx = p->gfx;
     if (!(p->gfx->dynamic & PVK_DYN_BIT(PRIMITIVE_TOPOLOGY)))
         t->topology = p->gfx->state.topology;
     if (!(p->gfx->dynamic & PVK_DYN_BIT(PRIMITIVE_RESTART_ENABLE)))
@@ -58051,9 +58057,29 @@ static void pvk_track_pipeline(struct pvk_draw_track *t, const struct pvk_pipeli
 static bool pvk_scan_cb(struct pvk_encoder *e, struct pvk_draw_track *t, const struct pvk_command_buffer *cb, uint32_t depth);
 
 /* One packet of the scan; true at the END_PASS that ends the instance. */
+static uint32_t pvk_topology_class(uint32_t topology)
+{
+    switch (topology) {
+    case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
+        return PVK_MTLPrimitiveTopologyClassPoint;
+    case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
+    case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
+    case VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY:
+    case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY:
+        return PVK_MTLPrimitiveTopologyClassLine;
+    default:
+        return PVK_MTLPrimitiveTopologyClassTriangle;
+    }
+}
+
 static bool pvk_scan_packet(struct pvk_encoder *e, struct pvk_draw_track *t, const struct pvk_cmd *c, uint32_t depth)
 {
     uint32_t conv, i;
+    if (c->op == PVK_CMD_DRAW || c->op == PVK_CMD_DRAW_INDEXED || c->op == PVK_CMD_DRAW_INDIRECT)
+        t->draws |= t->gfx && t->gfx->bresenham && (t->gfx->lines || pvk_topology_class(t->topology) ==
+                                                                          PVK_MTLPrimitiveTopologyClassLine)
+                        ? 1u
+                        : 2u;
     if (!t->first_draw && (c->op == PVK_CMD_DRAW || c->op == PVK_CMD_DRAW_INDEXED || c->op == PVK_CMD_DRAW_INDIRECT)) {
         t->first_draw = true;
         for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
@@ -59262,6 +59288,12 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
         pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(pass, height);
         pvk_MTL4RenderPassDescriptor_setDefaultRasterSampleCount(pass, samples);
     }
+    if (r->centers && samples > 1) {
+        pvk_MTLSamplePosition at[16];
+        for (k = 0; k < samples && k < 16; k++)
+            at[k].x = at[k].y = 0.5f;
+        pvk_MTL4RenderPassDescriptor_setSamplePositions_count(pass, at, samples);
+    }
     /* The copies of the depth and stencil r->hidden asks for, in memoryless
      * color slots after the colors (section 15, DEPTH/STENCIL INPUT
      * ATTACHMENTS): never stored, a later part of a split pass loads the
@@ -59407,6 +59439,8 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     track.pipeline_int = r->pipeline && r->pipeline->gfx ? r->pipeline->gfx->int_colors : 0;
     track.first_slots = 0;
     track.first_draw = false;
+    track.gfx = r->pipeline ? r->pipeline->gfx : NULL;
+    track.draws = 0;
     memset(track.map, PVK_NO_SLOT, sizeof(track.map));
     track.hidden = r->pipeline && r->pipeline->gfx /* the depth/stencil copies its pipelines need */
                        ? r->pipeline->gfx->reads | (r->pipeline->gfx->bounds ? PVK_HIDDEN_DEPTH : 0u)
@@ -59455,6 +59489,7 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     r->pass_stencil = stencil;
     r->vis_pool = e->occ_pool ? e->occ_pool : track.vis_pool;
     r->samples_pass = track.samples; /* (passes without attachments) */
+    r->centers = track.draws == 1; /* (Vulkan lets those lines sample there) */
     /* copies of the depth and stencil for input attachments and depth bounds */
     r->hidden = (c->hidden | track.hidden) &
                 ((c->depth.texture ? PVK_HIDDEN_DEPTH : 0u) | (c->stencil.texture ? PVK_HIDDEN_STENCIL : 0u));
@@ -63682,19 +63717,15 @@ static uint32_t pvk_dynamic_bits(VkDynamicState s)
     }
 }
 
-static uint32_t pvk_topology_class(uint32_t topology)
+/* Whether a pipeline rasterizes its lines Bresenham (VK_KHR_line_rasterization). */
+static bool pvk_bresenham_lines(const VkPipelineRasterizationStateCreateInfo *rs)
 {
-    switch (topology) {
-    case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
-        return PVK_MTLPrimitiveTopologyClassPoint;
-    case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
-    case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
-    case VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY:
-    case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY:
-        return PVK_MTLPrimitiveTopologyClassLine;
-    default:
-        return PVK_MTLPrimitiveTopologyClassTriangle;
-    }
+    const VkBaseInStructure *ext;
+    for (ext = rs ? (const VkBaseInStructure *)rs->pNext : NULL; ext; ext = ext->pNext)
+        if (ext->sType == VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO)
+            return ((const VkPipelineRasterizationLineStateCreateInfo *)ext)->lineRasterizationMode ==
+                   VK_LINE_RASTERIZATION_MODE_BRESENHAM;
+    return false;
 }
 
 static enum pvk_msl_scalar_type pvk_output_type(const struct pvk_format *f)
@@ -64175,6 +64206,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         gfx.state.depth_bias[2] = rs->depthBiasSlopeFactor;
         gfx.state.line_width = rs->lineWidth;
     }
+    gfx.bresenham = pvk_bresenham_lines(rs);
     if (ds && !discard) {
         gfx.state.depth_test = ds->depthTestEnable != VK_FALSE;
         gfx.state.depth_write = ds->depthWriteEnable != VK_FALSE;
@@ -64349,6 +64381,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     d.dynamic_strides = (dynamic & PVK_DYN_BIT(VERTEX_STRIDE)) != 0;
     d.has_fragment = fs != NULL;
     gfx.samples = d.samples;
+    gfx.bresenham = gfx.bresenham && gfx.samples > 1;
     gfx.view_mask = view_mask;
     (void)color_count;
 
