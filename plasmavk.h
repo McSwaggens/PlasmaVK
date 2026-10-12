@@ -49779,8 +49779,8 @@ static void pvk_spv_stage_inputs(struct pvk_spv *ctx, struct pvk_spv_iface *in, 
  * offsets are from the pixel's top-left corner, Vulkan's from its center
  * (checked on M4 Max): +0.5. Flat and integer inputs (and inputs the vertex
  * stage does not write) have one value: the variable's. The operand must
- * name its input with constant indices (a dynamically indexed array is not
- * supported). */
+ * name its input with constant array indices (a dynamically indexed array is
+ * not supported); a vector's component may be dynamic. */
 static void pvk_spv_interpolate_at(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     uint32_t inst = in->w[4], rid = in->w[2], i, n, comp;
@@ -49789,7 +49789,7 @@ static void pvk_spv_interpolate_at(struct pvk_spv *ctx, const struct pvk_spv_ins
     enum pvk_msl_scalar_type in_type[PVK_MSL_MAX_LOCATIONS];
     const struct pvk_spv_leaf *leaf = NULL;
     struct pvk_spv_type *r = pvk_spv_vtype(ctx, rid), *rs = pvk_spv_scalar_of(ctx, r);
-    const char *e, *sel = "";
+    const char *e, *sel = "", *dyn = NULL;
 
     if (ctx->model != PVK_SPV_ExecutionModelFragment)
         pvk_spv_fail(ctx, "interpolateAt* is only available in fragment shaders");
@@ -49812,6 +49812,8 @@ static void pvk_spv_interpolate_at(struct pvk_spv *ctx, const struct pvk_spv_ins
     comp = leaf->component;
     if (sel[0] == '.' && sel[1] >= 'w' && sel[1] <= 'z' && sel[2] == '\0' && n == 1)
         comp += sel[1] == 'w' ? 3u : (uint32_t)(sel[1] - 'x'); /* a component of a vector input */
+    else if (sel[0] == '[' && n == 1 && sel[strlen(sel) - 1] == ']' && !strchr(sel + 1, '[')) /* one by a dynamic index */
+        dyn = pvk_spv_fmt(ctx, "%.*s", (int)strlen(sel) - 2, sel + 1);
     else if (sel[0] != '\0')
         pvk_spv_fail(ctx, "interpolateAt* of a dynamically selected component is not supported");
     if (in_type[leaf->location] != PVK_MSL_SCALAR_FLOAT || (leaf->interp & PVK_MSL_INTERP_FLAT)) {
@@ -49829,7 +49831,7 @@ static void pvk_spv_interpolate_at(struct pvk_spv *ctx, const struct pvk_spv_ins
     else
         e = pvk_spv_fmt(ctx, "pvk_i%u.interpolate_at_offset(float2(%s) + 0.5f)", leaf->location,
                         pvk_spv_val(ctx, in->w[6]));
-    e = pvk_spv_swizzle(ctx, e, comp, n);
+    e = dyn ? pvk_spv_fmt(ctx, "%s[%uu + uint(%s)]", e, comp, dyn) : pvk_spv_swizzle(ctx, e, comp, n);
     pvk_spv_set(ctx, rid, rs->width == 16 ? pvk_spv_fmt(ctx, "%s(%s)", r->msl, e) : e);
 }
 
