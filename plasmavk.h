@@ -39164,6 +39164,13 @@ static void pvk_sampler_key(const struct pvk_device *device, const VkSamplerCrea
     memset(k, 0, sizeof(*k)); /* the key is compared bytewise */
     k->min = info->minFilter == VK_FILTER_LINEAR ? PVK_MTLSamplerMinMagFilterLinear : PVK_MTLSamplerMinMagFilterNearest;
     k->mag = info->magFilter == VK_FILTER_LINEAR ? PVK_MTLSamplerMinMagFilterLinear : PVK_MTLSamplerMinMagFilterNearest;
+    /* Vulkan picks the filter by the LOD clamped to [minLod, maxLod], Metal
+     * by the LOD before its clamps (M4 Max, macOS 27.2: level(0) with
+     * lodMinClamp 0.01 magnifies): a range on one side of 0 takes one filter. */
+    if (info->minLod > 0.0f)
+        k->mag = k->min;
+    else if (info->maxLod <= 0.0f)
+        k->min = k->mag;
     k->mip = info->mipmapMode == VK_SAMPLER_MIPMAP_MODE_LINEAR ? PVK_MTLSamplerMipFilterLinear : PVK_MTLSamplerMipFilterNearest;
     k->s = (uint32_t)pvk_address_mode(info->addressModeU);
     k->t = (uint32_t)pvk_address_mode(info->addressModeV);

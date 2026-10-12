@@ -2059,6 +2059,62 @@ static void test_samplers(void)
     vkDestroySampler(device, s2, NULL);
 }
 
+/* Metal sampler behaviors worked around: its opaque black border reads
+ * (0, 0, 0, 0) from A8Unorm, so A8_UNORM views take the sampler's opaque
+ * white twin, (0, 0, 0, 1) there; R5G5B5A1, where no Metal border reads
+ * opaque black, is not sampled; and Metal picks the filter by the LOD before
+ * minLod and maxLod clamp it, so a range on one side of 0 takes one filter. */
+static void test_sampler_quirks(void)
+{
+    uint8_t a8[4] = { 64, 64, 64, 64 };
+    float px[2 * 2 * 4] = { 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1 }; /* R G / B W */
+    struct img a = image_with(VK_IMAGE_TYPE_2D, VK_FORMAT_A8_UNORM, 2, 2, 1, 1, 1, a8, sizeof(a8));
+    struct img b = image_with(VK_IMAGE_TYPE_2D, VK_FORMAT_R32G32B32A32_SFLOAT, 2, 2, 1, 1, 1, px, sizeof(px));
+    VkImageView va = make_view(a.image, VK_IMAGE_VIEW_TYPE_2D, VK_FORMAT_A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1,
+                               identity_mapping());
+    VkImageView vb = make_view(b.image, VK_IMAGE_VIEW_TYPE_2D, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                               1, 0, 1, identity_mapping());
+    VkSampler s = make_sampler(VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK,
+                               0, 0, 0, VK_FALSE);
+    float c[4] = { -0.75f, 0.25f, 0, 0 }, out[8];
+    struct pvk_sampler twin;
+    VkFormatProperties fp;
+    VkSamplerCreateInfo si;
+
+    twin = *(struct pvk_sampler *)s;
+    twin.mtl_sampler = twin.mtl_alpha;
+    CHECK(twin.mtl_alpha && twin.mtl_alpha != ((struct pvk_sampler *)s)->mtl_sampler);
+    CHECK(harness("k2d", view_texture(va), (VkSampler)&twin, c, 1, out) && close4(out, 0, 0, 0, 1));
+    vkDestroySampler(device, s, NULL);
+
+    vkGetPhysicalDeviceFormatProperties(pd, VK_FORMAT_R5G5B5A1_UNORM_PACK16, &fp);
+    CHECK(!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) &&
+          (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT));
+
+    /* minFilter LINEAR, magFilter NEAREST at the center, level 0: minLod
+     * 0.01 minifies (the mean), maxLod 0 magnifies even at level 2 (W) */
+    memset(&si, 0, sizeof(si));
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.minFilter = VK_FILTER_LINEAR;
+    si.magFilter = VK_FILTER_NEAREST;
+    si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.minLod = 0.01f;
+    si.maxLod = VK_LOD_CLAMP_NONE;
+    CHECK_VK(vkCreateSampler(device, &si, NULL, &s), VK_SUCCESS);
+    c[0] = c[1] = 0.5f;
+    CHECK(harness("k2d", view_texture(vb), s, c, 1, out) && close4(out, 0.5f, 0.5f, 0.5f, 1));
+    vkDestroySampler(device, s, NULL);
+    si.minLod = si.maxLod = 0.0f;
+    CHECK_VK(vkCreateSampler(device, &si, NULL, &s), VK_SUCCESS);
+    c[3] = 2.0f;
+    CHECK(harness("k2d", view_texture(vb), s, c, 1, out) && close4(out, 1, 1, 1, 1));
+    vkDestroySampler(device, s, NULL);
+    vkDestroyImageView(device, va, NULL);
+    vkDestroyImageView(device, vb, NULL);
+    free_image(&a);
+    free_image(&b);
+}
+
 /* Texel buffer views: texture buffers at the view's offset. */
 static void test_buffer_views(void)
 {
@@ -2482,6 +2538,7 @@ int main(void)
     RUN(test_view_types);
     RUN(test_depth_stencil_views);
     RUN(test_samplers);
+    RUN(test_sampler_quirks);
     RUN(test_buffer_views);
     RUN(test_host_copy);
     RUN(test_host_copy_preinitialized);
