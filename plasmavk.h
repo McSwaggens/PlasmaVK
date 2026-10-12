@@ -47566,14 +47566,19 @@ static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn 
         opt = pvk_spv_fmt(ctx, "level(%s)", l);
     } else if (!native_1d) {
         const char *dx = pvk_spv_comps(ctx, o.dx, 0, n), *dy = pvk_spv_comps(ctx, o.dy, 0, n);
-        if (pvk_spv_image_as_2d(ctx, it))
+        if (pvk_spv_image_as_2d(ctx, it)) {
             opt = pvk_spv_fmt(ctx, "gradient2d(float2(%s, 0.0f), float2(%s, 0.0f))", dx, dy);
-        else
-            opt = pvk_spv_fmt(ctx, "%s(%s, %s)",
-                              it->img.dim == PVK_SPV_Dim2D ? "gradient2d"
-                              : it->img.dim == PVK_SPV_Dim3D ? "gradient3d"
-                                                             : "gradientcube",
-                              dx, dy);
+        } else if (it->img.dim == PVK_SPV_DimCube) { /* its level from the gradients (pvk_spv_math_template) */
+            const char *l = pvk_spv_fmt(ctx, "pvk_cube_lod(float3(%s), float3(%s), float3(%s), float(%s.get_width()))",
+                                        c, dx, dy, tex);
+            ctx->use_math = true;
+            if (o.min_lod)
+                l = pvk_spv_fmt(ctx, "max(%s, %s)", l, pvk_spv_val(ctx, o.min_lod));
+            opt = pvk_spv_fmt(ctx, "level(%s)", l);
+            o.min_lod = 0;
+        } else {
+            opt = pvk_spv_fmt(ctx, "%s(%s, %s)", it->img.dim == PVK_SPV_Dim2D ? "gradient2d" : "gradient3d", dx, dy);
+        }
         if (o.min_lod)
             opt = pvk_spv_fmt(ctx, "%s, min_lod_clamp(%s)", opt, pvk_spv_val(ctx, o.min_lod));
     }
@@ -51291,6 +51296,17 @@ static const char pvk_spv_math_template[] =
     "    for (int c = 0; c < C; c++)\n"
     "        r[c] = pvk_mul(a, b[c]);\n"
     "    return r;\n"
+    "}\n"
+    "/* Vulkan's level of detail of cube gradients: from the derivatives of the face\n"
+    " * coordinates (sc / ma, tc / ma) of the major axis, in texels of a size-wide\n"
+    " * face (Metal's gradientcube gives other levels). */\n"
+    "inline float pvk_cube_lod(float3 p, float3 dx, float3 dy, float size)\n"
+    "{\n"
+    "    float3 a = abs(p);\n"
+    "    bool z = a.z >= a.x && a.z >= a.y, y = !z && a.y >= a.x;\n"
+    "    float3 q = z ? p : y ? p.xzy : p.zyx, qx = z ? dx : y ? dx.xzy : dx.zyx, qy = z ? dy : y ? dy.xzy : dy.zyx;\n"
+    "    float2 sx = (qx.xy * q.z - q.xy * qx.z) / (q.z * q.z), sy = (qy.xy * q.z - q.xy * qy.z) / (q.z * q.z);\n"
+    "    return log2(max(length(sx), length(sy)) * size * 0.5f);\n"
     "}\n\n";
 
 static const char pvk_spv_cast_template[] =
