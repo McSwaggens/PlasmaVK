@@ -46696,13 +46696,17 @@ static void pvk_spv_coherence(struct pvk_spv *ctx)
     uint32_t i, f, bi, m, off;
     bool coherent = false;
     ctx->dev = "device";
-    for (i = 1; i < ctx->bound && !coherent; i++) {
-        struct pvk_spv_id *x = &ctx->ids[i];
-        if ((x->flags & PVK_SPV_F_COHERENT) && x->kind == PVK_SPV_K_VAR)
-            coherent = true;
-        if (x->kind == PVK_SPV_K_TYPE && x->t->op == PVK_SPV_OpTypeStruct)
-            for (m = 0; m < x->t->nmembers; m++)
-                coherent |= (x->t->members[m].flags & PVK_SPV_M_COHERENT) != 0;
+    /* (by the lists of variables and types: ids may be sparse) */
+    for (i = 0; i < ctx->nglobals && !coherent; i++)
+        coherent = (ctx->ids[ctx->globals[i]].flags & PVK_SPV_F_COHERENT) != 0;
+    for (f = 0; f < ctx->nfuncs && !coherent; f++)
+        for (i = 0; i < ctx->funcs[f]->nvars && !coherent; i++)
+            coherent = (ctx->ids[ctx->funcs[f]->vars[i]].flags & PVK_SPV_F_COHERENT) != 0;
+    for (i = 0; i < ctx->ntypes && !coherent; i++) {
+        const struct pvk_spv_type *t = ctx->ids[ctx->type_order[i]].t;
+        if (t->op == PVK_SPV_OpTypeStruct)
+            for (m = 0; m < t->nmembers; m++)
+                coherent |= (t->members[m].flags & PVK_SPV_M_COHERENT) != 0;
     }
     for (f = 0; f < ctx->nfuncs && !coherent; f++) {
         const struct pvk_spv_func *fn = ctx->funcs[f];
@@ -51788,7 +51792,8 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
     ctx->w = words;
     ctx->nw = (uint32_t)word_count;
     ctx->bound = words[3];
-    if (ctx->bound == 0 || ctx->bound > (1u << 22) || ctx->bound > 4 * ctx->nw + 1024)
+    /* (the ids array is committed lazily where used: sparse ids are fine) */
+    if (ctx->bound == 0 || ctx->bound > (1u << 22))
         pvk_spv_fail(ctx, "invalid id bound %u", ctx->bound);
     ctx->nids = ctx->bound;
     ctx->ids = pvk_spv_alloc(ctx, sizeof(*ctx->ids) * ctx->bound);
