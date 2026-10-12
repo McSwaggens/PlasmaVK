@@ -6685,6 +6685,122 @@ static void test_frag_depth_initializer(void)
     free_img(&target);
 }
 
+/* A depth/stencil render pass attachment through a stencil-only view
+ * (X32_Stencil8 to Metal, which renders to no such view: attachments take
+ * the image's own format), over two render passes and many tiles: the first
+ * clears the stencil to 7 and zeroes the left half, the second loads it and
+ * draws where it is 7. */
+static void test_stencil_view_attachment(void)
+{
+    enum { S = 256 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, S, S, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img ds = make_img(VK_FORMAT_D32_SFLOAT_S8_UINT, S, S, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(S * S * 4);
+    VkAttachmentDescription a[2];
+    VkAttachmentReference cref = { 0, VK_IMAGE_LAYOUT_GENERAL }, dref = { 1, VK_IMAGE_LAYOUT_GENERAL };
+    VkSubpassDescription sp;
+    VkRenderPassCreateInfo rpi;
+    VkRenderPass rp[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+    VkFramebuffer fb[2];
+    VkImageViewCreateInfo vi;
+    VkImageView views[2];
+    VkClearValue clears[2];
+    VkPipeline zero, equal;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t x, y, bad = 0;
+    int k;
+
+    memset(&vi, 0, sizeof(vi));
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = ds.image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = VK_FORMAT_D32_SFLOAT_S8_UINT;
+    vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
+    vi.subresourceRange.levelCount = vi.subresourceRange.layerCount = 1;
+    views[0] = target.view;
+    REQUIRE_VK(vkCreateImageView(device, &vi, NULL, &views[1]));
+    memset(a, 0, sizeof(a));
+    a[0].format = VK_FORMAT_R8G8B8A8_UNORM;
+    a[1].format = VK_FORMAT_D32_SFLOAT_S8_UINT;
+    memset(&sp, 0, sizeof(sp));
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &cref;
+    sp.pDepthStencilAttachment = &dref;
+    memset(&rpi, 0, sizeof(rpi));
+    rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpi.attachmentCount = 2;
+    rpi.pAttachments = a;
+    rpi.subpassCount = 1;
+    rpi.pSubpasses = &sp;
+    for (k = 0; k < 2; k++) {
+        uint32_t i;
+        for (i = 0; i < 2; i++) {
+            a[i].samples = VK_SAMPLE_COUNT_1_BIT;
+            a[i].loadOp = a[i].stencilLoadOp = k ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            a[i].storeOp = a[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+            a[i].initialLayout = a[i].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+        CHECK_VK(vkCreateRenderPass(device, &rpi, NULL, &rp[k]), VK_SUCCESS);
+        fb[k] = make_fb(rp[k], views, 2, S, S, 1);
+    }
+    REQUIRE(rp[0] && rp[1]);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.rp = rp[0];
+    p.viewports = 1;
+    p.viewport[0].width = p.viewport[0].height = S;
+    p.viewport[0].maxDepth = 1;
+    p.scissor[0].extent.width = p.scissor[0].extent.height = S;
+    p.has_ds = true;
+    memset(&p.ds, 0, sizeof(p.ds));
+    p.ds.stencilTestEnable = VK_TRUE;
+    p.ds.front.compareOp = VK_COMPARE_OP_ALWAYS;
+    p.ds.front.passOp = VK_STENCIL_OP_ZERO;
+    p.ds.front.compareMask = p.ds.front.writeMask = 0xff;
+    p.ds.back = p.ds.front;
+    zero = make_pipe(&p);
+    p.ds.front.compareOp = VK_COMPARE_OP_EQUAL;
+    p.ds.front.passOp = VK_STENCIL_OP_KEEP;
+    p.ds.front.reference = 7;
+    p.ds.back = p.ds.front;
+    equal = make_pipe(&p);
+    REQUIRE(zero && equal);
+    memset(clears, 0, sizeof(clears));
+    clears[0].color.float32[3] = 1.0f;
+    clears[1].depthStencil.depth = 1.0f;
+    clears[1].depthStencil.stencil = 7;
+    cb = begin_cmd();
+    begin_pass(cb, rp[0], fb[0], 0, 0, S, S, clears, 2);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, zero);
+    rect(cb, -1, -1, 0, 1, 0, 0, 0, 1, 0);
+    vkCmdEndRenderPass(cb);
+    barrier(cb);
+    begin_pass(cb, rp[1], fb[1], 0, 0, S, S, NULL, 0);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, equal);
+    rect(cb, -1, -1, 1, 1, 1, 0, 0, 1, 0);
+    vkCmdEndRenderPass(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    for (y = 0; y < S; y++)
+        for (x = 0; x < S; x++) {
+            uint32_t got = ((const uint32_t *)out.data)[y * S + x], want = x < S / 2 ? BLACK : RED;
+            if (got != want && bad++ < 4)
+                fprintf(stderr, "stencil view attachment: pixel (%u, %u) is %08x, expected %08x\n", x, y, got, want);
+        }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, zero, NULL);
+    vkDestroyPipeline(device, equal, NULL);
+    for (k = 0; k < 2; k++) {
+        vkDestroyFramebuffer(device, fb[k], NULL);
+        vkDestroyRenderPass(device, rp[k], NULL);
+    }
+    vkDestroyImageView(device, views[1], NULL);
+    free_buf(&out);
+    free_img(&ds);
+    free_img(&target);
+}
+
 /* A shared-exponent attachment written through a mask of red, green and blue
  * (all it has; Metal takes only All or None for RGB9E5). */
 static void test_rgb9e5_write_mask(void)
@@ -7965,6 +8081,7 @@ int main(void)
     RUN(test_copy_ms_depth);
     RUN(test_frag_depth_initializer);
     RUN(test_rgb9e5_write_mask);
+    RUN(test_stencil_view_attachment);
     RUN(test_alpha_coverage);
     RUN(test_sample_mask);
     RUN(test_logic_ops);

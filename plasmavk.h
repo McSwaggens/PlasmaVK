@@ -38838,9 +38838,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
         pvk_free(alloc, view);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
+    /* Attachments take the view without its swizzle, and a stencil view of
+     * a depth/stencil image (X32_Stencil8, for sampling) as the image's own
+     * format: Metal renders to no X32_Stencil8 view. */
     if (!image->memoryless && (image->mtl_usage & PVK_MTLTextureUsageRenderTarget) &&
         (swizzle.red != PVK_MTLTextureSwizzleRed || swizzle.green != PVK_MTLTextureSwizzleGreen ||
-         swizzle.blue != PVK_MTLTextureSwizzleBlue || swizzle.alpha != PVK_MTLTextureSwizzleAlpha)) {
+         swizzle.blue != PVK_MTLTextureSwizzleBlue || swizzle.alpha != PVK_MTLTextureSwizzleAlpha ||
+         format == PVK_MTLPixelFormatX32_Stencil8)) {
         pvk_MTLTextureSwizzleChannels identity;
         identity.red = PVK_MTLTextureSwizzleRed;
         identity.green = PVK_MTLTextureSwizzleGreen;
@@ -38848,7 +38852,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
         identity.alpha = PVK_MTLTextureSwizzleAlpha;
         pool = objc_autoreleasePoolPush();
         view->mtl_attachment = pvk_MTLTexture_newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(
-            image->mtl_texture, format, type, levels, slices, identity);
+            image->mtl_texture, format == PVK_MTLPixelFormatX32_Stencil8 ? f->mtl : format, type, levels, slices,
+            identity);
         objc_autoreleasePoolPop(pool);
     } else {
         view->mtl_attachment = pvk_retain(view->mtl_texture);
