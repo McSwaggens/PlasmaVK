@@ -46935,7 +46935,8 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     if (in->op == PVK_SPV_OpAtomicCompareExchange || in->op == PVK_SPV_OpAtomicCompareExchangeWeak)
         sem |= pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 6)) & PVK_SPV_SEM_ACQUIRE; /* Unequal */
     own = p->storage == PVK_SPV_StorageWorkgroup ? PVK_SPV_SemanticsWorkgroupMemory : PVK_SPV_SemanticsUniformMemory;
-    obj = pvk_spv_fmt(ctx, "(%s %s*)&%s", space, atype, p->expr);
+    obj = p->vec ? pvk_spv_fmt(ctx, "(%s %s*)%s", space, atype, pvk_spv_comp_addr(ctx, p)) /* a vector component */
+                 : pvk_spv_fmt(ctx, "(%s %s*)&%s", space, atype, p->expr);
     if (in->wc > first && in->op != PVK_SPV_OpAtomicIIncrement && in->op != PVK_SPV_OpAtomicIDecrement &&
         in->op != PVK_SPV_OpAtomicLoad && in->op != PVK_SPV_OpAtomicCompareExchange &&
         in->op != PVK_SPV_OpAtomicCompareExchangeWeak)
