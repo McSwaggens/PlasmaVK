@@ -2511,6 +2511,253 @@ static void test_sparse_depth_stencil(void)
     free_buf(&host);
 }
 
+/*
+ * #version 450
+ * layout(local_size_x = 8, local_size_y = 8) in;
+ * layout(set = 0, binding = 0) uniform sampler2D sparse_tex;
+ * layout(set = 0, binding = 1) uniform sampler2D plain_tex;
+ * layout(std430, set = 0, binding = 2) buffer Out { uint bad; vec4 got, want; } o;
+ * void main()
+ * {
+ *     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+ *     vec2 uv = (vec2(p) + 0.5) / vec2(51.0, 65.0);
+ *     vec4 a = texture(sparse_tex, uv), b = texture(plain_tex, uv);
+ *     if (p.x < 51 && p.y < 65 && a != b) {
+ *         atomicAdd(o.bad, 1u);
+ *         o.got = a;
+ *         o.want = b;
+ *     }
+ * }
+ */
+static const uint32_t spv_compressed_tail[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x00000056, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0006000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000d, 0x00060010, 0x00000004,
+    0x00000011, 0x00000008, 0x00000008, 0x00000001, 0x00030003, 0x00000002, 0x000001c2, 0x00040005,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000009, 0x00000070, 0x00080005, 0x0000000d,
+    0x475f6c67, 0x61626f6c, 0x766e496c, 0x7461636f, 0x496e6f69, 0x00000044, 0x00030005, 0x00000015,
+    0x00007675, 0x00030005, 0x00000021, 0x00000061, 0x00050005, 0x00000025, 0x72617073, 0x745f6573,
+    0x00007865, 0x00030005, 0x0000002a, 0x00000062, 0x00050005, 0x0000002b, 0x69616c70, 0x65745f6e,
+    0x00000078, 0x00030005, 0x00000046, 0x0074754f, 0x00040006, 0x00000046, 0x00000000, 0x00646162,
+    0x00040006, 0x00000046, 0x00000001, 0x00746f67, 0x00050006, 0x00000046, 0x00000002, 0x746e6177,
+    0x00000000, 0x00030005, 0x00000048, 0x0000006f, 0x00040047, 0x0000000d, 0x0000000b, 0x0000001c,
+    0x00040047, 0x00000025, 0x00000021, 0x00000000, 0x00040047, 0x00000025, 0x00000022, 0x00000000,
+    0x00040047, 0x0000002b, 0x00000021, 0x00000001, 0x00040047, 0x0000002b, 0x00000022, 0x00000000,
+    0x00030047, 0x00000046, 0x00000003, 0x00050048, 0x00000046, 0x00000000, 0x00000023, 0x00000000,
+    0x00050048, 0x00000046, 0x00000001, 0x00000023, 0x00000010, 0x00050048, 0x00000046, 0x00000002,
+    0x00000023, 0x00000020, 0x00040047, 0x00000048, 0x00000021, 0x00000002, 0x00040047, 0x00000048,
+    0x00000022, 0x00000000, 0x00040047, 0x00000055, 0x0000000b, 0x00000019, 0x00020013, 0x00000002,
+    0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000001, 0x00040017,
+    0x00000007, 0x00000006, 0x00000002, 0x00040020, 0x00000008, 0x00000007, 0x00000007, 0x00040015,
+    0x0000000a, 0x00000020, 0x00000000, 0x00040017, 0x0000000b, 0x0000000a, 0x00000003, 0x00040020,
+    0x0000000c, 0x00000001, 0x0000000b, 0x0004003b, 0x0000000c, 0x0000000d, 0x00000001, 0x00040017,
+    0x0000000e, 0x0000000a, 0x00000002, 0x00030016, 0x00000012, 0x00000020, 0x00040017, 0x00000013,
+    0x00000012, 0x00000002, 0x00040020, 0x00000014, 0x00000007, 0x00000013, 0x0004002b, 0x00000012,
+    0x00000018, 0x3f000000, 0x0004002b, 0x00000012, 0x0000001b, 0x424c0000, 0x0004002b, 0x00000012,
+    0x0000001c, 0x42820000, 0x0005002c, 0x00000013, 0x0000001d, 0x0000001b, 0x0000001c, 0x00040017,
+    0x0000001f, 0x00000012, 0x00000004, 0x00040020, 0x00000020, 0x00000007, 0x0000001f, 0x00090019,
+    0x00000022, 0x00000012, 0x00000001, 0x00000000, 0x00000000, 0x00000000, 0x00000001, 0x00000000,
+    0x0003001b, 0x00000023, 0x00000022, 0x00040020, 0x00000024, 0x00000000, 0x00000023, 0x0004003b,
+    0x00000024, 0x00000025, 0x00000000, 0x0004002b, 0x00000012, 0x00000028, 0x00000000, 0x0004003b,
+    0x00000024, 0x0000002b, 0x00000000, 0x00020014, 0x0000002f, 0x0004002b, 0x0000000a, 0x00000030,
+    0x00000000, 0x00040020, 0x00000031, 0x00000007, 0x00000006, 0x0004002b, 0x00000006, 0x00000034,
+    0x00000033, 0x0004002b, 0x0000000a, 0x00000038, 0x00000001, 0x0004002b, 0x00000006, 0x0000003b,
+    0x00000041, 0x00040017, 0x00000040, 0x0000002f, 0x00000004, 0x0005001e, 0x00000046, 0x0000000a,
+    0x0000001f, 0x0000001f, 0x00040020, 0x00000047, 0x00000002, 0x00000046, 0x0004003b, 0x00000047,
+    0x00000048, 0x00000002, 0x0004002b, 0x00000006, 0x00000049, 0x00000000, 0x00040020, 0x0000004a,
+    0x00000002, 0x0000000a, 0x0004002b, 0x00000006, 0x0000004d, 0x00000001, 0x00040020, 0x0000004f,
+    0x00000002, 0x0000001f, 0x0004002b, 0x00000006, 0x00000051, 0x00000002, 0x0004002b, 0x0000000a,
+    0x00000054, 0x00000008, 0x0006002c, 0x0000000b, 0x00000055, 0x00000054, 0x00000054, 0x00000038,
+    0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003b,
+    0x00000008, 0x00000009, 0x00000007, 0x0004003b, 0x00000014, 0x00000015, 0x00000007, 0x0004003b,
+    0x00000020, 0x00000021, 0x00000007, 0x0004003b, 0x00000020, 0x0000002a, 0x00000007, 0x0004003d,
+    0x0000000b, 0x0000000f, 0x0000000d, 0x0007004f, 0x0000000e, 0x00000010, 0x0000000f, 0x0000000f,
+    0x00000000, 0x00000001, 0x0004007c, 0x00000007, 0x00000011, 0x00000010, 0x0003003e, 0x00000009,
+    0x00000011, 0x0004003d, 0x00000007, 0x00000016, 0x00000009, 0x0004006f, 0x00000013, 0x00000017,
+    0x00000016, 0x00050050, 0x00000013, 0x00000019, 0x00000018, 0x00000018, 0x00050081, 0x00000013,
+    0x0000001a, 0x00000017, 0x00000019, 0x00050088, 0x00000013, 0x0000001e, 0x0000001a, 0x0000001d,
+    0x0003003e, 0x00000015, 0x0000001e, 0x0004003d, 0x00000023, 0x00000026, 0x00000025, 0x0004003d,
+    0x00000013, 0x00000027, 0x00000015, 0x00070058, 0x0000001f, 0x00000029, 0x00000026, 0x00000027,
+    0x00000002, 0x00000028, 0x0003003e, 0x00000021, 0x00000029, 0x0004003d, 0x00000023, 0x0000002c,
+    0x0000002b, 0x0004003d, 0x00000013, 0x0000002d, 0x00000015, 0x00070058, 0x0000001f, 0x0000002e,
+    0x0000002c, 0x0000002d, 0x00000002, 0x00000028, 0x0003003e, 0x0000002a, 0x0000002e, 0x00050041,
+    0x00000031, 0x00000032, 0x00000009, 0x00000030, 0x0004003d, 0x00000006, 0x00000033, 0x00000032,
+    0x000500b1, 0x0000002f, 0x00000035, 0x00000033, 0x00000034, 0x000300f7, 0x00000037, 0x00000000,
+    0x000400fa, 0x00000035, 0x00000036, 0x00000037, 0x000200f8, 0x00000036, 0x00050041, 0x00000031,
+    0x00000039, 0x00000009, 0x00000038, 0x0004003d, 0x00000006, 0x0000003a, 0x00000039, 0x000500b1,
+    0x0000002f, 0x0000003c, 0x0000003a, 0x0000003b, 0x000200f9, 0x00000037, 0x000200f8, 0x00000037,
+    0x000700f5, 0x0000002f, 0x0000003d, 0x00000035, 0x00000005, 0x0000003c, 0x00000036, 0x0004003d,
+    0x0000001f, 0x0000003e, 0x00000021, 0x0004003d, 0x0000001f, 0x0000003f, 0x0000002a, 0x000500b7,
+    0x00000040, 0x00000041, 0x0000003e, 0x0000003f, 0x0004009a, 0x0000002f, 0x00000042, 0x00000041,
+    0x000500a7, 0x0000002f, 0x00000043, 0x0000003d, 0x00000042, 0x000300f7, 0x00000045, 0x00000000,
+    0x000400fa, 0x00000043, 0x00000044, 0x00000045, 0x000200f8, 0x00000044, 0x00050041, 0x0000004a,
+    0x0000004b, 0x00000048, 0x00000049, 0x000700ea, 0x0000000a, 0x0000004c, 0x0000004b, 0x00000038,
+    0x00000030, 0x00000038, 0x0004003d, 0x0000001f, 0x0000004e, 0x00000021, 0x00050041, 0x0000004f,
+    0x00000050, 0x00000048, 0x0000004d, 0x0003003e, 0x00000050, 0x0000004e, 0x0004003d, 0x0000001f,
+    0x00000052, 0x0000002a, 0x00050041, 0x0000004f, 0x00000053, 0x00000048, 0x00000051, 0x0003003e,
+    0x00000053, 0x00000052, 0x000200f9, 0x00000045, 0x000200f8, 0x00000045, 0x000100fd, 0x00010038,
+};
+
+/* A 51x65 EAC R11 image with all its levels in the mip tail, level 0
+ * sampled at each texel beside an ordinary image with the same blocks: its corner block is a
+ * partial one (3x1 texels), which Metal's samplers read wrong from a sparse
+ * texture's tail. */
+static void test_sparse_compressed_tail(void)
+{
+    VkImageCreateInfo info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_EAC_R11_UNORM_BLOCK, 51, 65, 1, 7, 1,
+                                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                        VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT);
+    VkDescriptorSetLayoutBinding bindings[3];
+    VkDescriptorSetLayoutCreateInfo set_layout_info;
+    VkDescriptorPoolSize pool_sizes[2];
+    VkDescriptorPoolCreateInfo pool_info;
+    VkDescriptorSetAllocateInfo set_info;
+    VkDescriptorImageInfo image_desc[2];
+    VkDescriptorBufferInfo buffer_desc;
+    VkWriteDescriptorSet writes[2];
+    VkPipelineLayoutCreateInfo layout_info;
+    VkSamplerCreateInfo sampler_info;
+    VkSparseImageMemoryRequirements sr;
+    VkMemoryRequirements req;
+    VkDescriptorSetLayout set_layout;
+    VkDescriptorPool desc_pool;
+    VkDescriptorSet set;
+    VkPipelineLayout layout;
+    VkPipeline pipeline;
+    VkSampler sampler;
+    VkImage images[2];
+    VkImageView views[2];
+    VkDeviceMemory memory, plain_memory;
+    VkCommandBuffer cb;
+    VkBufferImageCopy copy;
+    struct buf host, out;
+    const float *f;
+    uint32_t i, l, size = 2 * 13 * 17 * 8;
+    VkDeviceSize at;
+    VkFormatProperties fp;
+
+    vkGetPhysicalDeviceFormatProperties(pd, VK_FORMAT_EAC_R11_UNORM_BLOCK, &fp);
+    if (!has_sparse() || !(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))
+        return;
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &images[0]));
+    sr = sparse_requirements(images[0]);
+    CHECK(sr.imageMipTailFirstLod == 0);
+    memory = allocate(private_type, sr.imageMipTailSize);
+    REQUIRE(memory);
+    bind_opaque(images[0], sr.imageMipTailOffset, sr.imageMipTailSize, memory, 0);
+    info.flags = 0;
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &images[1]));
+    vkGetImageMemoryRequirements(device, images[1], &req);
+    plain_memory = allocate(private_type, req.size);
+    REQUIRE(plain_memory);
+    REQUIRE_VK(vkBindImageMemory(device, images[1], plain_memory, 0));
+    host = host_buf(size);
+    out = host_buf(48);
+    REQUIRE(host.data && out.data);
+    for (i = 0; i < size; i++)
+        ((uint8_t *)host.data)[i] = (uint8_t)pattern(i, 7);
+    cb = begin();
+    for (i = 0; i < 2; i++) {
+        to_general(cb, images[i], VK_IMAGE_ASPECT_COLOR_BIT);
+        for (l = 0, at = 0; l < 7; l++) { /* every level, as the CTS uploads them */
+            uint32_t w = 51u >> l ? 51u >> l : 1u, h = 65u >> l ? 65u >> l : 1u;
+            copy_region(&copy, at, l, 0, 0, 0, 0, w, h, 1);
+            vkCmdCopyBufferToImage(cb, host.buffer, images[i], VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
+            at += (VkDeviceSize)((w + 3) / 4) * ((h + 3) / 4) * 8;
+        }
+    }
+    barrier(cb);
+    submit(cb);
+
+    memset(&sampler_info, 0, sizeof(sampler_info));
+    sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler_info.magFilter = sampler_info.minFilter = VK_FILTER_NEAREST;
+    sampler_info.addressModeU = sampler_info.addressModeV = sampler_info.addressModeW =
+        VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    REQUIRE_VK(vkCreateSampler(device, &sampler_info, NULL, &sampler));
+    memset(bindings, 0, sizeof(bindings));
+    for (i = 0; i < 3; i++) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = i < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    memset(&set_layout_info, 0, sizeof(set_layout_info));
+    set_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    set_layout_info.bindingCount = 3;
+    set_layout_info.pBindings = bindings;
+    REQUIRE_VK(vkCreateDescriptorSetLayout(device, &set_layout_info, NULL, &set_layout));
+    pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_sizes[0].descriptorCount = 2;
+    pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    pool_sizes[1].descriptorCount = 1;
+    memset(&pool_info, 0, sizeof(pool_info));
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.maxSets = 1;
+    pool_info.poolSizeCount = 2;
+    pool_info.pPoolSizes = pool_sizes;
+    REQUIRE_VK(vkCreateDescriptorPool(device, &pool_info, NULL, &desc_pool));
+    memset(&set_info, 0, sizeof(set_info));
+    set_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    set_info.descriptorPool = desc_pool;
+    set_info.descriptorSetCount = 1;
+    set_info.pSetLayouts = &set_layout;
+    REQUIRE_VK(vkAllocateDescriptorSets(device, &set_info, &set));
+    for (i = 0; i < 2; i++) {
+        views[i] = make_view(images[i], VK_FORMAT_EAC_R11_UNORM_BLOCK, VK_IMAGE_ASPECT_COLOR_BIT);
+        image_desc[i].sampler = sampler;
+        image_desc[i].imageView = views[i];
+        image_desc[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    buffer_desc.buffer = out.buffer;
+    buffer_desc.offset = 0;
+    buffer_desc.range = VK_WHOLE_SIZE;
+    memset(writes, 0, sizeof(writes));
+    writes[0].sType = writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = writes[1].dstSet = set;
+    writes[0].descriptorCount = 2;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].pImageInfo = image_desc;
+    writes[1].dstBinding = 2;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[1].pBufferInfo = &buffer_desc;
+    vkUpdateDescriptorSets(device, 2, writes, 0, NULL);
+    memset(&layout_info, 0, sizeof(layout_info));
+    layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout_info.setLayoutCount = 1;
+    layout_info.pSetLayouts = &set_layout;
+    REQUIRE_VK(vkCreatePipelineLayout(device, &layout_info, NULL, &layout));
+    pipeline = compute_pipeline(spv_compressed_tail, sizeof(spv_compressed_tail), layout);
+    REQUIRE(pipeline);
+
+    cb = begin();
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, NULL);
+    vkCmdDispatch(cb, 7, 9, 1);
+    barrier(cb);
+    submit(cb);
+    f = (const float *)((const uint8_t *)out.data + 16);
+    if (*(const uint32_t *)out.data)
+        PVK_TEST_FAIL("%u texels differ, e.g. red %g, want %g", *(const uint32_t *)out.data, (double)f[0],
+                      (double)f[4]);
+    CHECK(*(const uint32_t *)out.data == 0);
+
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyPipelineLayout(device, layout, NULL);
+    vkDestroyDescriptorPool(device, desc_pool, NULL);
+    vkDestroyDescriptorSetLayout(device, set_layout, NULL);
+    for (i = 0; i < 2; i++) {
+        vkDestroyImageView(device, views[i], NULL);
+        vkDestroyImage(device, images[i], NULL);
+    }
+    vkDestroySampler(device, sampler, NULL);
+    vkFreeMemory(device, memory, NULL);
+    vkFreeMemory(device, plain_memory, NULL);
+    free_buf(&host);
+    free_buf(&out);
+}
+
 /* spv_storage_tail on level `level` (w x h) of an RGBA8_UINT storage image:
  * each texel's { resident, R, G, 7 } into out (w * h * 4 uints). */
 static void storage_read(VkImage image, uint32_t level, uint32_t w, uint32_t h, uint32_t *out)
@@ -2784,6 +3031,7 @@ int main(void)
     RUN(test_sparse_residency_3d_tail);
     RUN(test_sparse_storage_reads);
     RUN(test_sparse_depth_stencil);
+    RUN(test_sparse_compressed_tail);
     teardown();
     return TEST_RESULT();
 }

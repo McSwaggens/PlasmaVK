@@ -37630,7 +37630,7 @@ struct pvk_sparse_layout {
     uint32_t res_metal_tail;
     uint32_t res_tail_tiles;
     id res_heap;
-    bool dedicated; /* storage images entirely in the Vulkan tail: the texture is not sparse */
+    bool dedicated; /* storage and compressed images entirely in the Vulkan tail: the texture is not sparse */
 };
 
 struct pvk_image {
@@ -38113,10 +38113,13 @@ static void pvk_sparse_residency_free(struct pvk_device *device, struct pvk_spar
     }
 }
 
-/* Makes the texture of a storage image entirely in the Vulkan tail an ordinary
- * one with memory of its own (SPARSE IMAGES): a shader with a sparse read
- * hangs the GPU reading such a ShaderWrite sparse texture. Binds then map
- * only its residency texture. */
+/* Makes the texture of a storage or block-compressed image entirely in the
+ * Vulkan tail an ordinary one with memory of its own (SPARSE IMAGES): a
+ * shader with a sparse read hangs the GPU reading such a ShaderWrite sparse
+ * texture, and samplers read a partial block at the corner of a compressed
+ * one's tail wrong (M4 Max, macOS 27.2: the last 4x4 block of level 0 of a
+ * 51x65 EAC texture with 7 levels; blits copy it right). Binds then map only its residency
+ * texture. */
 static bool pvk_sparse_dedicate(struct pvk_device *device, struct pvk_image *image)
 {
     void *pool = objc_autoreleasePoolPush();
@@ -38243,7 +38246,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImage(VkDevice _device, const VkImageCrea
             pvk_free(alloc, image);
             return VK_ERROR_OUT_OF_DEVICE_MEMORY;
         }
-        if ((image->usage & VK_IMAGE_USAGE_STORAGE_BIT) && image->sparse->tail_first == 0 &&
+        if (((image->usage & VK_IMAGE_USAGE_STORAGE_BIT) || image->fmt->block_w > 1) && image->sparse->tail_first == 0 &&
             !pvk_sparse_dedicate(device, image)) {
             pvk_sparse_residency_free(device, image->sparse);
             pvk_device_evict(device, image->mtl_texture);
