@@ -49760,7 +49760,11 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
     for (i = 0; i < fn->nparams; i++) {
         struct pvk_spv_id *x = pvk_spv_get(ctx, fn->params[i]);
         const char *decl;
-        if (x->p)
+        struct pvk_spv_type *rt = x->p ? pvk_spv_type(ctx, x->p->type) : NULL;
+        if (rt && rt->op == PVK_SPV_OpTypeRuntimeArray) /* a pointer to its first element (it decays to one) */
+            decl = pvk_spv_fmt(ctx, "%s %s* %s", pvk_spv_space(ctx, x->p),
+                               rt->slot ? rt->slot : pvk_spv_type(ctx, rt->elem)->msl, x->msl);
+        else if (x->p)
             decl = pvk_spv_fmt(ctx, "%s& %s", pvk_spv_qualified(ctx, pvk_spv_space(ctx, x->p), x->p->type), x->msl);
         else
             decl = pvk_spv_fmt(ctx, "%s %s", pvk_spv_type(ctx, x->type)->msl, x->msl);
