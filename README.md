@@ -15,9 +15,10 @@ linker flags: the header links Metal itself.
 
 **Status:** every Vulkan 1.4 command is implemented on Metal 4 (no stubs left),
 along with the extensions PlasmaVK advertises: surfaces and swapchains on
-CAMetalLayer, debug utils, maintenance5, descriptor indexing, draw parameters,
-indirect count, viewport index / layer output and, on Apple10 GPUs, sampler
-min/max filtering, and a built-in debug layer (below). Sparse resources (sparse binding; partially resident buffers and
+CAMetalLayer, debug utils, and, as Vulkan 1.4 drivers list them, the
+extensions promoted to Vulkan 1.1-1.4 whose features it has (sampler min/max
+filtering only on Apple10 GPUs), with their KHR/EXT command names; and a
+built-in debug layer (below). Sparse resources (sparse binding; partially resident buffers and
 2D, 3D and multisampled images; aliasing) map onto Metal 4's placement sparse
 buffers and textures (macOS/iOS 26.4). Partially resident images can't have
 storage usage, because Metal reports the residency of such a texture's mip

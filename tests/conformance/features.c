@@ -6,7 +6,10 @@
  * blocks of vk.xml 1.4.363, from which the specification generates its
  * Feature Requirements list. A feature can be required unconditionally from
  * one version and conditionally from an earlier one (when an extension is
- * offered or another feature is supported). */
+ * offered or another feature is supported). The extension blocks' lists add
+ * the features of extensions promoted to core where no version requires
+ * them, some in core structures (the table's last rows), some in the
+ * extensions' own structures (ext_requirements). */
 #include "ct.h"
 
 #include <stdio.h>
@@ -144,7 +147,84 @@ static const struct requirement requirements[] = {
     ALWAYS(R14, maintenance6, V14),
     ALWAYS(R14, pipelineRobustness, V14),
     IF_FEATURE(R14, pipelineProtectedAccess, 0, V14, R11, protectedMemory),
+    /* Extensions promoted to core (any version, if the structure is there) */
+    IF_EXT(R12, shaderBufferInt64Atomics, 0, V10, "VK_KHR_shader_atomic_int64"),
+    IF_EXT(R13, textureCompressionASTC_HDR, 0, V10, "VK_EXT_texture_compression_astc_hdr"),
+    IF_EXT(R14, hostImageCopy, 0, V10, "VK_EXT_host_image_copy"),
 };
+
+/* Features of promoted extensions' own structures (core has no members for
+ * them), required when the extension is offered. */
+struct ext_requirement {
+    const char *name;
+    const char *extension;
+    VkStructureType sType;
+    size_t offset; /* of the VkBool32 in the structure */
+};
+
+#define EXT_REQ(m, ext, sType, T) { #m, ext, sType, offsetof(T, m) }
+
+static const struct ext_requirement ext_requirements[] = {
+    EXT_REQ(extendedDynamicState, "VK_EXT_extended_dynamic_state",
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT,
+            VkPhysicalDeviceExtendedDynamicStateFeaturesEXT),
+    EXT_REQ(extendedDynamicState2, "VK_EXT_extended_dynamic_state2",
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_2_FEATURES_EXT,
+            VkPhysicalDeviceExtendedDynamicState2FeaturesEXT),
+    EXT_REQ(texelBufferAlignment, "VK_EXT_texel_buffer_alignment",
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXEL_BUFFER_ALIGNMENT_FEATURES_EXT,
+            VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT),
+    EXT_REQ(formatA4R4G4B4, "VK_EXT_4444_formats", VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_4444_FORMATS_FEATURES_EXT,
+            VkPhysicalDevice4444FormatsFeaturesEXT),
+    EXT_REQ(ycbcr2plane444Formats, "VK_EXT_ycbcr_2plane_444_formats",
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_YCBCR_2_PLANE_444_FORMATS_FEATURES_EXT,
+            VkPhysicalDeviceYcbcr2Plane444FormatsFeaturesEXT),
+};
+
+union ext_features {
+    VkBaseOutStructure base;
+    VkPhysicalDeviceExtendedDynamicStateFeaturesEXT dynamic_state;
+    VkPhysicalDeviceExtendedDynamicState2FeaturesEXT dynamic_state2;
+    VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT texel_buffer_alignment;
+    VkPhysicalDevice4444FormatsFeaturesEXT formats_4444;
+    VkPhysicalDeviceYcbcr2Plane444FormatsFeaturesEXT ycbcr_444;
+};
+
+/* The extension structure of sType through vkGetPhysicalDeviceFeatures2,
+ * pre-filled with fill. */
+static void get_ext_features(const struct ct_env *e, VkStructureType sType, union ext_features *u, unsigned char fill)
+{
+    VkPhysicalDeviceFeatures2 f2;
+    memset(u, fill, sizeof(*u));
+    u->base.sType = sType;
+    u->base.pNext = NULL;
+    memset(&f2, 0, sizeof(f2));
+    f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    f2.pNext = u;
+    vkGetPhysicalDeviceFeatures2(e->pd, &f2);
+}
+
+static void check_extension_feature(struct ct *t)
+{
+    const struct ext_requirement *req = ct_param(t);
+    union ext_features a, b;
+    VkBool32 va, vb;
+    struct ct_env e;
+
+    ct_env_init(t, &e);
+    if (!ct_device_extension_supported(e.pd, req->extension))
+        ct_skip(t, "%s is not offered", req->extension);
+    if (e.version < VK_API_VERSION_1_1)
+        ct_skip(t, "vkGetPhysicalDeviceFeatures2 needs Vulkan 1.1");
+    get_ext_features(&e, req->sType, &a, 0x00);
+    get_ext_features(&e, req->sType, &b, 0xFF);
+    memcpy(&va, (const char *)&a + req->offset, sizeof(va));
+    memcpy(&vb, (const char *)&b + req->offset, sizeof(vb));
+    CT_CHECKF(t, va == vb, "%s is not written by vkGetPhysicalDeviceFeatures2 (pre-filled 0x00: %u, 0xFF: %u)",
+              req->name, va, vb);
+    CT_CHECKF(t, va == VK_TRUE, "%s is %u with %s offered", req->name, va, req->extension);
+    ct_env_fini(&e);
+}
 
 static const VkBool32 *feature_at(const struct ct_features *f, struct ref r)
 {
@@ -259,8 +339,40 @@ CT_TEST(hostImageCopy_single_family,
     ct_env_fini(&e);
 }
 
+CT_TEST(formats_4444_format_features,
+        "Features > VkPhysicalDevice4444FormatsFeaturesEXT: formatA4R4G4B4 (formatA4B4G4R4) \"indicates that the "
+        "implementation must support using a VkFormat of VK_FORMAT_A4R4G4B4_UNORM_PACK16 (A4B4G4R4) with at least "
+        "the following VkFormatFeatureFlagBits\": SAMPLED_IMAGE, BLIT_SRC and SAMPLED_IMAGE_FILTER_LINEAR",
+        "vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFormatProperties vkGetPhysicalDeviceFormatProperties2 "
+        "vkEnumerateDeviceExtensionProperties")
+{
+    const VkFormatFeatureFlags2 need = VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_2_BLIT_SRC_BIT |
+                                       VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    union ext_features u;
+    struct ct_env e;
+
+    ct_env_init(t, &e);
+    if (!ct_device_extension_supported(e.pd, "VK_EXT_4444_formats"))
+        ct_skip(t, "VK_EXT_4444_formats is not offered");
+    if (e.version < VK_API_VERSION_1_1)
+        ct_skip(t, "vkGetPhysicalDeviceFeatures2 needs Vulkan 1.1");
+    get_ext_features(&e, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_4444_FORMATS_FEATURES_EXT, &u, 0);
+    if (u.formats_4444.formatA4R4G4B4)
+        CT_CHECKF(t, (ct_format_features(&e, VK_FORMAT_A4R4G4B4_UNORM_PACK16, 0) & need) == need,
+                  "A4R4G4B4: optimal tiling features 0x%llx",
+                  (unsigned long long)ct_format_features(&e, VK_FORMAT_A4R4G4B4_UNORM_PACK16, 0));
+    if (u.formats_4444.formatA4B4G4R4)
+        CT_CHECKF(t, (ct_format_features(&e, VK_FORMAT_A4B4G4R4_UNORM_PACK16, 0) & need) == need,
+                  "A4B4G4R4: optimal tiling features 0x%llx",
+                  (unsigned long long)ct_format_features(&e, VK_FORMAT_A4B4G4R4_UNORM_PACK16, 0));
+    if (!u.formats_4444.formatA4R4G4B4 && !u.formats_4444.formatA4B4G4R4)
+        ct_skip(t, "neither 4444 format feature is supported");
+    ct_env_fini(&e);
+}
+
 static const struct ct_test *const fixed_tests[] = {
     CT_REF(hostImageCopy_single_family),
+    CT_REF(formats_4444_format_features),
 };
 
 void ct_suite_features(struct ct_registry *r);
@@ -269,6 +381,9 @@ void ct_suite_features(struct ct_registry *r)
     static struct ct_test tests[CT_ARRAY_SIZE(requirements)];
     static const struct ct_test *ptrs[CT_ARRAY_SIZE(requirements)];
     static char specs[CT_ARRAY_SIZE(requirements)][320];
+    static struct ct_test ext_tests[CT_ARRAY_SIZE(ext_requirements)];
+    static const struct ct_test *ext_ptrs[CT_ARRAY_SIZE(ext_requirements)];
+    static char ext_specs[CT_ARRAY_SIZE(ext_requirements)][200];
     size_t i;
 
     for (i = 0; i < CT_ARRAY_SIZE(requirements); i++) {
@@ -288,6 +403,18 @@ void ct_suite_features(struct ct_registry *r)
         tests[i].param = q;
         ptrs[i] = &tests[i];
     }
+    for (i = 0; i < CT_ARRAY_SIZE(ext_requirements); i++) {
+        const struct ext_requirement *q = &ext_requirements[i];
+        snprintf(ext_specs[i], sizeof(ext_specs[i]), "Features > Feature Requirements: Vulkan implementations must "
+                 "support %s (a feature of the extension's own structure) if %s is offered", q->name, q->extension);
+        ext_tests[i].name = q->name;
+        ext_tests[i].fn = check_extension_feature;
+        ext_tests[i].spec = ext_specs[i];
+        ext_tests[i].commands = "vkGetPhysicalDeviceFeatures2 vkEnumerateDeviceExtensionProperties";
+        ext_tests[i].param = q;
+        ext_ptrs[i] = &ext_tests[i];
+    }
     ct_register(r, "features", ptrs, CT_ARRAY_SIZE(ptrs));
+    ct_register(r, "features", ext_ptrs, CT_ARRAY_SIZE(ext_ptrs));
     ct_register(r, "features", fixed_tests, CT_ARRAY_SIZE(fixed_tests));
 }

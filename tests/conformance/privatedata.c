@@ -1,6 +1,7 @@
 /* Chapter "Private Data": slots, vkSetPrivateData and vkGetPrivateData on
  * objects of several types, the value of data never set, reserved slots
- * (VkDevicePrivateDataCreateInfo), and allocation callbacks. */
+ * (VkDevicePrivateDataCreateInfo), allocation callbacks, and
+ * VK_EXT_private_data at apiVersion 1.0. */
 #include "ct.h"
 
 /* An instance and a device with privateData enabled (VUID-vkCreatePrivateDataSlot-
@@ -337,10 +338,70 @@ CT_TEST(private_data_allocator,
     ct_env_fini(&e);
 }
 
+CT_TEST(private_data_extension,
+        "Private Data with VK_EXT_private_data (promoted to Vulkan 1.3): on an apiVersion 1.0 instance with "
+        "VK_KHR_get_physical_device_properties2 (the extension's dependency below Vulkan 1.1), privateData is "
+        "supported (Features > Feature Requirements: required with the extension), a device with the extension and "
+        "VkPhysicalDevicePrivateDataFeaturesEXT::privateData can be created, vkGetDeviceProcAddr returns its "
+        "commands (Initialization > Command Function Pointers: enabled extension commands), and they store data",
+        "vkGetPhysicalDeviceFeatures2KHR vkCreateDevice vkCreatePrivateDataSlotEXT vkSetPrivateDataEXT "
+        "vkGetPrivateDataEXT vkDestroyPrivateDataSlotEXT vkDestroyDevice")
+{
+    const char *instance_exts[] = { VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME };
+    const char *device_exts[] = { VK_EXT_PRIVATE_DATA_EXTENSION_NAME };
+    PFN_vkGetPhysicalDeviceFeatures2KHR get_features;
+    PFN_vkCreatePrivateDataSlotEXT create;
+    PFN_vkDestroyPrivateDataSlotEXT destroy;
+    PFN_vkSetPrivateDataEXT set;
+    PFN_vkGetPrivateDataEXT get;
+    VkPhysicalDevicePrivateDataFeaturesEXT private_data;
+    VkPhysicalDeviceFeatures2KHR features;
+    VkPrivateDataSlotCreateInfoEXT info;
+    VkPrivateDataSlotEXT slot = VK_NULL_HANDLE;
+    struct ct_env e;
+    uint64_t v;
+
+    if (!ct_instance_extension_supported(instance_exts[0]))
+        ct_skip(t, "VK_KHR_get_physical_device_properties2 is not offered");
+    ct_env_init_ex(t, &e, VK_API_VERSION_1_0, instance_exts, 1);
+    if (!ct_device_extension_supported(e.pd, device_exts[0]))
+        ct_skip(t, "VK_EXT_private_data is not offered");
+    get_features =
+        (PFN_vkGetPhysicalDeviceFeatures2KHR)vkGetInstanceProcAddr(e.instance, "vkGetPhysicalDeviceFeatures2KHR");
+    CT_REQUIREF(t, get_features != NULL, "vkGetPhysicalDeviceFeatures2KHR is NULL with its extension enabled");
+    memset(&private_data, 0, sizeof(private_data));
+    private_data.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_FEATURES_EXT;
+    memset(&features, 0, sizeof(features));
+    features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR;
+    features.pNext = &private_data;
+    get_features(e.pd, &features);
+    CT_REQUIREF(t, private_data.privateData == VK_TRUE, "privateData is %u with VK_EXT_private_data offered",
+                private_data.privateData);
+    ct_env_device_ex(t, &e, &private_data, device_exts, 1, NULL);
+
+    create = (PFN_vkCreatePrivateDataSlotEXT)vkGetDeviceProcAddr(e.device, "vkCreatePrivateDataSlotEXT");
+    destroy = (PFN_vkDestroyPrivateDataSlotEXT)vkGetDeviceProcAddr(e.device, "vkDestroyPrivateDataSlotEXT");
+    set = (PFN_vkSetPrivateDataEXT)vkGetDeviceProcAddr(e.device, "vkSetPrivateDataEXT");
+    get = (PFN_vkGetPrivateDataEXT)vkGetDeviceProcAddr(e.device, "vkGetPrivateDataEXT");
+    CT_REQUIREF(t, create && destroy && set && get, "a command of VK_EXT_private_data is NULL with it enabled");
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_PRIVATE_DATA_SLOT_CREATE_INFO_EXT;
+    CT_REQUIRE_VK(t, create(e.device, &info, NULL, &slot));
+    CT_CHECK_VK(t, set(e.device, VK_OBJECT_TYPE_DEVICE, PT_HANDLE(e.device), slot, 0x123456789ull), VK_SUCCESS);
+    v = 0;
+    get(e.device, VK_OBJECT_TYPE_DEVICE, PT_HANDLE(e.device), slot, &v);
+    CT_CHECK(t, v == 0x123456789ull);
+    v = 1;
+    get(e.device, VK_OBJECT_TYPE_QUEUE, PT_HANDLE(e.queue), slot, &v);
+    CT_CHECKF(t, v == 0, "data never set reads %llu, not 0", (unsigned long long)v);
+    destroy(e.device, slot, NULL);
+    ct_env_fini(&e);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(private_data_slots),    CT_REF(private_data_slot_destroy_null), CT_REF(private_data_objects),
     CT_REF(private_data_new_objects), CT_REF(private_data_many),         CT_REF(private_data_reserved),
-    CT_REF(private_data_allocator),
+    CT_REF(private_data_allocator), CT_REF(private_data_extension),
 };
 
 CT_SUITE(privatedata, tests)

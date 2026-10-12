@@ -17,13 +17,13 @@ One file per chapter of the Vulkan specification:
 
 | File | Chapter | Tests |
 |---|---|---|
-| `initialization.c` | Initialization: `vkGet*ProcAddr`, instances | 25 |
+| `initialization.c` | Initialization: `vkGet*ProcAddr` (also of the KHR/EXT names of promoted extensions' commands), instances | 25 |
 | `devsandqueues.c` | Devices and Queues: physical devices, properties, features queries, queue families, devices, queues | 34 |
 | `cmdbuffers.c` | Command Buffers: resetting pools and command buffers (what they hold afterwards), trimming pools, `vkQueueSubmit2` (batches, binary and timeline semaphores, fences), the device mask | 5 |
 | `memory.c` | Memory Allocation: memory properties, allocation, mapping, flushing, host/device visibility, peer memory features | 28 |
 | `resources.c` | Resource Creation: buffers, images, memory requirements, binding, device addresses, subresource layouts, image and buffer views, multi-planar images (disjoint planes, linear plane layouts), the subresource layout queries of VK_KHR_maintenance5 on a 1.3 device | 32 |
 | `extensions.c` | Layers & Extensions: enumeration, extension dependencies, enabling a layer (with the instance extensions it provides), device layers of an instance with a layer enabled, the device extensions of each layer | 16 |
-| `features.c` | Features > Feature Requirements: one test per required feature | 86 |
+| `features.c` | Features > Feature Requirements: one test per required feature (also those extensions promoted to core require, in core structures or their own), the format features of VK_EXT_4444_formats | 95 |
 | `limits.c` | Limits > Limit Requirements: one test per limit of the Required Limits table | 145 |
 | `formats.c` | Formats: one test per format of the Required Format Support tables (features, image types), the required Y'CbCr formats, and the chapter's other rules | 66 |
 | `capabilities.c` | Additional Capabilities: image format properties (extents, mip levels, layers, sample counts, monotonicity, host image copy, Y'CbCr descriptor counts), sparse image formats, external memory, semaphore and fence handle types | 10 |
@@ -33,7 +33,7 @@ One file per chapter of the Vulkan specification:
 | `descriptorsets.c` | Resource Descriptors > Descriptor Sets: set layouts and support queries, pools and allocation, writes, copies, inline uniform blocks, update templates, dynamic offsets, push descriptors, update after bind, variable-count and partially bound bindings, every descriptor type read by a compute shader; push constant updates (`vkCmdPushConstants2`) | 20 |
 | `queries.c` | Queries: pools, host and device resets, timestamp availability, order and period, `vkCmdWriteTimestamp2`, secondaries, results layout with every flag, waiting, unavailable occlusion queries with PARTIAL, `vkCmdCopyQueryPoolResults` (later submission, same command buffer, WAIT), occlusion query counts (precise, occluded, no draws, several draws) | 16 |
 | `synchronization.c` | Synchronization and Cache Control. Events: host and device state, the host seeing a device signal, device waits on host and device signals (same command buffer, batch, earlier submission, several events, synchronization2, device-only events); timeline semaphore values and host waits; `vkDeviceWaitIdle` | 10 |
-| `privatedata.c` | Private Data: slots, data on objects of many types, data of new objects and slots, many objects, reserved slots, allocation callbacks | 7 |
+| `privatedata.c` | Private Data: slots, data on objects of many types, data of new objects and slots, many objects, reserved slots, allocation callbacks, VK_EXT_private_data on an apiVersion 1.0 instance | 8 |
 | `renderpass.c` | Render Pass: load and store operations, render areas, subpasses with an input attachment and a dependency (`vkCreateRenderPass2`, `vkCmdNextSubpass2`), depth and stencil read as input attachments (reference aspect masks), color and depth resolves (multisampled attachments stored or not), multiview, imageless framebuffers, render area granularity (also `vkGetRenderingAreaGranularityKHR` on a 1.3 device), `vkCmdNextSubpass` (inline and secondary contents, preserved attachments); dynamic rendering: color and depth, resolves, suspending and resuming across command buffers, multiview, local read (attachment locations, input attachment indices, depth and stencil input attachment indices) | 17 |
 | `pipelines.c` | Pipelines: no fragment shader, specialization constants (and operations on them), a uniform buffer through a descriptor set; dynamic state (viewports and scissors with and without counts, cull mode, front face, topology, depth and stencil state, rasterizer discard, depth bias); pipeline caches (header, `VK_INCOMPLETE`, partial data, round trip, merging), `FAIL_ON_PIPELINE_COMPILE_REQUIRED` with `EARLY_RETURN_ON_FAILURE`, creation feedback | 13 |
 | `drawing.c` | Drawing Commands and Fixed-Function Vertex Processing: vertex and instance numbering of direct, indexed (UINT16, UINT32, UINT8) and indirect draws, draw counts, primitive restart (static and dynamic), every primitive topology, draw parameters (BaseVertex, BaseInstance, DrawIndex), vertex attribute formats, offsets and instance rates, divisors, dynamic binding strides; `vkCmdBindIndexBuffer2` ranges; the KHR aliases of VK_KHR_maintenance5 and VK_KHR_draw_indirect_count on a 1.3 device | 15 |
@@ -156,10 +156,14 @@ of the file (an unlisted test is an unused static and breaks the build).
 
 `ct -c` reports which commands the selected tests call, against every Vulkan
 1.4 core command plus those of VK_KHR_surface, VK_EXT_metal_surface,
-VK_KHR_portability_enumeration, VK_KHR_swapchain and VK_EXT_debug_utils, and
-lists the rest (VK_EXT_swapchain_colorspace has no commands). When PlasmaVK
-advertises another extension, add its commands to `commands.c` (and, for a
-device extension, its name to `ct_origin_is_device_extension`).
+VK_KHR_portability_enumeration, VK_KHR_swapchain, VK_EXT_debug_utils and the
+extensions promoted to Vulkan 1.1-1.4 (their commands are the core ones
+under KHR/EXT names, which the tests mostly reach through `vkGet*ProcAddr`
+rather than call), and lists the rest (VK_EXT_swapchain_colorspace has no
+commands). When PlasmaVK advertises another extension, add its commands to
+`commands.c` (and, for a device extension, its name to
+`ct_origin_is_device_extension`; for a command vk.xml adds only with another
+extension or a core version, a row to `ct_command_condition`).
 VK_EXT_debug_utils is an instance extension with device-level commands
 (object names, labels): the `vkGet*ProcAddr` tests treat them as instance
 extension commands, which `vkGetDeviceProcAddr` returns when the instance
@@ -295,7 +299,8 @@ behaviour.
 | `devsandqueues.get_device_queue2_protected`, `features.pipelineProtectedAccess` | Apple GPUs have no protected memory. |
 | `memory.peer_memory_features` | Every device group has one physical device: `vkGetDeviceGroupPeerMemoryFeatures` has no valid call (its local and remote device indices must differ). |
 | `resources.buffer_capture_replay` | Metal cannot place a resource at a requested GPU address, so `bufferDeviceAddressCaptureReplay` is unsupported. |
-| `features.shaderInt64` | Required only with 64-bit shader atomics, which Apple7/Apple8 GPUs lack. |
+| `features.shaderInt64`, `features.shaderBufferInt64Atomics` | Required only with 64-bit shader atomics (VK_KHR_shader_atomic_int64), which Apple7/Apple8 GPUs lack. |
+| `features.ycbcr2plane444Formats` | VK_EXT_ycbcr_2plane_444_formats is not offered: of the four formats its feature promises, PlasmaVK has only the 8-bit one. |
 | `features.samplerFilterMinmax`, `formats.filter_minmax_formats`, `samplers.create_sampler_reduction` | Required only with VK_EXT_sampler_filter_minmax, which PlasmaVK offers from Apple10 (M5, A19): Metal's `MTLSamplerDescriptor.reductionMode` is an Apple10 feature (FST "Sampler minimum and maximum reduction"), and on Apple9 (M4 Max) it is accepted and ignored, minimum and maximum sampling as the weighted average. A shader cannot emulate it: a sampler descriptor is only its MTLResourceID. |
 
 ## Tests PlasmaVK fails

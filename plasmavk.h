@@ -31843,8 +31843,14 @@ static VkResult pvk_enumerate(const void *items, size_t item_size, uint32_t coun
 /* ==========================================================================
  * 6. Extensions
  *
- * Advertised extensions. Their commands get stubs in section 19 and entries
- * in section 20 until implemented.
+ * Advertised extensions: PlasmaVK's own (surfaces, swapchains, debug utils)
+ * and, as Vulkan 1.4 drivers do, every extension promoted to Vulkan 1.1-1.4
+ * whose functionality PlasmaVK has (Core Revisions). Applications written
+ * for an older apiVersion enable those and call the core commands by their
+ * KHR/EXT names (section 20). A promoted extension that needs a feature
+ * Vulkan 1.4 leaves optional is offered only with that feature
+ * (pvk_device_extension_features, section 7). An extension's own commands
+ * get stubs in section 19 until implemented, and entries in section 20.
  * ========================================================================== */
 
 enum pvk_instance_extension {
@@ -31857,15 +31863,29 @@ enum pvk_instance_extension {
      * provided by the debug layer below. Its device-level commands are
      * returned by vkGetDeviceProcAddr when the instance enabled it. */
     PVK_INSTANCE_EXT_EXT_debug_utils,
+    /* Promoted to Vulkan 1.1: the physical device queries */
+    PVK_INSTANCE_EXT_KHR_device_group_creation,
+    PVK_INSTANCE_EXT_KHR_external_fence_capabilities,
+    PVK_INSTANCE_EXT_KHR_external_memory_capabilities,
+    PVK_INSTANCE_EXT_KHR_external_semaphore_capabilities,
+    PVK_INSTANCE_EXT_KHR_get_physical_device_properties2,
     PVK_INSTANCE_EXTENSION_COUNT
 };
 
-static const VkExtensionProperties pvk_instance_extensions[] = {
-    { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_SURFACE_SPEC_VERSION },
-    { VK_EXT_METAL_SURFACE_EXTENSION_NAME, VK_EXT_METAL_SURFACE_SPEC_VERSION },
-    { VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME, VK_KHR_PORTABILITY_ENUMERATION_SPEC_VERSION },
-    { VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME, VK_EXT_SWAPCHAIN_COLOR_SPACE_SPEC_VERSION },
-    { VK_EXT_DEBUG_UTILS_EXTENSION_NAME, VK_EXT_DEBUG_UTILS_SPEC_VERSION },
+/* Each extension's properties at the index of its enum member. */
+#define PVK_EXT(prefix, e, NAME) [prefix##e] = { VK_##NAME##_EXTENSION_NAME, VK_##NAME##_SPEC_VERSION }
+
+static const VkExtensionProperties pvk_instance_extensions[PVK_INSTANCE_EXTENSION_COUNT] = {
+    PVK_EXT(PVK_INSTANCE_EXT_, KHR_surface, KHR_SURFACE),
+    PVK_EXT(PVK_INSTANCE_EXT_, EXT_metal_surface, EXT_METAL_SURFACE),
+    PVK_EXT(PVK_INSTANCE_EXT_, KHR_portability_enumeration, KHR_PORTABILITY_ENUMERATION),
+    PVK_EXT(PVK_INSTANCE_EXT_, EXT_swapchain_colorspace, EXT_SWAPCHAIN_COLOR_SPACE),
+    PVK_EXT(PVK_INSTANCE_EXT_, EXT_debug_utils, EXT_DEBUG_UTILS),
+    PVK_EXT(PVK_INSTANCE_EXT_, KHR_device_group_creation, KHR_DEVICE_GROUP_CREATION),
+    PVK_EXT(PVK_INSTANCE_EXT_, KHR_external_fence_capabilities, KHR_EXTERNAL_FENCE_CAPABILITIES),
+    PVK_EXT(PVK_INSTANCE_EXT_, KHR_external_memory_capabilities, KHR_EXTERNAL_MEMORY_CAPABILITIES),
+    PVK_EXT(PVK_INSTANCE_EXT_, KHR_external_semaphore_capabilities, KHR_EXTERNAL_SEMAPHORE_CAPABILITIES),
+    PVK_EXT(PVK_INSTANCE_EXT_, KHR_get_physical_device_properties2, KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2),
 };
 
 /* The one layer: built in, since without a loader no other layer can run
@@ -31882,47 +31902,208 @@ static const VkExtensionProperties pvk_debug_layer_extensions[] = {
     { VK_EXT_DEBUG_UTILS_EXTENSION_NAME, VK_EXT_DEBUG_UTILS_SPEC_VERSION },
 };
 
+/* Device extensions, listed in this order. The features a promoted one
+ * needs are in pvk_device_extension_features (section 7). */
 enum pvk_device_extension {
     PVK_DEVICE_EXT_KHR_swapchain,
-    PVK_DEVICE_EXT_KHR_maintenance5, /* core in 1.4; offered so apiVersion 1.3 apps can enable it */
-    /* Core in 1.2 but optional: offered (with samplerFilterMinmax) only where
-     * Metal samplers reduce (pvk_device_extension_available, section 7). */
-    PVK_DEVICE_EXT_EXT_sampler_filter_minmax,
-    /* Core in 1.2 but optional: offered with descriptorIndexing (section 7). */
-    PVK_DEVICE_EXT_EXT_descriptor_indexing,
-    /* Graphics features that are core but optional (section 7): offered
-     * with shaderDrawParameters, drawIndirectCount, and shaderOutputLayer
-     * with shaderOutputViewportIndex. */
+    /* Promoted to Vulkan 1.1 */
+    PVK_DEVICE_EXT_KHR_16bit_storage,
+    PVK_DEVICE_EXT_KHR_bind_memory2,
+    PVK_DEVICE_EXT_KHR_dedicated_allocation,
+    PVK_DEVICE_EXT_KHR_descriptor_update_template,
+    PVK_DEVICE_EXT_KHR_device_group,   /* groups of one device (section 8) */
+    PVK_DEVICE_EXT_KHR_external_fence, /* the external ones: no handle types (section 7) */
+    PVK_DEVICE_EXT_KHR_external_memory,
+    PVK_DEVICE_EXT_KHR_external_semaphore,
+    PVK_DEVICE_EXT_KHR_get_memory_requirements2,
+    PVK_DEVICE_EXT_KHR_maintenance1,
+    PVK_DEVICE_EXT_KHR_maintenance2,
+    PVK_DEVICE_EXT_KHR_maintenance3,
+    PVK_DEVICE_EXT_KHR_multiview,
+    PVK_DEVICE_EXT_KHR_relaxed_block_layout,
+    PVK_DEVICE_EXT_KHR_sampler_ycbcr_conversion,
     PVK_DEVICE_EXT_KHR_shader_draw_parameters,
-    PVK_DEVICE_EXT_KHR_draw_indirect_count,
+    PVK_DEVICE_EXT_KHR_storage_buffer_storage_class,
+    PVK_DEVICE_EXT_KHR_variable_pointers,
+    /* Promoted to Vulkan 1.2 */
+    PVK_DEVICE_EXT_EXT_descriptor_indexing,
+    PVK_DEVICE_EXT_EXT_host_query_reset,
+    PVK_DEVICE_EXT_EXT_sampler_filter_minmax, /* where Metal samplers reduce (section 7) */
+    PVK_DEVICE_EXT_EXT_scalar_block_layout,
+    PVK_DEVICE_EXT_EXT_separate_stencil_usage,
     PVK_DEVICE_EXT_EXT_shader_viewport_index_layer,
+    PVK_DEVICE_EXT_KHR_8bit_storage,
+    PVK_DEVICE_EXT_KHR_buffer_device_address,
+    PVK_DEVICE_EXT_KHR_create_renderpass2,
+    PVK_DEVICE_EXT_KHR_depth_stencil_resolve,
+    PVK_DEVICE_EXT_KHR_draw_indirect_count,
+    PVK_DEVICE_EXT_KHR_driver_properties,
+    PVK_DEVICE_EXT_KHR_image_format_list,
+    PVK_DEVICE_EXT_KHR_imageless_framebuffer,
+    PVK_DEVICE_EXT_KHR_sampler_mirror_clamp_to_edge,
+    PVK_DEVICE_EXT_KHR_separate_depth_stencil_layouts,
+    PVK_DEVICE_EXT_KHR_shader_atomic_int64, /* not offered: needs 64-bit buffer atomics */
+    PVK_DEVICE_EXT_KHR_shader_float16_int8, /* for shaderInt8 (shaderFloat16 is not supported) */
+    PVK_DEVICE_EXT_KHR_shader_float_controls,
+    PVK_DEVICE_EXT_KHR_shader_subgroup_extended_types,
+    PVK_DEVICE_EXT_KHR_spirv_1_4,
+    PVK_DEVICE_EXT_KHR_timeline_semaphore,
+    PVK_DEVICE_EXT_KHR_uniform_buffer_standard_layout,
+    PVK_DEVICE_EXT_KHR_vulkan_memory_model,
+    /* Promoted to Vulkan 1.3. Not VK_EXT_ycbcr_2plane_444_formats: its
+     * ycbcr2plane444Formats feature promises four formats, of which PlasmaVK
+     * has only G8_B8R8_2PLANE_444 (no 10-, 12- or 16-bit Y'CbCr formats). */
+    PVK_DEVICE_EXT_EXT_4444_formats,
+    PVK_DEVICE_EXT_EXT_extended_dynamic_state,
+    PVK_DEVICE_EXT_EXT_extended_dynamic_state2, /* not its logic op and patch control point states (section 15) */
+    PVK_DEVICE_EXT_EXT_image_robustness,
+    PVK_DEVICE_EXT_EXT_inline_uniform_block,
+    PVK_DEVICE_EXT_EXT_pipeline_creation_cache_control,
+    PVK_DEVICE_EXT_EXT_pipeline_creation_feedback,
+    PVK_DEVICE_EXT_EXT_private_data,
+    PVK_DEVICE_EXT_EXT_shader_demote_to_helper_invocation,
+    PVK_DEVICE_EXT_EXT_subgroup_size_control,
+    PVK_DEVICE_EXT_EXT_texel_buffer_alignment,
+    PVK_DEVICE_EXT_EXT_texture_compression_astc_hdr,
+    PVK_DEVICE_EXT_EXT_tooling_info,
+    PVK_DEVICE_EXT_KHR_copy_commands2,
+    PVK_DEVICE_EXT_KHR_dynamic_rendering,
+    PVK_DEVICE_EXT_KHR_format_feature_flags2,
+    PVK_DEVICE_EXT_KHR_maintenance4,
+    PVK_DEVICE_EXT_KHR_shader_integer_dot_product,
+    PVK_DEVICE_EXT_KHR_shader_non_semantic_info,
+    PVK_DEVICE_EXT_KHR_shader_terminate_invocation,
+    PVK_DEVICE_EXT_KHR_synchronization2,
+    PVK_DEVICE_EXT_KHR_zero_initialize_workgroup_memory,
+    /* Promoted to Vulkan 1.4 */
+    PVK_DEVICE_EXT_EXT_host_image_copy,
+    PVK_DEVICE_EXT_EXT_pipeline_protected_access, /* not offered: needs protected memory */
+    PVK_DEVICE_EXT_EXT_pipeline_robustness,
+    PVK_DEVICE_EXT_KHR_dynamic_rendering_local_read,
+    PVK_DEVICE_EXT_KHR_global_priority,
+    PVK_DEVICE_EXT_KHR_index_type_uint8,
+    PVK_DEVICE_EXT_KHR_line_rasterization,
+    PVK_DEVICE_EXT_KHR_load_store_op_none,
+    PVK_DEVICE_EXT_KHR_maintenance5,
+    PVK_DEVICE_EXT_KHR_maintenance6,
+    PVK_DEVICE_EXT_KHR_map_memory2,
+    PVK_DEVICE_EXT_KHR_push_descriptor,
+    PVK_DEVICE_EXT_KHR_shader_expect_assume,
+    PVK_DEVICE_EXT_KHR_shader_float_controls2,
+    PVK_DEVICE_EXT_KHR_shader_subgroup_rotate,
+    PVK_DEVICE_EXT_KHR_vertex_attribute_divisor,
     PVK_DEVICE_EXTENSION_COUNT
 };
 
-static const VkExtensionProperties pvk_device_extensions[] = {
-    { VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_SWAPCHAIN_SPEC_VERSION },
-    { VK_KHR_MAINTENANCE_5_EXTENSION_NAME, VK_KHR_MAINTENANCE_5_SPEC_VERSION },
-    { VK_EXT_SAMPLER_FILTER_MINMAX_EXTENSION_NAME, VK_EXT_SAMPLER_FILTER_MINMAX_SPEC_VERSION },
-    { VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME, VK_EXT_DESCRIPTOR_INDEXING_SPEC_VERSION },
-    { VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME, VK_KHR_SHADER_DRAW_PARAMETERS_SPEC_VERSION },
-    { VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME, VK_KHR_DRAW_INDIRECT_COUNT_SPEC_VERSION },
-    { VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME, VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_SPEC_VERSION },
+static const VkExtensionProperties pvk_device_extensions[PVK_DEVICE_EXTENSION_COUNT] = {
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_swapchain, KHR_SWAPCHAIN),
+    /* Vulkan 1.1 */
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_16bit_storage, KHR_16BIT_STORAGE),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_bind_memory2, KHR_BIND_MEMORY_2),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_dedicated_allocation, KHR_DEDICATED_ALLOCATION),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_descriptor_update_template, KHR_DESCRIPTOR_UPDATE_TEMPLATE),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_device_group, KHR_DEVICE_GROUP),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_external_fence, KHR_EXTERNAL_FENCE),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_external_memory, KHR_EXTERNAL_MEMORY),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_external_semaphore, KHR_EXTERNAL_SEMAPHORE),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_get_memory_requirements2, KHR_GET_MEMORY_REQUIREMENTS_2),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_maintenance1, KHR_MAINTENANCE_1),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_maintenance2, KHR_MAINTENANCE_2),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_maintenance3, KHR_MAINTENANCE_3),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_multiview, KHR_MULTIVIEW),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_relaxed_block_layout, KHR_RELAXED_BLOCK_LAYOUT),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_sampler_ycbcr_conversion, KHR_SAMPLER_YCBCR_CONVERSION),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_shader_draw_parameters, KHR_SHADER_DRAW_PARAMETERS),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_storage_buffer_storage_class, KHR_STORAGE_BUFFER_STORAGE_CLASS),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_variable_pointers, KHR_VARIABLE_POINTERS),
+    /* Vulkan 1.2 */
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_descriptor_indexing, EXT_DESCRIPTOR_INDEXING),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_host_query_reset, EXT_HOST_QUERY_RESET),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_sampler_filter_minmax, EXT_SAMPLER_FILTER_MINMAX),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_scalar_block_layout, EXT_SCALAR_BLOCK_LAYOUT),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_separate_stencil_usage, EXT_SEPARATE_STENCIL_USAGE),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_shader_viewport_index_layer, EXT_SHADER_VIEWPORT_INDEX_LAYER),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_8bit_storage, KHR_8BIT_STORAGE),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_buffer_device_address, KHR_BUFFER_DEVICE_ADDRESS),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_create_renderpass2, KHR_CREATE_RENDERPASS_2),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_depth_stencil_resolve, KHR_DEPTH_STENCIL_RESOLVE),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_draw_indirect_count, KHR_DRAW_INDIRECT_COUNT),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_driver_properties, KHR_DRIVER_PROPERTIES),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_image_format_list, KHR_IMAGE_FORMAT_LIST),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_imageless_framebuffer, KHR_IMAGELESS_FRAMEBUFFER),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_sampler_mirror_clamp_to_edge, KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_separate_depth_stencil_layouts, KHR_SEPARATE_DEPTH_STENCIL_LAYOUTS),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_shader_atomic_int64, KHR_SHADER_ATOMIC_INT64),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_shader_float16_int8, KHR_SHADER_FLOAT16_INT8),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_shader_float_controls, KHR_SHADER_FLOAT_CONTROLS),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_shader_subgroup_extended_types, KHR_SHADER_SUBGROUP_EXTENDED_TYPES),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_spirv_1_4, KHR_SPIRV_1_4),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_timeline_semaphore, KHR_TIMELINE_SEMAPHORE),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_uniform_buffer_standard_layout, KHR_UNIFORM_BUFFER_STANDARD_LAYOUT),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_vulkan_memory_model, KHR_VULKAN_MEMORY_MODEL),
+    /* Vulkan 1.3 */
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_4444_formats, EXT_4444_FORMATS),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_extended_dynamic_state, EXT_EXTENDED_DYNAMIC_STATE),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_extended_dynamic_state2, EXT_EXTENDED_DYNAMIC_STATE_2),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_image_robustness, EXT_IMAGE_ROBUSTNESS),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_inline_uniform_block, EXT_INLINE_UNIFORM_BLOCK),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_pipeline_creation_cache_control, EXT_PIPELINE_CREATION_CACHE_CONTROL),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_pipeline_creation_feedback, EXT_PIPELINE_CREATION_FEEDBACK),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_private_data, EXT_PRIVATE_DATA),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_shader_demote_to_helper_invocation, EXT_SHADER_DEMOTE_TO_HELPER_INVOCATION),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_subgroup_size_control, EXT_SUBGROUP_SIZE_CONTROL),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_texel_buffer_alignment, EXT_TEXEL_BUFFER_ALIGNMENT),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_texture_compression_astc_hdr, EXT_TEXTURE_COMPRESSION_ASTC_HDR),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_tooling_info, EXT_TOOLING_INFO),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_copy_commands2, KHR_COPY_COMMANDS_2),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_dynamic_rendering, KHR_DYNAMIC_RENDERING),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_format_feature_flags2, KHR_FORMAT_FEATURE_FLAGS_2),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_maintenance4, KHR_MAINTENANCE_4),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_shader_integer_dot_product, KHR_SHADER_INTEGER_DOT_PRODUCT),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_shader_non_semantic_info, KHR_SHADER_NON_SEMANTIC_INFO),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_shader_terminate_invocation, KHR_SHADER_TERMINATE_INVOCATION),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_synchronization2, KHR_SYNCHRONIZATION_2),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_zero_initialize_workgroup_memory, KHR_ZERO_INITIALIZE_WORKGROUP_MEMORY),
+    /* Vulkan 1.4 */
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_host_image_copy, EXT_HOST_IMAGE_COPY),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_pipeline_protected_access, EXT_PIPELINE_PROTECTED_ACCESS),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_pipeline_robustness, EXT_PIPELINE_ROBUSTNESS),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_dynamic_rendering_local_read, KHR_DYNAMIC_RENDERING_LOCAL_READ),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_global_priority, KHR_GLOBAL_PRIORITY),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_index_type_uint8, KHR_INDEX_TYPE_UINT8),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_line_rasterization, KHR_LINE_RASTERIZATION),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_load_store_op_none, KHR_LOAD_STORE_OP_NONE),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_maintenance5, KHR_MAINTENANCE_5),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_maintenance6, KHR_MAINTENANCE_6),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_map_memory2, KHR_MAP_MEMORY_2),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_push_descriptor, KHR_PUSH_DESCRIPTOR),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_shader_expect_assume, KHR_SHADER_EXPECT_ASSUME),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_shader_float_controls2, KHR_SHADER_FLOAT_CONTROLS_2),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_shader_subgroup_rotate, KHR_SHADER_SUBGROUP_ROTATE),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_vertex_attribute_divisor, KHR_VERTEX_ATTRIBUTE_DIVISOR),
 };
 
-/* The instance extension each device extension depends on (-1: none), from
- * the depends= attributes of vk.xml. Layers & Extensions > Extension
- * Dependencies: a device extension whose instance extension dependency was
- * not enabled by vkCreateInstance is unsupported, so it is neither listed by
- * vkEnumerateDeviceExtensionProperties nor accepted by vkCreateDevice, and
- * its commands are not available (section 20). */
-static const int pvk_device_extension_needs[PVK_DEVICE_EXTENSION_COUNT] = {
-    PVK_INSTANCE_EXT_KHR_surface, /* VK_KHR_swapchain */
-    -1,                           /* VK_KHR_maintenance5 */
-    -1,                           /* VK_EXT_sampler_filter_minmax */
-    -1,                           /* VK_EXT_descriptor_indexing (VK_KHR_maintenance3: core in 1.1) */
-    -1,                           /* VK_KHR_shader_draw_parameters */
-    -1,                           /* VK_KHR_draw_indirect_count */
-    -1,                           /* VK_EXT_shader_viewport_index_layer */
+#undef PVK_EXT
+
+/* The instance extension each device extension depends on, plus one (0:
+ * none), from the depends= attributes of vk.xml. Layers & Extensions >
+ * Extension Dependencies: a device extension whose instance extension
+ * dependency was not enabled by vkCreateInstance is unsupported, so it is
+ * neither listed by vkEnumerateDeviceExtensionProperties nor accepted by
+ * vkCreateDevice, and its commands are not available (section 20).
+ *
+ * The promoted extensions depend on core versions, on other promoted
+ * extensions, or on either (e.g. "VK_KHR_get_physical_device_properties2 or
+ * VK_VERSION_1_1"). The same section: "If a required extension has been
+ * promoted to another extension or to a core API version, then as a general
+ * rule, the dependency is also satisfied by the promoted extension or core
+ * version". PlasmaVK's physical device is Vulkan 1.4, so they are all
+ * satisfied, also on an instance that enabled none of the promoted instance
+ * extensions (as on Mesa's drivers). Enabling an extension's dependencies
+ * too is the application's valid usage
+ * (VUID-vkCreateDevice-ppEnabledExtensionNames-01387), not checked here. */
+static const unsigned char pvk_device_extension_needs[PVK_DEVICE_EXTENSION_COUNT] = {
+    [PVK_DEVICE_EXT_KHR_swapchain] = 1 + PVK_INSTANCE_EXT_KHR_surface,
 };
 
 /* ==========================================================================
@@ -31969,13 +32150,18 @@ struct pvk_labels {
 
 /* Every core feature, 1.0 to 1.4. The feature structs of promoted
  * extensions are runs of members of these (section 7). sType and pNext are
- * unused. */
+ * unused. The last ones are the feature structs of promoted extensions that
+ * core has no members for (section 6). */
 struct pvk_features {
     VkPhysicalDeviceFeatures core;
     VkPhysicalDeviceVulkan11Features v11;
     VkPhysicalDeviceVulkan12Features v12;
     VkPhysicalDeviceVulkan13Features v13;
     VkPhysicalDeviceVulkan14Features v14;
+    VkPhysicalDevice4444FormatsFeaturesEXT formats_4444;
+    VkPhysicalDeviceExtendedDynamicStateFeaturesEXT dynamic_state;
+    VkPhysicalDeviceExtendedDynamicState2FeaturesEXT dynamic_state2;
+    VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT texel_buffer_alignment;
 };
 
 /* The same for properties beyond VkPhysicalDeviceProperties. v14's copy
@@ -32850,7 +33036,11 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
  * the GPU has (pvk_physical_device_init_texture_features), descriptor
  * indexing (pvk_physical_device_init_descriptor_features), graphics
  * (pvk_physical_device_init_graphics_features) and sparse resources
- * (pvk_physical_device_init_sparse).
+ * (pvk_physical_device_init_sparse). The feature structs of promoted
+ * extensions that core has no members for report what Vulkan 1.3 made core
+ * (VK_EXT_extended_dynamic_state, VK_EXT_extended_dynamic_state2,
+ * VK_EXT_texel_buffer_alignment), or formats the GPU has (VK_EXT_4444_formats,
+ * pvk_physical_device_init_texture_features).
  *
  * Most of these have no implementation yet (their commands are stubs in
  * section 19): reporting them follows from claiming 1.4, and each subsystem
@@ -32888,6 +33078,12 @@ static void pvk_physical_device_init_features(struct pvk_features *f)
     f->v13.dynamicRendering = VK_TRUE;
     f->v13.shaderIntegerDotProduct = VK_TRUE;
     f->v13.maintenance4 = VK_TRUE;
+    /* The dynamic states of their commands (core in 1.3; the logic op and
+     * patch control points ones are not), and the alignments of
+     * VkPhysicalDeviceTexelBufferAlignmentProperties (core in 1.3) */
+    f->dynamic_state.extendedDynamicState = VK_TRUE;
+    f->dynamic_state2.extendedDynamicState2 = VK_TRUE;
+    f->texel_buffer_alignment.texelBufferAlignment = VK_TRUE;
     /* Vulkan 1.4 */
     c->fullDrawIndexUint32 = VK_TRUE;
     c->imageCubeArray = VK_TRUE;
@@ -32954,6 +33150,11 @@ static void pvk_physical_device_init_texture_features(struct pvk_physical_device
     pd->features.core.textureCompressionASTC_LDR = VK_TRUE;
     pd->features.core.textureCompressionBC = pd->bc_formats;
     pd->features.v13.textureCompressionASTC_HDR = VK_TRUE;
+    /* VK_EXT_4444_formats: A4R4G4B4 and A4B4G4R4 are ABGR4Unorm with a
+     * swizzle (pvk_later_formats), so they have the sampled, filtered and
+     * blit source features the two promise. */
+    pd->features.formats_4444.formatA4R4G4B4 = VK_TRUE;
+    pd->features.formats_4444.formatA4B4G4R4 = VK_TRUE;
     pd->features.v12.samplerFilterMinmax = pd->filter_minmax;
     /* Reduction applies to R, G, B and A alike; whether Metal applies a view's
      * swizzle before reducing is unverified, so only R is promised. */
@@ -33156,9 +33357,10 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceProperties(VkPhysicalDevice physic
  * is a run of consecutive members of a VkPhysicalDeviceVulkan1x struct, of
  * the same types in the same order, so filling it (and, for features,
  * checking it in vkCreateDevice) copies that byte range from struct
- * pvk_features / pvk_properties_1x. PVK_RUN fails to compile if the two
- * ranges differ in size. Structs not listed (other extensions) are left
- * alone. */
+ * pvk_features / pvk_properties_1x. The few feature structs with no core
+ * members are runs of their copies in struct pvk_features. PVK_RUN fails to
+ * compile if the two ranges differ in size. Structs not listed (other
+ * extensions) are left alone. */
 struct pvk_run {
     VkStructureType sType;
     uint16_t offset; /* of the run in the application's struct */
@@ -33171,7 +33373,7 @@ struct pvk_run {
     { sType, offsetof(T, first), offsetof(S, sfirst),                                                \
       PVK_RUN_SIZE(T, first, last) +                                                                 \
           0 * sizeof(char[PVK_RUN_SIZE(T, first, last) == PVK_RUN_SIZE(S, sfirst, slast) ? 1 : -1]) }
-/* A feature run: the members have the same names in VkPhysicalDeviceVulkan1xFeatures v. */
+/* A feature run: the members have the same names in member v of struct pvk_features. */
 #define PVK_FRUN(sType, T, v, first, last) PVK_RUN(sType, T, first, last, struct pvk_features, v.first, v.last)
 /* A property run of members first..last, named v.vfirst..v.vlast in pvk_properties_1x. */
 #define PVK_PRUN(sType, T, first, last, v, vfirst, vlast) \
@@ -33264,6 +33466,18 @@ static const struct pvk_run pvk_feature_runs[] = {
              VkPhysicalDeviceShaderIntegerDotProductFeatures, v13, shaderIntegerDotProduct, shaderIntegerDotProduct),
     PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES, VkPhysicalDeviceMaintenance4Features, v13,
              maintenance4, maintenance4),
+    /* Extensions promoted to Vulkan 1.3 whose structs have no core members */
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_4444_FORMATS_FEATURES_EXT, VkPhysicalDevice4444FormatsFeaturesEXT,
+             formats_4444, formatA4R4G4B4, formatA4B4G4R4),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT,
+             VkPhysicalDeviceExtendedDynamicStateFeaturesEXT, dynamic_state, extendedDynamicState,
+             extendedDynamicState),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_2_FEATURES_EXT,
+             VkPhysicalDeviceExtendedDynamicState2FeaturesEXT, dynamic_state2, extendedDynamicState2,
+             extendedDynamicState2PatchControlPoints),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXEL_BUFFER_ALIGNMENT_FEATURES_EXT,
+             VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT, texel_buffer_alignment, texelBufferAlignment,
+             texelBufferAlignment),
     /* Vulkan 1.4 */
     PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GLOBAL_PRIORITY_QUERY_FEATURES,
              VkPhysicalDeviceGlobalPriorityQueryFeatures, v14, globalPriorityQuery, globalPriorityQuery),
@@ -34675,25 +34889,97 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceToolProperties(VkPhysicalDevic
  * instance: its instance extension dependency, if any, is enabled. */
 static bool pvk_device_extension_supported(const struct pvk_instance *instance, unsigned ext)
 {
-    int needs = pvk_device_extension_needs[ext];
+    int needs = pvk_device_extension_needs[ext] - 1;
     return needs < 0 || instance->extensions[needs];
 }
 
-/* ... and the physical device has what the extension needs. */
+/* Whether the physical device has the features a device extension requires:
+ * Features > Feature Requirements, from the <feature> lists of vk.xml's
+ * extension blocks and the VK_VERSION_1_x requirements that depend on an
+ * extension (samplerMirrorClampToEdge, drawIndirectCount,
+ * shaderDrawParameters, samplerFilterMinmax, descriptorIndexing,
+ * shaderOutputViewportIndex and shaderOutputLayer). VK_KHR_maintenance6 and
+ * VK_KHR_push_descriptor list none; they go with their Vulkan 1.4 features.
+ * Most of these are features Vulkan 1.4 requires, which
+ * pvk_physical_device_init_features always reports. The others are what
+ * the GPU may lack: shaderBufferInt64Atomics, samplerFilterMinmax,
+ * descriptorIndexing, shaderDrawParameters, drawIndirectCount,
+ * shaderOutputViewportIndex/Layer, textureCompressionASTC_HDR, formatA4R4G4B4,
+ * hostImageCopy and pipelineProtectedAccess (protectedMemory). */
+static bool pvk_device_extension_features(const struct pvk_features *f, unsigned ext)
+{
+    switch (ext) {
+    /* Vulkan 1.1 */
+    case PVK_DEVICE_EXT_KHR_16bit_storage: return f->v11.storageBuffer16BitAccess;
+    case PVK_DEVICE_EXT_KHR_multiview: return f->v11.multiview;
+    case PVK_DEVICE_EXT_KHR_sampler_ycbcr_conversion: return f->v11.samplerYcbcrConversion;
+    case PVK_DEVICE_EXT_KHR_shader_draw_parameters: return f->v11.shaderDrawParameters;
+    case PVK_DEVICE_EXT_KHR_variable_pointers: return f->v11.variablePointersStorageBuffer;
+    /* Vulkan 1.2 */
+    case PVK_DEVICE_EXT_EXT_descriptor_indexing: return f->v12.descriptorIndexing;
+    case PVK_DEVICE_EXT_EXT_host_query_reset: return f->v12.hostQueryReset;
+    case PVK_DEVICE_EXT_EXT_sampler_filter_minmax: return f->v12.samplerFilterMinmax;
+    case PVK_DEVICE_EXT_EXT_scalar_block_layout: return f->v12.scalarBlockLayout;
+    case PVK_DEVICE_EXT_EXT_shader_viewport_index_layer:
+        return f->v12.shaderOutputViewportIndex && f->v12.shaderOutputLayer;
+    case PVK_DEVICE_EXT_KHR_8bit_storage: return f->v12.storageBuffer8BitAccess;
+    case PVK_DEVICE_EXT_KHR_buffer_device_address: return f->v12.bufferDeviceAddress;
+    case PVK_DEVICE_EXT_KHR_draw_indirect_count: return f->v12.drawIndirectCount;
+    case PVK_DEVICE_EXT_KHR_imageless_framebuffer: return f->v12.imagelessFramebuffer;
+    case PVK_DEVICE_EXT_KHR_sampler_mirror_clamp_to_edge: return f->v12.samplerMirrorClampToEdge;
+    case PVK_DEVICE_EXT_KHR_separate_depth_stencil_layouts: return f->v12.separateDepthStencilLayouts;
+    case PVK_DEVICE_EXT_KHR_shader_atomic_int64: return f->v12.shaderBufferInt64Atomics;
+    case PVK_DEVICE_EXT_KHR_shader_float16_int8: return f->v12.shaderFloat16 || f->v12.shaderInt8;
+    case PVK_DEVICE_EXT_KHR_shader_subgroup_extended_types: return f->v12.shaderSubgroupExtendedTypes;
+    case PVK_DEVICE_EXT_KHR_timeline_semaphore: return f->v12.timelineSemaphore;
+    case PVK_DEVICE_EXT_KHR_uniform_buffer_standard_layout: return f->v12.uniformBufferStandardLayout;
+    case PVK_DEVICE_EXT_KHR_vulkan_memory_model: return f->v12.vulkanMemoryModel;
+    /* Vulkan 1.3 */
+    case PVK_DEVICE_EXT_EXT_4444_formats: return f->formats_4444.formatA4R4G4B4;
+    case PVK_DEVICE_EXT_EXT_extended_dynamic_state: return f->dynamic_state.extendedDynamicState;
+    case PVK_DEVICE_EXT_EXT_extended_dynamic_state2: return f->dynamic_state2.extendedDynamicState2;
+    case PVK_DEVICE_EXT_EXT_image_robustness: return f->v13.robustImageAccess;
+    case PVK_DEVICE_EXT_EXT_inline_uniform_block: /* update after bind too, with descriptor indexing */
+        return f->v13.inlineUniformBlock &&
+               (f->v13.descriptorBindingInlineUniformBlockUpdateAfterBind || !f->v12.descriptorIndexing);
+    case PVK_DEVICE_EXT_EXT_pipeline_creation_cache_control: return f->v13.pipelineCreationCacheControl;
+    case PVK_DEVICE_EXT_EXT_private_data: return f->v13.privateData;
+    case PVK_DEVICE_EXT_EXT_shader_demote_to_helper_invocation: return f->v13.shaderDemoteToHelperInvocation;
+    case PVK_DEVICE_EXT_EXT_subgroup_size_control: return f->v13.subgroupSizeControl && f->v13.computeFullSubgroups;
+    case PVK_DEVICE_EXT_EXT_texel_buffer_alignment: return f->texel_buffer_alignment.texelBufferAlignment;
+    case PVK_DEVICE_EXT_EXT_texture_compression_astc_hdr: return f->v13.textureCompressionASTC_HDR;
+    case PVK_DEVICE_EXT_KHR_dynamic_rendering: return f->v13.dynamicRendering;
+    case PVK_DEVICE_EXT_KHR_maintenance4: return f->v13.maintenance4;
+    case PVK_DEVICE_EXT_KHR_shader_integer_dot_product: return f->v13.shaderIntegerDotProduct;
+    case PVK_DEVICE_EXT_KHR_shader_terminate_invocation: return f->v13.shaderTerminateInvocation;
+    case PVK_DEVICE_EXT_KHR_synchronization2: return f->v13.synchronization2;
+    case PVK_DEVICE_EXT_KHR_zero_initialize_workgroup_memory: return f->v13.shaderZeroInitializeWorkgroupMemory;
+    /* Vulkan 1.4 */
+    case PVK_DEVICE_EXT_EXT_host_image_copy: return f->v14.hostImageCopy;
+    case PVK_DEVICE_EXT_EXT_pipeline_protected_access: return f->v14.pipelineProtectedAccess;
+    case PVK_DEVICE_EXT_EXT_pipeline_robustness: return f->v14.pipelineRobustness;
+    case PVK_DEVICE_EXT_KHR_dynamic_rendering_local_read: return f->v14.dynamicRenderingLocalRead;
+    case PVK_DEVICE_EXT_KHR_global_priority: return f->v14.globalPriorityQuery;
+    case PVK_DEVICE_EXT_KHR_index_type_uint8: return f->v14.indexTypeUint8;
+    case PVK_DEVICE_EXT_KHR_line_rasterization: /* any line style */
+        return f->v14.rectangularLines || f->v14.bresenhamLines || f->v14.smoothLines ||
+               f->v14.stippledRectangularLines || f->v14.stippledBresenhamLines || f->v14.stippledSmoothLines;
+    case PVK_DEVICE_EXT_KHR_maintenance5: return f->v14.maintenance5;
+    case PVK_DEVICE_EXT_KHR_maintenance6: return f->v14.maintenance6;
+    case PVK_DEVICE_EXT_KHR_push_descriptor: return f->v14.pushDescriptor;
+    case PVK_DEVICE_EXT_KHR_shader_expect_assume: return f->v14.shaderExpectAssume;
+    case PVK_DEVICE_EXT_KHR_shader_float_controls2: return f->v14.shaderFloatControls2;
+    case PVK_DEVICE_EXT_KHR_shader_subgroup_rotate: return f->v14.shaderSubgroupRotate;
+    case PVK_DEVICE_EXT_KHR_vertex_attribute_divisor: return f->v14.vertexAttributeInstanceRateDivisor;
+    default: return true;
+    }
+}
+
+/* Whether a device extension is available on a physical device: supported
+ * on its instance, with the features it requires. */
 static bool pvk_device_extension_available(const struct pvk_physical_device *pd, unsigned ext)
 {
-    if (ext == PVK_DEVICE_EXT_EXT_sampler_filter_minmax && !pd->filter_minmax)
-        return false;
-    if (ext == PVK_DEVICE_EXT_EXT_descriptor_indexing && !pd->features.v12.descriptorIndexing)
-        return false;
-    if (ext == PVK_DEVICE_EXT_KHR_shader_draw_parameters && !pd->features.v11.shaderDrawParameters)
-        return false;
-    if (ext == PVK_DEVICE_EXT_KHR_draw_indirect_count && !pd->features.v12.drawIndirectCount)
-        return false;
-    if (ext == PVK_DEVICE_EXT_EXT_shader_viewport_index_layer &&
-        !(pd->features.v12.shaderOutputViewportIndex && pd->features.v12.shaderOutputLayer))
-        return false;
-    return pvk_device_extension_supported(pd->instance, ext);
+    return pvk_device_extension_features(&pd->features, ext) && pvk_device_extension_supported(pd->instance, ext);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice,
@@ -53874,6 +54160,30 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetPrimitiveRestartEnable(VkCommandBuffer comman
     pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_PRIMITIVE_RESTART_ENABLE, 0, primitiveRestartEnable != VK_FALSE);
 }
 
+/* VK_EXT_extended_dynamic_state2's two states that are not core: PlasmaVK
+ * supports neither extendedDynamicState2LogicOp (logical operations are
+ * compiled into fragment functions, section 13) nor
+ * extendedDynamicState2PatchControlPoints (no tessellation), so valid usage
+ * allows no call. */
+VKAPI_ATTR void VKAPI_CALL vkCmdSetLogicOpEXT(VkCommandBuffer commandBuffer, VkLogicOp logicOp)
+{
+    const struct pvk_command_buffer *cb = (const struct pvk_command_buffer *)commandBuffer;
+    if (pvk_cb_debug(cb) && !cb->pool->device->features.dynamic_state2.extendedDynamicState2LogicOp)
+        pvk_cb_vuid(cb, "VUID-vkCmdSetLogicOpEXT-None-09422",
+                    "vkCmdSetLogicOpEXT: the extendedDynamicState2LogicOp feature is not enabled");
+    (void)logicOp;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetPatchControlPointsEXT(VkCommandBuffer commandBuffer, uint32_t patchControlPoints)
+{
+    const struct pvk_command_buffer *cb = (const struct pvk_command_buffer *)commandBuffer;
+    if (pvk_cb_debug(cb) && !cb->pool->device->features.dynamic_state2.extendedDynamicState2PatchControlPoints)
+        pvk_cb_vuid(cb, "VUID-vkCmdSetPatchControlPointsEXT-None-09422",
+                    "vkCmdSetPatchControlPointsEXT: the extendedDynamicState2PatchControlPoints feature is not "
+                    "enabled");
+    (void)patchControlPoints;
+}
+
 /* Stippled lines are not supported (their features are not reported), so
  * the stipple is kept but changes nothing. */
 VKAPI_ATTR void VKAPI_CALL vkCmdSetLineStipple(VkCommandBuffer commandBuffer, uint32_t lineStippleFactor,
@@ -63411,12 +63721,24 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue _queue, const VkPresent
  *
  * Every command vkGetInstanceProcAddr / vkGetDeviceProcAddr can return,
  * with its scope, the core version that added it and the extension it
- * belongs to. Keep it alphabetical (for readers; lookup is linear).
+ * belongs to. Keep it alphabetical (for readers; lookup is linear). The
+ * commands of extensions promoted to core are the core functions under the
+ * extensions' names (vkCmdBeginRenderingKHR is vkCmdBeginRendering).
  * ========================================================================== */
 
 /* An entry's kind: its scope, OR'ed with PVK_CORE_1_x for commands added
  * after Vulkan 1.0 (for an extension command: the core version it also
- * depends on), and PVK_IEXT/PVK_DEXT for extension commands. */
+ * depends on), and PVK_IEXT/PVK_DEXT for extension commands. PVK_DEXT2 names
+ * a second device extension the command also needs: vk.xml's <require
+ * depends="..."> blocks add some commands of an extension only with another
+ * one (VK_KHR_maintenance6's vkCmdPushDescriptorSet2KHR needs
+ * VK_KHR_push_descriptor too). A command that comes in several ways has an
+ * entry for each, next to each other, and is available if one of them is:
+ * vkCmdPushDescriptorSetWithTemplateKHR (VK_KHR_push_descriptor, with
+ * Vulkan 1.1 or VK_KHR_descriptor_update_template), and the device group
+ * commands that both VK_KHR_swapchain (with Vulkan 1.1) and
+ * VK_KHR_device_group (with VK_KHR_surface, vkAcquireNextImage2KHR with
+ * VK_KHR_swapchain) add. */
 enum pvk_scope { PVK_SCOPE_GLOBAL, PVK_SCOPE_INSTANCE, PVK_SCOPE_DEVICE };
 #define PVK_SCOPE(kind) ((kind) & 3u)
 #define PVK_CORE_1_1 (1u << 2)
@@ -63424,10 +63746,13 @@ enum pvk_scope { PVK_SCOPE_GLOBAL, PVK_SCOPE_INSTANCE, PVK_SCOPE_DEVICE };
 #define PVK_CORE_1_3 (3u << 2)
 #define PVK_CORE_1_4 (4u << 2)
 #define PVK_MINOR(kind) (((kind) >> 2) & 7u)
-#define PVK_IEXT(e) ((1u + (unsigned)(e)) << 5)  /* enum pvk_instance_extension */
-#define PVK_DEXT(e) ((1u + (unsigned)(e)) << 10) /* enum pvk_device_extension */
-#define PVK_KIND_IEXT(kind) ((int)(((kind) >> 5) & 31u) - 1)  /* -1: none */
-#define PVK_KIND_DEXT(kind) ((int)(((kind) >> 10) & 31u) - 1) /* -1: none */
+#define PVK_IEXT(e) ((1u + (unsigned)(e)) << 5)   /* enum pvk_instance_extension, 5 bits */
+#define PVK_DEXT(e) ((1u + (unsigned)(e)) << 10)  /* enum pvk_device_extension, 8 bits */
+#define PVK_DEXT2(e) ((1u + (unsigned)(e)) << 18) /* enum pvk_device_extension, 8 bits */
+#define PVK_KIND_IEXT(kind) ((int)(((kind) >> 5) & 31u) - 1)    /* -1: none */
+#define PVK_KIND_DEXT(kind) ((int)(((kind) >> 10) & 255u) - 1)  /* -1: none */
+#define PVK_KIND_DEXT2(kind) ((int)(((kind) >> 18) & 255u) - 1) /* -1: none */
+typedef char pvk_kind_check[PVK_INSTANCE_EXTENSION_COUNT < 31 && PVK_DEVICE_EXTENSION_COUNT < 255 ? 1 : -1];
 
 /* Defined after the table; declared here for VK_NO_PROTOTYPES builds. */
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char *pName);
@@ -63439,6 +63764,7 @@ static const struct pvk_entrypoint {
     unsigned kind;
 } pvk_entrypoints[] = {
     { "vkAcquireNextImage2KHR", (PFN_vkVoidFunction)vkAcquireNextImage2KHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) | PVK_CORE_1_1 },
+    { "vkAcquireNextImage2KHR", (PFN_vkVoidFunction)vkAcquireNextImage2KHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_device_group) | PVK_DEXT2(PVK_DEVICE_EXT_KHR_swapchain) },
     { "vkAcquireNextImageKHR", (PFN_vkVoidFunction)vkAcquireNextImageKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) },
     { "vkAllocateCommandBuffers", (PFN_vkVoidFunction)vkAllocateCommandBuffers, PVK_SCOPE_DEVICE },
     { "vkAllocateDescriptorSets", (PFN_vkVoidFunction)vkAllocateDescriptorSets, PVK_SCOPE_DEVICE },
@@ -63446,37 +63772,49 @@ static const struct pvk_entrypoint {
     { "vkBeginCommandBuffer", (PFN_vkVoidFunction)vkBeginCommandBuffer, PVK_SCOPE_DEVICE },
     { "vkBindBufferMemory", (PFN_vkVoidFunction)vkBindBufferMemory, PVK_SCOPE_DEVICE },
     { "vkBindBufferMemory2", (PFN_vkVoidFunction)vkBindBufferMemory2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkBindBufferMemory2KHR", (PFN_vkVoidFunction)vkBindBufferMemory2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_bind_memory2) },
     { "vkBindImageMemory", (PFN_vkVoidFunction)vkBindImageMemory, PVK_SCOPE_DEVICE },
     { "vkBindImageMemory2", (PFN_vkVoidFunction)vkBindImageMemory2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkBindImageMemory2KHR", (PFN_vkVoidFunction)vkBindImageMemory2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_bind_memory2) },
     { "vkCmdBeginDebugUtilsLabelEXT", (PFN_vkVoidFunction)vkCmdBeginDebugUtilsLabelEXT, PVK_SCOPE_DEVICE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkCmdBeginQuery", (PFN_vkVoidFunction)vkCmdBeginQuery, PVK_SCOPE_DEVICE },
     { "vkCmdBeginRenderPass", (PFN_vkVoidFunction)vkCmdBeginRenderPass, PVK_SCOPE_DEVICE },
     { "vkCmdBeginRenderPass2", (PFN_vkVoidFunction)vkCmdBeginRenderPass2, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkCmdBeginRenderPass2KHR", (PFN_vkVoidFunction)vkCmdBeginRenderPass2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_create_renderpass2) },
     { "vkCmdBeginRendering", (PFN_vkVoidFunction)vkCmdBeginRendering, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdBeginRenderingKHR", (PFN_vkVoidFunction)vkCmdBeginRendering, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_dynamic_rendering) },
     { "vkCmdBindDescriptorSets", (PFN_vkVoidFunction)vkCmdBindDescriptorSets, PVK_SCOPE_DEVICE },
     { "vkCmdBindDescriptorSets2", (PFN_vkVoidFunction)vkCmdBindDescriptorSets2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCmdBindDescriptorSets2KHR", (PFN_vkVoidFunction)vkCmdBindDescriptorSets2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance6) },
     { "vkCmdBindIndexBuffer", (PFN_vkVoidFunction)vkCmdBindIndexBuffer, PVK_SCOPE_DEVICE },
     { "vkCmdBindIndexBuffer2", (PFN_vkVoidFunction)vkCmdBindIndexBuffer2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkCmdBindIndexBuffer2KHR", (PFN_vkVoidFunction)vkCmdBindIndexBuffer2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance5) },
     { "vkCmdBindPipeline", (PFN_vkVoidFunction)vkCmdBindPipeline, PVK_SCOPE_DEVICE },
     { "vkCmdBindVertexBuffers", (PFN_vkVoidFunction)vkCmdBindVertexBuffers, PVK_SCOPE_DEVICE },
     { "vkCmdBindVertexBuffers2", (PFN_vkVoidFunction)vkCmdBindVertexBuffers2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdBindVertexBuffers2EXT", (PFN_vkVoidFunction)vkCmdBindVertexBuffers2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state) },
     { "vkCmdBlitImage", (PFN_vkVoidFunction)vkCmdBlitImage, PVK_SCOPE_DEVICE },
     { "vkCmdBlitImage2", (PFN_vkVoidFunction)vkCmdBlitImage2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdBlitImage2KHR", (PFN_vkVoidFunction)vkCmdBlitImage2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_copy_commands2) },
     { "vkCmdClearAttachments", (PFN_vkVoidFunction)vkCmdClearAttachments, PVK_SCOPE_DEVICE },
     { "vkCmdClearColorImage", (PFN_vkVoidFunction)vkCmdClearColorImage, PVK_SCOPE_DEVICE },
     { "vkCmdClearDepthStencilImage", (PFN_vkVoidFunction)vkCmdClearDepthStencilImage, PVK_SCOPE_DEVICE },
     { "vkCmdCopyBuffer", (PFN_vkVoidFunction)vkCmdCopyBuffer, PVK_SCOPE_DEVICE },
     { "vkCmdCopyBuffer2", (PFN_vkVoidFunction)vkCmdCopyBuffer2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdCopyBuffer2KHR", (PFN_vkVoidFunction)vkCmdCopyBuffer2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_copy_commands2) },
     { "vkCmdCopyBufferToImage", (PFN_vkVoidFunction)vkCmdCopyBufferToImage, PVK_SCOPE_DEVICE },
     { "vkCmdCopyBufferToImage2", (PFN_vkVoidFunction)vkCmdCopyBufferToImage2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdCopyBufferToImage2KHR", (PFN_vkVoidFunction)vkCmdCopyBufferToImage2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_copy_commands2) },
     { "vkCmdCopyImage", (PFN_vkVoidFunction)vkCmdCopyImage, PVK_SCOPE_DEVICE },
     { "vkCmdCopyImage2", (PFN_vkVoidFunction)vkCmdCopyImage2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdCopyImage2KHR", (PFN_vkVoidFunction)vkCmdCopyImage2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_copy_commands2) },
     { "vkCmdCopyImageToBuffer", (PFN_vkVoidFunction)vkCmdCopyImageToBuffer, PVK_SCOPE_DEVICE },
     { "vkCmdCopyImageToBuffer2", (PFN_vkVoidFunction)vkCmdCopyImageToBuffer2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdCopyImageToBuffer2KHR", (PFN_vkVoidFunction)vkCmdCopyImageToBuffer2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_copy_commands2) },
     { "vkCmdCopyQueryPoolResults", (PFN_vkVoidFunction)vkCmdCopyQueryPoolResults, PVK_SCOPE_DEVICE },
     { "vkCmdDispatch", (PFN_vkVoidFunction)vkCmdDispatch, PVK_SCOPE_DEVICE },
     { "vkCmdDispatchBase", (PFN_vkVoidFunction)vkCmdDispatchBase, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkCmdDispatchBaseKHR", (PFN_vkVoidFunction)vkCmdDispatchBase, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_device_group) },
     { "vkCmdDispatchIndirect", (PFN_vkVoidFunction)vkCmdDispatchIndirect, PVK_SCOPE_DEVICE },
     { "vkCmdDraw", (PFN_vkVoidFunction)vkCmdDraw, PVK_SCOPE_DEVICE },
     { "vkCmdDrawIndexed", (PFN_vkVoidFunction)vkCmdDrawIndexed, PVK_SCOPE_DEVICE },
@@ -63490,62 +63828,100 @@ static const struct pvk_entrypoint {
     { "vkCmdEndQuery", (PFN_vkVoidFunction)vkCmdEndQuery, PVK_SCOPE_DEVICE },
     { "vkCmdEndRenderPass", (PFN_vkVoidFunction)vkCmdEndRenderPass, PVK_SCOPE_DEVICE },
     { "vkCmdEndRenderPass2", (PFN_vkVoidFunction)vkCmdEndRenderPass2, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkCmdEndRenderPass2KHR", (PFN_vkVoidFunction)vkCmdEndRenderPass2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_create_renderpass2) },
     { "vkCmdEndRendering", (PFN_vkVoidFunction)vkCmdEndRendering, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdEndRenderingKHR", (PFN_vkVoidFunction)vkCmdEndRendering, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_dynamic_rendering) },
     { "vkCmdExecuteCommands", (PFN_vkVoidFunction)vkCmdExecuteCommands, PVK_SCOPE_DEVICE },
     { "vkCmdFillBuffer", (PFN_vkVoidFunction)vkCmdFillBuffer, PVK_SCOPE_DEVICE },
     { "vkCmdInsertDebugUtilsLabelEXT", (PFN_vkVoidFunction)vkCmdInsertDebugUtilsLabelEXT, PVK_SCOPE_DEVICE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkCmdNextSubpass", (PFN_vkVoidFunction)vkCmdNextSubpass, PVK_SCOPE_DEVICE },
     { "vkCmdNextSubpass2", (PFN_vkVoidFunction)vkCmdNextSubpass2, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkCmdNextSubpass2KHR", (PFN_vkVoidFunction)vkCmdNextSubpass2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_create_renderpass2) },
     { "vkCmdPipelineBarrier", (PFN_vkVoidFunction)vkCmdPipelineBarrier, PVK_SCOPE_DEVICE },
     { "vkCmdPipelineBarrier2", (PFN_vkVoidFunction)vkCmdPipelineBarrier2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdPipelineBarrier2KHR", (PFN_vkVoidFunction)vkCmdPipelineBarrier2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_synchronization2) },
     { "vkCmdPushConstants", (PFN_vkVoidFunction)vkCmdPushConstants, PVK_SCOPE_DEVICE },
     { "vkCmdPushConstants2", (PFN_vkVoidFunction)vkCmdPushConstants2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCmdPushConstants2KHR", (PFN_vkVoidFunction)vkCmdPushConstants2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance6) },
     { "vkCmdPushDescriptorSet", (PFN_vkVoidFunction)vkCmdPushDescriptorSet, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkCmdPushDescriptorSet2", (PFN_vkVoidFunction)vkCmdPushDescriptorSet2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCmdPushDescriptorSet2KHR", (PFN_vkVoidFunction)vkCmdPushDescriptorSet2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance6) | PVK_DEXT2(PVK_DEVICE_EXT_KHR_push_descriptor) },
+    { "vkCmdPushDescriptorSetKHR", (PFN_vkVoidFunction)vkCmdPushDescriptorSet, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_push_descriptor) },
     { "vkCmdPushDescriptorSetWithTemplate", (PFN_vkVoidFunction)vkCmdPushDescriptorSetWithTemplate, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkCmdPushDescriptorSetWithTemplate2", (PFN_vkVoidFunction)vkCmdPushDescriptorSetWithTemplate2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCmdPushDescriptorSetWithTemplate2KHR", (PFN_vkVoidFunction)vkCmdPushDescriptorSetWithTemplate2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance6) | PVK_DEXT2(PVK_DEVICE_EXT_KHR_push_descriptor) },
+    { "vkCmdPushDescriptorSetWithTemplateKHR", (PFN_vkVoidFunction)vkCmdPushDescriptorSetWithTemplate, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_push_descriptor) | PVK_CORE_1_1 },
+    { "vkCmdPushDescriptorSetWithTemplateKHR", (PFN_vkVoidFunction)vkCmdPushDescriptorSetWithTemplate, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_push_descriptor) | PVK_DEXT2(PVK_DEVICE_EXT_KHR_descriptor_update_template) },
     { "vkCmdResetEvent", (PFN_vkVoidFunction)vkCmdResetEvent, PVK_SCOPE_DEVICE },
     { "vkCmdResetEvent2", (PFN_vkVoidFunction)vkCmdResetEvent2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdResetEvent2KHR", (PFN_vkVoidFunction)vkCmdResetEvent2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_synchronization2) },
     { "vkCmdResetQueryPool", (PFN_vkVoidFunction)vkCmdResetQueryPool, PVK_SCOPE_DEVICE },
     { "vkCmdResolveImage", (PFN_vkVoidFunction)vkCmdResolveImage, PVK_SCOPE_DEVICE },
     { "vkCmdResolveImage2", (PFN_vkVoidFunction)vkCmdResolveImage2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdResolveImage2KHR", (PFN_vkVoidFunction)vkCmdResolveImage2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_copy_commands2) },
     { "vkCmdSetBlendConstants", (PFN_vkVoidFunction)vkCmdSetBlendConstants, PVK_SCOPE_DEVICE },
     { "vkCmdSetCullMode", (PFN_vkVoidFunction)vkCmdSetCullMode, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetCullModeEXT", (PFN_vkVoidFunction)vkCmdSetCullMode, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state) },
     { "vkCmdSetDepthBias", (PFN_vkVoidFunction)vkCmdSetDepthBias, PVK_SCOPE_DEVICE },
     { "vkCmdSetDepthBiasEnable", (PFN_vkVoidFunction)vkCmdSetDepthBiasEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetDepthBiasEnableEXT", (PFN_vkVoidFunction)vkCmdSetDepthBiasEnable, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state2) },
     { "vkCmdSetDepthBounds", (PFN_vkVoidFunction)vkCmdSetDepthBounds, PVK_SCOPE_DEVICE },
     { "vkCmdSetDepthBoundsTestEnable", (PFN_vkVoidFunction)vkCmdSetDepthBoundsTestEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetDepthBoundsTestEnableEXT", (PFN_vkVoidFunction)vkCmdSetDepthBoundsTestEnable, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state) },
     { "vkCmdSetDepthCompareOp", (PFN_vkVoidFunction)vkCmdSetDepthCompareOp, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetDepthCompareOpEXT", (PFN_vkVoidFunction)vkCmdSetDepthCompareOp, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state) },
     { "vkCmdSetDepthTestEnable", (PFN_vkVoidFunction)vkCmdSetDepthTestEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetDepthTestEnableEXT", (PFN_vkVoidFunction)vkCmdSetDepthTestEnable, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state) },
     { "vkCmdSetDepthWriteEnable", (PFN_vkVoidFunction)vkCmdSetDepthWriteEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetDepthWriteEnableEXT", (PFN_vkVoidFunction)vkCmdSetDepthWriteEnable, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state) },
     { "vkCmdSetDeviceMask", (PFN_vkVoidFunction)vkCmdSetDeviceMask, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkCmdSetDeviceMaskKHR", (PFN_vkVoidFunction)vkCmdSetDeviceMask, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_device_group) },
     { "vkCmdSetEvent", (PFN_vkVoidFunction)vkCmdSetEvent, PVK_SCOPE_DEVICE },
     { "vkCmdSetEvent2", (PFN_vkVoidFunction)vkCmdSetEvent2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetEvent2KHR", (PFN_vkVoidFunction)vkCmdSetEvent2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_synchronization2) },
     { "vkCmdSetFrontFace", (PFN_vkVoidFunction)vkCmdSetFrontFace, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetFrontFaceEXT", (PFN_vkVoidFunction)vkCmdSetFrontFace, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state) },
     { "vkCmdSetLineStipple", (PFN_vkVoidFunction)vkCmdSetLineStipple, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCmdSetLineStippleKHR", (PFN_vkVoidFunction)vkCmdSetLineStipple, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_line_rasterization) },
     { "vkCmdSetLineWidth", (PFN_vkVoidFunction)vkCmdSetLineWidth, PVK_SCOPE_DEVICE },
+    { "vkCmdSetLogicOpEXT", (PFN_vkVoidFunction)vkCmdSetLogicOpEXT, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state2) },
+    { "vkCmdSetPatchControlPointsEXT", (PFN_vkVoidFunction)vkCmdSetPatchControlPointsEXT, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state2) },
     { "vkCmdSetPrimitiveRestartEnable", (PFN_vkVoidFunction)vkCmdSetPrimitiveRestartEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetPrimitiveRestartEnableEXT", (PFN_vkVoidFunction)vkCmdSetPrimitiveRestartEnable, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state2) },
     { "vkCmdSetPrimitiveTopology", (PFN_vkVoidFunction)vkCmdSetPrimitiveTopology, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetPrimitiveTopologyEXT", (PFN_vkVoidFunction)vkCmdSetPrimitiveTopology, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state) },
     { "vkCmdSetRasterizerDiscardEnable", (PFN_vkVoidFunction)vkCmdSetRasterizerDiscardEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetRasterizerDiscardEnableEXT", (PFN_vkVoidFunction)vkCmdSetRasterizerDiscardEnable, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state2) },
     { "vkCmdSetRenderingAttachmentLocations", (PFN_vkVoidFunction)vkCmdSetRenderingAttachmentLocations, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCmdSetRenderingAttachmentLocationsKHR", (PFN_vkVoidFunction)vkCmdSetRenderingAttachmentLocations, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_dynamic_rendering_local_read) },
     { "vkCmdSetRenderingInputAttachmentIndices", (PFN_vkVoidFunction)vkCmdSetRenderingInputAttachmentIndices, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCmdSetRenderingInputAttachmentIndicesKHR", (PFN_vkVoidFunction)vkCmdSetRenderingInputAttachmentIndices, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_dynamic_rendering_local_read) },
     { "vkCmdSetScissor", (PFN_vkVoidFunction)vkCmdSetScissor, PVK_SCOPE_DEVICE },
     { "vkCmdSetScissorWithCount", (PFN_vkVoidFunction)vkCmdSetScissorWithCount, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetScissorWithCountEXT", (PFN_vkVoidFunction)vkCmdSetScissorWithCount, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state) },
     { "vkCmdSetStencilCompareMask", (PFN_vkVoidFunction)vkCmdSetStencilCompareMask, PVK_SCOPE_DEVICE },
     { "vkCmdSetStencilOp", (PFN_vkVoidFunction)vkCmdSetStencilOp, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetStencilOpEXT", (PFN_vkVoidFunction)vkCmdSetStencilOp, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state) },
     { "vkCmdSetStencilReference", (PFN_vkVoidFunction)vkCmdSetStencilReference, PVK_SCOPE_DEVICE },
     { "vkCmdSetStencilTestEnable", (PFN_vkVoidFunction)vkCmdSetStencilTestEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetStencilTestEnableEXT", (PFN_vkVoidFunction)vkCmdSetStencilTestEnable, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state) },
     { "vkCmdSetStencilWriteMask", (PFN_vkVoidFunction)vkCmdSetStencilWriteMask, PVK_SCOPE_DEVICE },
     { "vkCmdSetViewport", (PFN_vkVoidFunction)vkCmdSetViewport, PVK_SCOPE_DEVICE },
     { "vkCmdSetViewportWithCount", (PFN_vkVoidFunction)vkCmdSetViewportWithCount, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdSetViewportWithCountEXT", (PFN_vkVoidFunction)vkCmdSetViewportWithCount, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state) },
     { "vkCmdUpdateBuffer", (PFN_vkVoidFunction)vkCmdUpdateBuffer, PVK_SCOPE_DEVICE },
     { "vkCmdWaitEvents", (PFN_vkVoidFunction)vkCmdWaitEvents, PVK_SCOPE_DEVICE },
     { "vkCmdWaitEvents2", (PFN_vkVoidFunction)vkCmdWaitEvents2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdWaitEvents2KHR", (PFN_vkVoidFunction)vkCmdWaitEvents2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_synchronization2) },
     { "vkCmdWriteTimestamp", (PFN_vkVoidFunction)vkCmdWriteTimestamp, PVK_SCOPE_DEVICE },
     { "vkCmdWriteTimestamp2", (PFN_vkVoidFunction)vkCmdWriteTimestamp2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCmdWriteTimestamp2KHR", (PFN_vkVoidFunction)vkCmdWriteTimestamp2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_synchronization2) },
     { "vkCopyImageToImage", (PFN_vkVoidFunction)vkCopyImageToImage, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCopyImageToImageEXT", (PFN_vkVoidFunction)vkCopyImageToImage, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_host_image_copy) },
     { "vkCopyImageToMemory", (PFN_vkVoidFunction)vkCopyImageToMemory, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCopyImageToMemoryEXT", (PFN_vkVoidFunction)vkCopyImageToMemory, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_host_image_copy) },
     { "vkCopyMemoryToImage", (PFN_vkVoidFunction)vkCopyMemoryToImage, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkCopyMemoryToImageEXT", (PFN_vkVoidFunction)vkCopyMemoryToImage, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_host_image_copy) },
     { "vkCreateBuffer", (PFN_vkVoidFunction)vkCreateBuffer, PVK_SCOPE_DEVICE },
     { "vkCreateBufferView", (PFN_vkVoidFunction)vkCreateBufferView, PVK_SCOPE_DEVICE },
     { "vkCreateCommandPool", (PFN_vkVoidFunction)vkCreateCommandPool, PVK_SCOPE_DEVICE },
@@ -63554,6 +63930,7 @@ static const struct pvk_entrypoint {
     { "vkCreateDescriptorPool", (PFN_vkVoidFunction)vkCreateDescriptorPool, PVK_SCOPE_DEVICE },
     { "vkCreateDescriptorSetLayout", (PFN_vkVoidFunction)vkCreateDescriptorSetLayout, PVK_SCOPE_DEVICE },
     { "vkCreateDescriptorUpdateTemplate", (PFN_vkVoidFunction)vkCreateDescriptorUpdateTemplate, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkCreateDescriptorUpdateTemplateKHR", (PFN_vkVoidFunction)vkCreateDescriptorUpdateTemplate, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_descriptor_update_template) },
     { "vkCreateDevice", (PFN_vkVoidFunction)vkCreateDevice, PVK_SCOPE_INSTANCE },
     { "vkCreateEvent", (PFN_vkVoidFunction)vkCreateEvent, PVK_SCOPE_DEVICE },
     { "vkCreateFence", (PFN_vkVoidFunction)vkCreateFence, PVK_SCOPE_DEVICE },
@@ -63566,11 +63943,14 @@ static const struct pvk_entrypoint {
     { "vkCreatePipelineCache", (PFN_vkVoidFunction)vkCreatePipelineCache, PVK_SCOPE_DEVICE },
     { "vkCreatePipelineLayout", (PFN_vkVoidFunction)vkCreatePipelineLayout, PVK_SCOPE_DEVICE },
     { "vkCreatePrivateDataSlot", (PFN_vkVoidFunction)vkCreatePrivateDataSlot, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkCreatePrivateDataSlotEXT", (PFN_vkVoidFunction)vkCreatePrivateDataSlot, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_private_data) },
     { "vkCreateQueryPool", (PFN_vkVoidFunction)vkCreateQueryPool, PVK_SCOPE_DEVICE },
     { "vkCreateRenderPass", (PFN_vkVoidFunction)vkCreateRenderPass, PVK_SCOPE_DEVICE },
     { "vkCreateRenderPass2", (PFN_vkVoidFunction)vkCreateRenderPass2, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkCreateRenderPass2KHR", (PFN_vkVoidFunction)vkCreateRenderPass2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_create_renderpass2) },
     { "vkCreateSampler", (PFN_vkVoidFunction)vkCreateSampler, PVK_SCOPE_DEVICE },
     { "vkCreateSamplerYcbcrConversion", (PFN_vkVoidFunction)vkCreateSamplerYcbcrConversion, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkCreateSamplerYcbcrConversionKHR", (PFN_vkVoidFunction)vkCreateSamplerYcbcrConversion, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_sampler_ycbcr_conversion) },
     { "vkCreateSemaphore", (PFN_vkVoidFunction)vkCreateSemaphore, PVK_SCOPE_DEVICE },
     { "vkCreateShaderModule", (PFN_vkVoidFunction)vkCreateShaderModule, PVK_SCOPE_DEVICE },
     { "vkCreateSwapchainKHR", (PFN_vkVoidFunction)vkCreateSwapchainKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) },
@@ -63581,6 +63961,7 @@ static const struct pvk_entrypoint {
     { "vkDestroyDescriptorPool", (PFN_vkVoidFunction)vkDestroyDescriptorPool, PVK_SCOPE_DEVICE },
     { "vkDestroyDescriptorSetLayout", (PFN_vkVoidFunction)vkDestroyDescriptorSetLayout, PVK_SCOPE_DEVICE },
     { "vkDestroyDescriptorUpdateTemplate", (PFN_vkVoidFunction)vkDestroyDescriptorUpdateTemplate, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkDestroyDescriptorUpdateTemplateKHR", (PFN_vkVoidFunction)vkDestroyDescriptorUpdateTemplate, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_descriptor_update_template) },
     { "vkDestroyDevice", (PFN_vkVoidFunction)vkDestroyDevice, PVK_SCOPE_DEVICE },
     { "vkDestroyEvent", (PFN_vkVoidFunction)vkDestroyEvent, PVK_SCOPE_DEVICE },
     { "vkDestroyFence", (PFN_vkVoidFunction)vkDestroyFence, PVK_SCOPE_DEVICE },
@@ -63592,10 +63973,12 @@ static const struct pvk_entrypoint {
     { "vkDestroyPipelineCache", (PFN_vkVoidFunction)vkDestroyPipelineCache, PVK_SCOPE_DEVICE },
     { "vkDestroyPipelineLayout", (PFN_vkVoidFunction)vkDestroyPipelineLayout, PVK_SCOPE_DEVICE },
     { "vkDestroyPrivateDataSlot", (PFN_vkVoidFunction)vkDestroyPrivateDataSlot, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkDestroyPrivateDataSlotEXT", (PFN_vkVoidFunction)vkDestroyPrivateDataSlot, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_private_data) },
     { "vkDestroyQueryPool", (PFN_vkVoidFunction)vkDestroyQueryPool, PVK_SCOPE_DEVICE },
     { "vkDestroyRenderPass", (PFN_vkVoidFunction)vkDestroyRenderPass, PVK_SCOPE_DEVICE },
     { "vkDestroySampler", (PFN_vkVoidFunction)vkDestroySampler, PVK_SCOPE_DEVICE },
     { "vkDestroySamplerYcbcrConversion", (PFN_vkVoidFunction)vkDestroySamplerYcbcrConversion, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkDestroySamplerYcbcrConversionKHR", (PFN_vkVoidFunction)vkDestroySamplerYcbcrConversion, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_sampler_ycbcr_conversion) },
     { "vkDestroySemaphore", (PFN_vkVoidFunction)vkDestroySemaphore, PVK_SCOPE_DEVICE },
     { "vkDestroyShaderModule", (PFN_vkVoidFunction)vkDestroyShaderModule, PVK_SCOPE_DEVICE },
     { "vkDestroySurfaceKHR", (PFN_vkVoidFunction)vkDestroySurfaceKHR, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_surface) },
@@ -63608,26 +63991,38 @@ static const struct pvk_entrypoint {
     { "vkEnumerateInstanceLayerProperties", (PFN_vkVoidFunction)vkEnumerateInstanceLayerProperties, PVK_SCOPE_GLOBAL },
     { "vkEnumerateInstanceVersion", (PFN_vkVoidFunction)vkEnumerateInstanceVersion, PVK_SCOPE_GLOBAL | PVK_CORE_1_1 },
     { "vkEnumeratePhysicalDeviceGroups", (PFN_vkVoidFunction)vkEnumeratePhysicalDeviceGroups, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkEnumeratePhysicalDeviceGroupsKHR", (PFN_vkVoidFunction)vkEnumeratePhysicalDeviceGroups, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_device_group_creation) },
     { "vkEnumeratePhysicalDevices", (PFN_vkVoidFunction)vkEnumeratePhysicalDevices, PVK_SCOPE_INSTANCE },
     { "vkFlushMappedMemoryRanges", (PFN_vkVoidFunction)vkFlushMappedMemoryRanges, PVK_SCOPE_DEVICE },
     { "vkFreeCommandBuffers", (PFN_vkVoidFunction)vkFreeCommandBuffers, PVK_SCOPE_DEVICE },
     { "vkFreeDescriptorSets", (PFN_vkVoidFunction)vkFreeDescriptorSets, PVK_SCOPE_DEVICE },
     { "vkFreeMemory", (PFN_vkVoidFunction)vkFreeMemory, PVK_SCOPE_DEVICE },
     { "vkGetBufferDeviceAddress", (PFN_vkVoidFunction)vkGetBufferDeviceAddress, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkGetBufferDeviceAddressKHR", (PFN_vkVoidFunction)vkGetBufferDeviceAddress, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_buffer_device_address) },
     { "vkGetBufferMemoryRequirements", (PFN_vkVoidFunction)vkGetBufferMemoryRequirements, PVK_SCOPE_DEVICE },
     { "vkGetBufferMemoryRequirements2", (PFN_vkVoidFunction)vkGetBufferMemoryRequirements2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkGetBufferMemoryRequirements2KHR", (PFN_vkVoidFunction)vkGetBufferMemoryRequirements2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_get_memory_requirements2) },
     { "vkGetBufferOpaqueCaptureAddress", (PFN_vkVoidFunction)vkGetBufferOpaqueCaptureAddress, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkGetBufferOpaqueCaptureAddressKHR", (PFN_vkVoidFunction)vkGetBufferOpaqueCaptureAddress, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_buffer_device_address) },
     { "vkGetDescriptorSetLayoutSupport", (PFN_vkVoidFunction)vkGetDescriptorSetLayoutSupport, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkGetDescriptorSetLayoutSupportKHR", (PFN_vkVoidFunction)vkGetDescriptorSetLayoutSupport, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance3) },
     { "vkGetDeviceBufferMemoryRequirements", (PFN_vkVoidFunction)vkGetDeviceBufferMemoryRequirements, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkGetDeviceBufferMemoryRequirementsKHR", (PFN_vkVoidFunction)vkGetDeviceBufferMemoryRequirements, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance4) },
     { "vkGetDeviceGroupPeerMemoryFeatures", (PFN_vkVoidFunction)vkGetDeviceGroupPeerMemoryFeatures, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkGetDeviceGroupPeerMemoryFeaturesKHR", (PFN_vkVoidFunction)vkGetDeviceGroupPeerMemoryFeatures, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_device_group) },
     { "vkGetDeviceGroupPresentCapabilitiesKHR", (PFN_vkVoidFunction)vkGetDeviceGroupPresentCapabilitiesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) | PVK_CORE_1_1 },
+    { "vkGetDeviceGroupPresentCapabilitiesKHR", (PFN_vkVoidFunction)vkGetDeviceGroupPresentCapabilitiesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_device_group) | PVK_IEXT(PVK_INSTANCE_EXT_KHR_surface) },
     { "vkGetDeviceGroupSurfacePresentModesKHR", (PFN_vkVoidFunction)vkGetDeviceGroupSurfacePresentModesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) | PVK_CORE_1_1 },
+    { "vkGetDeviceGroupSurfacePresentModesKHR", (PFN_vkVoidFunction)vkGetDeviceGroupSurfacePresentModesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_device_group) | PVK_IEXT(PVK_INSTANCE_EXT_KHR_surface) },
     { "vkGetDeviceImageMemoryRequirements", (PFN_vkVoidFunction)vkGetDeviceImageMemoryRequirements, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkGetDeviceImageMemoryRequirementsKHR", (PFN_vkVoidFunction)vkGetDeviceImageMemoryRequirements, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance4) },
     { "vkGetDeviceImageSparseMemoryRequirements", (PFN_vkVoidFunction)vkGetDeviceImageSparseMemoryRequirements, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkGetDeviceImageSparseMemoryRequirementsKHR", (PFN_vkVoidFunction)vkGetDeviceImageSparseMemoryRequirements, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance4) },
     { "vkGetDeviceImageSubresourceLayout", (PFN_vkVoidFunction)vkGetDeviceImageSubresourceLayout, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkGetDeviceImageSubresourceLayoutKHR", (PFN_vkVoidFunction)vkGetDeviceImageSubresourceLayout, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance5) },
     { "vkGetDeviceMemoryCommitment", (PFN_vkVoidFunction)vkGetDeviceMemoryCommitment, PVK_SCOPE_DEVICE },
     { "vkGetDeviceMemoryOpaqueCaptureAddress", (PFN_vkVoidFunction)vkGetDeviceMemoryOpaqueCaptureAddress, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkGetDeviceMemoryOpaqueCaptureAddressKHR", (PFN_vkVoidFunction)vkGetDeviceMemoryOpaqueCaptureAddress, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_buffer_device_address) },
     { "vkGetDeviceProcAddr", (PFN_vkVoidFunction)vkGetDeviceProcAddr, PVK_SCOPE_DEVICE },
     { "vkGetDeviceQueue", (PFN_vkVoidFunction)vkGetDeviceQueue, PVK_SCOPE_DEVICE },
     { "vkGetDeviceQueue2", (PFN_vkVoidFunction)vkGetDeviceQueue2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
@@ -63635,46 +64030,64 @@ static const struct pvk_entrypoint {
     { "vkGetFenceStatus", (PFN_vkVoidFunction)vkGetFenceStatus, PVK_SCOPE_DEVICE },
     { "vkGetImageMemoryRequirements", (PFN_vkVoidFunction)vkGetImageMemoryRequirements, PVK_SCOPE_DEVICE },
     { "vkGetImageMemoryRequirements2", (PFN_vkVoidFunction)vkGetImageMemoryRequirements2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkGetImageMemoryRequirements2KHR", (PFN_vkVoidFunction)vkGetImageMemoryRequirements2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_get_memory_requirements2) },
     { "vkGetImageSparseMemoryRequirements", (PFN_vkVoidFunction)vkGetImageSparseMemoryRequirements, PVK_SCOPE_DEVICE },
     { "vkGetImageSparseMemoryRequirements2", (PFN_vkVoidFunction)vkGetImageSparseMemoryRequirements2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkGetImageSparseMemoryRequirements2KHR", (PFN_vkVoidFunction)vkGetImageSparseMemoryRequirements2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_get_memory_requirements2) },
     { "vkGetImageSubresourceLayout", (PFN_vkVoidFunction)vkGetImageSubresourceLayout, PVK_SCOPE_DEVICE },
     { "vkGetImageSubresourceLayout2", (PFN_vkVoidFunction)vkGetImageSubresourceLayout2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkGetImageSubresourceLayout2EXT", (PFN_vkVoidFunction)vkGetImageSubresourceLayout2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_host_image_copy) },
     { "vkGetImageSubresourceLayout2KHR", (PFN_vkVoidFunction)vkGetImageSubresourceLayout2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance5) },
     { "vkGetInstanceProcAddr", (PFN_vkVoidFunction)vkGetInstanceProcAddr, PVK_SCOPE_GLOBAL },
     { "vkGetPhysicalDeviceExternalBufferProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalBufferProperties, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkGetPhysicalDeviceExternalBufferPropertiesKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalBufferProperties, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_external_memory_capabilities) },
     { "vkGetPhysicalDeviceExternalFenceProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalFenceProperties, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkGetPhysicalDeviceExternalFencePropertiesKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalFenceProperties, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_external_fence_capabilities) },
     { "vkGetPhysicalDeviceExternalSemaphoreProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalSemaphoreProperties, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkGetPhysicalDeviceExternalSemaphorePropertiesKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalSemaphoreProperties, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_external_semaphore_capabilities) },
     { "vkGetPhysicalDeviceFeatures", (PFN_vkVoidFunction)vkGetPhysicalDeviceFeatures, PVK_SCOPE_INSTANCE },
     { "vkGetPhysicalDeviceFeatures2", (PFN_vkVoidFunction)vkGetPhysicalDeviceFeatures2, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkGetPhysicalDeviceFeatures2KHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceFeatures2, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_get_physical_device_properties2) },
     { "vkGetPhysicalDeviceFormatProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceFormatProperties, PVK_SCOPE_INSTANCE },
     { "vkGetPhysicalDeviceFormatProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceFormatProperties2, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkGetPhysicalDeviceFormatProperties2KHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceFormatProperties2, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_get_physical_device_properties2) },
     { "vkGetPhysicalDeviceImageFormatProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceImageFormatProperties, PVK_SCOPE_INSTANCE },
     { "vkGetPhysicalDeviceImageFormatProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceImageFormatProperties2, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkGetPhysicalDeviceImageFormatProperties2KHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceImageFormatProperties2, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_get_physical_device_properties2) },
     { "vkGetPhysicalDeviceMemoryProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceMemoryProperties, PVK_SCOPE_INSTANCE },
     { "vkGetPhysicalDeviceMemoryProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceMemoryProperties2, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkGetPhysicalDeviceMemoryProperties2KHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceMemoryProperties2, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_get_physical_device_properties2) },
     { "vkGetPhysicalDevicePresentRectanglesKHR", (PFN_vkVoidFunction)vkGetPhysicalDevicePresentRectanglesKHR, PVK_SCOPE_INSTANCE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) | PVK_CORE_1_1 },
+    { "vkGetPhysicalDevicePresentRectanglesKHR", (PFN_vkVoidFunction)vkGetPhysicalDevicePresentRectanglesKHR, PVK_SCOPE_INSTANCE | PVK_DEXT(PVK_DEVICE_EXT_KHR_device_group) | PVK_IEXT(PVK_INSTANCE_EXT_KHR_surface) },
     { "vkGetPhysicalDeviceProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceProperties, PVK_SCOPE_INSTANCE },
     { "vkGetPhysicalDeviceProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceProperties2, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkGetPhysicalDeviceProperties2KHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceProperties2, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_get_physical_device_properties2) },
     { "vkGetPhysicalDeviceQueueFamilyProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceQueueFamilyProperties, PVK_SCOPE_INSTANCE },
     { "vkGetPhysicalDeviceQueueFamilyProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceQueueFamilyProperties2, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkGetPhysicalDeviceQueueFamilyProperties2KHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceQueueFamilyProperties2, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_get_physical_device_properties2) },
     { "vkGetPhysicalDeviceSparseImageFormatProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceSparseImageFormatProperties, PVK_SCOPE_INSTANCE },
     { "vkGetPhysicalDeviceSparseImageFormatProperties2", (PFN_vkVoidFunction)vkGetPhysicalDeviceSparseImageFormatProperties2, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
+    { "vkGetPhysicalDeviceSparseImageFormatProperties2KHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceSparseImageFormatProperties2, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_get_physical_device_properties2) },
     { "vkGetPhysicalDeviceSurfaceCapabilitiesKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceSurfaceCapabilitiesKHR, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_surface) },
     { "vkGetPhysicalDeviceSurfaceFormatsKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceSurfaceFormatsKHR, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_surface) },
     { "vkGetPhysicalDeviceSurfacePresentModesKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceSurfacePresentModesKHR, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_surface) },
     { "vkGetPhysicalDeviceSurfaceSupportKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceSurfaceSupportKHR, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_surface) },
     { "vkGetPhysicalDeviceToolProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceToolProperties, PVK_SCOPE_INSTANCE | PVK_CORE_1_3 },
+    { "vkGetPhysicalDeviceToolPropertiesEXT", (PFN_vkVoidFunction)vkGetPhysicalDeviceToolProperties, PVK_SCOPE_INSTANCE | PVK_DEXT(PVK_DEVICE_EXT_EXT_tooling_info) },
     { "vkGetPipelineCacheData", (PFN_vkVoidFunction)vkGetPipelineCacheData, PVK_SCOPE_DEVICE },
     { "vkGetPrivateData", (PFN_vkVoidFunction)vkGetPrivateData, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkGetPrivateDataEXT", (PFN_vkVoidFunction)vkGetPrivateData, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_private_data) },
     { "vkGetQueryPoolResults", (PFN_vkVoidFunction)vkGetQueryPoolResults, PVK_SCOPE_DEVICE },
     { "vkGetRenderAreaGranularity", (PFN_vkVoidFunction)vkGetRenderAreaGranularity, PVK_SCOPE_DEVICE },
     { "vkGetRenderingAreaGranularity", (PFN_vkVoidFunction)vkGetRenderingAreaGranularity, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkGetRenderingAreaGranularityKHR", (PFN_vkVoidFunction)vkGetRenderingAreaGranularity, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance5) },
     { "vkGetSemaphoreCounterValue", (PFN_vkVoidFunction)vkGetSemaphoreCounterValue, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkGetSemaphoreCounterValueKHR", (PFN_vkVoidFunction)vkGetSemaphoreCounterValue, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_timeline_semaphore) },
     { "vkGetSwapchainImagesKHR", (PFN_vkVoidFunction)vkGetSwapchainImagesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) },
     { "vkInvalidateMappedMemoryRanges", (PFN_vkVoidFunction)vkInvalidateMappedMemoryRanges, PVK_SCOPE_DEVICE },
     { "vkMapMemory", (PFN_vkVoidFunction)vkMapMemory, PVK_SCOPE_DEVICE },
     { "vkMapMemory2", (PFN_vkVoidFunction)vkMapMemory2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkMapMemory2KHR", (PFN_vkVoidFunction)vkMapMemory2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_map_memory2) },
     { "vkMergePipelineCaches", (PFN_vkVoidFunction)vkMergePipelineCaches, PVK_SCOPE_DEVICE },
     { "vkQueueBeginDebugUtilsLabelEXT", (PFN_vkVoidFunction)vkQueueBeginDebugUtilsLabelEXT, PVK_SCOPE_DEVICE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkQueueBindSparse", (PFN_vkVoidFunction)vkQueueBindSparse, PVK_SCOPE_DEVICE },
@@ -63683,6 +64096,7 @@ static const struct pvk_entrypoint {
     { "vkQueuePresentKHR", (PFN_vkVoidFunction)vkQueuePresentKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) },
     { "vkQueueSubmit", (PFN_vkVoidFunction)vkQueueSubmit, PVK_SCOPE_DEVICE },
     { "vkQueueSubmit2", (PFN_vkVoidFunction)vkQueueSubmit2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkQueueSubmit2KHR", (PFN_vkVoidFunction)vkQueueSubmit2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_synchronization2) },
     { "vkQueueWaitIdle", (PFN_vkVoidFunction)vkQueueWaitIdle, PVK_SCOPE_DEVICE },
     { "vkResetCommandBuffer", (PFN_vkVoidFunction)vkResetCommandBuffer, PVK_SCOPE_DEVICE },
     { "vkResetCommandPool", (PFN_vkVoidFunction)vkResetCommandPool, PVK_SCOPE_DEVICE },
@@ -63690,22 +64104,31 @@ static const struct pvk_entrypoint {
     { "vkResetEvent", (PFN_vkVoidFunction)vkResetEvent, PVK_SCOPE_DEVICE },
     { "vkResetFences", (PFN_vkVoidFunction)vkResetFences, PVK_SCOPE_DEVICE },
     { "vkResetQueryPool", (PFN_vkVoidFunction)vkResetQueryPool, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkResetQueryPoolEXT", (PFN_vkVoidFunction)vkResetQueryPool, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_host_query_reset) },
     { "vkSetDebugUtilsObjectNameEXT", (PFN_vkVoidFunction)vkSetDebugUtilsObjectNameEXT, PVK_SCOPE_DEVICE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkSetDebugUtilsObjectTagEXT", (PFN_vkVoidFunction)vkSetDebugUtilsObjectTagEXT, PVK_SCOPE_DEVICE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkSetEvent", (PFN_vkVoidFunction)vkSetEvent, PVK_SCOPE_DEVICE },
     { "vkSetPrivateData", (PFN_vkVoidFunction)vkSetPrivateData, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
+    { "vkSetPrivateDataEXT", (PFN_vkVoidFunction)vkSetPrivateData, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_private_data) },
     { "vkSignalSemaphore", (PFN_vkVoidFunction)vkSignalSemaphore, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkSignalSemaphoreKHR", (PFN_vkVoidFunction)vkSignalSemaphore, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_timeline_semaphore) },
     { "vkSubmitDebugUtilsMessageEXT", (PFN_vkVoidFunction)vkSubmitDebugUtilsMessageEXT, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkTransitionImageLayout", (PFN_vkVoidFunction)vkTransitionImageLayout, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkTransitionImageLayoutEXT", (PFN_vkVoidFunction)vkTransitionImageLayout, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_host_image_copy) },
     { "vkTrimCommandPool", (PFN_vkVoidFunction)vkTrimCommandPool, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkTrimCommandPoolKHR", (PFN_vkVoidFunction)vkTrimCommandPool, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance1) },
     { "vkUnmapMemory", (PFN_vkVoidFunction)vkUnmapMemory, PVK_SCOPE_DEVICE },
     { "vkUnmapMemory2", (PFN_vkVoidFunction)vkUnmapMemory2, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
+    { "vkUnmapMemory2KHR", (PFN_vkVoidFunction)vkUnmapMemory2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_map_memory2) },
     { "vkUpdateDescriptorSetWithTemplate", (PFN_vkVoidFunction)vkUpdateDescriptorSetWithTemplate, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
+    { "vkUpdateDescriptorSetWithTemplateKHR", (PFN_vkVoidFunction)vkUpdateDescriptorSetWithTemplate, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_descriptor_update_template) },
     { "vkUpdateDescriptorSets", (PFN_vkVoidFunction)vkUpdateDescriptorSets, PVK_SCOPE_DEVICE },
     { "vkWaitForFences", (PFN_vkVoidFunction)vkWaitForFences, PVK_SCOPE_DEVICE },
     { "vkWaitSemaphores", (PFN_vkVoidFunction)vkWaitSemaphores, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
+    { "vkWaitSemaphoresKHR", (PFN_vkVoidFunction)vkWaitSemaphores, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_timeline_semaphore) },
 };
 
+/* The first entry of a command, or NULL. */
 static const struct pvk_entrypoint *pvk_entrypoint_find(const char *name)
 {
     size_t i;
@@ -63713,6 +64136,43 @@ static const struct pvk_entrypoint *pvk_entrypoint_find(const char *name)
         if (strcmp(pvk_entrypoints[i].name, name) == 0)
             return &pvk_entrypoints[i];
     return NULL;
+}
+
+/* The command's next entry (another way it comes), or NULL. */
+static const struct pvk_entrypoint *pvk_entrypoint_next(const struct pvk_entrypoint *e)
+{
+    return e + 1 < pvk_entrypoints + PVK_ARRAY_SIZE(pvk_entrypoints) && strcmp(e[1].name, e->name) == 0 ? e + 1
+                                                                                                          : NULL;
+}
+
+/* Whether the instance enabled the instance extension of an entry's kind,
+ * and the device extensions are available on its physical device. */
+static bool pvk_entrypoint_available(const struct pvk_instance *instance, unsigned kind)
+{
+    const struct pvk_physical_device *pd = instance->physical_device;
+    int iext = PVK_KIND_IEXT(kind), dext = PVK_KIND_DEXT(kind), dext2 = PVK_KIND_DEXT2(kind);
+    if (iext >= 0 && !instance->extensions[iext])
+        return false;
+    if (dext >= 0 && !(pd && pvk_device_extension_available(pd, (unsigned)dext)))
+        return false;
+    return dext2 < 0 || (pd && pvk_device_extension_available(pd, (unsigned)dext2));
+}
+
+/* Whether an entry's kind is a device-level command of the core version the
+ * application requested, and the device (and, for an instance extension,
+ * its instance) enabled its extensions. */
+static bool pvk_entrypoint_enabled(const struct pvk_device *device, unsigned kind)
+{
+    const struct pvk_instance *instance = device->physical_device->instance;
+    unsigned requested = VK_API_VERSION_MAJOR(instance->api_version) > 1 ? 7u : VK_API_VERSION_MINOR(instance->api_version);
+    int iext = PVK_KIND_IEXT(kind), dext = PVK_KIND_DEXT(kind), dext2 = PVK_KIND_DEXT2(kind);
+    if (PVK_SCOPE(kind) != PVK_SCOPE_DEVICE || PVK_MINOR(kind) > requested)
+        return false;
+    if (iext >= 0 && !instance->extensions[iext])
+        return false;
+    if (dext >= 0 && !device->extensions[dext])
+        return false;
+    return dext2 < 0 || device->extensions[dext2];
 }
 
 /* Initialization > Command Function Pointers, the vkGetInstanceProcAddr
@@ -63726,7 +64186,6 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance _insta
 {
     const struct pvk_instance *instance = (const struct pvk_instance *)_instance;
     const struct pvk_entrypoint *e = pvk_entrypoint_find(pName);
-    int iext, dext;
 
     if (!e)
         return NULL;
@@ -63736,13 +64195,10 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance _insta
         return PVK_SCOPE(e->kind) == PVK_SCOPE_GLOBAL ? e->fn : NULL;
     if (PVK_SCOPE(e->kind) == PVK_SCOPE_GLOBAL)
         return NULL;
-    iext = PVK_KIND_IEXT(e->kind);
-    if (iext >= 0 && !instance->extensions[iext])
-        return NULL;
-    dext = PVK_KIND_DEXT(e->kind);
-    if (dext >= 0 && !(instance->physical_device && pvk_device_extension_available(instance->physical_device, (unsigned)dext)))
-        return NULL;
-    return e->fn;
+    for (; e; e = pvk_entrypoint_next(e))
+        if (pvk_entrypoint_available(instance, e->kind))
+            return e->fn;
+    return NULL;
 }
 
 /* The vkGetDeviceProcAddr table: device-level commands (no instance- or
@@ -63757,24 +64213,14 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance _insta
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice _device, const char *pName)
 {
     const struct pvk_device *device = (const struct pvk_device *)_device;
-    const struct pvk_entrypoint *e = pvk_entrypoint_find(pName);
-    const struct pvk_instance *instance;
-    unsigned requested;
-    int iext, dext;
+    const struct pvk_entrypoint *e;
 
-    if (!e || !device || PVK_SCOPE(e->kind) != PVK_SCOPE_DEVICE)
+    if (!device)
         return NULL;
-    instance = device->physical_device->instance;
-    requested = VK_API_VERSION_MAJOR(instance->api_version) > 1 ? 7u : VK_API_VERSION_MINOR(instance->api_version);
-    if (PVK_MINOR(e->kind) > requested)
-        return NULL;
-    iext = PVK_KIND_IEXT(e->kind);
-    if (iext >= 0 && !instance->extensions[iext])
-        return NULL;
-    dext = PVK_KIND_DEXT(e->kind);
-    if (dext >= 0 && !device->extensions[dext])
-        return NULL;
-    return e->fn;
+    for (e = pvk_entrypoint_find(pName); e; e = pvk_entrypoint_next(e))
+        if (pvk_entrypoint_enabled(device, e->kind))
+            return e->fn;
+    return NULL;
 }
 
 #endif /* PLASMAVK_IMPLEMENTATION */

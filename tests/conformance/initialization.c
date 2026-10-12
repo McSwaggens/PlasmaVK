@@ -165,24 +165,58 @@ CT_TEST(gipa_unknown_names,
     ct_env_fini(&e);
 }
 
+static int named(const char *const *names, uint32_t n, const char *name)
+{
+    uint32_t i;
+    for (i = 0; i < n; i++)
+        if (strcmp(names[i], name) == 0)
+            return 1;
+    return 0;
+}
+
 /* Instance extensions in ct_commands that the implementation offers. */
 static uint32_t offered_instance_extensions(const char **names, uint32_t max)
 {
     uint32_t n = 0;
-    size_t i, j;
+    size_t i;
     for (i = 0; i < ct_command_count; i++) {
         const struct ct_command *c = &ct_commands[i];
-        int seen = 0;
         if (ct_command_version(c) || c->level == CT_LEVEL_DEVICE)
             continue;
-        if (strcmp(c->origin, "VK_KHR_swapchain") == 0)
+        if (ct_origin_is_device_extension(c->origin))
             continue; /* a device extension with a physical-device-level command */
-        for (j = 0; j < n; j++)
-            seen |= strcmp(names[j], c->origin) == 0;
-        if (!seen && n < max && ct_instance_extension_supported(c->origin))
+        if (!named(names, n, c->origin) && n < max && ct_instance_extension_supported(c->origin))
             names[n++] = c->origin;
     }
     return n;
+}
+
+/* Device extensions in ct_commands that pd offers. */
+static uint32_t offered_device_extensions(VkPhysicalDevice pd, const char **names, uint32_t max)
+{
+    uint32_t n = 0;
+    size_t i;
+    for (i = 0; i < ct_command_count; i++) {
+        const struct ct_command *c = &ct_commands[i];
+        if (!ct_command_version(c) && ct_origin_is_device_extension(c->origin) && !named(names, n, c->origin) &&
+            n < max && ct_device_extension_supported(pd, c->origin))
+            names[n++] = c->origin;
+    }
+    return n;
+}
+
+/* Whether a device extension command is available with the device
+ * extensions in names at core version `version`: its extension is there,
+ * and what else it needs (ct_command_condition). */
+static int command_available(const struct ct_command *c, const char *const *names, uint32_t n, uint32_t version)
+{
+    const char *extension;
+    uint32_t needs;
+    if (!named(names, n, c->origin))
+        return 0;
+    if (!ct_command_condition(c, &needs, &extension))
+        return 1;
+    return (needs && version >= needs) || (extension && named(names, n, extension));
 }
 
 CT_TEST(gipa_enabled_instance_extension,
@@ -227,23 +261,27 @@ CT_TEST(gipa_disabled_instance_extension,
 
 CT_TEST(gipa_available_device_extension,
         "Initialization > Command Function Pointers: vkGetInstanceProcAddr(instance, name) returns a valid "
-        "pointer for the commands of device extensions available on a physical device of instance",
-        "vkGetInstanceProcAddr")
+        "pointer for the commands of device extensions available on a physical device of instance (every device "
+        "extension of the command list offered: VK_KHR_swapchain with VK_KHR_surface enabled, and the extensions "
+        "promoted to core, whose commands are the core ones under KHR/EXT names)",
+        "vkGetInstanceProcAddr vkEnumerateDeviceExtensionProperties")
 {
-    const char *names[16];
+    const char *names[16], *device_names[64];
     struct ct_env e;
-    uint32_t n = offered_instance_extensions(names, 16);
+    uint32_t n = offered_instance_extensions(names, 16), m;
     size_t i;
 
     /* VK_KHR_swapchain counts as available only with VK_KHR_surface enabled. */
     ct_env_init_ex(t, &e, 0, names, n);
-    if (!ct_device_extension_supported(e.pd, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
-        ct_skip(t, "VK_KHR_swapchain is not available");
+    m = offered_device_extensions(e.pd, device_names, 64);
+    if (!m)
+        ct_skip(t, "no device extension with commands in the command list is available");
     for (i = 0; i < ct_command_count; i++) {
         const struct ct_command *c = &ct_commands[i];
-        if (strcmp(c->origin, "VK_KHR_swapchain") != 0)
+        if (!command_available(c, device_names, m, e.version))
             continue;
-        CT_CHECKF(t, vkGetInstanceProcAddr(e.instance, c->name) != NULL, "%s: NULL", c->name);
+        CT_CHECKF(t, vkGetInstanceProcAddr(e.instance, c->name) != NULL, "%s (%s available): NULL", c->name,
+                  c->origin);
     }
     ct_env_fini(&e);
 }
@@ -370,28 +408,34 @@ CT_TEST(gdpa_disabled_device_extension,
 
 CT_TEST(gdpa_enabled_device_extension,
         "Initialization > Command Function Pointers: vkGetDeviceProcAddr returns a valid pointer for the "
-        "device-level commands of enabled device extensions",
-        "vkGetDeviceProcAddr vkCreateDevice vkDestroyDevice")
+        "device-level commands of enabled device extensions (VK_KHR_swapchain, and from Vulkan 1.3, where core "
+        "satisfies their dependencies, every device extension of the command list offered, the extensions "
+        "promoted to core among them)",
+        "vkGetDeviceProcAddr vkCreateDevice vkDestroyDevice vkEnumerateDeviceExtensionProperties")
 {
     const char *instance_exts[] = { VK_KHR_SURFACE_EXTENSION_NAME };
-    const char *device_exts[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    const char *device_exts[64];
     struct ct_env e;
+    uint32_t n;
     size_t i;
 
     if (!ct_instance_extension_supported(VK_KHR_SURFACE_EXTENSION_NAME))
         ct_skip(t, "VK_KHR_surface is not offered");
     ct_env_init_ex(t, &e, 0, instance_exts, 1);
-    if (!ct_device_extension_supported(e.pd, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
-        ct_skip(t, "VK_KHR_swapchain is not offered");
-    ct_env_device_ex(t, &e, NULL, device_exts, 1, NULL);
+    if (e.version >= VK_API_VERSION_1_3) {
+        n = offered_device_extensions(e.pd, device_exts, 60);
+    } else {
+        device_exts[0] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+        n = ct_device_extension_supported(e.pd, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    }
+    if (!n)
+        ct_skip(t, "no device extension with commands in the command list is offered");
+    ct_env_device_ex(t, &e, NULL, device_exts, n, NULL);
     for (i = 0; i < ct_command_count; i++) {
         const struct ct_command *c = &ct_commands[i];
-        /* The device-group commands of VK_KHR_swapchain need Vulkan 1.1. */
-        if (strcmp(c->origin, "VK_KHR_swapchain") != 0 || c->level != CT_LEVEL_DEVICE)
+        if (c->level != CT_LEVEL_DEVICE || !command_available(c, device_exts, n, e.version))
             continue;
-        if (e.version < VK_API_VERSION_1_1 && (strstr(c->name, "DeviceGroup") || strstr(c->name, "Image2")))
-            continue;
-        CT_CHECKF(t, vkGetDeviceProcAddr(e.device, c->name) != NULL, "%s: NULL", c->name);
+        CT_CHECKF(t, vkGetDeviceProcAddr(e.device, c->name) != NULL, "%s (%s enabled): NULL", c->name, c->origin);
     }
     ct_env_fini(&e);
 }

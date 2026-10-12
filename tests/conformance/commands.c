@@ -1,11 +1,15 @@
 /* Every Vulkan 1.4 core command, plus the commands of the extensions PlasmaVK
  * advertises: VK_KHR_surface, VK_EXT_metal_surface, VK_KHR_swapchain and
- * VK_EXT_debug_utils, and the KHR aliases of VK_KHR_maintenance5 and
- * VK_KHR_draw_indirect_count (the other advertised extensions have no
- * commands). Each entry names the core version or
- * extension that introduced the command and its dispatch level (global,
+ * VK_EXT_debug_utils, and those of the extensions promoted to Vulkan
+ * 1.1-1.4 (the core commands under KHR/EXT names, and VK_EXT_extended_dynamic_state2's
+ * vkCmdSetLogicOpEXT and vkCmdSetPatchControlPointsEXT); the other
+ * advertised extensions have no commands. Each entry names the core version
+ * or extension that introduced the command and its dispatch level (global,
  * instance, physical device or device; see Initialization > Command Function
- * Pointers). Used for coverage and by the vkGet*ProcAddr tests.
+ * Pointers). A command that vk.xml adds to several extensions is listed once,
+ * under the extension whose name it has; ct_command_condition gives what
+ * else some commands need. Used for coverage and by the vkGet*ProcAddr
+ * tests.
  *
  * Source: the Vulkan registry (vk.xml) of Vulkan-Headers 1.4.363, the headers
  * in plasmavk.h. Maintained by hand: when PlasmaVK advertises another
@@ -262,12 +266,110 @@ const struct ct_command ct_commands[] = {
     { "vkGetDeviceGroupSurfacePresentModesKHR", "VK_KHR_swapchain", CT_LEVEL_DEVICE },
     { "vkGetPhysicalDevicePresentRectanglesKHR", "VK_KHR_swapchain", CT_LEVEL_PHYSICAL },
     { "vkAcquireNextImage2KHR", "VK_KHR_swapchain", CT_LEVEL_DEVICE },
+    /* Promoted to Vulkan 1.1 */
+    { "vkEnumeratePhysicalDeviceGroupsKHR", "VK_KHR_device_group_creation", CT_LEVEL_INSTANCE },
+    { "vkGetPhysicalDeviceExternalBufferPropertiesKHR", "VK_KHR_external_memory_capabilities", CT_LEVEL_PHYSICAL },
+    { "vkGetPhysicalDeviceExternalFencePropertiesKHR", "VK_KHR_external_fence_capabilities", CT_LEVEL_PHYSICAL },
+    { "vkGetPhysicalDeviceExternalSemaphorePropertiesKHR", "VK_KHR_external_semaphore_capabilities",
+      CT_LEVEL_PHYSICAL },
+    { "vkGetPhysicalDeviceFeatures2KHR", "VK_KHR_get_physical_device_properties2", CT_LEVEL_PHYSICAL },
+    { "vkGetPhysicalDeviceProperties2KHR", "VK_KHR_get_physical_device_properties2", CT_LEVEL_PHYSICAL },
+    { "vkGetPhysicalDeviceFormatProperties2KHR", "VK_KHR_get_physical_device_properties2", CT_LEVEL_PHYSICAL },
+    { "vkGetPhysicalDeviceImageFormatProperties2KHR", "VK_KHR_get_physical_device_properties2", CT_LEVEL_PHYSICAL },
+    { "vkGetPhysicalDeviceQueueFamilyProperties2KHR", "VK_KHR_get_physical_device_properties2", CT_LEVEL_PHYSICAL },
+    { "vkGetPhysicalDeviceMemoryProperties2KHR", "VK_KHR_get_physical_device_properties2", CT_LEVEL_PHYSICAL },
+    { "vkGetPhysicalDeviceSparseImageFormatProperties2KHR", "VK_KHR_get_physical_device_properties2",
+      CT_LEVEL_PHYSICAL },
+    { "vkBindBufferMemory2KHR", "VK_KHR_bind_memory2", CT_LEVEL_DEVICE },
+    { "vkBindImageMemory2KHR", "VK_KHR_bind_memory2", CT_LEVEL_DEVICE },
+    { "vkCreateDescriptorUpdateTemplateKHR", "VK_KHR_descriptor_update_template", CT_LEVEL_DEVICE },
+    { "vkDestroyDescriptorUpdateTemplateKHR", "VK_KHR_descriptor_update_template", CT_LEVEL_DEVICE },
+    { "vkUpdateDescriptorSetWithTemplateKHR", "VK_KHR_descriptor_update_template", CT_LEVEL_DEVICE },
+    { "vkGetDeviceGroupPeerMemoryFeaturesKHR", "VK_KHR_device_group", CT_LEVEL_DEVICE },
+    { "vkCmdSetDeviceMaskKHR", "VK_KHR_device_group", CT_LEVEL_DEVICE },
+    { "vkCmdDispatchBaseKHR", "VK_KHR_device_group", CT_LEVEL_DEVICE },
+    { "vkGetImageMemoryRequirements2KHR", "VK_KHR_get_memory_requirements2", CT_LEVEL_DEVICE },
+    { "vkGetBufferMemoryRequirements2KHR", "VK_KHR_get_memory_requirements2", CT_LEVEL_DEVICE },
+    { "vkGetImageSparseMemoryRequirements2KHR", "VK_KHR_get_memory_requirements2", CT_LEVEL_DEVICE },
+    { "vkTrimCommandPoolKHR", "VK_KHR_maintenance1", CT_LEVEL_DEVICE },
+    { "vkGetDescriptorSetLayoutSupportKHR", "VK_KHR_maintenance3", CT_LEVEL_DEVICE },
+    { "vkCreateSamplerYcbcrConversionKHR", "VK_KHR_sampler_ycbcr_conversion", CT_LEVEL_DEVICE },
+    { "vkDestroySamplerYcbcrConversionKHR", "VK_KHR_sampler_ycbcr_conversion", CT_LEVEL_DEVICE },
+    /* Promoted to Vulkan 1.2 */
+    { "vkResetQueryPoolEXT", "VK_EXT_host_query_reset", CT_LEVEL_DEVICE },
+    { "vkGetBufferDeviceAddressKHR", "VK_KHR_buffer_device_address", CT_LEVEL_DEVICE },
+    { "vkGetBufferOpaqueCaptureAddressKHR", "VK_KHR_buffer_device_address", CT_LEVEL_DEVICE },
+    { "vkGetDeviceMemoryOpaqueCaptureAddressKHR", "VK_KHR_buffer_device_address", CT_LEVEL_DEVICE },
+    { "vkCreateRenderPass2KHR", "VK_KHR_create_renderpass2", CT_LEVEL_DEVICE },
+    { "vkCmdBeginRenderPass2KHR", "VK_KHR_create_renderpass2", CT_LEVEL_DEVICE },
+    { "vkCmdNextSubpass2KHR", "VK_KHR_create_renderpass2", CT_LEVEL_DEVICE },
+    { "vkCmdEndRenderPass2KHR", "VK_KHR_create_renderpass2", CT_LEVEL_DEVICE },
+    { "vkCmdDrawIndirectCountKHR", "VK_KHR_draw_indirect_count", CT_LEVEL_DEVICE },
+    { "vkCmdDrawIndexedIndirectCountKHR", "VK_KHR_draw_indirect_count", CT_LEVEL_DEVICE },
+    { "vkGetSemaphoreCounterValueKHR", "VK_KHR_timeline_semaphore", CT_LEVEL_DEVICE },
+    { "vkWaitSemaphoresKHR", "VK_KHR_timeline_semaphore", CT_LEVEL_DEVICE },
+    { "vkSignalSemaphoreKHR", "VK_KHR_timeline_semaphore", CT_LEVEL_DEVICE },
+    /* Promoted to Vulkan 1.3 */
+    { "vkCmdSetCullModeEXT", "VK_EXT_extended_dynamic_state", CT_LEVEL_DEVICE },
+    { "vkCmdSetFrontFaceEXT", "VK_EXT_extended_dynamic_state", CT_LEVEL_DEVICE },
+    { "vkCmdSetPrimitiveTopologyEXT", "VK_EXT_extended_dynamic_state", CT_LEVEL_DEVICE },
+    { "vkCmdSetViewportWithCountEXT", "VK_EXT_extended_dynamic_state", CT_LEVEL_DEVICE },
+    { "vkCmdSetScissorWithCountEXT", "VK_EXT_extended_dynamic_state", CT_LEVEL_DEVICE },
+    { "vkCmdBindVertexBuffers2EXT", "VK_EXT_extended_dynamic_state", CT_LEVEL_DEVICE },
+    { "vkCmdSetDepthTestEnableEXT", "VK_EXT_extended_dynamic_state", CT_LEVEL_DEVICE },
+    { "vkCmdSetDepthWriteEnableEXT", "VK_EXT_extended_dynamic_state", CT_LEVEL_DEVICE },
+    { "vkCmdSetDepthCompareOpEXT", "VK_EXT_extended_dynamic_state", CT_LEVEL_DEVICE },
+    { "vkCmdSetDepthBoundsTestEnableEXT", "VK_EXT_extended_dynamic_state", CT_LEVEL_DEVICE },
+    { "vkCmdSetStencilTestEnableEXT", "VK_EXT_extended_dynamic_state", CT_LEVEL_DEVICE },
+    { "vkCmdSetStencilOpEXT", "VK_EXT_extended_dynamic_state", CT_LEVEL_DEVICE },
+    { "vkCmdSetPatchControlPointsEXT", "VK_EXT_extended_dynamic_state2", CT_LEVEL_DEVICE },
+    { "vkCmdSetRasterizerDiscardEnableEXT", "VK_EXT_extended_dynamic_state2", CT_LEVEL_DEVICE },
+    { "vkCmdSetDepthBiasEnableEXT", "VK_EXT_extended_dynamic_state2", CT_LEVEL_DEVICE },
+    { "vkCmdSetLogicOpEXT", "VK_EXT_extended_dynamic_state2", CT_LEVEL_DEVICE },
+    { "vkCmdSetPrimitiveRestartEnableEXT", "VK_EXT_extended_dynamic_state2", CT_LEVEL_DEVICE },
+    { "vkCreatePrivateDataSlotEXT", "VK_EXT_private_data", CT_LEVEL_DEVICE },
+    { "vkDestroyPrivateDataSlotEXT", "VK_EXT_private_data", CT_LEVEL_DEVICE },
+    { "vkSetPrivateDataEXT", "VK_EXT_private_data", CT_LEVEL_DEVICE },
+    { "vkGetPrivateDataEXT", "VK_EXT_private_data", CT_LEVEL_DEVICE },
+    { "vkGetPhysicalDeviceToolPropertiesEXT", "VK_EXT_tooling_info", CT_LEVEL_PHYSICAL },
+    { "vkCmdCopyBuffer2KHR", "VK_KHR_copy_commands2", CT_LEVEL_DEVICE },
+    { "vkCmdCopyImage2KHR", "VK_KHR_copy_commands2", CT_LEVEL_DEVICE },
+    { "vkCmdCopyBufferToImage2KHR", "VK_KHR_copy_commands2", CT_LEVEL_DEVICE },
+    { "vkCmdCopyImageToBuffer2KHR", "VK_KHR_copy_commands2", CT_LEVEL_DEVICE },
+    { "vkCmdBlitImage2KHR", "VK_KHR_copy_commands2", CT_LEVEL_DEVICE },
+    { "vkCmdResolveImage2KHR", "VK_KHR_copy_commands2", CT_LEVEL_DEVICE },
+    { "vkCmdBeginRenderingKHR", "VK_KHR_dynamic_rendering", CT_LEVEL_DEVICE },
+    { "vkCmdEndRenderingKHR", "VK_KHR_dynamic_rendering", CT_LEVEL_DEVICE },
+    { "vkGetDeviceBufferMemoryRequirementsKHR", "VK_KHR_maintenance4", CT_LEVEL_DEVICE },
+    { "vkGetDeviceImageMemoryRequirementsKHR", "VK_KHR_maintenance4", CT_LEVEL_DEVICE },
+    { "vkGetDeviceImageSparseMemoryRequirementsKHR", "VK_KHR_maintenance4", CT_LEVEL_DEVICE },
+    { "vkCmdSetEvent2KHR", "VK_KHR_synchronization2", CT_LEVEL_DEVICE },
+    { "vkCmdResetEvent2KHR", "VK_KHR_synchronization2", CT_LEVEL_DEVICE },
+    { "vkCmdWaitEvents2KHR", "VK_KHR_synchronization2", CT_LEVEL_DEVICE },
+    { "vkCmdPipelineBarrier2KHR", "VK_KHR_synchronization2", CT_LEVEL_DEVICE },
+    { "vkCmdWriteTimestamp2KHR", "VK_KHR_synchronization2", CT_LEVEL_DEVICE },
+    { "vkQueueSubmit2KHR", "VK_KHR_synchronization2", CT_LEVEL_DEVICE },
+    /* Promoted to Vulkan 1.4 */
+    { "vkCopyMemoryToImageEXT", "VK_EXT_host_image_copy", CT_LEVEL_DEVICE },
+    { "vkCopyImageToMemoryEXT", "VK_EXT_host_image_copy", CT_LEVEL_DEVICE },
+    { "vkCopyImageToImageEXT", "VK_EXT_host_image_copy", CT_LEVEL_DEVICE },
+    { "vkTransitionImageLayoutEXT", "VK_EXT_host_image_copy", CT_LEVEL_DEVICE },
+    { "vkGetImageSubresourceLayout2EXT", "VK_EXT_host_image_copy", CT_LEVEL_DEVICE },
+    { "vkCmdSetRenderingAttachmentLocationsKHR", "VK_KHR_dynamic_rendering_local_read", CT_LEVEL_DEVICE },
+    { "vkCmdSetRenderingInputAttachmentIndicesKHR", "VK_KHR_dynamic_rendering_local_read", CT_LEVEL_DEVICE },
+    { "vkCmdSetLineStippleKHR", "VK_KHR_line_rasterization", CT_LEVEL_DEVICE },
     { "vkCmdBindIndexBuffer2KHR", "VK_KHR_maintenance5", CT_LEVEL_DEVICE },
     { "vkGetRenderingAreaGranularityKHR", "VK_KHR_maintenance5", CT_LEVEL_DEVICE },
     { "vkGetDeviceImageSubresourceLayoutKHR", "VK_KHR_maintenance5", CT_LEVEL_DEVICE },
     { "vkGetImageSubresourceLayout2KHR", "VK_KHR_maintenance5", CT_LEVEL_DEVICE },
-    { "vkCmdDrawIndirectCountKHR", "VK_KHR_draw_indirect_count", CT_LEVEL_DEVICE },
-    { "vkCmdDrawIndexedIndirectCountKHR", "VK_KHR_draw_indirect_count", CT_LEVEL_DEVICE },
+    { "vkCmdBindDescriptorSets2KHR", "VK_KHR_maintenance6", CT_LEVEL_DEVICE },
+    { "vkCmdPushConstants2KHR", "VK_KHR_maintenance6", CT_LEVEL_DEVICE },
+    { "vkCmdPushDescriptorSet2KHR", "VK_KHR_maintenance6", CT_LEVEL_DEVICE },
+    { "vkCmdPushDescriptorSetWithTemplate2KHR", "VK_KHR_maintenance6", CT_LEVEL_DEVICE },
+    { "vkMapMemory2KHR", "VK_KHR_map_memory2", CT_LEVEL_DEVICE },
+    { "vkUnmapMemory2KHR", "VK_KHR_map_memory2", CT_LEVEL_DEVICE },
+    { "vkCmdPushDescriptorSetKHR", "VK_KHR_push_descriptor", CT_LEVEL_DEVICE },
+    { "vkCmdPushDescriptorSetWithTemplateKHR", "VK_KHR_push_descriptor", CT_LEVEL_DEVICE },
     /* VK_EXT_debug_utils: an instance extension with device-level commands
      * (vkGetDeviceProcAddr returns them when the instance enabled it) */
     { "vkCreateDebugUtilsMessengerEXT", "VK_EXT_debug_utils", CT_LEVEL_INSTANCE },
@@ -292,11 +394,71 @@ const size_t ct_command_count = sizeof(ct_commands) / sizeof(ct_commands[0]);
 int ct_origin_is_device_extension(const char *origin)
 {
     static const char *const device_extensions[] = {
-        "VK_KHR_swapchain", "VK_KHR_maintenance5", "VK_KHR_draw_indirect_count",
+        "VK_KHR_swapchain",
+        "VK_KHR_bind_memory2",
+        "VK_KHR_descriptor_update_template",
+        "VK_KHR_device_group",
+        "VK_KHR_get_memory_requirements2",
+        "VK_KHR_maintenance1",
+        "VK_KHR_maintenance3",
+        "VK_KHR_sampler_ycbcr_conversion",
+        "VK_EXT_host_query_reset",
+        "VK_KHR_buffer_device_address",
+        "VK_KHR_create_renderpass2",
+        "VK_KHR_draw_indirect_count",
+        "VK_KHR_timeline_semaphore",
+        "VK_EXT_extended_dynamic_state",
+        "VK_EXT_extended_dynamic_state2",
+        "VK_EXT_private_data",
+        "VK_EXT_tooling_info",
+        "VK_KHR_copy_commands2",
+        "VK_KHR_dynamic_rendering",
+        "VK_KHR_maintenance4",
+        "VK_KHR_synchronization2",
+        "VK_EXT_host_image_copy",
+        "VK_KHR_dynamic_rendering_local_read",
+        "VK_KHR_line_rasterization",
+        "VK_KHR_maintenance5",
+        "VK_KHR_maintenance6",
+        "VK_KHR_map_memory2",
+        "VK_KHR_push_descriptor",
     };
     size_t i;
     for (i = 0; i < CT_ARRAY_SIZE(device_extensions); i++)
         if (strcmp(origin, device_extensions[i]) == 0)
             return 1;
+    return 0;
+}
+
+/* Commands of the list that vk.xml adds to their extension only together
+ * with a core version or another extension (<require depends="...">), and
+ * other extensions that add them too: VK_KHR_swapchain's device group
+ * commands need Vulkan 1.1 (VK_KHR_device_group adds them with
+ * VK_KHR_surface or VK_KHR_swapchain, which VK_KHR_swapchain needs anyway);
+ * VK_KHR_push_descriptor's template command needs Vulkan 1.1 or
+ * VK_KHR_descriptor_update_template; VK_KHR_maintenance6's push descriptor
+ * commands need VK_KHR_push_descriptor. */
+int ct_command_condition(const struct ct_command *c, uint32_t *version, const char **extension)
+{
+    static const struct {
+        const char *name;
+        uint32_t version;
+        const char *extension;
+    } conditions[] = {
+        { "vkGetDeviceGroupPresentCapabilitiesKHR", VK_API_VERSION_1_1, "VK_KHR_device_group" },
+        { "vkGetDeviceGroupSurfacePresentModesKHR", VK_API_VERSION_1_1, "VK_KHR_device_group" },
+        { "vkGetPhysicalDevicePresentRectanglesKHR", VK_API_VERSION_1_1, "VK_KHR_device_group" },
+        { "vkAcquireNextImage2KHR", VK_API_VERSION_1_1, "VK_KHR_device_group" },
+        { "vkCmdPushDescriptorSetWithTemplateKHR", VK_API_VERSION_1_1, "VK_KHR_descriptor_update_template" },
+        { "vkCmdPushDescriptorSet2KHR", 0, "VK_KHR_push_descriptor" },
+        { "vkCmdPushDescriptorSetWithTemplate2KHR", 0, "VK_KHR_push_descriptor" },
+    };
+    size_t i;
+    for (i = 0; i < CT_ARRAY_SIZE(conditions); i++)
+        if (strcmp(c->name, conditions[i].name) == 0) {
+            *version = conditions[i].version;
+            *extension = conditions[i].extension;
+            return 1;
+        }
     return 0;
 }

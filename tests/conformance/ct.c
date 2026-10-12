@@ -1925,7 +1925,7 @@ static void ct_mark(const struct ct_command *c, void *user)
 static void ct_coverage(const struct ct_entry *const *sel, size_t n)
 {
     unsigned char *covered = calloc(ct_command_count, 1);
-    const char *origins[32];
+    const char *origins[64];
     size_t i, j, origin_count = 0, total = 0;
 
     if (!covered)

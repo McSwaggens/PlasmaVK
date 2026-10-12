@@ -218,7 +218,14 @@ features.pushDescriptor
 features.dynamicRenderingLocalRead
 features.maintenance6
 features.pipelineRobustness
+features.textureCompressionASTC_HDR
+features.hostImageCopy
+features.extendedDynamicState
+features.extendedDynamicState2
+features.texelBufferAlignment
+features.formatA4R4G4B4
 features.hostImageCopy_single_family
+features.formats_4444_format_features
 
 limits.maxImageDimension1D
 limits.maxImageDimension2D
@@ -534,6 +541,7 @@ privatedata.private_data_new_objects
 privatedata.private_data_many
 privatedata.private_data_reserved
 privatedata.private_data_allocator
+privatedata.private_data_extension
 wsi.surface_create_destroy
 wsi.surface_allocation_callbacks
 wsi.surface_support

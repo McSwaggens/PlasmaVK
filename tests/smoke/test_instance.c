@@ -41,18 +41,44 @@ static int has_extension(const VkExtensionProperties *props, uint32_t count, con
 
 static void test_instance_extensions(void)
 {
-    VkExtensionProperties props[16];
+    VkExtensionProperties props[32];
     uint32_t count = 0, one = 1;
 
     REQUIRE_VK(vkEnumerateInstanceExtensionProperties(NULL, &count, NULL));
-    REQUIRE(count >= 2 && count <= 16);
+    REQUIRE(count >= 2 && count <= 32);
     CHECK_VK(vkEnumerateInstanceExtensionProperties(NULL, &one, props), VK_INCOMPLETE);
     CHECK(one == 1);
     REQUIRE_VK(vkEnumerateInstanceExtensionProperties(NULL, &count, props));
     CHECK(has_extension(props, count, VK_KHR_SURFACE_EXTENSION_NAME));
     CHECK(has_extension(props, count, VK_EXT_METAL_SURFACE_EXTENSION_NAME));
+    /* The instance extensions promoted to Vulkan 1.1 */
+    CHECK(has_extension(props, count, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME));
+    CHECK(has_extension(props, count, VK_KHR_DEVICE_GROUP_CREATION_EXTENSION_NAME));
+    CHECK(has_extension(props, count, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME));
+    CHECK(has_extension(props, count, VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME));
+    CHECK(has_extension(props, count, VK_KHR_EXTERNAL_FENCE_CAPABILITIES_EXTENSION_NAME));
     CHECK_VK(vkEnumerateInstanceExtensionProperties("VK_LAYER_KHRONOS_validation", &count, NULL),
              VK_ERROR_LAYER_NOT_PRESENT);
+}
+
+/* The hand-maintained extension tables in plasmavk.h (designated
+ * initializers): every slot is filled, each name once. */
+static void check_extension_table(const VkExtensionProperties *props, uint32_t count, const char *what)
+{
+    uint32_t i, j;
+    for (i = 0; i < count; i++) {
+        if (strncmp(props[i].extensionName, "VK_", 3) != 0 || props[i].specVersion == 0)
+            PVK_TEST_FAIL("%s extension %u is not filled in", what, i);
+        for (j = 0; j < i; j++)
+            if (strcmp(props[i].extensionName, props[j].extensionName) == 0)
+                PVK_TEST_FAIL("%s extension %s is listed twice", what, props[i].extensionName);
+    }
+}
+
+static void test_extension_tables(void)
+{
+    check_extension_table(pvk_instance_extensions, PVK_INSTANCE_EXTENSION_COUNT, "instance");
+    check_extension_table(pvk_device_extensions, PVK_DEVICE_EXTENSION_COUNT, "device");
 }
 
 static void test_unsupported_extension(void)
@@ -107,20 +133,26 @@ static void test_proc_addr(void)
     vkDestroyInstance(instance, NULL);
 }
 
-/* The hand-maintained table in plasmavk.h: no duplicates, and with every
+/* The hand-maintained table in plasmavk.h: alphabetical (so a command's
+ * several entries, the ways it comes, are next to each other), with one
+ * function and scope per command, extension tags in range, and with every
  * instance extension enabled every entry but the global commands resolves
  * through vkGetInstanceProcAddr. */
 static void test_entrypoint_table(void)
 {
-    const char *extensions[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_METAL_SURFACE_EXTENSION_NAME,
-                                 VK_EXT_DEBUG_UTILS_EXTENSION_NAME };
+    VkExtensionProperties props[PVK_INSTANCE_EXTENSION_COUNT];
+    const char *extensions[PVK_INSTANCE_EXTENSION_COUNT];
     VkInstanceCreateInfo info;
     VkInstance instance = VK_NULL_HANDLE;
-    size_t i, j;
+    uint32_t count = PVK_INSTANCE_EXTENSION_COUNT;
+    size_t i;
 
+    REQUIRE_VK(vkEnumerateInstanceExtensionProperties(NULL, &count, props));
+    for (i = 0; i < count; i++)
+        extensions[i] = props[i].extensionName;
     memset(&info, 0, sizeof(info));
     info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    info.enabledExtensionCount = 3;
+    info.enabledExtensionCount = count;
     info.ppEnabledExtensionNames = extensions;
     REQUIRE_VK(vkCreateInstance(&info, NULL, &instance));
 
@@ -130,11 +162,19 @@ static void test_entrypoint_table(void)
         CHECK(e->fn != NULL);
         if (vkGetInstanceProcAddr(instance, e->name) != (global ? NULL : e->fn))
             PVK_TEST_FAIL("vkGetInstanceProcAddr(instance, \"%s\")", e->name);
-        for (j = i + 1; j < PVK_ARRAY_SIZE(pvk_entrypoints); j++)
-            if (strcmp(e->name, pvk_entrypoints[j].name) == 0)
-                PVK_TEST_FAIL("duplicate entry point %s", e->name);
+        if (PVK_KIND_IEXT(e->kind) >= PVK_INSTANCE_EXTENSION_COUNT || PVK_KIND_DEXT(e->kind) >= PVK_DEVICE_EXTENSION_COUNT ||
+            PVK_KIND_DEXT2(e->kind) >= PVK_DEVICE_EXTENSION_COUNT)
+            PVK_TEST_FAIL("%s: extension out of range", e->name);
+        if (i > 0) {
+            const struct pvk_entrypoint *p = &pvk_entrypoints[i - 1];
+            int order = strcmp(p->name, e->name);
+            if (order > 0)
+                PVK_TEST_FAIL("%s is not in alphabetical order", e->name);
+            if (order == 0 && (p->fn != e->fn || PVK_SCOPE(p->kind) != PVK_SCOPE(e->kind) || p->kind == e->kind))
+                PVK_TEST_FAIL("entries of %s differ in function or scope, or are the same", e->name);
+        }
     }
-    CHECK(PVK_ARRAY_SIZE(pvk_entrypoints) >= 249);
+    CHECK(PVK_ARRAY_SIZE(pvk_entrypoints) >= 363);
     vkDestroyInstance(instance, NULL);
 }
 
@@ -191,6 +231,7 @@ int main(void)
 {
     RUN(test_version);
     RUN(test_instance_extensions);
+    RUN(test_extension_tables);
     RUN(test_unsupported_extension);
     RUN(test_physical_device);
     RUN(test_proc_addr);
