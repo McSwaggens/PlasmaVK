@@ -5708,6 +5708,209 @@ static void ds_subpass_case(VkFormat format, VkSampleCountFlagBits samples, bool
     free_img(&ds);
 }
 
+/*
+ * #version 450
+ * layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInput u_color;
+ * layout(input_attachment_index = 1, set = 0, binding = 1) uniform subpassInput u_depth;
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = subpassLoad(u_color) + vec4(subpassLoad(u_depth).r, 0.0, 0.0, 1.0);
+ * }
+ */
+static const uint32_t spv_add_depth_fs[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x0000001d, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000028, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
+    0x00000000, 0x00000001, 0x0006000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009,
+    0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004,
+    0x6e69616d, 0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c, 0x00040005, 0x0000000c,
+    0x6f635f75, 0x00726f6c, 0x00040005, 0x00000013, 0x65645f75, 0x00687470, 0x00040047, 0x00000009,
+    0x0000001e, 0x00000000, 0x00040047, 0x0000000c, 0x00000021, 0x00000000, 0x00040047, 0x0000000c,
+    0x00000022, 0x00000000, 0x00040047, 0x0000000c, 0x0000002b, 0x00000000, 0x00040047, 0x00000013,
+    0x00000021, 0x00000001, 0x00040047, 0x00000013, 0x00000022, 0x00000000, 0x00040047, 0x00000013,
+    0x0000002b, 0x00000001, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016,
+    0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040020, 0x00000008,
+    0x00000003, 0x00000007, 0x0004003b, 0x00000008, 0x00000009, 0x00000003, 0x00090019, 0x0000000a,
+    0x00000006, 0x00000006, 0x00000000, 0x00000000, 0x00000000, 0x00000002, 0x00000000, 0x00040020,
+    0x0000000b, 0x00000000, 0x0000000a, 0x0004003b, 0x0000000b, 0x0000000c, 0x00000000, 0x00040015,
+    0x0000000e, 0x00000020, 0x00000001, 0x0004002b, 0x0000000e, 0x0000000f, 0x00000000, 0x00040017,
+    0x00000010, 0x0000000e, 0x00000002, 0x0005002c, 0x00000010, 0x00000011, 0x0000000f, 0x0000000f,
+    0x0004003b, 0x0000000b, 0x00000013, 0x00000000, 0x00040015, 0x00000016, 0x00000020, 0x00000000,
+    0x0004002b, 0x00000016, 0x00000017, 0x00000000, 0x0004002b, 0x00000006, 0x00000019, 0x00000000,
+    0x0004002b, 0x00000006, 0x0000001a, 0x3f800000, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200f8, 0x00000005, 0x0004003d, 0x0000000a, 0x0000000d, 0x0000000c, 0x00050062,
+    0x00000007, 0x00000012, 0x0000000d, 0x00000011, 0x0004003d, 0x0000000a, 0x00000014, 0x00000013,
+    0x00050062, 0x00000007, 0x00000015, 0x00000014, 0x00000011, 0x00050051, 0x00000006, 0x00000018,
+    0x00000015, 0x00000000, 0x00070050, 0x00000007, 0x0000001b, 0x00000018, 0x00000019, 0x00000019,
+    0x0000001a, 0x00050081, 0x00000007, 0x0000001c, 0x00000012, 0x0000001b, 0x0003003e, 0x00000009,
+    0x0000001c, 0x000100fd, 0x00010038,
+};
+
+/* Draws of a subpass read its depth as an input attachment (through the
+ * depth copy) and write it, adding what they read to the color they also
+ * read: the first must see the loaded depth (0.25), not what the pass
+ * leaves (0.75), the second the first's (0.5). */
+static void test_depth_input_before_write(void)
+{
+    enum { S = 8 }; /* (at 16 x 16 the old in-pass copy read the loaded depth, M4 Max) */
+    VkAttachmentDescription a[2];
+    VkAttachmentReference ro = { 0, VK_IMAGE_LAYOUT_GENERAL }, rds = { 1, VK_IMAGE_LAYOUT_GENERAL };
+    VkAttachmentReference rin[2] = { { 0, VK_IMAGE_LAYOUT_GENERAL }, { 1, VK_IMAGE_LAYOUT_GENERAL } };
+    VkSubpassDescription sp;
+    VkSubpassDependency dep;
+    VkRenderPassCreateInfo info;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    struct img out = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, S, S, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img ds = make_img(VK_FORMAT_D32_SFLOAT_S8_UINT, S, S, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf got = make_buf(S * S * 16);
+    VkImageView views[2] = { out.view, ds.view }, depth_view = aspect_view(&ds, VK_IMAGE_ASPECT_DEPTH_BIT);
+    VkClearDepthStencilValue dv = { 0.25f, 0 };
+    VkImageSubresourceRange range = { VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1 };
+    VkDescriptorSetLayoutBinding binds[2];
+    VkDescriptorSetLayoutCreateInfo sli;
+    VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
+    VkPushConstantRange pcr = { VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(struct pc) };
+    VkPipelineLayoutCreateInfo pli;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkDescriptorPoolSize size = { VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 2 };
+    VkDescriptorPoolCreateInfo dpi;
+    VkDescriptorPool dpool = VK_NULL_HANDLE;
+    VkDescriptorSetAllocateInfo dai;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VkDescriptorImageInfo ii[2];
+    VkWriteDescriptorSet w;
+    VkMemoryBarrier mb;
+    VkFramebuffer fb;
+    VkClearValue clears[2];
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t i, bad = 0;
+
+    memset(a, 0, sizeof(a));
+    a[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    a[1].format = VK_FORMAT_D32_SFLOAT_S8_UINT;
+    memset(binds, 0, sizeof(binds));
+    for (i = 0; i < 2; i++) {
+        a[i].samples = VK_SAMPLE_COUNT_1_BIT;
+        a[i].loadOp = i ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        a[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        a[i].storeOp = a[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+        a[i].initialLayout = a[i].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        binds[i].binding = i;
+        binds[i].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+        binds[i].descriptorCount = 1;
+        binds[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        ii[i].sampler = VK_NULL_HANDLE;
+        ii[i].imageView = i ? depth_view : out.view;
+        ii[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    memset(&sp, 0, sizeof(sp));
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &ro;
+    sp.pDepthStencilAttachment = &rds;
+    sp.inputAttachmentCount = 2;
+    sp.pInputAttachments = rin;
+    memset(&dep, 0, sizeof(dep));
+    dep.srcSubpass = dep.dstSubpass = 0;
+    dep.srcStageMask = dep.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                          VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+                                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.srcAccessMask = dep.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT |
+                                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    info.attachmentCount = 2;
+    info.pAttachments = a;
+    info.subpassCount = 1;
+    info.pSubpasses = &sp;
+    info.dependencyCount = 1;
+    info.pDependencies = &dep;
+    CHECK_VK(vkCreateRenderPass(device, &info, NULL, &rp), VK_SUCCESS);
+    fb = make_fb(rp, views, 2, S, S, 1);
+    memset(&sli, 0, sizeof(sli));
+    sli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    sli.bindingCount = 2;
+    sli.pBindings = binds;
+    CHECK_VK(vkCreateDescriptorSetLayout(device, &sli, NULL, &set_layout), VK_SUCCESS);
+    memset(&pli, 0, sizeof(pli));
+    pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pli.setLayoutCount = 1;
+    pli.pSetLayouts = &set_layout;
+    pli.pushConstantRangeCount = 1;
+    pli.pPushConstantRanges = &pcr;
+    CHECK_VK(vkCreatePipelineLayout(device, &pli, NULL, &layout), VK_SUCCESS);
+    memset(&dpi, 0, sizeof(dpi));
+    dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpi.maxSets = 1;
+    dpi.poolSizeCount = 1;
+    dpi.pPoolSizes = &size;
+    CHECK_VK(vkCreateDescriptorPool(device, &dpi, NULL, &dpool), VK_SUCCESS);
+    memset(&dai, 0, sizeof(dai));
+    dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dai.descriptorPool = dpool;
+    dai.descriptorSetCount = 1;
+    dai.pSetLayouts = &set_layout;
+    CHECK_VK(vkAllocateDescriptorSets(device, &dai, &set), VK_SUCCESS);
+    memset(&w, 0, sizeof(w));
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = set;
+    w.descriptorCount = 2;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    w.pImageInfo = ii;
+    vkUpdateDescriptorSets(device, 1, &w, 0, NULL);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_add_depth_fs, sizeof(spv_add_depth_fs));
+    p.layout = layout;
+    p.rp = rp;
+    p.has_ds = true;
+    memset(&p.ds, 0, sizeof(p.ds));
+    p.ds.depthTestEnable = p.ds.depthWriteEnable = VK_TRUE;
+    p.ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    memset(&mb, 0, sizeof(mb));
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = mb.dstAccessMask = dep.srcAccessMask;
+    memset(clears, 0, sizeof(clears));
+    cb = begin_cmd();
+    vkCmdClearDepthStencilImage(cb, ds.image, VK_IMAGE_LAYOUT_GENERAL, &dv, 1, &range);
+    barrier(cb);
+    begin_pass(cb, rp, fb, 0, 0, S, S, clears, 2);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, NULL);
+    for (i = 0; i < 2; i++) {
+        if (i)
+            vkCmdPipelineBarrier(cb, dep.srcStageMask, dep.dstStageMask, VK_DEPENDENCY_BY_REGION_BIT, 1, &mb, 0, NULL,
+                                 0, NULL);
+        vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(struct pc),
+                           &(struct pc){ { -1, -1, 1, 1 }, { 0, 0, 0, 0 }, i ? 0.75f : 0.5f, 0, 0, 0 });
+        vkCmdDraw(cb, 4, 1, 0, 0);
+    }
+    vkCmdEndRenderPass(cb);
+    download(cb, &out, 0, VK_IMAGE_ASPECT_COLOR_BIT, &got);
+    submit(cb);
+    for (i = 0; i < S * S; i++) {
+        const float *t = (const float *)got.data + 4 * i;
+        if ((t[0] != 0.75f || t[1] != 0.0f || t[3] != 2.0f) && bad++ < 4)
+            fprintf(stderr, "depth input before write: texel %u is %g %g %g %g\n", i, t[0], t[1], t[2], t[3]);
+    }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyDescriptorPool(device, dpool, NULL);
+    vkDestroyPipelineLayout(device, layout, NULL);
+    vkDestroyDescriptorSetLayout(device, set_layout, NULL);
+    vkDestroyImageView(device, depth_view, NULL);
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+    free_buf(&got);
+    free_img(&out);
+    free_img(&ds);
+}
+
 /* Depth bounds (depthBounds), with one and four samples: the scene's
  * sloped triangle over depth 0.5, then a full-screen draw at depth 0.95
  * with static bounds [0.3, 0.6] writing red and its depth, then one at 0.05
@@ -8819,6 +9022,7 @@ int main(void)
     RUN(test_ds_local_read);
     RUN(test_ds_split);
     RUN(test_ds_subpasses);
+    RUN(test_depth_input_before_write);
     RUN(test_stencil_input);
     RUN(test_ds_resolve_stencil);
     RUN(test_alpha_to_coverage_no_color);

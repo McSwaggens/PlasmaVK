@@ -58638,20 +58638,23 @@ struct pvk_hidden_texture {
     struct pvk_hidden_texture *next;
     pvk_MTLPixelFormat format;
     uint32_t width, height, samples, layers;
+    bool stored;
     id texture;
 };
 
-/* A memoryless render target (not retained: the device keeps it); NULL
- * when Metal cannot make it. layers: renderTargetArrayLength (0: 2D). */
+/* A memoryless render target, or with `stored` a private one (not
+ * retained: the device keeps it); NULL when Metal cannot make it. layers:
+ * renderTargetArrayLength (0: 2D). */
 static id pvk_hidden_texture(struct pvk_device *device, pvk_MTLPixelFormat format, uint32_t width, uint32_t height,
-                             uint32_t samples, uint32_t layers)
+                             uint32_t samples, uint32_t layers, bool stored)
 {
     struct pvk_hidden_texture *t;
     id texture;
+    bool made = false;
     pthread_mutex_lock(&pvk_graphics_lock);
     for (t = device->hidden_textures; t; t = t->next)
         if (t->format == format && t->width == width && t->height == height && t->samples == samples &&
-            t->layers == layers)
+            t->layers == layers && t->stored == stored)
             break;
     if (!t && (t = pvk_alloc(pvk_device_alloc(device), sizeof(*t), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE))) {
         void *pool = objc_autoreleasePoolPush();
@@ -58666,7 +58669,8 @@ static id pvk_hidden_texture(struct pvk_device *device, pvk_MTLPixelFormat forma
             pvk_MTLTextureDescriptor_setHeight(desc, height);
             pvk_MTLTextureDescriptor_setSampleCount(desc, samples);
             pvk_MTLTextureDescriptor_setArrayLength(desc, layers ? layers : 1);
-            pvk_MTLTextureDescriptor_setResourceOptions(desc, PVK_MTLResourceStorageModeMemoryless |
+            pvk_MTLTextureDescriptor_setResourceOptions(desc, (stored ? PVK_MTLResourceStorageModePrivate
+                                                                      : PVK_MTLResourceStorageModeMemoryless) |
                                                                   PVK_MTLResourceHazardTrackingModeUntracked);
             pvk_MTLTextureDescriptor_setUsage(desc, PVK_MTLTextureUsageRenderTarget);
             t->texture = pvk_MTLDevice_newTextureWithDescriptor(device->physical_device->mtl_device, desc);
@@ -58679,8 +58683,10 @@ static id pvk_hidden_texture(struct pvk_device *device, pvk_MTLPixelFormat forma
             t->height = height;
             t->samples = samples;
             t->layers = layers;
+            t->stored = stored;
             t->next = device->hidden_textures;
             device->hidden_textures = t;
+            made = true;
         } else {
             pvk_free(pvk_device_alloc(device), t);
             t = NULL;
@@ -58688,6 +58694,10 @@ static id pvk_hidden_texture(struct pvk_device *device, pvk_MTLPixelFormat forma
     }
     texture = t ? t->texture : NULL;
     pthread_mutex_unlock(&pvk_graphics_lock);
+    if (made && stored) { /* (the GPU reads it in this batch) */
+        pvk_device_make_resident(device, texture);
+        pvk_device_commit_residency(device);
+    }
     return texture;
 }
 
@@ -58927,27 +58937,6 @@ static void pvk_render_internal_end(struct pvk_encoder *e)
     r->pso_set = NULL;
     r->dirty = PVK_RD_ALL;
     pvk_render_counting(e, true);
-}
-
-/* Loads the depth copy from the depth attachment's texture (LOAD_OP_LOAD). */
-static void pvk_render_copy_depth(struct pvk_encoder *e, const struct pvk_pass_attachment *pa)
-{
-    struct pvk_render *r = &e->render;
-    bool ms = r->samples_pass > 1, layered = pa->array || r->layers;
-    uint32_t kind = ms ? (pa->array ? PVK_DSC_DEPTH_MS_ARRAY : PVK_DSC_DEPTH_MS)
-                       : (pa->array ? PVK_DSC_DEPTH_ARRAY : PVK_DSC_DEPTH);
-    id pso = pvk_ds_copy_pipeline(e->device, kind, r->samples_pass, layered), ds;
-    struct pvk_ds_key dk;
-    memset(&dk, 0, sizeof(dk));
-    dk.depth_compare = PVK_MTLCompareFunctionAlways;
-    ds = pvk_ds_state(e->device, &dk);
-    if (!pso || !ds) {
-        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
-        return;
-    }
-    pvk_render_internal_begin(e, pso, r->hidden_slot[0], pa->texture);
-    pvk_render_internal_draw(e, ds, 0, 0, layered);
-    pvk_render_internal_end(e);
 }
 
 /* Rebuilds the stencil copy from the stencil attachment, bit by bit. */
@@ -59298,6 +59287,63 @@ static void pvk_render_defer_resolve(struct pvk_pass_attachment *pa, struct pvk_
  * and resolves. Sets the pass's extent and sample count in r, and the
  * depth and stencil copies r->hidden asks for (dropping those it cannot
  * keep). */
+/* The depth copy of a pass that loads the depth (section 15, DEPTH/STENCIL
+ * INPUT ATTACHMENTS): rendered from depth attachment pa before the pass,
+ * into a texture the pass loads (in it, a read of the attachment returned
+ * what the whole pass leaves there, in an 8 x 8 pass on M4 Max: draws
+ * reading the copy before others wrote the depth saw those writes). NULL
+ * when Metal cannot make it. */
+static id pvk_render_seed_depth(struct pvk_encoder *e, const struct pvk_pass_attachment *pa, uint32_t width,
+                                uint32_t height, uint32_t samples, uint32_t layers)
+{
+    bool layered = pa->array || layers, ok = false;
+    uint32_t kind = samples > 1 ? (pa->array ? PVK_DSC_DEPTH_MS_ARRAY : PVK_DSC_DEPTH_MS)
+                                : (pa->array ? PVK_DSC_DEPTH_ARRAY : PVK_DSC_DEPTH);
+    id pso = pvk_ds_copy_pipeline(e->device, kind, samples, layered);
+    id tex = pvk_hidden_texture(e->device, PVK_MTLPixelFormatR32Float, width, height, samples, layers, true);
+    id pass, att, enc, map;
+    struct pvk_dsc_args *args;
+    pvk_MTLGPUAddress address;
+    void *pool;
+    if (!pso || !tex || !(args = pvk_upload(e, sizeof(*args), 16, NULL, NULL, &address)))
+        return NULL;
+    memset(args, 0, sizeof(*args));
+    pool = objc_autoreleasePoolPush();
+    pass = pvk_MTL4RenderPassDescriptor_new();
+    att = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
+        pvk_MTL4RenderPassDescriptor_colorAttachments(pass), 0);
+    pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, tex);
+    pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, PVK_MTLLoadActionDontCare);
+    pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
+    if (layers)
+        pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, layers);
+    pvk_MTL4RenderPassDescriptor_setSupportColorAttachmentMapping(pass, true);
+    enc = pvk_retain(pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass));
+    pvk_release(pass);
+    if (enc && (map = pvk_MTLLogicalToPhysicalColorAttachmentMap_new())) {
+        pvk_MTLLogicalToPhysicalColorAttachmentMap_setPhysicalIndex_forLogicalIndex(map, 0, 0);
+        pvk_MTL4RenderCommandEncoder_setColorAttachmentMap(enc, map);
+        pvk_release(map);
+        /* after the depth's writers, and the texture's readers, before */
+        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
+            enc, PVK_STAGES_ALL, PVK_STAGES_RENDER, e->queue->device->visibility);
+        pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
+        pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->render_table,
+                                                               PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
+        pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->render_table, pvk_MTLTexture_gpuResourceID(pa->texture), 0);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->render_table, address, 0);
+        pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
+            enc, PVK_MTLPrimitiveTypeTriangle, 0, 3, layered && layers ? layers : 1, 0);
+        ok = true;
+    }
+    if (enc) {
+        pvk_encoder_close(e, enc);
+        pvk_release(enc);
+    }
+    objc_autoreleasePoolPop(pool);
+    return ok ? tex : NULL;
+}
+
 static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass *c, const struct pvk_pass_attachment *depth,
                           const struct pvk_pass_attachment *stencil, bool load_all, bool store_all, uint32_t int_slots)
 {
@@ -59405,18 +59451,21 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
             at[k].x = at[k].y = 0.5f;
         pvk_MTL4RenderPassDescriptor_setSamplePositions_count(pass, at, samples);
     }
-    /* The copies of the depth and stencil r->hidden asks for, in memoryless
-     * color slots after the colors (section 15, DEPTH/STENCIL INPUT
-     * ATTACHMENTS): never stored, a later part of a split pass loads the
-     * depth copy from the depth attachment (pvk_render_rebind) */
+    /* The copies of the depth and stencil r->hidden asks for, in color slots
+     * after the colors (section 15, DEPTH/STENCIL INPUT ATTACHMENTS), never
+     * stored: memoryless, but for a depth copy of loaded depth, rendered
+     * before (pvk_render_seed_depth; also for a later part of a split pass,
+     * pvk_render_rebind) */
     for (k = 0, s = c->color_count; k < 2; k++) {
+        bool seed = !k && depth->texture &&
+                    (load_all || (depth->load == PVK_MTLLoadActionLoad && !depth->clear_in_area));
         id tex, att;
         if (!(r->hidden & (1u << k)))
             continue;
-        tex = s < PVK_MAX_COLOR_ATTACHMENTS ? pvk_hidden_texture(e->device, k ? PVK_MTLPixelFormatR8Uint
-                                                                              : PVK_MTLPixelFormatR32Float,
-                                                                 width, height, samples, c->layers)
-                                            : NULL;
+        tex = s >= PVK_MAX_COLOR_ATTACHMENTS ? NULL
+              : seed ? pvk_render_seed_depth(e, depth, width, height, samples, c->layers)
+                     : pvk_hidden_texture(e->device, k ? PVK_MTLPixelFormatR8Uint : PVK_MTLPixelFormatR32Float, width,
+                                          height, samples, c->layers, false);
         if (!tex) {
             static int warned;
             if (!warned++)
@@ -59429,9 +59478,11 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
         att = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
             pvk_MTL4RenderPassDescriptor_colorAttachments(pass), s);
         pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, tex);
-        pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, !k && !load_all && c->depth.load == PVK_MTLLoadActionClear
+        pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, seed ? PVK_MTLLoadActionLoad
+                                                                 : !k && !load_all && c->depth.load == PVK_MTLLoadActionClear
                                                                      ? PVK_MTLLoadActionClear
                                                                      : PVK_MTLLoadActionDontCare);
+        e->prepassed |= seed; /* (the pass waits for it) */
         pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionDontCare);
         if (!k) {
             pvk_MTLClearColor cc;
@@ -59500,11 +59551,8 @@ static void pvk_render_rebind(struct pvk_encoder *e, uint32_t int_slots)
         enc, PVK_STAGES_RENDER, PVK_STAGES_RENDER, e->queue->device->visibility);
     r->int_slots = int_slots;
     pvk_render_takeover(e, enc);
-    /* The copies of the depth and stencil are memoryless: the depth copy
-     * loads from the depth the previous part stored, the stencil copy is
-     * rebuilt when read */
-    if (r->hidden & PVK_HIDDEN_DEPTH)
-        pvk_render_copy_depth(e, &r->pass_depth);
+    /* (the depth copy starts from the depth the previous part stored,
+     * pvk_render_open; the stencil copy is rebuilt when read) */
     r->stencil_dirty = true;
     pvk_render_counting(e, true);
 }
@@ -59710,8 +59758,6 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
         clears &= ~now;
         ds_clears &= ~now_ds;
     }
-    if ((r->hidden & PVK_HIDDEN_DEPTH) && c->depth.load == PVK_MTLLoadActionLoad && !c->depth.clear_in_area)
-        pvk_render_copy_depth(e, &c->depth); /* the loaded depth into its copy */
     pvk_render_counting(e, true); /* a query active since before the pass */
     r->group = group;
     r->tex_slots = 0;
