@@ -11796,6 +11796,96 @@ static void test_wrapping_arithmetic(void)
 
 /*
  * #version 450
+ * layout(local_size_x = 1) in;
+ * layout(std430, set = 0, binding = 0) readonly buffer In { vec4 v[4]; } i;
+ * layout(std430, set = 0, binding = 1) buffer Out { vec4 v[4]; } o;
+ * void main()
+ * {
+ *     o.v[0].x = i.v[0].x;
+ *     o.v[0].y = i.v[0].y;
+ *     o.v[0].z = i.v[0].z;
+ *     o.v[0].w = i.v[0].w;
+ * }
+ */
+static const uint32_t spv_component_stores[] = {
+    0x07230203, 0x00010300, 0x0008000b, 0x00000027, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0005000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x00060010, 0x00000004, 0x00000011,
+    0x00000001, 0x00000001, 0x00000001, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004,
+    0x6e69616d, 0x00000000, 0x00030005, 0x0000000b, 0x0074754f, 0x00040006, 0x0000000b, 0x00000000,
+    0x00000076, 0x00030005, 0x0000000d, 0x0000006f, 0x00030005, 0x00000011, 0x00006e49, 0x00040006,
+    0x00000011, 0x00000000, 0x00000076, 0x00030005, 0x00000013, 0x00000069, 0x00040047, 0x0000000a,
+    0x00000006, 0x00000010, 0x00030047, 0x0000000b, 0x00000002, 0x00050048, 0x0000000b, 0x00000000,
+    0x00000023, 0x00000000, 0x00040047, 0x0000000d, 0x00000021, 0x00000001, 0x00040047, 0x0000000d,
+    0x00000022, 0x00000000, 0x00040047, 0x00000010, 0x00000006, 0x00000010, 0x00030047, 0x00000011,
+    0x00000002, 0x00040048, 0x00000011, 0x00000000, 0x00000018, 0x00050048, 0x00000011, 0x00000000,
+    0x00000023, 0x00000000, 0x00030047, 0x00000013, 0x00000018, 0x00040047, 0x00000013, 0x00000021,
+    0x00000000, 0x00040047, 0x00000013, 0x00000022, 0x00000000, 0x00040047, 0x00000026, 0x0000000b,
+    0x00000019, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006,
+    0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040015, 0x00000008, 0x00000020,
+    0x00000000, 0x0004002b, 0x00000008, 0x00000009, 0x00000004, 0x0004001c, 0x0000000a, 0x00000007,
+    0x00000009, 0x0003001e, 0x0000000b, 0x0000000a, 0x00040020, 0x0000000c, 0x0000000c, 0x0000000b,
+    0x0004003b, 0x0000000c, 0x0000000d, 0x0000000c, 0x00040015, 0x0000000e, 0x00000020, 0x00000001,
+    0x0004002b, 0x0000000e, 0x0000000f, 0x00000000, 0x0004001c, 0x00000010, 0x00000007, 0x00000009,
+    0x0003001e, 0x00000011, 0x00000010, 0x00040020, 0x00000012, 0x0000000c, 0x00000011, 0x0004003b,
+    0x00000012, 0x00000013, 0x0000000c, 0x0004002b, 0x00000008, 0x00000014, 0x00000000, 0x00040020,
+    0x00000015, 0x0000000c, 0x00000006, 0x0004002b, 0x00000008, 0x00000019, 0x00000001, 0x0004002b,
+    0x00000008, 0x0000001d, 0x00000002, 0x0004002b, 0x00000008, 0x00000021, 0x00000003, 0x00040017,
+    0x00000025, 0x00000008, 0x00000003, 0x0006002c, 0x00000025, 0x00000026, 0x00000019, 0x00000019,
+    0x00000019, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005,
+    0x00070041, 0x00000015, 0x00000016, 0x00000013, 0x0000000f, 0x0000000f, 0x00000014, 0x0004003d,
+    0x00000006, 0x00000017, 0x00000016, 0x00070041, 0x00000015, 0x00000018, 0x0000000d, 0x0000000f,
+    0x0000000f, 0x00000014, 0x0003003e, 0x00000018, 0x00000017, 0x00070041, 0x00000015, 0x0000001a,
+    0x00000013, 0x0000000f, 0x0000000f, 0x00000019, 0x0004003d, 0x00000006, 0x0000001b, 0x0000001a,
+    0x00070041, 0x00000015, 0x0000001c, 0x0000000d, 0x0000000f, 0x0000000f, 0x00000019, 0x0003003e,
+    0x0000001c, 0x0000001b, 0x00070041, 0x00000015, 0x0000001e, 0x00000013, 0x0000000f, 0x0000000f,
+    0x0000001d, 0x0004003d, 0x00000006, 0x0000001f, 0x0000001e, 0x00070041, 0x00000015, 0x00000020,
+    0x0000000d, 0x0000000f, 0x0000000f, 0x0000001d, 0x0003003e, 0x00000020, 0x0000001f, 0x00070041,
+    0x00000015, 0x00000022, 0x00000013, 0x0000000f, 0x0000000f, 0x00000021, 0x0004003d, 0x00000006,
+    0x00000023, 0x00000022, 0x00070041, 0x00000015, 0x00000024, 0x0000000d, 0x0000000f, 0x0000000f,
+    0x00000021, 0x0003003e, 0x00000024, 0x00000023, 0x000100fd, 0x00010038,
+};
+
+/* Stores to components of a vector in a buffer by many invocations at once
+ * (with robust buffer access, each under its bounds check): each writes its
+ * component only. Metal merged them into stores of the whole vector, which
+ * write back the components other invocations stored as this one read them. */
+static void test_component_stores(void)
+{
+    static const float in[16] = { 2, 3, 4, 5 };
+    float init[16];
+    struct pvk_msl_result res;
+    struct pvk_msl_options o;
+    struct mt_buffer bi, bo;
+    struct mt_binding b[2];
+    uint32_t k, round;
+    int bad = 0;
+    id pso;
+
+    memset(&o, 0, sizeof(o));
+    o.robust_storage_buffers = true;
+    MT_BUILD(spv_component_stores, &o, res, pso);
+    for (round = 0; round < 64; round++) {
+        for (k = 0; k < 16; k++)
+            init[k] = -1.0f;
+        bi = mt_buffer(sizeof(in), in, sizeof(in));
+        bo = mt_buffer(sizeof(init), init, sizeof(init));
+        b[0] = bind(0, 0, &bi);
+        b[1] = bind(0, 1, &bo);
+        CHECK(mt_dispatch(pso, &res, b, 2, NULL, 0, 32, 32, 1));
+        for (k = 0; k < 4; k++)
+            if (get_f32(bo.data, k * 4) != in[k])
+                bad++;
+        mt_buffer_free(&bi);
+        mt_buffer_free(&bo);
+    }
+    CHECK(bad == 0);
+    pvk_release(pso);
+    pvk_msl_result_free(&res);
+}
+
+/*
+ * #version 450
  * layout(local_size_x = 4) in;
  * shared uvec4 s[1];
  * layout(std430, binding = 0) buffer B { uvec4 o; };
@@ -12526,6 +12616,7 @@ int main(void)
     RUN(test_padded_struct_store);
     RUN(test_vector_index_past_end);
     RUN(test_wrapping_arithmetic);
+    RUN(test_component_stores);
     RUN(test_atomic_components);
     RUN(test_ieee_specials);
     RUN(test_layout_odds);

@@ -46048,6 +46048,21 @@ static void pvk_spv_copy(struct pvk_spv *ctx, const char *dst, const struct pvk_
     }
 }
 
+static bool pvk_spv_writable(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
+{
+    switch (p->storage) {
+    case PVK_SPV_StorageInput:
+    case PVK_SPV_StoragePushConstant:
+    case PVK_SPV_StorageUniformConstant:
+    case PVK_SPV_StorageImage:
+        return false;
+    case PVK_SPV_StorageUniform:
+        return pvk_spv_get(ctx, p->var)->func == 0 && pvk_spv_is_storage_block(ctx, p->var);
+    default:
+        return true;
+    }
+}
+
 /* Moves pointer p one level down by index (cidx: constant value, -1: dynamic). */
 static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char *idx, int64_t cidx)
 {
@@ -46131,6 +46146,16 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
             p->expr = pvk_spv_fmt(ctx, "%s[%s]%s[%s]", p->expr, idx, p->node->padded ? ".v" : "", p->rm_col);
             p->rm_col = NULL;
             p->node = NULL;
+        } else if (p->storage == PVK_SPV_StorageStorageBuffer || p->storage == PVK_SPV_StoragePhysicalStorageBuffer ||
+                   p->storage == PVK_SPV_StorageWorkgroup ||
+                   (p->storage == PVK_SPV_StorageUniform && pvk_spv_writable(ctx, p))) {
+            /* A component of a vector other invocations see, through a
+             * scalar pointer: Metal stores v.y as the whole vector (a read,
+             * modify and write that undoes other invocations' components) */
+            uint32_t c = cidx < 0 ? 0 : cidx < t->count ? (uint32_t)cidx : t->count - 1;
+            const char *as = p->storage == PVK_SPV_StorageWorkgroup ? "threadgroup" : "device";
+            p->expr = pvk_spv_fmt(ctx, "((%s %s*)&%s)[%s]", as, pvk_spv_type(ctx, t->elem)->msl, p->expr,
+                                  cidx < 0 ? idx : pvk_spv_fmt(ctx, "%u", c));
         } else if (cidx >= 0) { /* (past the end: undefined, but it must compile) */
             p->expr = pvk_spv_fmt(ctx, "%s.%c", p->expr, "xyzw"[cidx < t->count ? cidx : t->count - 1]);
         } else {
@@ -46246,21 +46271,6 @@ static void pvk_spv_if_close(struct pvk_spv *ctx, const char *ok)
         return;
     ctx->indent--;
     pvk_spv_line(ctx, "}");
-}
-
-static bool pvk_spv_writable(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
-{
-    switch (p->storage) {
-    case PVK_SPV_StorageInput:
-    case PVK_SPV_StoragePushConstant:
-    case PVK_SPV_StorageUniformConstant:
-    case PVK_SPV_StorageImage:
-        return false;
-    case PVK_SPV_StorageUniform:
-        return pvk_spv_get(ctx, p->var)->func == 0 && pvk_spv_is_storage_block(ctx, p->var);
-    default:
-        return true;
-    }
 }
 
 /* Whether p points at memory other invocations see (buffers, workgroup). */
