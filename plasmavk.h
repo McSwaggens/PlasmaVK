@@ -42015,6 +42015,7 @@ struct pvk_spv {
     bool use_array, use_padded; /* emit the pvk_array / pvk_padded templates */
     bool use_sampled, use_cast; /* emit pvk_sampled / pvk_tex_cast */
     bool use_storage;           /* emit pvk_storage */
+    bool use_math;              /* emit pvk_atan2, pvk_tanh */
     bool use_ycbcr;             /* emit pvk_ycbcr_d (Y'CBCR SAMPLING) */
     const struct pvk_ycbcr *ycbcr_fns[PVK_SPV_MAX_YCBCR]; /* conversions with a pvk_ycbcr_<k> function */
     uint32_t nycbcr;
@@ -46002,10 +46003,15 @@ static void pvk_spv_glsl(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
             continue;
         if (nops != simple[i].nops)
             pvk_spv_fail(ctx, "GLSL.std.450 instruction %u: wrong operand count", inst);
+        fn = simple[i].name;
+        if ((inst == PVK_SPV_GLSL_Atan2 && rs && rs->width == 32) || inst == PVK_SPV_GLSL_Tanh) {
+            fn = inst == PVK_SPV_GLSL_Tanh ? "pvk_tanh" : "pvk_atan2"; /* (pvk_spv_math_template) */
+            ctx->use_math = true;
+        }
         if (nops == 1)
-            pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", simple[i].name, pvk_spv_val(ctx, in->w[5])));
+            pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", fn, pvk_spv_val(ctx, in->w[5])));
         else if (nops == 2)
-            pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s, %s)", simple[i].name, pvk_spv_val(ctx, in->w[5]),
+            pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s, %s)", fn, pvk_spv_val(ctx, in->w[5]),
                                               pvk_spv_val(ctx, in->w[6])));
         else
             pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s, %s, %s)", simple[i].name, pvk_spv_val(ctx, in->w[5]),
@@ -46096,9 +46102,11 @@ static void pvk_spv_glsl(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         if (r->op != PVK_SPV_OpTypeStruct || r->nmembers != 2)
             pvk_spv_fail(ctx, "ModfStruct/FrexpStruct needs a two-member struct");
         name = pvk_spv_result(ctx, rid);
-        pvk_spv_line(ctx, "%s.%s = %s(%s, %s.%s);", name, r->members[0].msl,
-                     inst == PVK_SPV_GLSL_ModfStruct ? "modf" : "frexp", pvk_spv_val(ctx, in->w[5]), name,
-                     r->members[1].msl);
+        /* value types on both sides (a packed 3-vector binds to neither parameter) */
+        pvk_spv_line(ctx, "{ %s pvk_whole; %s.%s = %s(%s(%s), pvk_whole); %s.%s = pvk_whole; }",
+                     pvk_spv_type(ctx, r->members[1].type)->msl, name, r->members[0].msl,
+                     inst == PVK_SPV_GLSL_ModfStruct ? "modf" : "frexp", pvk_spv_type(ctx, r->members[0].type)->msl,
+                     pvk_spv_val(ctx, in->w[5]), name, r->members[1].msl);
         return;
     }
     case PVK_SPV_GLSL_PackHalf2x16:
@@ -51008,6 +51016,26 @@ static const char pvk_spv_ycbcr_template[] =
     "    texture2d<float> t1, t2;\n"
     "};\n\n";
 
+static const char pvk_spv_math_template[] =
+    "/* Where Metal's are wrong: atan2 of arguments near the top of the float range\n"
+    " * is 0 (scaled alike, the angle stays; tiny ones too), atan2 of x = -0 has\n"
+    " * the wrong sign (x = +-0 is answered here), tanh past about 50 is NaN (1 in\n"
+    " * float from 10 on). */\n"
+    "template <typename T>\n"
+    "inline T pvk_atan2(T y, T x)\n"
+    "{\n"
+    "    T m = max(abs(y), abs(x));\n"
+    "    T s = select(select(T(1.0f), T(0x1p64f), m < T(0x1p-64f)), T(0x1p-64f), m > T(0x1p64f));\n"
+    "    T r = atan2(y * s, x * s);\n"
+    "    T z = select(copysign(T(M_PI_2_F), y), select(y, copysign(T(M_PI_F), y), signbit(x)), y == T(0.0f));\n"
+    "    return select(r, z, x == T(0.0f));\n"
+    "}\n"
+    "template <typename T>\n"
+    "inline T pvk_tanh(T x)\n"
+    "{\n"
+    "    return tanh(clamp(x, T(-10.0f), T(10.0f)));\n"
+    "}\n\n";
+
 static const char pvk_spv_cast_template[] =
     "/* The same texture as another texture type (depth and color views of one image). */\n"
     "template <typename T, typename U>\n"
@@ -51201,6 +51229,8 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         pvk_sb_append(ctx, out, pvk_spv_ycbcr_template, sizeof(pvk_spv_ycbcr_template) - 1);
     if (ctx->use_cast)
         pvk_sb_append(ctx, out, pvk_spv_cast_template, sizeof(pvk_spv_cast_template) - 1);
+    if (ctx->use_math)
+        pvk_sb_append(ctx, out, pvk_spv_math_template, sizeof(pvk_spv_math_template) - 1);
     if (ctx->types.len)
         pvk_sb_append(ctx, out, ctx->types.data, ctx->types.len);
     if (ctx->consts.len)
