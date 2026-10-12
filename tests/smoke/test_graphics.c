@@ -3676,48 +3676,53 @@ static const uint32_t spv_ms_input_fs[] = {
     0x00000014, 0x00070062, 0x00000007, 0x00000019, 0x0000000d, 0x00000018, 0x00000040, 0x00000015,
     0x0003003e, 0x00000009, 0x00000019, 0x000100fd, 0x00010038,
 };
-
-/* A single-sampled subpass reads a sample (pc.layer) of a 4-sample input
- * attachment, which framebuffer fetch cannot (one sample count per Metal
- * pass): its texture is read instead. The first subpass renders sample 0
- * red, the others black. */
-static void test_subpass_ms_input(void)
+/* A subpass reads a sample (pc.layer) of a 4-sample input attachment, which
+ * framebuffer fetch cannot (it fetches the current sample, one sample count
+ * per Metal pass): its texture is read instead. The reading subpass is
+ * single-sampled, or 4-sample and resolved. The first subpass renders
+ * sample 0 red, the others black. */
+static void subpass_ms_input_case(bool ms_reader)
 {
-    VkAttachmentDescription a[2];
+    VkAttachmentDescription a[3];
     VkAttachmentReference ra = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
     VkAttachmentReference rin = { 0, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
     VkAttachmentReference rb = { 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+    VkAttachmentReference rr = { 2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
     VkSubpassDescription sp[2];
     VkSubpassDependency dep;
     VkRenderPassCreateInfo info;
     VkRenderPass rp = VK_NULL_HANDLE;
     struct img ms = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img ims = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
     struct img ib = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
     struct buf out = make_buf(W * H * 4);
-    VkImageView views[2];
+    VkImageView views[3];
     VkFramebuffer fb;
     VkDescriptorPool dpool = VK_NULL_HANDLE;
     VkDescriptorSet set;
-    VkClearValue clears[2];
+    VkClearValue clears[3];
     VkPipeline p0, p1;
     struct pipe p;
     struct pc pc;
     VkCommandBuffer cb;
-    uint32_t s, x, y;
+    uint32_t s, x, y, n = ms_reader ? 3 : 2;
     int bad = 0;
 
     memset(a, 0, sizeof(a));
-    a[0].format = a[1].format = VK_FORMAT_R8G8B8A8_UNORM;
+    a[0].format = a[1].format = a[2].format = VK_FORMAT_R8G8B8A8_UNORM;
     a[0].samples = VK_SAMPLE_COUNT_4_BIT;
-    a[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    a[1].samples = ms_reader ? VK_SAMPLE_COUNT_4_BIT : VK_SAMPLE_COUNT_1_BIT;
+    a[2].samples = VK_SAMPLE_COUNT_1_BIT;
     a[0].loadOp = a[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    a[2].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     a[0].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    a[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    a[0].stencilLoadOp = a[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    a[0].stencilStoreOp = a[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    a[0].initialLayout = a[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    a[1].storeOp = ms_reader ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
+    a[2].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    a[0].stencilLoadOp = a[1].stencilLoadOp = a[2].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    a[0].stencilStoreOp = a[1].stencilStoreOp = a[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    a[0].initialLayout = a[1].initialLayout = a[2].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     a[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    a[1].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    a[1].finalLayout = a[2].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
     memset(sp, 0, sizeof(sp));
     sp[0].pipelineBindPoint = sp[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     sp[0].colorAttachmentCount = 1;
@@ -3726,6 +3731,7 @@ static void test_subpass_ms_input(void)
     sp[1].pInputAttachments = &rin;
     sp[1].colorAttachmentCount = 1;
     sp[1].pColorAttachments = &rb;
+    sp[1].pResolveAttachments = ms_reader ? &rr : NULL;
     memset(&dep, 0, sizeof(dep));
     dep.srcSubpass = 0;
     dep.dstSubpass = 1;
@@ -3736,7 +3742,7 @@ static void test_subpass_ms_input(void)
     dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
     memset(&info, 0, sizeof(info));
     info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    info.attachmentCount = 2;
+    info.attachmentCount = n;
     info.pAttachments = a;
     info.subpassCount = 2;
     info.pSubpasses = sp;
@@ -3744,8 +3750,9 @@ static void test_subpass_ms_input(void)
     info.pDependencies = &dep;
     CHECK_VK(vkCreateRenderPass(device, &info, NULL, &rp), VK_SUCCESS);
     views[0] = ms.view;
-    views[1] = ib.view;
-    fb = make_fb(rp, views, 2, W, H, 1);
+    views[1] = ms_reader ? ims.view : ib.view;
+    views[2] = ib.view;
+    fb = make_fb(rp, views, n, W, H, 1);
     set = input_set(&dpool, ms.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_sample_fs, sizeof(spv_sample_fs));
     p.rp = rp;
@@ -3757,13 +3764,14 @@ static void test_subpass_ms_input(void)
     p.layout = input_layout;
     p.rp = rp;
     p.subpass = 1;
+    p.samples = ms_reader ? VK_SAMPLE_COUNT_4_BIT : VK_SAMPLE_COUNT_1_BIT;
     p1 = make_pipe(&p);
     REQUIRE(p0 && p1);
     memset(clears, 0, sizeof(clears));
     clears[0].color.float32[2] = clears[1].color.float32[2] = 1.0f; /* blue: not drawn */
     for (s = 0; s < 2; s++) {
         cb = begin_cmd();
-        begin_pass(cb, rp, fb, 0, 0, W, H, clears, 2);
+        begin_pass(cb, rp, fb, 0, 0, W, H, clears, n);
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p0);
         rect(cb, -1, -1, 1, 1, 0, 0, 0, 0, 0);
         vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
@@ -3782,7 +3790,8 @@ static void test_subpass_ms_input(void)
         for (y = 0; y < H; y++)
             for (x = 0; x < W; x++)
                 if (px(&out, x, y) != (s == 0 ? RED : BLACK) && bad++ < 4)
-                    fprintf(stderr, "multisampled input: sample %u pixel (%u, %u) is %08x\n", s, x, y, px(&out, x, y));
+                    fprintf(stderr, "multisampled input (%s reader): sample %u pixel (%u, %u) is %08x\n",
+                            ms_reader ? "4-sample" : "single-sampled", s, x, y, px(&out, x, y));
     }
     CHECK(bad == 0);
     vkDestroyPipeline(device, p0, NULL);
@@ -3792,7 +3801,14 @@ static void test_subpass_ms_input(void)
     vkDestroyRenderPass(device, rp, NULL);
     free_buf(&out);
     free_img(&ms);
+    free_img(&ims);
     free_img(&ib);
+}
+
+static void test_subpass_ms_input(void)
+{
+    subpass_ms_input_case(false);
+    subpass_ms_input_case(true);
 }
 
 /* Five subpasses, each rendering its own R32G32B32A32_SFLOAT attachment:

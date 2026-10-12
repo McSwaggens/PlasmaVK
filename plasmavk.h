@@ -40670,7 +40670,7 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   without it, as dynamic rendering local read defaults to). The render
  *   pass must keep that image bound as color attachment c. subpassInputMS
  *   reads the current sample (the shader should run per sample). One mapped
- *   to PVK_MSL_IA_TEXTURE (another sample count than the pass's) is read
+ *   to PVK_MSL_IA_TEXTURE (section 15: not in the pass's tile memory) is read
  *   from [[texture(i)]] at the fragment's pixel and the Sample operand's
  *   sample: its value is a pvk_ia_tex(_ms) of the texture and the pixel.
  *   result->input_attachments / color_fetches.
@@ -53389,8 +53389,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
  *   mask) and none needs what an earlier one resolved. So input attachments
  *   are read from tile memory (framebuffer fetch, section 13) and transient
  *   attachments never leave it. Color input attachments of another sample
- *   count than their subpass are read from their textures instead (bound at
- *   fragment texture index i, pvk_subpass_texture_inputs). Within an
+ *   count than their subpass, or multisampled ones not among its color
+ *   attachments, are read from their textures instead (bound at fragment
+ *   texture index i, pvk_subpass_texture_inputs). Within an
  *   encoder, each subpass maps the fragment shader's color locations
  *   (logical indices) to the encoder's attachments
  *   (physical indices) with Metal 4's color attachment map, which every
@@ -61985,9 +61986,12 @@ static void pvk_subpass_ds_input(const struct pvk_render_pass *rp, struct pvk_su
 /* The color input attachments a subpass reads from textures (bits of input
  * attachment indices): those of another sample count than its color and
  * depth/stencil attachments, which no Metal pass holds beside them for
- * framebuffer fetch. The encoder binds their views at fragment texture
- * index i (section 16) and shaders read them at the fragment's position
- * (section 13, PVK_MSL_IA_TEXTURE). */
+ * framebuffer fetch, and multisampled ones that are not its color
+ * attachments, which it may read at any sample (framebuffer fetch reads the
+ * current one). Its group starts after the one that renders them. The
+ * encoder binds their views at fragment texture index i (section 16) and
+ * shaders read them at the fragment's position (section 13,
+ * PVK_MSL_IA_TEXTURE). */
 static uint32_t pvk_subpass_texture_inputs(const struct pvk_render_pass *rp, const struct pvk_subpass *sp)
 {
     uint32_t samples = 0, bits = 0, j;
@@ -61996,9 +62000,15 @@ static uint32_t pvk_subpass_texture_inputs(const struct pvk_render_pass *rp, con
             samples = rp->attachments[sp->colors[j]].samples;
     if (!samples && sp->depth < rp->attachment_count)
         samples = rp->attachments[sp->depth].samples;
-    for (j = 0; j < sp->input_count && samples; j++)
-        if (pvk_rp_color(rp, sp->inputs[j]) && rp->attachments[sp->inputs[j]].samples != samples)
+    for (j = 0; j < sp->input_count && samples; j++) {
+        uint32_t a = sp->inputs[j], k;
+        if (!pvk_rp_color(rp, a))
+            continue;
+        for (k = 0; k < sp->color_count && sp->colors[k] != a; k++)
+            ;
+        if (rp->attachments[a].samples != samples || (samples > 1 && k == sp->color_count))
             bits |= 1u << j;
+    }
     return bits;
 }
 
@@ -62079,6 +62089,8 @@ static bool pvk_rp_can_merge(const struct pvk_render_pass *rp, const struct pvk_
     }
     for (i = 0; i < sp->input_count; i++) {
         uint32_t a = sp->inputs[i];
+        if ((sp->texture_inputs & (1u << i)) && pvk_rp_slot(mp, a) < mp->color_count)
+            return false; /* read from its texture: once the group has stored it */
         if (a == VK_ATTACHMENT_UNUSED || (sp->texture_inputs & (1u << i)))
             continue;
         if (pvk_rp_resolves_into(mp, a))
