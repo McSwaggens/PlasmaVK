@@ -42096,6 +42096,7 @@ struct pvk_spv {
     bool use_storage;           /* emit pvk_storage */
     bool use_math;              /* emit pvk_atan2, pvk_tanh */
     bool use_ia;                /* emit pvk_ia_tex, pvk_ia_tex_ms */
+    bool at_centroid;           /* interpolateAtCentroid is used: centroid inputs are read as it reads them */
     bool use_ycbcr;             /* emit pvk_ycbcr_d (Y'CBCR SAMPLING) */
     const struct pvk_ycbcr *ycbcr_fns[PVK_SPV_MAX_YCBCR]; /* conversions with a pvk_ycbcr_<k> function */
     uint32_t nycbcr;
@@ -49937,21 +49938,57 @@ static void pvk_spv_stage_inputs(struct pvk_spv *ctx, struct pvk_spv_iface *in, 
  * shaders: a fragment input location read this way is a Metal
  * interpolant<float4, ...> in the stage_in struct, passed to the functions
  * that need it (pvk_iN, pvk_spv_func.interp_locs); the stage function reads
- * its ordinary value with interpolate_at_center/centroid/sample. Metal's
- * offsets are from the pixel's top-left corner, Vulkan's from its center
- * (checked on M4 Max): +0.5. Flat and integer inputs (and inputs the vertex
- * stage does not write) have one value: the variable's. The operand must
- * name its input with constant array indices (a dynamically indexed array is
- * not supported); a vector's component may be dynamic. */
+ * its ordinary value with interpolate_at_center/centroid/sample, and with
+ * interpolateAtCentroid in the shader, its centroid inputs' with
+ * interpolate_at_centroid too, also when it runs per sample (Metal's
+ * centroid inputs and interpolate_at_centroid differ at times, where Vulkan
+ * asks for the same values). Metal's offsets are from the pixel's top-left corner, Vulkan's
+ * from its center (checked on M4 Max): +0.5. Flat and integer inputs (and
+ * inputs the vertex stage does not write) have one value: the variable's.
+ * An element of an input array by a dynamic index selects among its
+ * elements' interpolants; a vector's component may be dynamic too. */
+
+/* The interpolateAt* value of leaf (selector sel after its lvalue) as n
+ * components, NULL for a flat or integer input. */
+static const char *pvk_spv_interp_value(struct pvk_spv *ctx, const struct pvk_spv_insn *in,
+                                        const enum pvk_msl_scalar_type *in_type, const struct pvk_spv_leaf *leaf,
+                                        const char *sel, uint32_t n)
+{
+    uint32_t inst = in->w[4], comp = leaf->component;
+    const char *e, *dyn = NULL;
+    if (sel[0] == '.' && sel[1] >= 'w' && sel[1] <= 'z' && sel[2] == '\0' && n == 1)
+        comp += sel[1] == 'w' ? 3u : (uint32_t)(sel[1] - 'x'); /* a component of a vector input */
+    else if (sel[0] == '[' && n == 1 && sel[strlen(sel) - 1] == ']' && !strchr(sel + 1, '[')) /* one by a dynamic index */
+        dyn = pvk_spv_fmt(ctx, "%.*s", (int)strlen(sel) - 2, sel + 1);
+    else if (sel[0] != '\0')
+        pvk_spv_fail(ctx, "interpolateAt* of a dynamically selected component is not supported");
+    if (in_type[leaf->location] != PVK_MSL_SCALAR_FLOAT || (leaf->interp & PVK_MSL_INTERP_FLAT))
+        return NULL;
+    ctx->fn->interp_locs |= 1u << leaf->location;
+    ctx->interp_type[leaf->location] = (leaf->interp & PVK_MSL_INTERP_NO_PERSPECTIVE)
+                                           ? "interpolant<float4, interpolation::no_perspective>"
+                                           : "interpolant<float4, interpolation::perspective>";
+    if (inst == PVK_SPV_GLSL_InterpolateAtCentroid) {
+        e = pvk_spv_fmt(ctx, "pvk_i%u.interpolate_at_centroid()", leaf->location);
+        ctx->at_centroid = true;
+    } else if (inst == PVK_SPV_GLSL_InterpolateAtSample) {
+        e = pvk_spv_fmt(ctx, "pvk_i%u.interpolate_at_sample(uint(%s))", leaf->location, pvk_spv_val(ctx, in->w[6]));
+    } else {
+        e = pvk_spv_fmt(ctx, "pvk_i%u.interpolate_at_offset(float2(%s) + 0.5f)", leaf->location,
+                        pvk_spv_val(ctx, in->w[6]));
+    }
+    return dyn ? pvk_spv_fmt(ctx, "%s[%uu + uint(%s)]", e, comp, dyn) : pvk_spv_swizzle(ctx, e, comp, n);
+}
+
 static void pvk_spv_interpolate_at(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
-    uint32_t inst = in->w[4], rid = in->w[2], i, n, comp;
+    uint32_t inst = in->w[4], rid = in->w[2], i, n;
     const struct pvk_spv_ptr *p;
     struct pvk_spv_iface ifc;
     enum pvk_msl_scalar_type in_type[PVK_MSL_MAX_LOCATIONS];
     const struct pvk_spv_leaf *leaf = NULL;
     struct pvk_spv_type *r = pvk_spv_vtype(ctx, rid), *rs = pvk_spv_scalar_of(ctx, r);
-    const char *e, *sel = "", *dyn = NULL;
+    const char *e = NULL, *sel = "";
 
     if (ctx->model != PVK_SPV_ExecutionModelFragment)
         pvk_spv_fail(ctx, "interpolateAt* is only available in fragment shaders");
@@ -49961,6 +49998,7 @@ static void pvk_spv_interpolate_at(struct pvk_spv *ctx, const struct pvk_spv_ins
     if (p->storage != PVK_SPV_StorageInput || p->type != in->w[1] || !rs || rs->op != PVK_SPV_OpTypeFloat)
         pvk_spv_fail(ctx, "interpolateAt* needs a pointer to a floating-point input");
     pvk_spv_stage_inputs(ctx, &ifc, in_type);
+    n = pvk_spv_components(r);
     for (i = 0; i < ifc.nleaves && !leaf; i++) { /* the leaf p points into, by its selectors */
         size_t l = strlen(ifc.leaves[i].lvalue);
         if (strncmp(p->expr, ifc.leaves[i].lvalue, l) == 0 && (p->expr[l] == '\0' || p->expr[l] == '.' || p->expr[l] == '[')) {
@@ -49968,32 +50006,37 @@ static void pvk_spv_interpolate_at(struct pvk_spv *ctx, const struct pvk_spv_ins
             sel = p->expr + l;
         }
     }
-    if (!leaf)
-        pvk_spv_fail(ctx, "interpolateAt* of an input with a dynamic index is not supported");
-    n = pvk_spv_components(r);
-    comp = leaf->component;
-    if (sel[0] == '.' && sel[1] >= 'w' && sel[1] <= 'z' && sel[2] == '\0' && n == 1)
-        comp += sel[1] == 'w' ? 3u : (uint32_t)(sel[1] - 'x'); /* a component of a vector input */
-    else if (sel[0] == '[' && n == 1 && sel[strlen(sel) - 1] == ']' && !strchr(sel + 1, '[')) /* one by a dynamic index */
-        dyn = pvk_spv_fmt(ctx, "%.*s", (int)strlen(sel) - 2, sel + 1);
-    else if (sel[0] != '\0')
-        pvk_spv_fail(ctx, "interpolateAt* of a dynamically selected component is not supported");
-    if (in_type[leaf->location] != PVK_MSL_SCALAR_FLOAT || (leaf->interp & PVK_MSL_INTERP_FLAT)) {
+    if (leaf) {
+        e = pvk_spv_interp_value(ctx, in, in_type, leaf, sel, n);
+    } else { /* base[index]rest: the elements' values, selected by the index */
+        const char *open = strchr(p->expr, '['), *close = open ? strchr(open, ']') : NULL, *rest, *index;
+        uint32_t k;
+        if (!open || !close)
+            pvk_spv_fail(ctx, "interpolateAt* of an input it cannot find");
+        index = pvk_spv_fmt(ctx, "%.*s", (int)(close - open - 1), open + 1);
+        rest = close + 1;
+        for (k = 0;; k++) {
+            const char *name = pvk_spv_fmt(ctx, "%.*s[%u]", (int)(open - p->expr), p->expr, k), *v;
+            size_t l = strlen(name);
+            leaf = NULL;
+            for (i = 0; i < ifc.nleaves && !leaf; i++) /* the element's leaf: its lvalue, then a prefix of rest */
+                if (strncmp(ifc.leaves[i].lvalue, name, l) == 0 &&
+                    strncmp(rest, ifc.leaves[i].lvalue + l, strlen(ifc.leaves[i].lvalue + l)) == 0)
+                    leaf = &ifc.leaves[i];
+            if (!leaf)
+                break;
+            v = pvk_spv_interp_value(ctx, in, in_type, leaf, rest + strlen(leaf->lvalue + l), n);
+            if (!v)
+                pvk_spv_fail(ctx, "interpolateAt* of a flat input array by a dynamic index is not supported");
+            e = e ? pvk_spv_fmt(ctx, "(uint(%s) == %uu ? %s : %s)", index, k, v, e) : v;
+        }
+        if (!e)
+            pvk_spv_fail(ctx, "interpolateAt* of an input it cannot find");
+    }
+    if (!e) {
         pvk_spv_load(ctx, rid, p); /* one value per primitive */
         return;
     }
-    ctx->fn->interp_locs |= 1u << leaf->location;
-    ctx->interp_type[leaf->location] = (leaf->interp & PVK_MSL_INTERP_NO_PERSPECTIVE)
-                                           ? "interpolant<float4, interpolation::no_perspective>"
-                                           : "interpolant<float4, interpolation::perspective>";
-    if (inst == PVK_SPV_GLSL_InterpolateAtCentroid)
-        e = pvk_spv_fmt(ctx, "pvk_i%u.interpolate_at_centroid()", leaf->location);
-    else if (inst == PVK_SPV_GLSL_InterpolateAtSample)
-        e = pvk_spv_fmt(ctx, "pvk_i%u.interpolate_at_sample(uint(%s))", leaf->location, pvk_spv_val(ctx, in->w[6]));
-    else
-        e = pvk_spv_fmt(ctx, "pvk_i%u.interpolate_at_offset(float2(%s) + 0.5f)", leaf->location,
-                        pvk_spv_val(ctx, in->w[6]));
-    e = dyn ? pvk_spv_fmt(ctx, "%s[%uu + uint(%s)]", e, comp, dyn) : pvk_spv_swizzle(ctx, e, comp, n);
     pvk_spv_set(ctx, rid, rs->width == 16 ? pvk_spv_fmt(ctx, "%s(%s)", r->msl, e) : e);
 }
 
@@ -50673,6 +50716,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     uint32_t fetch_colors = 0, sample_inputs = 0, nin = 0, nout = 0, colors = 0;
     uint64_t ia_textures = 0; /* [[texture(i)]] parameters of input attachments read from textures */
     bool a2c_src = false;     /* pvk_a2c_src holds location 0's value, which no attachment takes */
+    uint32_t centroid_locs = 0; /* centroid inputs read through interpolants (ctx->at_centroid) */
     enum pvk_msl_scalar_type in_type[PVK_MSL_MAX_LOCATIONS], out_type[2][PVK_MSL_MAX_LOCATIONS];
     uint32_t loc_interp[PVK_MSL_MAX_LOCATIONS];
     struct pvk_msl_varying vin[PVK_MSL_MAX_LOCATIONS], vout[PVK_MSL_MAX_LOCATIONS + 1];
@@ -50888,10 +50932,18 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         for (i = 0; i < in.nleaves; i++)
             if (in.leaves[i].location == loc)
                 loc_interp[loc] = in.leaves[i].interp; /* (a location's variables must agree) */
-        if (per_sample && !(loc_interp[loc] & PVK_MSL_INTERP_FLAT)) /* sample shading: interpolated at the sample */
+        if (per_sample && !(loc_interp[loc] & PVK_MSL_INTERP_FLAT) &&
+            !(ctx->at_centroid && (loc_interp[loc] & PVK_MSL_INTERP_CENTROID))) /* sample shading: at the sample */
             loc_interp[loc] = (loc_interp[loc] & ~PVK_MSL_INTERP_CENTROID) | PVK_MSL_INTERP_SAMPLE;
         if (in_type[loc] != PVK_MSL_SCALAR_FLOAT)
             loc_interp[loc] = PVK_MSL_INTERP_FLAT;
+        if (ctx->at_centroid && (loc_interp[loc] & PVK_MSL_INTERP_CENTROID) && !(loc_interp[loc] & PVK_MSL_INTERP_FLAT) &&
+            in_type[loc] == PVK_MSL_SCALAR_FLOAT && !(entry->interp_locs & (1u << loc))) {
+            centroid_locs |= 1u << loc; /* read as interpolateAtCentroid reads (pvk_spv_interpolate_at) */
+            ctx->interp_type[loc] = (loc_interp[loc] & PVK_MSL_INTERP_NO_PERSPECTIVE)
+                                        ? "interpolant<float4, interpolation::no_perspective>"
+                                        : "interpolant<float4, interpolation::perspective>";
+        }
     }
     for (i = 0; i < in.nleaves; i++) {
         const struct pvk_spv_leaf *l = &in.leaves[i];
@@ -50900,7 +50952,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         if (k == PVK_SPV_SLOT_NONE)
             continue; /* (an unwritten fragment input: 0) */
         slot = vertex ? pvk_spv_fmt(ctx, "pvk_attr%u", l->location) : pvk_spv_fmt(ctx, "pvk_in.pvk_l%u", l->location);
-        if (!vertex && (entry->interp_locs & (1u << l->location))) /* an interpolant (interpolateAt*) */
+        if (!vertex && ((entry->interp_locs | centroid_locs) & (1u << l->location))) /* an interpolant (interpolateAt*) */
             slot = pvk_spv_fmt(ctx, "%s.%s", slot,
                                (loc_interp[l->location] & PVK_MSL_INTERP_SAMPLE)     ? "interpolate_at_sample(pvk_sample_id)"
                                : (loc_interp[l->location] & PVK_MSL_INTERP_CENTROID) ? "interpolate_at_centroid()"
@@ -50916,7 +50968,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
             for (i = 0; i < in.nleaves; i++)
                 if (in.leaves[i].location == loc)
                     vin[nin].components |= ((1u << in.leaves[i].ncomp) - 1) << in.leaves[i].component;
-            if (entry->interp_locs & (1u << loc))
+            if ((entry->interp_locs | centroid_locs) & (1u << loc))
                 pvk_sb_printf(ctx, &ins, "    %s pvk_l%u [[user(locn%u)]];\n", ctx->interp_type[loc], loc, loc);
             else
                 pvk_sb_printf(ctx, &ins, "    %s pvk_l%u [[user(locn%u)]] [[%s]];\n", pvk_spv_kind_msl(ctx, in_type[loc], 4),
