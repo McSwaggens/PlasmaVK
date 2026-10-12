@@ -50045,7 +50045,19 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             for (h = 0; h < nh; h++)
                 PVK_SPV_PUSH(ctx, params, nparams, cap, hidden[h]);
         }
-        pvk_sb_printf(ctx, out, "static inline %s %s(", pvk_spv_type(ctx, fn->ret)->msl, fn->msl);
+        /* A loop it returns from as well as after it: not inlined. Metal's
+         * compiler returned 0 from such a function inlined where its argument
+         * is uniform (macOS 27.2: the Khronos CTS's control_flow
+         * mixed_return_break_continue_vertex; noinline was what helped). */
+        uint32_t b, loops = 0, returns = 0;
+        for (b = 0; b < fn->nblocks; b++) {
+            const struct pvk_spv_block *blk = &fn->blocks[b];
+            uint32_t op = pvk_spv_insn_at(ctx, blk->end).op;
+            loops += blk->merge && pvk_spv_insn_at(ctx, blk->merge).op == PVK_SPV_OpLoopMerge;
+            returns += op == PVK_SPV_OpReturn || op == PVK_SPV_OpReturnValue;
+        }
+        pvk_sb_printf(ctx, out, "%s %s %s(", loops && returns > 1 ? "__attribute__((noinline)) static" : "static inline",
+                      pvk_spv_type(ctx, fn->ret)->msl, fn->msl);
     }
     for (i = 0; i < nparams; i++)
         pvk_sb_printf(ctx, out, "%s%s", i ? (entry ? ",\n                 " : ", ") : "", params[i]);
