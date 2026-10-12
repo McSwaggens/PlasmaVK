@@ -2753,6 +2753,82 @@ static void test_multiview(void)
 
 /* A timestamp in a multiview pass takes one query per view: the first gets
  * the time, the others 0, all available. */
+static uint32_t expect_red_all(uint32_t x, uint32_t y)
+{
+    (void)x, (void)y;
+    return RED;
+}
+
+/* A multiview render pass's load-op clear applies to each view in the
+ * first subpass using it: subpasses of views 0 and 1 (Metal passes of
+ * their own) clear both layers. */
+static void test_multiview_subpass_clears(void)
+{
+    static const VkClearColorValue blue = { { 0, 0, 1, 1 } };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 2, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out[2];
+    VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 2 };
+    VkAttachmentDescription a;
+    VkAttachmentReference ref;
+    VkSubpassDescription sp[2];
+    VkRenderPassMultiviewCreateInfo mv;
+    VkRenderPassCreateInfo rpi;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    VkFramebuffer fb;
+    VkClearValue clear;
+    VkCommandBuffer cb;
+    uint32_t masks[2] = { 0x1, 0x2 }, i;
+
+    for (i = 0; i < 2; i++)
+        out[i] = make_buf(W * H * 4);
+    memset(&a, 0, sizeof(a));
+    a.format = VK_FORMAT_R8G8B8A8_UNORM;
+    a.samples = VK_SAMPLE_COUNT_1_BIT;
+    a.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    a.initialLayout = a.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    ref.attachment = 0;
+    ref.layout = VK_IMAGE_LAYOUT_GENERAL;
+    memset(sp, 0, sizeof(sp));
+    for (i = 0; i < 2; i++) {
+        sp[i].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sp[i].colorAttachmentCount = 1;
+        sp[i].pColorAttachments = &ref;
+    }
+    memset(&mv, 0, sizeof(mv));
+    mv.sType = VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO;
+    mv.subpassCount = 2;
+    mv.pViewMasks = masks;
+    memset(&rpi, 0, sizeof(rpi));
+    rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpi.pNext = &mv;
+    rpi.attachmentCount = 1;
+    rpi.pAttachments = &a;
+    rpi.subpassCount = 2;
+    rpi.pSubpasses = sp;
+    CHECK_VK(vkCreateRenderPass(device, &rpi, NULL, &rp), VK_SUCCESS);
+    REQUIRE(rp);
+    fb = make_fb(rp, &target.view, 1, W, H, 1);
+    memset(&clear, 0, sizeof(clear));
+    clear.color.float32[0] = clear.color.float32[3] = 1.0f;
+    cb = begin_cmd();
+    vkCmdClearColorImage(cb, target.image, VK_IMAGE_LAYOUT_GENERAL, &blue, 1, &range);
+    barrier(cb);
+    begin_pass(cb, rp, fb, 0, 0, W, H, &clear, 1);
+    vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdEndRenderPass(cb);
+    for (i = 0; i < 2; i++)
+        download(cb, &target, i, VK_IMAGE_ASPECT_COLOR_BIT, &out[i]);
+    submit(cb);
+    CHECK(count_bad(&out[0], expect_red_all, "multiview subpass clears, layer 0") == 0);
+    CHECK(count_bad(&out[1], expect_red_all, "multiview subpass clears, layer 1") == 0);
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+    for (i = 0; i < 2; i++)
+        free_buf(&out[i]);
+    free_img(&target);
+}
+
 static void test_multiview_timestamps(void)
 {
     struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 3, VK_SAMPLE_COUNT_1_BIT);
@@ -6451,12 +6527,6 @@ static void test_dual_source_unwritten(void)
     free_img(&target);
 }
 
-static uint32_t expect_red_all(uint32_t x, uint32_t y)
-{
-    (void)x, (void)y;
-    return RED;
-}
-
 /* A copy of the depth of a multisampled combined depth/stencil image (staged
  * through a buffer: a multisampled texel takes its samples' bytes), then
  * depth-tested against: A's 0.75 copied over B's 0.25 lets a draw at 0.5 pass
@@ -7819,6 +7889,7 @@ int main(void)
     RUN(test_depth_bias_clamp);
     RUN(test_viewports_layers);
     RUN(test_multiview);
+    RUN(test_multiview_subpass_clears);
     RUN(test_multiview_timestamps);
     RUN(test_occlusion);
     RUN(test_draw_kinds);
