@@ -4812,8 +4812,11 @@ static void ms_fetch_sample(const struct ds_setup *s, const struct img *color, c
  * stencil (input attachment aspects from VkRenderPassInputAttachmentAspect
  * CreateInfo) with the attachment read-only or not its depth/stencil
  * attachment at all. load: the scene is drawn and stored by an earlier
- * render pass, and the reading pass loads it (the copy loads from it). */
-static void ds_subpass_case(VkFormat format, VkSampleCountFlagBits samples, bool read_only, bool load)
+ * render pass, and the reading pass loads it (the copy loads from it).
+ * depth_aspects: the stencil's input attachment too has the depth aspect
+ * alone (the Khronos CTS reads stencil so: the variable's type decides). */
+static void ds_subpass_case(VkFormat format, VkSampleCountFlagBits samples, bool read_only, bool load,
+                            bool depth_aspects)
 {
     VkAttachmentDescription a[2];
     VkAttachmentReference ro = { 0, VK_IMAGE_LAYOUT_GENERAL }, rds = { 1, VK_IMAGE_LAYOUT_GENERAL };
@@ -4838,8 +4841,8 @@ static void ds_subpass_case(VkFormat format, VkSampleCountFlagBits samples, bool
     char what[96];
     uint32_t k, i;
 
-    snprintf(what, sizeof(what), "%s %ux%s%s", format == VK_FORMAT_D16_UNORM ? "D16" : "D32S8", (unsigned)samples,
-             read_only ? " read-only" : " input only", load ? " loaded" : "");
+    snprintf(what, sizeof(what), "%s %ux%s%s%s", format == VK_FORMAT_D16_UNORM ? "D16" : "D32S8", (unsigned)samples,
+             read_only ? " read-only" : " input only", load ? " loaded" : "", depth_aspects ? " depth aspects" : "");
     ds_setup_init(&s, &ds);
     memset(a, 0, sizeof(a));
     a[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -4863,7 +4866,7 @@ static void ds_subpass_case(VkFormat format, VkSampleCountFlagBits samples, bool
     for (k = 0; k < 2; k++) {
         aspects[k].subpass = load ? 0 : 1;
         aspects[k].inputAttachmentIndex = k;
-        aspects[k].aspectMask = k ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
+        aspects[k].aspectMask = k && !depth_aspects ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
     }
     memset(&aspect_info, 0, sizeof(aspect_info));
     aspect_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_INPUT_ATTACHMENT_ASPECT_CREATE_INFO;
@@ -5102,14 +5105,15 @@ static void test_depth_bounds(void)
 
 static void test_ds_subpasses(void)
 {
-    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_1_BIT, true, false);
-    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_1_BIT, false, false);
-    ds_subpass_case(VK_FORMAT_D16_UNORM, VK_SAMPLE_COUNT_1_BIT, true, false);
-    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_1_BIT, true, true);
-    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, true, false);
-    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, true, true);
-    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, false, false); /* read from textures */
-    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, false, true);
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_1_BIT, true, false, false);
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_1_BIT, false, false, false);
+    ds_subpass_case(VK_FORMAT_D16_UNORM, VK_SAMPLE_COUNT_1_BIT, true, false, false);
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_1_BIT, true, true, false);
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, true, false, false);
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, true, true, false);
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, false, false, false); /* read from textures */
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_4_BIT, false, true, false);
+    ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_1_BIT, true, false, true);
 }
 
 /*

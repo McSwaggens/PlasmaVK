@@ -53998,7 +53998,6 @@ struct pvk_subpass {
     uint32_t resolves[PVK_MAX_COLOR_ATTACHMENTS]; /* its resolve attachment */
     uint32_t input_count;
     uint32_t inputs[PVK_MAX_INPUT_ATTACHMENTS];   /* attachment at each input attachment index */
-    uint32_t input_aspects[PVK_MAX_INPUT_ATTACHMENTS]; /* VkImageAspectFlags read (0: the format's) */
     uint32_t depth, depth_resolve;                /* depth/stencil attachment and its resolve */
     VkResolveModeFlagBits depth_resolve_mode, stencil_resolve_mode;
     uint32_t view_mask;
@@ -62581,16 +62580,17 @@ static bool pvk_rp_color(const struct pvk_render_pass *rp, uint32_t a)
  * ATTACHMENTS): its own depth/stencil attachment, or else the first
  * single-sampled one it reads (others are read from textures,
  * pvk_subpass_texture_inputs).
- * Aspects: the reference's, else every aspect of the format (a shader
- * reads depth through a float input attachment, stencil through an integer
- * one). */
+ * Aspects: every aspect of the format, whatever the reference's aspect mask
+ * (a shader reads depth through a float input attachment, stencil through
+ * an integer one; the Khronos CTS reads the stencil of a reference whose
+ * aspect mask is depth only, through a stencil view's descriptor). */
 static void pvk_subpass_ds_input(const struct pvk_render_pass *rp, struct pvk_subpass *sp)
 {
     uint32_t j;
     sp->ds_input = VK_ATTACHMENT_UNUSED;
     sp->hidden = 0;
     for (j = 0; j < sp->input_count; j++) {
-        uint32_t a = sp->inputs[j], aspects = sp->input_aspects[j];
+        uint32_t a = sp->inputs[j];
         const struct pvk_format *f = a < rp->attachment_count ? rp->attachments[a].fmt : NULL;
         if (!f || pvk_format_is_color(f))
             continue;
@@ -62598,11 +62598,9 @@ static void pvk_subpass_ds_input(const struct pvk_render_pass *rp, struct pvk_su
                                (sp->ds_input != VK_ATTACHMENT_UNUSED && a != sp->ds_input)))
             continue;
         sp->ds_input = a;
-        if (!aspects)
-            aspects = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-        if ((aspects & VK_IMAGE_ASPECT_DEPTH_BIT) && pvk_format_has_depth(f))
+        if (pvk_format_has_depth(f))
             sp->hidden |= PVK_HIDDEN_DEPTH;
-        if ((aspects & VK_IMAGE_ASPECT_STENCIL_BIT) && pvk_format_has_stencil(f))
+        if (pvk_format_has_stencil(f))
             sp->hidden |= PVK_HIDDEN_STENCIL;
     }
 }
@@ -62884,7 +62882,6 @@ static VkResult pvk_render_pass_create(struct pvk_device *device, const VkRender
                                                                               : PVK_MAX_INPUT_ATTACHMENTS;
         for (j = 0; j < PVK_MAX_INPUT_ATTACHMENTS; j++) {
             sp->inputs[j] = j < sp->input_count ? d->pInputAttachments[j].attachment : VK_ATTACHMENT_UNUSED;
-            sp->input_aspects[j] = j < sp->input_count ? d->pInputAttachments[j].aspectMask : 0;
             pvk_rp_use(rp, sp->inputs[j], i);
         }
         sp->depth = d->pDepthStencilAttachment ? d->pDepthStencilAttachment->attachment : VK_ATTACHMENT_UNUSED;
@@ -63896,10 +63893,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
                 input_colors[i] = rp->attachments[sp->inputs[i]].fmt->kind == PVK_FK_DEPTH_STENCIL ? PVK_MSL_IA_TEXTURE_DS
                                                                                                   : PVK_MSL_IA_TEXTURE;
         for (i = 0; i < sp->input_count; i++) {
-            uint32_t aspects = sp->input_aspects[i] ? sp->input_aspects[i]
-                                                    : VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-            bool dep = (aspects & VK_IMAGE_ASPECT_DEPTH_BIT) && (readable & PVK_HIDDEN_DEPTH);
-            bool sten = (aspects & VK_IMAGE_ASPECT_STENCIL_BIT) && (readable & PVK_HIDDEN_STENCIL);
+            bool dep = (readable & PVK_HIDDEN_DEPTH) != 0, sten = (readable & PVK_HIDDEN_STENCIL) != 0;
             if (sp->inputs[i] == VK_ATTACHMENT_UNUSED || sp->inputs[i] != sp->ds_input || (!dep && !sten))
                 continue;
             input_colors[i] = dep && sten ? PVK_MSL_IA_DEPTH_STENCIL : dep ? PVK_MSL_IA_DEPTH : PVK_MSL_IA_STENCIL;
