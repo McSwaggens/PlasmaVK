@@ -43228,7 +43228,7 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         t->elem = pvk_spv_arg(ctx, in, 2);
         e = pvk_spv_type(ctx, t->elem);
         if (e->op == PVK_SPV_OpTypeVoid || e->op == PVK_SPV_OpTypeRuntimeArray || e->op == PVK_SPV_OpTypeFunction ||
-            (e->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(e)))
+            (e->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(e) && !pvk_spv_is_vptr(e))) /* (variable pointers) */
             pvk_spv_fail(ctx, "unsupported array element type");
         t->opaque = e->opaque;
         if (in->op == PVK_SPV_OpTypeArray) {
