@@ -62743,7 +62743,9 @@ static void pvk_subpass_ds_input(const struct pvk_render_pass *rp, struct pvk_su
  * Metal pass holds beside them for framebuffer fetch, multisampled ones
  * that are not its color attachments, which it may read at any sample
  * (framebuffer fetch reads the current one), and depth/stencil ones other
- * than the one it reads through copies (sp->ds_input, set first). Its group
+ * than the one it reads through copies (sp->ds_input, set first), and color
+ * ones past the logical color indices it leaves free (a Metal pass has 8
+ * color attachments, its copies among them). Its group
  * starts after the one that renders them, and no later subpass of its group
  * renders them. The
  * encoder binds their views at fragment texture index i (section 16) and
@@ -62771,6 +62773,30 @@ static uint32_t pvk_subpass_texture_inputs(const struct pvk_render_pass *rp, con
         if (samples ? rp->attachments[a].samples != samples || (samples > 1 && k == sp->color_count)
                     : rp->attachments[a].samples > 1)
             bits |= 1u << j;
+    }
+    { /* color inputs needing more logical indices than its color attachments and the copies leave
+       * (8 in all): all from textures (shaders read one input attachment type one way) */
+        uint32_t free = 0, need = 0, others = 0, l, k;
+        for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS; l++)
+            if (l >= sp->color_count || sp->colors[l] == VK_ATTACHMENT_UNUSED)
+                free++;
+        l = (uint32_t)__builtin_popcount(sp->hidden);
+        free = free > l ? free - l : 0;
+        for (j = 0; j < sp->input_count; j++) {
+            uint32_t a = sp->inputs[j];
+            if (((bits >> j) & 1) || !pvk_rp_color(rp, a))
+                continue;
+            for (k = 0; k < sp->color_count && sp->colors[k] != a; k++)
+                ;
+            if (k < sp->color_count) /* fetched at its color attachment's index */
+                continue;
+            others |= 1u << j;
+            for (k = 0; k < j && sp->inputs[k] != a; k++)
+                ;
+            need += k == j; /* (else as the earlier input of it) */
+        }
+        if (need > free)
+            bits |= others;
     }
     return bits;
 }
