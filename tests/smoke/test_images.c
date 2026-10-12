@@ -2368,6 +2368,62 @@ static void test_host_copy(void)
             free_image(&a);
         }
     }
+    /* image to image, both aspects of a combined depth/stencil format in one region */
+    {
+        static const VkImageAspectFlags aspects[2] = { VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_ASPECT_STENCIL_BIT };
+        float depth[64];
+        VkCopyImageToImageInfo ii;
+        VkImageCopy2 c;
+        unsigned i;
+        for (i = 0; i < 64; i++)
+            depth[i] = (float)i / 64.0f;
+        info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_D32_SFLOAT_S8_UINT, 8, 8, 1, 1, 1, usage);
+        a = make_image_in(&info, shared_type);
+        b = make_image_in(&info, shared_type);
+        for (i = 0; i < 2; i++) {
+            memset(&up, 0, sizeof(up));
+            up.sType = VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY;
+            up.pHostPointer = i ? (void *)in : (void *)depth;
+            up.imageSubresource.aspectMask = aspects[i];
+            up.imageSubresource.layerCount = 1;
+            up.imageExtent.width = up.imageExtent.height = 8;
+            up.imageExtent.depth = 1;
+            ui.dstImage = a.image;
+            CHECK_VK(vkCopyMemoryToImage(device, &ui), VK_SUCCESS);
+        }
+        memset(&c, 0, sizeof(c));
+        c.sType = VK_STRUCTURE_TYPE_IMAGE_COPY_2;
+        c.srcSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+        c.srcSubresource.layerCount = 1;
+        c.dstSubresource = c.srcSubresource;
+        c.extent.width = c.extent.height = 8;
+        c.extent.depth = 1;
+        memset(&ii, 0, sizeof(ii));
+        ii.sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_IMAGE_INFO;
+        ii.srcImage = a.image;
+        ii.srcImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ii.dstImage = b.image;
+        ii.dstImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ii.regionCount = 1;
+        ii.pRegions = &c;
+        CHECK_VK(vkCopyImageToImage(device, &ii), VK_SUCCESS);
+        for (i = 0; i < 2; i++) {
+            memset(out, 0, 256);
+            memset(&down, 0, sizeof(down));
+            down.sType = VK_STRUCTURE_TYPE_IMAGE_TO_MEMORY_COPY;
+            down.pHostPointer = out;
+            down.imageSubresource.aspectMask = aspects[i];
+            down.imageSubresource.layerCount = 1;
+            down.imageExtent.width = down.imageExtent.height = 8;
+            down.imageExtent.depth = 1;
+            di.srcImage = b.image;
+            CHECK_VK(vkCopyImageToMemory(device, &di), VK_SUCCESS);
+            if (memcmp(i ? (const void *)in : (const void *)depth, out, i ? 64 : 256))
+                PVK_TEST_FAIL("image to image host copy: the %s", i ? "stencil" : "depth");
+        }
+        free_image(&a);
+        free_image(&b);
+    }
     free(in);
     free(out);
 }

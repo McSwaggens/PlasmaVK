@@ -39623,8 +39623,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToImage(VkDevice _device, const VkCopy
     VkResult result = VK_SUCCESS;
     uint32_t i;
 
-    for (i = 0; i < info->regionCount && result == VK_SUCCESS; i++) {
-        const VkImageCopy2 *c = &info->pRegions[i];
+    for (i = 0; i < info->regionCount * 2 && result == VK_SUCCESS; i++) {
+        /* each region, a depth/stencil one aspect by aspect (depth, then stencil) */
+        VkImageCopy2 one = info->pRegions[i / 2];
+        const VkImageCopy2 *c = &one;
         const struct pvk_format *sf, *df;
         struct pvk_host_region r;
         VkDeviceSize size;
@@ -39634,7 +39636,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToImage(VkDevice _device, const VkCopy
                               : c->srcSubresource.layerCount;
         uint32_t w, h, d = whole ? (src->type == VK_IMAGE_TYPE_3D ? pvk_mip_extent(src->extent.depth, c->srcSubresource.mipLevel) : 1)
                                  : c->extent.depth;
+        const VkImageAspectFlags ds = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
 
+        if ((one.srcSubresource.aspectMask & ds) == ds)
+            one.srcSubresource.aspectMask = one.dstSubresource.aspectMask =
+                i % 2 ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
+        else if (i % 2)
+            continue;
         pvk_image_aspect(src, c->srcSubresource.aspectMask, &sf, &sw, &sh);
         pvk_image_aspect(dst, c->dstSubresource.aspectMask, &df, &dw, &dh);
         w = whole ? pvk_mip_extent(sw, c->srcSubresource.mipLevel) : c->extent.width;
