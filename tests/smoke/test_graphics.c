@@ -3685,6 +3685,104 @@ static void test_subpass_ms_input(void)
     free_img(&ib);
 }
 
+/* Five subpasses, each rendering its own R32G32B32A32_SFLOAT attachment:
+ * one Metal pass would take 80 bytes of tile memory a sample, more than the
+ * 64 Metal allows, so they are not all merged. */
+static void test_subpass_tile_storage(void)
+{
+    enum { N = 5 };
+    VkAttachmentDescription a[N];
+    VkAttachmentReference refs[N];
+    VkSubpassDescription sp[N];
+    VkSubpassDependency deps[N - 1];
+    VkRenderPassCreateInfo info;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    struct img imgs[N];
+    struct buf out = make_buf(W * H * 16);
+    VkImageView views[N];
+    VkFramebuffer fb;
+    VkClearValue clears[N];
+    VkPipeline pipes[N];
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t i, k, bad = 0;
+
+    memset(a, 0, sizeof(a));
+    memset(sp, 0, sizeof(sp));
+    memset(deps, 0, sizeof(deps));
+    memset(clears, 0, sizeof(clears));
+    for (i = 0; i < N; i++) {
+        imgs[i] = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+        views[i] = imgs[i].view;
+        a[i].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        a[i].samples = VK_SAMPLE_COUNT_1_BIT;
+        a[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        a[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        a[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        a[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        a[i].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        a[i].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        refs[i].attachment = i;
+        refs[i].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        sp[i].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sp[i].colorAttachmentCount = 1;
+        sp[i].pColorAttachments = &refs[i];
+        if (i) {
+            deps[i - 1].srcSubpass = i - 1;
+            deps[i - 1].dstSubpass = i;
+            deps[i - 1].srcStageMask = deps[i - 1].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            deps[i - 1].srcAccessMask = deps[i - 1].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            deps[i - 1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+        }
+    }
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    info.attachmentCount = N;
+    info.pAttachments = a;
+    info.subpassCount = N;
+    info.pSubpasses = sp;
+    info.dependencyCount = N - 1;
+    info.pDependencies = deps;
+    CHECK_VK(vkCreateRenderPass(device, &info, NULL, &rp), VK_SUCCESS);
+    fb = make_fb(rp, views, N, W, H, 1);
+    for (i = 0; i < N; i++) {
+        pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+        p.color_formats[0] = VK_FORMAT_R32G32B32A32_SFLOAT;
+        p.rp = rp;
+        p.subpass = i;
+        pipes[i] = make_pipe(&p);
+        REQUIRE(pipes[i]);
+    }
+    cb = begin_cmd();
+    begin_pass(cb, rp, fb, 0, 0, W, H, clears, N);
+    for (i = 0; i < N; i++) {
+        if (i)
+            vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[i]);
+        rect(cb, -1, -1, 1, 1, (float)(i + 1), 0.5f, 0.25f, 1.0f, 0);
+    }
+    vkCmdEndRenderPass(cb);
+    submit(cb);
+    for (i = 0; i < N; i++) {
+        cb = begin_cmd();
+        download(cb, &imgs[i], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        for (k = 0; k < W * H; k++) {
+            const float *t = (const float *)out.data + 4 * k;
+            if ((t[0] != (float)(i + 1) || t[1] != 0.5f || t[2] != 0.25f || t[3] != 1.0f) && bad++ < 4)
+                fprintf(stderr, "tile storage: attachment %u texel %u is %g %g %g %g\n", i, k, t[0], t[1], t[2], t[3]);
+        }
+    }
+    CHECK(bad == 0);
+    for (i = 0; i < N; i++) {
+        vkDestroyPipeline(device, pipes[i], NULL);
+        free_img(&imgs[i]);
+    }
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+    free_buf(&out);
+}
+
 /* Dynamic rendering local read: draw into attachment 0, then map location 0
  * to attachment 1 and read attachment 0 as input attachment 0. */
 static void test_local_read(void)
@@ -6371,6 +6469,7 @@ int main(void)
     RUN(test_clear_attachments);
     RUN(test_subpasses);
     RUN(test_subpass_ms_input);
+    RUN(test_subpass_tile_storage);
     RUN(test_local_read);
     RUN(test_ds_local_read);
     RUN(test_ds_split);

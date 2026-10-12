@@ -53384,14 +53384,15 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
  *   A render pass instance is one Metal render pass (render command encoder)
  *   per group of consecutive subpasses (struct pvk_rp_pass, chosen when the
  *   render pass is made, section 17): subpasses share an encoder when their
- *   attachments fit one Metal render pass (8 color attachments, one
- *   depth/stencil attachment, one sample count, one view mask) and none
- *   needs what an earlier one resolved. So input attachments are read from
- *   tile memory (framebuffer fetch, section 13) and transient attachments
- *   never leave it. Color input attachments of another sample count than
- *   their subpass are read from their textures instead (bound at fragment
- *   texture index i, pvk_subpass_texture_inputs). Within an encoder, each subpass maps the fragment
- *   shader's color locations (logical indices) to the encoder's attachments
+ *   attachments fit one Metal render pass (8 color attachments in 64 bytes
+ *   per sample, one depth/stencil attachment, one sample count, one view
+ *   mask) and none needs what an earlier one resolved. So input attachments
+ *   are read from tile memory (framebuffer fetch, section 13) and transient
+ *   attachments never leave it. Color input attachments of another sample
+ *   count than their subpass are read from their textures instead (bound at
+ *   fragment texture index i, pvk_subpass_texture_inputs). Within an
+ *   encoder, each subpass maps the fragment shader's color locations
+ *   (logical indices) to the encoder's attachments
  *   (physical indices) with Metal 4's color attachment map, which every
  *   pipeline inherits (checked on M4 Max: a pipeline's color attachment
  *   formats, fragment outputs and framebuffer fetches all use logical
@@ -62018,6 +62019,28 @@ static bool pvk_rp_resolves_into(const struct pvk_rp_pass *mp, uint32_t a)
     return mp->depth_resolve == a;
 }
 
+/* Tile memory a Metal pass's color attachments and depth/stencil copies take
+ * per sample: each its texel size, aligned to that. Metal allows 64 bytes
+ * ("Per sample storage" validation, M4 Max, macOS 27.2). */
+#define PVK_TILE_BYTES 64u
+static uint32_t pvk_rp_storage(const struct pvk_render_pass *rp, const struct pvk_rp_pass *mp)
+{
+    uint32_t s, total = 0, b;
+    for (s = 0; s < mp->color_count + 2; s++) {
+        if (s < mp->color_count)
+            b = mp->colors[s] < rp->attachment_count && rp->attachments[mp->colors[s]].fmt
+                    ? rp->attachments[mp->colors[s]].fmt->bytes
+                    : 0;
+        else /* the copies: R32Float, R8Uint */
+            b = (mp->hidden & (1u << (s - mp->color_count))) ? (s == mp->color_count ? 4u : 1u) : 0u;
+        if (b)
+            total = (total + b - 1) / b * b + b;
+    }
+    return total;
+}
+
+static void pvk_rp_pass_add(const struct pvk_render_pass *rp, struct pvk_rp_pass *mp, uint32_t k);
+
 static bool pvk_rp_can_merge(const struct pvk_render_pass *rp, const struct pvk_rp_pass *mp, uint32_t k,
                              const VkRenderPassCreateInfo2 *info)
 {
@@ -62071,6 +62094,12 @@ static bool pvk_rp_can_merge(const struct pvk_render_pass *rp, const struct pvk_
     }
     if (slots + (uint32_t)__builtin_popcount(mp->hidden | sp->hidden) > PVK_MAX_COLOR_ATTACHMENTS)
         return false; /* (the depth and stencil copies take color slots too) */
+    {
+        struct pvk_rp_pass merged = *mp;
+        pvk_rp_pass_add(rp, &merged, k);
+        if (pvk_rp_storage(rp, &merged) > PVK_TILE_BYTES)
+            return false;
+    }
     for (i = 0; i < info->dependencyCount; i++) {
         const VkSubpassDependency2 *d = &info->pDependencies[i];
         const VkBaseInStructure *ext;
