@@ -782,7 +782,7 @@ static void ref_sample(const struct ref *r, const struct conv *c, float s, float
                        bool *ambiguous, bool *linear)
 {
     bool lin = (lod > 0.0f ? c->min_filter : c->mag_filter) == VK_FILTER_LINEAR;
-    bool explicit_rec = c->force_explicit || r->f->planes == 1;
+    bool explicit_rec = c->force_explicit;
     float u = s * r->w, v = t * r->h, rgba[4] = { 0, 0, 0, 1 };
 
     *linear = lin;
@@ -1225,7 +1225,7 @@ static void test_sample_formats(void)
     uint32_t i, e;
     char name[96];
     for (i = 0; i < PVK_ARRAY_SIZE(yfmts); i++) {
-        for (e = 0; e < (yfmts[i].planes > 1 ? 2u : 1u); e++) {
+        for (e = 0; e < 2; e++) {
             struct conv c = conv_default();
             struct sample_case s;
             c.force_explicit = e;
@@ -1274,8 +1274,8 @@ static void test_sample_chroma(void)
                         for (lf = 0; lf < 2; lf++) {
                             struct conv c = conv_default();
                             struct sample_case s;
-                            if ((yfmts[formats[fi]].planes == 1 && e) || (!yfmts[formats[fi]].ys && y) || (lf && (x || y)))
-                                continue; /* packed: always explicit; 4:2:2: no y location; nearest luma once */
+                            if ((!yfmts[formats[fi]].ys && y) || (lf && (x || y)))
+                                continue; /* 4:2:2: no y location; nearest luma once */
                             c.x_chroma = x ? VK_CHROMA_LOCATION_MIDPOINT : VK_CHROMA_LOCATION_COSITED_EVEN;
                             c.y_chroma = y ? VK_CHROMA_LOCATION_MIDPOINT : VK_CHROMA_LOCATION_COSITED_EVEN;
                             c.chroma_filter = cf ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
@@ -1302,8 +1302,6 @@ static void test_sample_min_mag(void)
                 for (l = 0; l < 2; l++) {
                     struct conv c = conv_default();
                     struct sample_case s;
-                    if (yfmts[formats[fi]].planes == 1 && e)
-                        continue;
                     c.force_explicit = e;
                     c.min_filter = VK_FILTER_LINEAR;
                     c.mag_filter = VK_FILTER_NEAREST;
@@ -1378,11 +1376,10 @@ static void test_format_properties(void)
         CHECK(!(p3.optimalTilingFeatures & (VK_FORMAT_FEATURE_2_BLIT_SRC_BIT | VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT |
                                             VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT)));
         CHECK(!!(p3.optimalTilingFeatures & VK_FORMAT_FEATURE_2_DISJOINT_BIT) == (f->planes > 1));
-        if (f->planes == 1) /* explicit, and so forceable (a spec rule) */
-            CHECK(p3.optimalTilingFeatures &
-                  VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_BIT);
-        CHECK(p3.optimalTilingFeatures &
-              VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_FORCEABLE_BIT);
+        /* implicit, explicit not offered (the CTS reference differs from the spec) */
+        CHECK(!(p3.optimalTilingFeatures &
+                (VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_BIT |
+                 VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_FORCEABLE_BIT)));
         CHECK(descriptor_count(f->format, VK_IMAGE_TILING_OPTIMAL, 0) == f->planes);
 
         memset(&info, 0, sizeof(info));
@@ -1930,7 +1927,7 @@ static struct pvk_ycbcr frag_ycbcr(const struct yfmt *f, const struct conv *c)
     y.x_chroma = (uint8_t)c->x_chroma;
     y.y_chroma = (uint8_t)c->y_chroma;
     y.chroma_filter = (uint8_t)c->chroma_filter;
-    y.explicit_reconstruction = (uint8_t)(c->force_explicit || f->planes == 1);
+    y.explicit_reconstruction = (uint8_t)c->force_explicit;
     y.min_filter = (uint8_t)c->min_filter;
     y.mag_filter = (uint8_t)c->mag_filter;
     y.min_lod = 0.0f;

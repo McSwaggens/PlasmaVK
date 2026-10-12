@@ -34041,9 +34041,12 @@ static const struct {
  * images are one RG8Unorm texture, each texel its Y and one chroma value
  * (Cb at even x, Cr at odd x). Shaders reconstruct, range-expand and convert
  * (section 13), so every chroma location and filter is offered, with
- * separate reconstruction filters and forceable explicit reconstruction;
- * for the packed formats reconstruction is always explicit (one texel holds
- * only half the chroma, so the sampler cannot filter it). Formats > Required
+ * separate reconstruction filters; for the packed formats the shader filters
+ * the chroma by hand (one texel holds only half of it, so the sampler cannot).
+ * Explicit reconstruction is implemented (forceExplicitReconstruction is
+ * honoured) but not advertised: the Khronos CTS's reference for it differs
+ * from the spec's formulae (0.75/0.25 weights swapped for 4:2:0 midpoint,
+ * and for 4:2:2 cosited even), so a spec-exact result fails. Formats > Required
  * Format Support asks for G8_B8_R8_3PLANE_420 and G8_B8R8_2PLANE_420 with
  * SAMPLED_IMAGE, TRANSFER_SRC, TRANSFER_DST and a chroma location. */
 struct pvk_ycbcr_format {
@@ -34162,11 +34165,7 @@ static VkFormatFeatureFlags2 pvk_format_image_features(const struct pvk_physical
             VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT |
             VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_SEPARATE_RECONSTRUCTION_FILTER_BIT;
         if (pvk_ycbcr_format(f)->planes > 1)
-            r |= VK_FORMAT_FEATURE_2_DISJOINT_BIT |
-                 VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_FORCEABLE_BIT;
-        else /* always explicit, so forcing it is honoured (the spec requires both bits) */
-            r |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_BIT |
-                 VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_CHROMA_RECONSTRUCTION_EXPLICIT_FORCEABLE_BIT;
+            r |= VK_FORMAT_FEATURE_2_DISJOINT_BIT; /* (no explicit reconstruction bits: above) */
         return r;
     }
     if (linear && (!pvk_format_is_color(f) || f->block_w > 1))
@@ -37544,7 +37543,7 @@ struct pvk_ycbcr {
     uint8_t swizzle[4];         /* components r, g, b, a: VkComponentSwizzle, never IDENTITY */
     uint8_t x_chroma, y_chroma; /* VkChromaLocation */
     uint8_t chroma_filter;      /* VkFilter */
-    uint8_t explicit_reconstruction; /* forceExplicitReconstruction, or a packed format */
+    uint8_t explicit_reconstruction; /* forceExplicitReconstruction */
     /* the sampler's */
     uint8_t min_filter, mag_filter; /* VkFilter */
     float min_lod, max_lod, lod_bias;
@@ -39233,7 +39232,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSamplerYcbcrConversion(VkDevice device,
         y->x_chroma = (uint8_t)pCreateInfo->xChromaOffset;
         y->y_chroma = (uint8_t)pCreateInfo->yChromaOffset;
         y->chroma_filter = (uint8_t)pCreateInfo->chromaFilter;
-        y->explicit_reconstruction = pCreateInfo->forceExplicitReconstruction || yf->packed;
+        y->explicit_reconstruction = (uint8_t)pCreateInfo->forceExplicitReconstruction;
     }
     *pYcbcrConversion = (VkSamplerYcbcrConversion)y;
     return VK_SUCCESS;
@@ -40769,12 +40768,14 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *       descriptor's sampler and the instruction's LOD operands, the chroma
  *       planes with a constexpr sampler of the chroma filter (clamped to the
  *       edge) at the coordinate the chroma location gives;
- *     explicit reconstruction (forceExplicitReconstruction; always for the
- *       packed formats): texels are read, each luma texel gets its chroma
+ *     explicit reconstruction (forceExplicitReconstruction), and packed
+ *       formats: texels are read, each luma texel gets its chroma
  *       reconstructed (nearest or linear, from the chroma location), and the
  *       sampler's min or mag filter, by Vulkan's LOD (the Lod operand, or
  *       log2 of the largest scaled derivative, plus the biases, clamped),
- *       filters them by hand (nearest or bilinear, clamped to the edge);
+ *       filters them by hand (nearest or bilinear, clamped to the edge); a
+ *       packed format's implicit reconstruction filters its chroma by hand
+ *       at the coordinate the chroma location gives instead;
  *   then the component mapping, range expansion (ITU full or narrow, the
  *   format's bits) and model conversion (RGB or YCbCr identity, BT.709,
  *   BT.601, BT.2020). Filtering comes first: the expansion and conversion
@@ -47365,12 +47366,16 @@ static void pvk_spv_ycbcr_implicit_fn(struct pvk_spv *ctx, uint32_t k, const str
  * for cosited samples, 0.5 (i - 0.5) for midpoint ones), then the sampler's
  * filter for the LOD filters them, clamped to the edge (the address mode
  * Vulkan requires). A packed 4:2:2 texture holds Cb and Cr in alternate
- * texels. lod: the LOD before the sampler's bias and clamps; min_lod: the
- * MinLod operand. */
+ * texels; without forceExplicitReconstruction its reconstruction is
+ * implicit: the luma is filtered so, the chroma by the chroma filter at the
+ * chroma location's coordinate (0.5 (u + 0.5) for cosited samples, 0.5 u
+ * for midpoint ones, in texels). lod: the LOD before the sampler's bias and
+ * clamps; min_lod: the MinLod operand. */
 static void pvk_spv_ycbcr_explicit_fn(struct pvk_spv *ctx, uint32_t k, const struct pvk_ycbcr *y)
 {
     struct pvk_sb *sb = &ctx->ycbcr_text;
     const char *luma = y->packed == 2 ? "g" : "r", *chroma = y->packed == 2 ? "r" : "g";
+    bool implicit = !y->explicit_reconstruction && (y->x_shift || y->y_shift);
     bool linear = y->chroma_filter == VK_FILTER_LINEAR && (y->x_shift || y->y_shift);
 
     pvk_sb_printf(ctx, sb, "template <typename D>\ninline float2 pvk_ycbcr_chroma_%u(D d, int2 k)\n{\n", k);
@@ -47387,7 +47392,9 @@ static void pvk_spv_ycbcr_explicit_fn(struct pvk_spv *ctx, uint32_t k, const str
     pvk_sb_printf(ctx, sb, "}\n\ntemplate <typename D>\ninline float3 pvk_ycbcr_texel_%u(D d, int2 i)\n{\n"
                            "    i = clamp(i, int2(0), int2(int(d.t.get_width()), int(d.t.get_height())) - 1);\n"
                            "    float g = d.t.read(uint2(i)).%s;\n", k, luma);
-    if (!linear) {
+    if (implicit) {
+        pvk_sb_printf(ctx, sb, "    float2 ch = float2(0.0f); /* filtered on its own */\n");
+    } else if (!linear) {
         pvk_sb_printf(ctx, sb, "    float2 ch = pvk_ycbcr_chroma_%u(d, int2(i.x >> %u, i.y >> %u));\n", k, y->x_shift,
                       y->y_shift);
     } else {
@@ -47425,8 +47432,23 @@ static void pvk_spv_ycbcr_explicit_fn(struct pvk_spv *ctx, uint32_t k, const str
                            "        float2 b = u - 0.5f, fl = floor(b), w = b - fl;\n        int2 i = int2(fl);\n"
                            "        rgb = mix(mix(pvk_ycbcr_texel_%u(d, i), pvk_ycbcr_texel_%u(d, i + int2(1, 0)), w.x),\n"
                            "                  mix(pvk_ycbcr_texel_%u(d, i + int2(0, 1)), pvk_ycbcr_texel_%u(d, i + int2(1, 1)), w.x), w.y);\n"
-                           "    } else {\n        rgb = pvk_ycbcr_texel_%u(d, int2(floor(u)));\n    }\n"
-                           "    return pvk_ycbcr_convert_%u(float4(rgb, 1.0f));\n}\n\n", k, k, k, k, k, k);
+                           "    } else {\n        rgb = pvk_ycbcr_texel_%u(d, int2(floor(u)));\n    }\n", k, k, k, k, k);
+    if (implicit) {
+        const char *cx = !y->x_shift ? "u.x"
+                         : y->x_chroma == VK_CHROMA_LOCATION_COSITED_EVEN ? "0.5f * u.x + 0.25f" : "0.5f * u.x";
+        const char *cy = !y->y_shift ? "u.y"
+                         : y->y_chroma == VK_CHROMA_LOCATION_COSITED_EVEN ? "0.5f * u.y + 0.25f" : "0.5f * u.y";
+        pvk_sb_printf(ctx, sb, "    float2 cu = float2(%s, %s);\n", cx, cy);
+        if (linear)
+            pvk_sb_printf(ctx, sb, "    float2 cb = cu - 0.5f, cf = floor(cb), cw = cb - cf;\n    int2 ck = int2(cf);\n"
+                                   "    float2 ch = mix(mix(pvk_ycbcr_chroma_%u(d, ck), pvk_ycbcr_chroma_%u(d, ck + int2(1, 0)), cw.x),\n"
+                                   "                    mix(pvk_ycbcr_chroma_%u(d, ck + int2(0, 1)), pvk_ycbcr_chroma_%u(d, ck + int2(1, 1)), cw.x),\n"
+                                   "                    cw.y);\n", k, k, k, k);
+        else
+            pvk_sb_printf(ctx, sb, "    float2 ch = pvk_ycbcr_chroma_%u(d, int2(floor(cu)));\n", k);
+        pvk_sb_printf(ctx, sb, "    rgb.r = ch.y;\n    rgb.b = ch.x;\n");
+    }
+    pvk_sb_printf(ctx, sb, "    return pvk_ycbcr_convert_%u(float4(rgb, 1.0f));\n}\n\n", k);
 }
 
 /* The index k of the pvk_ycbcr_<k> function of a conversion, made on first use. */
