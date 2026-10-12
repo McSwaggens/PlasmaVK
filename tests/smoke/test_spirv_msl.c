@@ -11064,6 +11064,60 @@ static void test_compute_beside_vertex(void)
 }
 
 /*
+ * SPIR-V assembly (spirv-as from the Vulkan SDK), a compute shader over
+ *     buffer In { uint x0; uint x1; } (binding 0), buffer Out { uint y0;
+ *     uint y1; } (binding 1), members 1 at Offset 16:
+ *   OpDecorate %grp Offset 0
+ *   %grp = OpDecorationGroup
+ *   OpGroupMemberDecorate %grp %In 0 %Out 0
+ *   main: y0 = x0 + 1; y1 = x1
+ */
+static const uint32_t spv_member_group[] = {
+    0x07230203, 0x00010300, 0x00070000, 0x00000017, 0x00000000, 0x00020011, 0x00000001, 0x0003000e,
+    0x00000000, 0x00000001, 0x0005000f, 0x00000005, 0x00000001, 0x6e69616d, 0x00000000, 0x00060010,
+    0x00000001, 0x00000011, 0x00000001, 0x00000001, 0x00000001, 0x00030047, 0x00000002, 0x00000002,
+    0x00030047, 0x00000003, 0x00000002, 0x00050048, 0x00000002, 0x00000001, 0x00000023, 0x00000010,
+    0x00050048, 0x00000003, 0x00000001, 0x00000023, 0x00000010, 0x00040047, 0x00000004, 0x00000023,
+    0x00000000, 0x00020049, 0x00000004, 0x0006004b, 0x00000004, 0x00000002, 0x00000000, 0x00000003,
+    0x00000000, 0x00040047, 0x00000005, 0x00000022, 0x00000000, 0x00040047, 0x00000005, 0x00000021,
+    0x00000000, 0x00040047, 0x00000006, 0x00000022, 0x00000000, 0x00040047, 0x00000006, 0x00000021,
+    0x00000001, 0x00020013, 0x00000007, 0x00030021, 0x00000008, 0x00000007, 0x00040015, 0x00000009,
+    0x00000020, 0x00000000, 0x0004001e, 0x00000002, 0x00000009, 0x00000009, 0x0004001e, 0x00000003,
+    0x00000009, 0x00000009, 0x00040020, 0x0000000a, 0x0000000c, 0x00000002, 0x00040020, 0x0000000b,
+    0x0000000c, 0x00000003, 0x00040020, 0x0000000c, 0x0000000c, 0x00000009, 0x0004003b, 0x0000000a,
+    0x00000005, 0x0000000c, 0x0004003b, 0x0000000b, 0x00000006, 0x0000000c, 0x0004002b, 0x00000009,
+    0x0000000d, 0x00000000, 0x0004002b, 0x00000009, 0x0000000e, 0x00000001, 0x00050036, 0x00000007,
+    0x00000001, 0x00000000, 0x00000008, 0x000200f8, 0x0000000f, 0x00050041, 0x0000000c, 0x00000010,
+    0x00000005, 0x0000000d, 0x00050041, 0x0000000c, 0x00000011, 0x00000005, 0x0000000e, 0x0004003d,
+    0x00000009, 0x00000012, 0x00000010, 0x0004003d, 0x00000009, 0x00000013, 0x00000011, 0x00050080,
+    0x00000009, 0x00000014, 0x00000012, 0x0000000e, 0x00050041, 0x0000000c, 0x00000015, 0x00000006,
+    0x0000000d, 0x00050041, 0x0000000c, 0x00000016, 0x00000006, 0x0000000e, 0x0003003e, 0x00000015,
+    0x00000014, 0x0003003e, 0x00000016, 0x00000013, 0x000100fd, 0x00010038,
+};
+
+/* Member decorations from a decoration group (OpGroupMemberDecorate). */
+static void test_member_decoration_group(void)
+{
+    uint32_t in[5] = { 7, 0, 0, 0, 9 }, out[5] = { 0, 0, 0, 0, 0 };
+    struct pvk_msl_result res;
+    struct mt_buffer bi, bo;
+    struct mt_binding b[2];
+    id pso;
+
+    MT_BUILD(spv_member_group, NULL, res, pso);
+    bi = mt_buffer(sizeof(in), in, sizeof(in));
+    bo = mt_buffer(sizeof(out), out, sizeof(out));
+    b[0] = bind(0, 0, &bi);
+    b[1] = bind(0, 1, &bo);
+    CHECK(mt_dispatch(pso, &res, b, 2, NULL, 0, 1, 1, 1));
+    CHECK(get_u32(bo.data, 0) == 8 && get_u32(bo.data, 16) == 9);
+    mt_buffer_free(&bi);
+    mt_buffer_free(&bo);
+    pvk_release(pso);
+    pvk_msl_result_free(&res);
+}
+
+/*
  * #version 450
  * layout(local_size_x = 1) in;
  * layout(std430, binding = 0) buffer B { float inf; float nzero; float qnan; float one; float o[16]; };
@@ -11705,6 +11759,7 @@ int main(void)
     RUN(test_component_pointers);
     RUN(test_quantize_to_f16);
     RUN(test_compute_beside_vertex);
+    RUN(test_member_decoration_group);
     RUN(test_ieee_specials);
     RUN(test_layout_odds);
     RUN(test_layout_tight);

@@ -43429,78 +43429,110 @@ static void pvk_spv_decorate(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     }
 }
 
-/* OpMemberName / OpMemberDecorate, applied once the struct types exist. */
+/* One OpMemberName or OpMemberDecorate. */
+static void pvk_spv_member_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *insn)
+{
+    struct pvk_spv_insn in = *insn;
+    struct pvk_spv_type *t = pvk_spv_type(ctx, pvk_spv_arg(ctx, &in, 1));
+    uint32_t m = pvk_spv_arg(ctx, &in, 2);
+    struct pvk_spv_member *mb;
+    if (t->op != PVK_SPV_OpTypeStruct || m >= t->nmembers)
+        pvk_spv_fail(ctx, "member decoration of a non-member");
+    mb = &t->members[m];
+    if (in.op == PVK_SPV_OpMemberName) {
+        mb->name = pvk_spv_string(ctx, &in, 3, NULL);
+        return;
+    }
+    switch (pvk_spv_arg(ctx, &in, 3)) {
+    case PVK_SPV_DecoOffset:
+        mb->flags |= PVK_SPV_M_OFFSET;
+        mb->offset = pvk_spv_arg(ctx, &in, 4);
+        break;
+    case PVK_SPV_DecoMatrixStride:
+        mb->matrix_stride = pvk_spv_arg(ctx, &in, 4);
+        break;
+    case PVK_SPV_DecoRowMajor:
+        mb->flags |= PVK_SPV_M_ROW_MAJOR;
+        break;
+    case PVK_SPV_DecoColMajor:
+        mb->flags &= ~PVK_SPV_M_ROW_MAJOR;
+        break;
+    case PVK_SPV_DecoNonWritable:
+        mb->flags |= PVK_SPV_M_NON_WRITABLE;
+        break;
+    case PVK_SPV_DecoBuiltIn:
+        mb->flags |= PVK_SPV_M_BUILTIN;
+        mb->builtin = pvk_spv_arg(ctx, &in, 4);
+        break;
+    case PVK_SPV_DecoLocation:
+        mb->flags |= PVK_SPV_M_LOCATION;
+        mb->location = pvk_spv_arg(ctx, &in, 4);
+        break;
+    case PVK_SPV_DecoComponent:
+        mb->flags |= PVK_SPV_M_COMPONENT;
+        mb->component = pvk_spv_arg(ctx, &in, 4);
+        break;
+    case PVK_SPV_DecoFlat:
+        mb->interp |= PVK_MSL_INTERP_FLAT;
+        break;
+    case PVK_SPV_DecoNoPerspective:
+        mb->interp |= PVK_MSL_INTERP_NO_PERSPECTIVE;
+        break;
+    case PVK_SPV_DecoCentroid:
+        mb->interp |= PVK_MSL_INTERP_CENTROID;
+        break;
+    case PVK_SPV_DecoSample:
+        mb->interp |= PVK_MSL_INTERP_SAMPLE;
+        break;
+    case PVK_SPV_DecoCoherent:
+    case PVK_SPV_DecoVolatile:
+        mb->flags |= PVK_SPV_M_COHERENT;
+        break;
+    case PVK_SPV_DecoInvariant:
+        mb->flags |= PVK_SPV_M_INVARIANT;
+        break;
+    case PVK_SPV_DecoPatch:
+    case PVK_SPV_DecoPerPrimitive:
+    case PVK_SPV_DecoPerVertex:
+    case PVK_SPV_DecoXfbBuffer:
+        pvk_spv_fail(ctx, "unsupported member decoration %u (tessellation, mesh or transform feedback)", in.w[3]);
+    default:
+        break;
+    }
+}
+
+/* OpMemberName / OpMemberDecorate, applied once the struct types exist; an
+ * OpGroupMemberDecorate is each decoration of its group (before it) as an
+ * OpMemberDecorate of each member it names. */
 static void pvk_spv_apply_member_insns(struct pvk_spv *ctx)
 {
-    uint32_t i;
+    uint32_t i, off, t, k;
     for (i = 0; i < ctx->nmember_insns; i++) {
         struct pvk_spv_insn in = pvk_spv_insn_at(ctx, ctx->member_insns[i]);
-        struct pvk_spv_type *t = pvk_spv_type(ctx, pvk_spv_arg(ctx, &in, 1));
-        uint32_t m = pvk_spv_arg(ctx, &in, 2);
-        struct pvk_spv_member *mb;
-        if (t->op != PVK_SPV_OpTypeStruct || m >= t->nmembers)
-            pvk_spv_fail(ctx, "member decoration of a non-member");
-        mb = &t->members[m];
-        if (in.op == PVK_SPV_OpMemberName) {
-            mb->name = pvk_spv_string(ctx, &in, 3, NULL);
+        if (in.op != PVK_SPV_OpGroupMemberDecorate) {
+            pvk_spv_member_insn(ctx, &in);
             continue;
         }
-        switch (pvk_spv_arg(ctx, &in, 3)) {
-        case PVK_SPV_DecoOffset:
-            mb->flags |= PVK_SPV_M_OFFSET;
-            mb->offset = pvk_spv_arg(ctx, &in, 4);
-            break;
-        case PVK_SPV_DecoMatrixStride:
-            mb->matrix_stride = pvk_spv_arg(ctx, &in, 4);
-            break;
-        case PVK_SPV_DecoRowMajor:
-            mb->flags |= PVK_SPV_M_ROW_MAJOR;
-            break;
-        case PVK_SPV_DecoColMajor:
-            mb->flags &= ~PVK_SPV_M_ROW_MAJOR;
-            break;
-        case PVK_SPV_DecoNonWritable:
-            mb->flags |= PVK_SPV_M_NON_WRITABLE;
-            break;
-        case PVK_SPV_DecoBuiltIn:
-            mb->flags |= PVK_SPV_M_BUILTIN;
-            mb->builtin = pvk_spv_arg(ctx, &in, 4);
-            break;
-        case PVK_SPV_DecoLocation:
-            mb->flags |= PVK_SPV_M_LOCATION;
-            mb->location = pvk_spv_arg(ctx, &in, 4);
-            break;
-        case PVK_SPV_DecoComponent:
-            mb->flags |= PVK_SPV_M_COMPONENT;
-            mb->component = pvk_spv_arg(ctx, &in, 4);
-            break;
-        case PVK_SPV_DecoFlat:
-            mb->interp |= PVK_MSL_INTERP_FLAT;
-            break;
-        case PVK_SPV_DecoNoPerspective:
-            mb->interp |= PVK_MSL_INTERP_NO_PERSPECTIVE;
-            break;
-        case PVK_SPV_DecoCentroid:
-            mb->interp |= PVK_MSL_INTERP_CENTROID;
-            break;
-        case PVK_SPV_DecoSample:
-            mb->interp |= PVK_MSL_INTERP_SAMPLE;
-            break;
-        case PVK_SPV_DecoCoherent:
-        case PVK_SPV_DecoVolatile:
-            mb->flags |= PVK_SPV_M_COHERENT;
-            break;
-        case PVK_SPV_DecoInvariant:
-            mb->flags |= PVK_SPV_M_INVARIANT;
-            break;
-        case PVK_SPV_DecoPatch:
-        case PVK_SPV_DecoPerPrimitive:
-        case PVK_SPV_DecoPerVertex:
-        case PVK_SPV_DecoXfbBuffer:
-            pvk_spv_fail(ctx, "unsupported member decoration %u (tessellation, mesh or transform feedback)",
-                         in.w[3]);
-        default:
-            break;
+        for (off = 5; off < in.off;) {
+            struct pvk_spv_insn d = pvk_spv_insn_at(ctx, off);
+            off += d.wc;
+            if ((d.op != PVK_SPV_OpDecorate && d.op != PVK_SPV_OpDecorateString) || d.wc < 3 || d.w[1] != in.w[1])
+                continue;
+            for (t = 2; t + 1 < in.wc; t += 2) {
+                uint32_t words[64];
+                struct pvk_spv_insn copy = d;
+                if (d.wc + 1 > PVK_ARRAY_SIZE(words))
+                    pvk_spv_fail(ctx, "decoration too long");
+                copy.op = d.op == PVK_SPV_OpDecorate ? PVK_SPV_OpMemberDecorate : PVK_SPV_OpMemberDecorateString;
+                copy.wc = d.wc + 1;
+                words[0] = copy.wc << 16 | copy.op;
+                words[1] = in.w[t];     /* the struct */
+                words[2] = in.w[t + 1]; /* the member */
+                for (k = 2; k < d.wc; k++)
+                    words[k + 1] = d.w[k];
+                copy.w = words;
+                pvk_spv_member_insn(ctx, &copy);
+            }
         }
     }
 }
@@ -43655,7 +43687,8 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
     case PVK_SPV_OpMemberName:
     case PVK_SPV_OpMemberDecorate:
     case PVK_SPV_OpMemberDecorateString:
-        pvk_spv_arg(ctx, in, 3);
+    case PVK_SPV_OpGroupMemberDecorate:
+        pvk_spv_arg(ctx, in, in->op == PVK_SPV_OpGroupMemberDecorate ? 1 : 3);
         PVK_SPV_PUSH(ctx, ctx->member_insns, ctx->nmember_insns, ctx->cap_member_insns, in->off);
         break;
     case PVK_SPV_OpDecorate:
@@ -43688,8 +43721,6 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         }
         break;
     }
-    case PVK_SPV_OpGroupMemberDecorate:
-        pvk_spv_fail(ctx, "member decoration groups are not supported");
     case PVK_SPV_OpTypeForwardPointer: {
         /* Declares the pointer type early (structs may contain pointers to
          * themselves); its OpTypePointer fills it in. Not in type_order. */
