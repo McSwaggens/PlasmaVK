@@ -33006,8 +33006,10 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
      * INPUT ATTACHMENTS). Multisampled local reads are unverified. */
     p14->dynamicRenderingLocalReadDepthStencilAttachments = VK_TRUE;
     p14->dynamicRenderingLocalReadMultisampledAttachments = VK_FALSE;
-    /* maintenance5 behaviour as KosmicKrisp and MoltenVK report it for Metal. */
-    p14->earlyFragmentMultisampleCoverageAfterSampleCounting = VK_TRUE;
+    /* maintenance5: with EarlyFragmentTests, Metal's occlusion counts come after
+     * alpha to coverage (the CTS counts no samples of an alpha-0 draw) and
+     * before the sample mask test. */
+    p14->earlyFragmentMultisampleCoverageAfterSampleCounting = VK_FALSE;
     p14->earlyFragmentSampleMaskTestBeforeSampleCounting = VK_FALSE;
     p14->depthStencilSwizzleOneSupport = VK_TRUE;
     /* Three-plane Y'CbCr formats take three descriptors. */
