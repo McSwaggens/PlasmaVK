@@ -43195,8 +43195,8 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         if ((t->img.ms && t->img.dim != PVK_SPV_Dim2D) ||
             (t->img.arrayed && (t->img.dim == PVK_SPV_Dim3D || t->img.dim == PVK_SPV_DimBuffer)))
             pvk_spv_fail(ctx, "unsupported image type (multisampled or arrayed)");
-        if (t->img.depth == 1 && e->op != PVK_SPV_OpTypeFloat)
-            t->img.depth = 0; /* (Vulkan ignores Depth; only comparisons, of float images, need a depth texture) */
+        if (t->img.depth == 1) /* Vulkan ignores Depth: a color texture, cast where a Dref needs a depth one */
+            t->img.depth = e->op == PVK_SPV_OpTypeFloat ? 2 : 0;
         break;
     case PVK_SPV_OpTypeSampler:
         t->opaque = true;
@@ -46116,8 +46116,11 @@ static void pvk_spv_glsl(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         if (nops != simple[i].nops)
             pvk_spv_fail(ctx, "GLSL.std.450 instruction %u: wrong operand count", inst);
         fn = simple[i].name;
-        if ((inst == PVK_SPV_GLSL_Atan2 && rs && rs->width == 32) || inst == PVK_SPV_GLSL_Tanh) {
-            fn = inst == PVK_SPV_GLSL_Tanh ? "pvk_tanh" : "pvk_atan2"; /* (pvk_spv_math_template) */
+        if ((inst == PVK_SPV_GLSL_Atan2 && rs && rs->width == 32) || inst == PVK_SPV_GLSL_Tanh ||
+            inst == PVK_SPV_GLSL_Sin || inst == PVK_SPV_GLSL_Cos || inst == PVK_SPV_GLSL_Fract ||
+            inst == PVK_SPV_GLSL_Asinh || inst == PVK_SPV_GLSL_Round || inst == PVK_SPV_GLSL_FMin ||
+            inst == PVK_SPV_GLSL_FMax || inst == PVK_SPV_GLSL_NMin || inst == PVK_SPV_GLSL_NMax) {
+            fn = pvk_spv_fmt(ctx, "pvk_%s", fn); /* (pvk_spv_math_template) */
             ctx->use_math = true;
         }
         if (nops == 1)
@@ -46197,10 +46200,11 @@ static void pvk_spv_glsl(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         PVK_SPV_NOPS(2);
         p = pvk_spv_ptr_of(ctx, in->w[6]);
         name = pvk_spv_result(ctx, rid);
+        ctx->use_math |= inst != PVK_SPV_GLSL_Modf;
         pvk_spv_line(ctx, "{");
         ctx->indent++;
         pvk_spv_line(ctx, "%s pvk_out;", pvk_spv_type(ctx, p->type)->msl);
-        pvk_spv_line(ctx, "%s = %s(%s, pvk_out);", name, inst == PVK_SPV_GLSL_Modf ? "modf" : "frexp",
+        pvk_spv_line(ctx, "%s = %s(%s, pvk_out);", name, inst == PVK_SPV_GLSL_Modf ? "modf" : "pvk_frexp",
                      pvk_spv_val(ctx, in->w[5]));
         pvk_spv_store(ctx, p, "pvk_out", p->type);
         ctx->indent--;
@@ -46213,11 +46217,12 @@ static void pvk_spv_glsl(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         PVK_SPV_NOPS(1);
         if (r->op != PVK_SPV_OpTypeStruct || r->nmembers != 2)
             pvk_spv_fail(ctx, "ModfStruct/FrexpStruct needs a two-member struct");
+        ctx->use_math |= inst != PVK_SPV_GLSL_ModfStruct;
         name = pvk_spv_result(ctx, rid);
         /* value types on both sides (a packed 3-vector binds to neither parameter) */
         pvk_spv_line(ctx, "{ %s pvk_whole; %s.%s = %s(%s(%s), pvk_whole); %s.%s = pvk_whole; }",
                      pvk_spv_type(ctx, r->members[1].type)->msl, name, r->members[0].msl,
-                     inst == PVK_SPV_GLSL_ModfStruct ? "modf" : "frexp", pvk_spv_type(ctx, r->members[0].type)->msl,
+                     inst == PVK_SPV_GLSL_ModfStruct ? "modf" : "pvk_frexp", pvk_spv_type(ctx, r->members[0].type)->msl,
                      pvk_spv_val(ctx, in->w[5]), name, r->members[1].msl);
         return;
     }
@@ -48537,9 +48542,13 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s)", s));
         return;
     }
+    case PVK_SPV_OpVectorTimesMatrix: case PVK_SPV_OpMatrixTimesVector: case PVK_SPV_OpMatrixTimesMatrix:
+        ctx->use_math = true; /* pvk_mul: products of -0 stay -0 (pvk_spv_math_template) */
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "pvk_mul(%s, %s)", pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3)),
+                                          pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 4))));
+        return;
     case PVK_SPV_OpFAdd: case PVK_SPV_OpFSub: case PVK_SPV_OpFMul: case PVK_SPV_OpFDiv:
-    case PVK_SPV_OpVectorTimesScalar: case PVK_SPV_OpMatrixTimesScalar: case PVK_SPV_OpVectorTimesMatrix:
-    case PVK_SPV_OpMatrixTimesVector: case PVK_SPV_OpMatrixTimesMatrix:
+    case PVK_SPV_OpVectorTimesScalar: case PVK_SPV_OpMatrixTimesScalar:
     case PVK_SPV_OpFOrdEqual: case PVK_SPV_OpFUnordNotEqual: case PVK_SPV_OpFOrdLessThan:
     case PVK_SPV_OpFOrdGreaterThan: case PVK_SPV_OpFOrdLessThanEqual: case PVK_SPV_OpFOrdGreaterThanEqual:
     case PVK_SPV_OpLogicalOr: case PVK_SPV_OpLogicalAnd: case PVK_SPV_OpLogicalEqual: case PVK_SPV_OpLogicalNotEqual:
@@ -51163,23 +51172,99 @@ static const char pvk_spv_ia_template[] =
     "};\n\n";
 
 static const char pvk_spv_math_template[] =
-    "/* Where Metal's are wrong: atan2 of arguments near the top of the float range\n"
-    " * is 0 (scaled alike, the angle stays; tiny ones too), atan2 of x = -0 has\n"
-    " * the wrong sign (x = +-0 is answered here), tanh past about 50 is NaN (1 in\n"
-    " * float from 10 on). */\n"
+    "/* Where Metal's are wrong (shaderSignedZeroInfNanPreserve, float_controls2\n"
+    " * without fast-math flags): atan2 of arguments near the top of the float\n"
+    " * range is 0 (scaled alike, the angle stays; tiny ones too), and of zeros\n"
+    " * and infinities off; tanh past about 50 is NaN (1 in float from 10 on), of\n"
+    " * NaN a number; sin, cos of Inf and NaN, fract of Inf are numbers; asinh of\n"
+    " * Inf is NaN; round, frexp of -0 and min, max of +-0 lose the sign; matrix\n"
+    " * products of -0 are +0. */\n"
     "template <typename T>\n"
     "inline T pvk_atan2(T y, T x)\n"
     "{\n"
     "    T m = max(abs(y), abs(x));\n"
     "    T s = select(select(T(1.0f), T(0x1p64f), m < T(0x1p-64f)), T(0x1p-64f), m > T(0x1p64f));\n"
-    "    T r = atan2(y * s, x * s);\n"
-    "    T z = select(copysign(T(M_PI_2_F), y), select(y, copysign(T(M_PI_F), y), signbit(x)), y == T(0.0f));\n"
-    "    return select(r, z, x == T(0.0f));\n"
+    "    T r = atan2(y * s, x * s), pi = copysign(T(M_PI_F), y);\n"
+    "    T both = copysign(select(T(M_PI_4_F), T(3.0f * M_PI_4_F), signbit(x)), y);\n"
+    "    r = select(r, copysign(T(M_PI_2_F), y), x == T(0.0f));\n"
+    "    r = select(r, select(y, pi, signbit(x)), y == T(0.0f));\n"
+    "    r = select(r, select(copysign(T(0.0f), y), pi, signbit(x)), isinf(x));\n"
+    "    r = select(r, select(copysign(T(M_PI_2_F), y), both, isinf(x)), isinf(y));\n"
+    "    return select(select(r, x, isnan(x)), y, isnan(y));\n"
     "}\n"
     "template <typename T>\n"
     "inline T pvk_tanh(T x)\n"
     "{\n"
-    "    return tanh(clamp(x, T(-10.0f), T(10.0f)));\n"
+    "    return select(tanh(clamp(x, T(-10.0f), T(10.0f))), x, isnan(x));\n"
+    "}\n"
+    "template <typename T>\n"
+    "inline T pvk_sin(T x)\n"
+    "{\n"
+    "    return select(sin(x), x - x, !isfinite(x));\n"
+    "}\n"
+    "template <typename T>\n"
+    "inline T pvk_cos(T x)\n"
+    "{\n"
+    "    return select(cos(x), x - x, !isfinite(x));\n"
+    "}\n"
+    "template <typename T>\n"
+    "inline T pvk_fract(T x)\n"
+    "{\n"
+    "    return select(fract(x), x - x, !isfinite(x));\n"
+    "}\n"
+    "template <typename T>\n"
+    "inline T pvk_asinh(T x)\n"
+    "{\n"
+    "    return select(asinh(x), x, isinf(x));\n"
+    "}\n"
+    "template <typename T>\n"
+    "inline T pvk_round(T x)\n"
+    "{\n"
+    "    return copysign(round(x), x);\n"
+    "}\n"
+    "template <typename T>\n"
+    "inline T pvk_fmin(T a, T b)\n"
+    "{\n"
+    "    return select(fmin(a, b), select(b, a, signbit(a)), a == b);\n"
+    "}\n"
+    "template <typename T>\n"
+    "inline T pvk_fmax(T a, T b)\n"
+    "{\n"
+    "    return select(fmax(a, b), select(a, b, signbit(a)), a == b);\n"
+    "}\n"
+    "template <typename T, typename E>\n"
+    "inline T pvk_frexp(T x, thread E &e)\n"
+    "{\n"
+    "    T m = frexp(x, e);\n"
+    "    return select(m, x, x == T(0.0f));\n"
+    "}\n"
+    "template <typename T, int C, int R>\n"
+    "inline vec<T, R> pvk_mul(matrix<T, C, R> m, vec<T, C> v)\n"
+    "{\n"
+    "    vec<T, R> r = m[0] * v[0];\n"
+    "    for (int c = 1; c < C; c++)\n"
+    "        r += m[c] * v[c];\n"
+    "    return r;\n"
+    "}\n"
+    "template <typename T, int C, int R>\n"
+    "inline vec<T, C> pvk_mul(vec<T, R> v, matrix<T, C, R> m)\n"
+    "{\n"
+    "    vec<T, C> r;\n"
+    "    for (int c = 0; c < C; c++) {\n"
+    "        T s = v[0] * m[c][0];\n"
+    "        for (int k = 1; k < R; k++)\n"
+    "            s += v[k] * m[c][k];\n"
+    "        r[c] = s;\n"
+    "    }\n"
+    "    return r;\n"
+    "}\n"
+    "template <typename T, int K, int R, int C>\n"
+    "inline matrix<T, C, R> pvk_mul(matrix<T, K, R> a, matrix<T, C, K> b)\n"
+    "{\n"
+    "    matrix<T, C, R> r;\n"
+    "    for (int c = 0; c < C; c++)\n"
+    "        r[c] = pvk_mul(a, b[c]);\n"
+    "    return r;\n"
     "}\n\n";
 
 static const char pvk_spv_cast_template[] =
