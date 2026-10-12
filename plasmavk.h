@@ -46358,8 +46358,9 @@ static uint32_t pvk_spv_const_u32(struct pvk_spv *ctx, uint32_t cid)
  * release (Release, AcquireRelease, SequentiallyConsistent, MakeAvailable)
  * is atomic_thread_fence before the operation, an acquire (Acquire, ...,
  * MakeVisible) one after it, over the storage classes the semantics name
- * (the atomic's own when it names none), at the memory scope's
- * thread_scope (Device and QueueFamily: thread_scope_device). Device-scope
+ * and the atomic's own, at the memory scope's
+ * thread_scope (Device and QueueFamily: thread_scope_device, as are fences
+ * over both workgroup and device memory: pvk_spv_fence_scope). Device-scope
  * coherence of buffer memory itself: COHERENCE in pvk_spv_coherence. */
 
 #define PVK_SPV_SEM_RELEASE \
@@ -46376,18 +46377,34 @@ static const char *pvk_spv_thread_scope(uint32_t scope)
                                             : "thread_scope_device";
 }
 
-/* The fence of a release (want PVK_SPV_SEM_RELEASE) or acquire for memory
- * scope `scope` and semantics `sem`; own: the storage of the atomic it
- * orders (NULL: none). Emitted when the semantics ask for it. */
-static void pvk_spv_fence(struct pvk_spv *ctx, uint32_t scope, uint32_t sem, uint32_t want, const char *own)
+/* The thread_scope of a fence at memory scope `scope` over semantics sem.
+ * Metal's threadgroup-scope fences don't order threadgroup memory against
+ * device memory for other SIMD-groups (M4 Max, macOS 27.2: a payload in
+ * threadgroup memory written before a release fence was read stale after a
+ * buffer guard written after it was seen, about once in 50,000 handoffs;
+ * never with thread_scope_device and both in the fence's flags), so fences
+ * over both are device-scope. */
+static const char *pvk_spv_fence_scope(uint32_t scope, uint32_t sem)
 {
-    const char *flags = pvk_spv_mem_flags(ctx, sem);
+    if ((sem & PVK_SPV_SemanticsWorkgroupMemory) &&
+        (sem & (PVK_SPV_SemanticsUniformMemory | PVK_SPV_SemanticsCrossWorkgroupMemory)))
+        return "thread_scope_device";
+    return pvk_spv_thread_scope(scope);
+}
+
+/* The fence of a release (want PVK_SPV_SEM_RELEASE) or acquire for memory
+ * scope `scope` and semantics `sem`; own: the storage class semantics of
+ * the atomic it orders (0: none), which the fence covers too (a fence over
+ * threadgroup memory alone does not order it against a device atomic, as
+ * pvk_spv_fence_scope found). Emitted when the semantics ask for it. */
+static void pvk_spv_fence(struct pvk_spv *ctx, uint32_t scope, uint32_t sem, uint32_t want, uint32_t own)
+{
+    const char *flags = pvk_spv_mem_flags(ctx, sem | own);
     if (!(sem & want) || scope == PVK_SPV_ScopeInvocation)
         return;
-    if (!flags)
-        flags = own;
     if (flags)
-        pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, pvk_spv_thread_scope(scope));
+        pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags,
+                     pvk_spv_fence_scope(scope, sem | own));
 }
 
 static void pvk_spv_barrier(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
@@ -46403,7 +46420,7 @@ static void pvk_spv_barrier(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
                               PVK_SPV_SemanticsImageMemory);
         bool wide = dev && (scope == PVK_SPV_ScopeDevice || scope == PVK_SPV_ScopeQueueFamily);
         if (wide)
-            pvk_spv_fence(ctx, scope, dev | PVK_SPV_SemanticsRelease, PVK_SPV_SEM_RELEASE, NULL);
+            pvk_spv_fence(ctx, scope, dev | PVK_SPV_SemanticsRelease, PVK_SPV_SEM_RELEASE, 0);
         if (exec == PVK_SPV_ScopeWorkgroup)
             pvk_spv_line(ctx, "threadgroup_barrier(%s);", flags ? flags : "mem_flags::mem_none");
         else if (exec == PVK_SPV_ScopeSubgroup)
@@ -46411,12 +46428,13 @@ static void pvk_spv_barrier(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         else
             pvk_spv_fail(ctx, "OpControlBarrier with execution scope %u is not supported", exec);
         if (wide)
-            pvk_spv_fence(ctx, scope, dev | PVK_SPV_SemanticsAcquire, PVK_SPV_SEM_ACQUIRE, NULL);
+            pvk_spv_fence(ctx, scope, dev | PVK_SPV_SemanticsAcquire, PVK_SPV_SEM_ACQUIRE, 0);
     } else {
         uint32_t scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 1));
-        const char *flags = pvk_spv_mem_flags(ctx, pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2)));
+        uint32_t sem = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2));
+        const char *flags = pvk_spv_mem_flags(ctx, sem);
         if (flags && scope != PVK_SPV_ScopeInvocation)
-            pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, pvk_spv_thread_scope(scope));
+            pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, pvk_spv_fence_scope(scope, sem));
     }
 }
 
@@ -46501,7 +46519,8 @@ static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn 
     struct pvk_spv_type *t = pvk_spv_type(ctx, p->type), *it = pvk_spv_type(ctx, p->texel_type);
     struct pvk_spv_type *st = pvk_spv_type(ctx, it->elem);
     const char *img = p->texel_image, *args = p->texel_args, *t4, *e = NULL, *v = NULL, *what = NULL;
-    const char *ok = p->texel_ok, *own = "mem_flags::mem_texture";
+    const char *ok = p->texel_ok;
+    uint32_t own = PVK_SPV_SemanticsImageMemory;
     uint32_t scope, sem;
 
     if (t->op == PVK_SPV_OpTypeFloat)
@@ -46603,7 +46622,8 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     uint32_t first = store ? 4 : 6; /* first value operand */
     const struct pvk_spv_ptr *p = pvk_spv_ptr_of(ctx, ptr);
     struct pvk_spv_type *t = pvk_spv_type(ctx, p->type);
-    const char *space, *atype, *obj, *e = NULL, *v = NULL, *own, *ok = pvk_spv_bounds(ctx, p);
+    const char *space, *atype, *obj, *e = NULL, *v = NULL, *ok = pvk_spv_bounds(ctx, p);
+    uint32_t own;
     const char *ord = "memory_order_relaxed";
 
     if (p->storage == PVK_SPV_StorageImage) {
@@ -46644,7 +46664,7 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     sem = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 3 : 5));
     if (in->op == PVK_SPV_OpAtomicCompareExchange || in->op == PVK_SPV_OpAtomicCompareExchangeWeak)
         sem |= pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 6)) & PVK_SPV_SEM_ACQUIRE; /* Unequal */
-    own = p->storage == PVK_SPV_StorageWorkgroup ? "mem_flags::mem_threadgroup" : "mem_flags::mem_device";
+    own = p->storage == PVK_SPV_StorageWorkgroup ? PVK_SPV_SemanticsWorkgroupMemory : PVK_SPV_SemanticsUniformMemory;
     obj = pvk_spv_fmt(ctx, "(%s %s*)&%s", space, atype, p->expr);
     if (in->wc > first && in->op != PVK_SPV_OpAtomicIIncrement && in->op != PVK_SPV_OpAtomicIDecrement &&
         in->op != PVK_SPV_OpAtomicLoad && in->op != PVK_SPV_OpAtomicCompareExchange &&
