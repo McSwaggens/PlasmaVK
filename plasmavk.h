@@ -54274,6 +54274,7 @@ struct pvk_cmd_begin_pass {
     uint32_t flags;       /* VkRenderingFlags of vkCmdBeginRendering */
     uint32_t hidden;      /* render passes: PVK_HIDDEN_* copies the subpasses read */
     uint32_t view_mask;   /* multiview: the views (load-op clears clear their layers only) */
+    uint32_t after;       /* render passes: a Metal pass after the instance's first (it waits for those before) */
     /* Render passes: the aspects of the depth/stencil resolve attachment
      * that its load ops clear and the subpass does not resolve (mode NONE),
      * cleared in the render area when the pass ends (pvk_render_resolve_clear) */
@@ -54606,6 +54607,7 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
     c->view_mask = mp->view_mask;
     c->color_count = mp->color_count;
     c->hidden = mp->hidden;
+    c->after = p > 0;
     if (mp->depth_resolve != VK_ATTACHMENT_UNUSED && r->views[mp->depth_resolve] &&
         pass->attachments[mp->depth_resolve].first_use >= mp->first) {
         const struct pvk_rp_attachment *ra = &pass->attachments[mp->depth_resolve];
@@ -55641,7 +55643,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   consumer barrier against all earlier encoders on the queue (once per
  *   encoder); and once a queue has seen a barrier, every encoder it starts
  *   later begins with such a consumer barrier, as the barrier's second scope
- *   reaches every later command (queue->ordered). Waiting for all earlier
+ *   reaches every later command (queue->ordered). So does each Metal pass
+ *   of a render pass instance after its first, and a resumed one: it loads
+ *   what those before it stored. Waiting for all earlier
  *   encoders also covers what a barrier ordered before them, which a
  *   producer barrier at the end of an encoder would not when no command of
  *   that encoder follows the barrier. Stages are conservative
@@ -59128,7 +59132,8 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     enc = pvk_render_open(e, c, &depth, &stencil, false, r->split, r->int_slots);
     if (!enc)
         return;
-    if (e->waits || e->queue->ordered || e->prepassed)
+    /* (a later part of a render pass instance loads what the earlier stored) */
+    if (e->waits || e->queue->ordered || e->prepassed || c->after || (c->flags & VK_RENDERING_RESUMING_BIT))
         pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
             enc, PVK_STAGES_ALL, PVK_STAGES_RENDER, e->queue->device->visibility);
     e->prepassed = false;
