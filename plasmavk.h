@@ -40316,9 +40316,10 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   multisampled, sampled or storage, depth), OpTypeSampler,
  *   OpTypeSampledImage, OpSampledImage and OpImage (a Depth that differs
  *   between an image and its sampled image reinterprets the texture, as
- *   glslang emits for separate shadow samplers); explicit-LOD sampling with
- *   Lod or Grad, ConstOffset or Offset (not on cubes), MinLod, Proj and Dref
- *   variants; in fragment shaders implicit-LOD sampling (Bias, MinLod, the
+ *   glslang emits for separate shadow samplers; a sampled image of a texel
+ *   buffer, GLSL's samplerBuffer, is the texel buffer); explicit-LOD
+ *   sampling with Lod or Grad, ConstOffset or Offset (not on cubes), MinLod,
+ *   Proj and Dref variants; in fragment shaders implicit-LOD sampling (Bias, MinLod, the
  *   same variants) and OpImageQueryLod (calculate_clamped/unclamped_lod),
  *   derivatives (OpDPdx/y and Fwidth: Metal has no fine/coarse choice, its
  *   dfdx/dfdy serve both); OpImageFetch (Lod, Sample, offsets); OpImageGather and
@@ -42658,7 +42659,7 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     case PVK_SPV_OpTypeSampledImage:
         t->elem = pvk_spv_arg(ctx, in, 2);
         e = pvk_spv_type(ctx, t->elem);
-        if (e->op != PVK_SPV_OpTypeImage || e->img.sampled != 1 || e->img.dim == PVK_SPV_DimBuffer)
+        if (e->op != PVK_SPV_OpTypeImage || e->img.sampled != 1)
             pvk_spv_fail(ctx, "OpTypeSampledImage of an image that cannot be sampled");
         t->opaque = true;
         break;
@@ -43682,6 +43683,11 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
             t->size = t->align = 8;
             break;
         case PVK_SPV_OpTypeSampledImage:
+            if (pvk_spv_type(ctx, t->elem)->img.dim == PVK_SPV_DimBuffer) { /* a uniform texel buffer itself */
+                t->msl = pvk_spv_type(ctx, t->elem)->msl;
+                t->size = t->align = 8;
+                break;
+            }
             t->msl = pvk_spv_fmt(ctx, "pvk_sampled<%s>", pvk_spv_type(ctx, t->elem)->msl);
             t->size = 16;
             t->align = 8;
@@ -44309,6 +44315,8 @@ static VkDescriptorType pvk_spv_resource_kind(struct pvk_spv *ctx, uint32_t var,
     case PVK_SPV_OpTypeSampler:
         return VK_DESCRIPTOR_TYPE_SAMPLER;
     case PVK_SPV_OpTypeSampledImage:
+        if (pvk_spv_type(ctx, t->elem)->img.dim == PVK_SPV_DimBuffer) /* samplerBuffer */
+            return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
         return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     case PVK_SPV_OpTypeImage:
         if (t->img.dim == PVK_SPV_DimBuffer)
@@ -47186,6 +47194,8 @@ static void pvk_spv_image_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     case PVK_SPV_OpImage: {
         struct pvk_spv_type *r = pvk_spv_vtype(ctx, rid), *it = pvk_spv_image_type(ctx, pvk_spv_arg(ctx, in, 3), true);
         const char *e = pvk_spv_fmt(ctx, "%s.t", pvk_spv_val(ctx, in->w[3]));
+        if (it->img.dim == PVK_SPV_DimBuffer) /* a texel buffer's sampled image is the texel buffer */
+            e = pvk_spv_val(ctx, in->w[3]);
         if (r->op != PVK_SPV_OpTypeImage || r->elem != it->elem || r->img.dim != it->img.dim ||
             r->img.arrayed != it->img.arrayed || r->img.ms != it->img.ms)
             pvk_spv_fail(ctx, "malformed OpImage");
