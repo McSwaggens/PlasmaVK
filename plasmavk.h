@@ -41100,6 +41100,8 @@ struct pvk_msl_options {
     bool robust_vertex_input;    /* attributes outside a binding's size read (0, 0, 0, 1) */
     uint32_t vertex_table_buffer; /* 0: PVK_MSL_VERTEX_TABLE_BUFFER */
     bool point_size;             /* point topology: output a point size (1.0 unless the shader writes one) */
+    bool no_point_size;          /* line or triangle topology: PointSize is dropped (Vulkan ignores it, and
+                                  * Metal rejects it with a primitive topology class) */
     /* Multiview (VK_KHR_multiview): the view mask. ViewIndex for vertex
      * amplification id n is the mask's n-th set bit; 0: ViewIndex is 0. */
     uint32_t view_mask;
@@ -50100,6 +50102,8 @@ static void pvk_spv_stage_builtin(struct pvk_spv *ctx, uint32_t builtin, uint32_
         case PVK_SPV_BuiltInPointSize:
             if (t->op != PVK_SPV_OpTypeFloat)
                 pvk_spv_fail(ctx, "PointSize must be a float");
+            if (ctx->options && ctx->options->no_point_size)
+                return;
             res->builtins |= PVK_MSL_BUILTIN_POINT_SIZE;
             pvk_sb_printf(ctx, outs, "    float pvk_point_size [[point_size]];\n");
             pvk_spv_line(ctx, "pvk_out.pvk_point_size = float(%s);", lv);
@@ -63058,6 +63062,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     }
     vo.dynamic_vertex_strides = d.dynamic_strides != 0;
     vo.point_size = d.point_size != 0;
+    vo.no_point_size = !vo.point_size;
     vo.view_mask = fo.view_mask = view_mask;
     if (fs)
         fo.specialization = fs->pSpecializationInfo;
