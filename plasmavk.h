@@ -54787,6 +54787,11 @@ struct pvk_encoder {
     struct pvk_query_pool *occ_pool; /* the active occlusion query, NULL: none */
     uint32_t occ_query;
     struct pvk_cursor cursor;   /* after the packet being encoded (primaries) */
+    /* A packet of a secondary command buffer being encoded (depth > 0): the
+     * next packet in it, where a render pass it begins scans ahead from */
+    uint32_t depth;
+    const struct pvk_cmd_block *sub_block;
+    size_t sub_at;
     struct pvk_pp_result *pp;   /* draw preprocessing results of the render pass, in draw order */
     uint32_t pp_count, pp_next, pp_capacity;
     bool prepassed;             /* compute work the next render encoder must wait for */
@@ -56498,11 +56503,24 @@ static const struct pvk_cmd *pvk_cursor_next(struct pvk_cursor *cur)
     }
 }
 
-/* Preprocesses the draws of the render pass instance starting at the cursor. */
+/* Preprocesses the draws of the render pass instance starting at the cursor,
+ * or, begun in a secondary command buffer, in the rest of it (where it ends). */
 static void pvk_prepass_scan(struct pvk_encoder *e, struct pvk_draw_track *t)
 {
     struct pvk_cursor cur = e->cursor;
     const struct pvk_cmd *c;
+    if (e->depth) {
+        const struct pvk_cmd_block *b = e->sub_block;
+        size_t at = e->sub_at;
+        for (; b && e->result == VK_SUCCESS; b = b->next, at = 0)
+            while (at < b->used && e->result == VK_SUCCESS) {
+                c = (const struct pvk_cmd *)((const char *)b->data + at);
+                at += c->size;
+                if (pvk_scan_packet(e, t, c, e->depth))
+                    return;
+            }
+        return;
+    }
     while (e->result == VK_SUCCESS && (c = pvk_cursor_next(&cur)))
         if (pvk_scan_packet(e, t, c, 0))
             break;
@@ -58551,9 +58569,13 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
             const struct pvk_cmd *c = (const struct pvk_cmd *)((const char *)b->data + at);
             id enc;
             at += c->size;
+            e->depth = depth;
             if (!depth) { /* render passes scan ahead from here */
                 e->cursor.block = b;
                 e->cursor.at = at;
+            } else {
+                e->sub_block = b;
+                e->sub_at = at;
             }
             switch ((enum pvk_cmd_op)c->op) {
             case PVK_CMD_FILL_BUFFER:

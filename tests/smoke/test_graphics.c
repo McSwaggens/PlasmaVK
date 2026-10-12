@@ -1540,6 +1540,29 @@ static void submit(VkCommandBuffer cb)
     vkFreeCommandBuffers(device, cmd_pool, 1, &cb);
 }
 
+/* A secondary command buffer that renders on its own (no inheritance). */
+static VkCommandBuffer begin_secondary(void)
+{
+    VkCommandBufferAllocateInfo alloc;
+    VkCommandBufferInheritanceInfo inh;
+    VkCommandBufferBeginInfo begin;
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc.commandPool = cmd_pool;
+    alloc.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+    alloc.commandBufferCount = 1;
+    vkAllocateCommandBuffers(device, &alloc, &cb);
+    memset(&inh, 0, sizeof(inh));
+    inh.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+    memset(&begin, 0, sizeof(begin));
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    begin.pInheritanceInfo = &inh;
+    vkBeginCommandBuffer(cb, &begin);
+    return cb;
+}
+
 /* Everything before against everything after. */
 static void barrier(VkCommandBuffer cb)
 {
@@ -2696,8 +2719,10 @@ struct uvec4 {
 
 /* Draw parameters (gl_InstanceIndex, gl_BaseVertex, gl_BaseInstance,
  * gl_DrawID, each + 1) of points drawn by every kind of draw, the indirect
- * ones with and without count buffers. */
-static void test_draw_kinds(void)
+ * ones with and without count buffers; in the primary command buffer, or in
+ * a secondary one that begins and ends the rendering itself (its draws are
+ * preprocessed from there). */
+static void draw_kinds(int secondary)
 {
     static const VkVertexInputBindingDescription binding = { 0, 8, VK_VERTEX_INPUT_RATE_VERTEX };
     static const VkVertexInputAttributeDescription attr = { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 };
@@ -2717,7 +2742,7 @@ static void test_draw_kinds(void)
     float *f;
     struct pipe p;
     VkPipeline pipeline;
-    VkCommandBuffer cb;
+    VkCommandBuffer cb, rec;
     VkDeviceSize zero_offset = 0;
     int bad = 0;
 
@@ -2758,20 +2783,27 @@ static void test_draw_kinds(void)
     u[0] = 1;
     u[1] = 0;
     cb = begin_cmd();
-    begin_rendering(cb, &target, 1, zero, NULL);
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdBindVertexBuffers(cb, 0, 1, &vb.buffer, &zero_offset);
-    vkCmdBindIndexBuffer(cb, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDraw(cb, 2, 2, 1, 3);
-    vkCmdDrawIndexed(cb, 2, 1, 0, 2, 0);
-    vkCmdDrawIndirect(cb, ind.buffer, 0, 1, 16);
-    vkCmdDrawIndexedIndirect(cb, ind.buffer, 16, 1, 20);
-    vkCmdDrawIndirectCount(cb, ind.buffer, 64, cnt.buffer, 0, 2, 16);
-    vkCmdDrawIndexedIndirectCount(cb, ind.buffer, 128, cnt.buffer, 4, 1, 20);
-    vkCmdDrawIndexedIndirectCount(cb, ind.buffer, 192, cnt.buffer, 0, 1, 20);
-    vkCmdEndRendering(cb);
+    rec = secondary ? begin_secondary() : cb;
+    begin_rendering(rec, &target, 1, zero, NULL);
+    vkCmdBindPipeline(rec, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindVertexBuffers(rec, 0, 1, &vb.buffer, &zero_offset);
+    vkCmdBindIndexBuffer(rec, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdDraw(rec, 2, 2, 1, 3);
+    vkCmdDrawIndexed(rec, 2, 1, 0, 2, 0);
+    vkCmdDrawIndirect(rec, ind.buffer, 0, 1, 16);
+    vkCmdDrawIndexedIndirect(rec, ind.buffer, 16, 1, 20);
+    vkCmdDrawIndirectCount(rec, ind.buffer, 64, cnt.buffer, 0, 2, 16);
+    vkCmdDrawIndexedIndirectCount(rec, ind.buffer, 128, cnt.buffer, 4, 1, 20);
+    vkCmdDrawIndexedIndirectCount(rec, ind.buffer, 192, cnt.buffer, 0, 1, 20);
+    vkCmdEndRendering(rec);
+    if (secondary) {
+        vkEndCommandBuffer(rec);
+        vkCmdExecuteCommands(cb, 1, &rec);
+    }
     download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
     submit(cb);
+    if (secondary)
+        vkFreeCommandBuffers(device, cmd_pool, 1, &rec);
     for (y = 0; y < H; y++)
         for (x = 0; x < W; x++) {
             const uint32_t *got = (const uint32_t *)out.data + 4 * (y * W + x);
@@ -2794,6 +2826,16 @@ static void test_draw_kinds(void)
     free_buf(&ind);
     free_buf(&cnt);
     free_img(&target);
+}
+
+static void test_draw_kinds(void)
+{
+    draw_kinds(0);
+}
+
+static void test_draw_kinds_secondary(void)
+{
+    draw_kinds(1);
 }
 
 /* Multi-draw indirect (multiDrawIndirect, drawIndirectCount): every draw of
@@ -6037,6 +6079,7 @@ int main(void)
     RUN(test_multiview);
     RUN(test_occlusion);
     RUN(test_draw_kinds);
+    RUN(test_draw_kinds_secondary);
     RUN(test_multi_draw);
     RUN(test_indices);
     RUN(test_vertex_input);
