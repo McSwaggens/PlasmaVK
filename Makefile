@@ -4,7 +4,10 @@
 #   make test       smoke tests (ASan + UBSan)
 #   make check      everything users hit: strict C dialects, ObjC (with and
 #                   without <Metal/Metal.h>), VK_NO_PROTOTYPES, C++, two-TU
-#                   link, iOS, then the smoke tests
+#                   link, iOS, then the smoke tests and the conformance suite
+#
+#   Both run in parallel with make -j (CPU-bound builds; each smoke test
+#   prints its output whole when it ends).
 #   make bench      benchmarks on PlasmaVK
 #   make bench-mvk  the same benchmarks on MoltenVK through the system loader
 #
@@ -28,39 +31,65 @@ BREW       := $(shell brew --prefix 2>/dev/null)
 LOADER_LIB := $(BREW)/lib
 MVK_ICD    := $(BREW)/etc/vulkan/icd.d/MoltenVK_icd.json
 
-.PHONY: all test check bench bench-mvk clean
+SMOKE_DEPS := plasmavk.h $(wildcard tests/*.h)
+CHECKS     := $(addprefix $(BUILD)/check/,impl-c99.o impl-c11.o impl-gnu17.o impl-objc.o impl-with-metal.o \
+                impl-noproto.o user-cpp.o two-tu ios)
+
+.PHONY: all test check bench bench-mvk clean run-two-tu $(addprefix run-,$(SMOKE))
 .PHONY: conformance conformance-mvk conformance-icd
 
 all: test
 
-test:
-	@mkdir -p $(BUILD)/smoke
-	@set -e; for t in $(SMOKE); do \
-		$(CC) $(CFLAGS) $(SAN) tests/smoke/$$t.c -o $(BUILD)/smoke/$$t; \
-		echo "== $$t"; ./$(BUILD)/smoke/$$t; \
-	done
+# Each smoke test's output is printed whole when it ends (make -j runs them
+# side by side); a test rebuilds when it, plasmavk.h or a tests/ header changes.
+test: $(addprefix run-,$(SMOKE))
 
-check:
-	@mkdir -p $(BUILD)/check
-	@set -e; for std in c99 c11 gnu17; do \
-		echo "== implementation, -std=$$std"; \
-		$(CC) -std=$$std $(WARN) -c tests/compile/impl.c -o $(BUILD)/check/impl-$$std.o; \
-	done
+$(BUILD)/smoke/%: tests/smoke/%.c $(SMOKE_DEPS)
+	@mkdir -p $(@D)
+	@$(CC) $(CFLAGS) $(SAN) $< -o $@
+
+$(addprefix run-,$(SMOKE)): run-%: $(BUILD)/smoke/%
+	@out=$$(./$< 2>&1); status=$$?; printf '== %s\n%s\n' $* "$$out"; exit $$status
+
+check: run-two-tu test conformance
+
+$(BUILD)/check/impl-c99.o $(BUILD)/check/impl-c11.o $(BUILD)/check/impl-gnu17.o: $(BUILD)/check/impl-%.o: tests/compile/impl.c plasmavk.h
+	@mkdir -p $(@D)
+	@echo "== implementation, -std=$*"
+	@$(CC) -std=$* $(WARN) -c $< -o $@
+
+$(BUILD)/check/impl-objc.o: tests/compile/impl.c plasmavk.h
+	@mkdir -p $(@D)
 	@echo "== implementation, Objective-C without ARC"
-	@$(CC) -x objective-c -fno-objc-arc $(WARN) -c tests/compile/impl.c -o $(BUILD)/check/impl-objc.o
+	@$(CC) -x objective-c -fno-objc-arc $(WARN) -c $< -o $@
+
+$(BUILD)/check/impl-with-metal.o: tests/compile/impl_with_metal.m plasmavk.h
+	@mkdir -p $(@D)
 	@echo "== implementation, Objective-C file that also imports <Metal/Metal.h>"
-	@$(CC) -x objective-c -fno-objc-arc $(WARN) -c tests/compile/impl_with_metal.m -o $(BUILD)/check/impl-with-metal.o
+	@$(CC) -x objective-c -fno-objc-arc $(WARN) -c $< -o $@
+
+$(BUILD)/check/impl-noproto.o: tests/compile/impl.c plasmavk.h
+	@mkdir -p $(@D)
 	@echo "== implementation, VK_NO_PROTOTYPES"
-	@$(CC) -std=c99 $(WARN) -DVK_NO_PROTOTYPES -c tests/compile/impl.c -o $(BUILD)/check/impl-noproto.o
+	@$(CC) -std=c99 $(WARN) -DVK_NO_PROTOTYPES -c $< -o $@
+
+$(BUILD)/check/user-cpp.o: tests/compile/user.cpp plasmavk.h
+	@mkdir -p $(@D)
 	@echo "== declarations from C++"
-	@$(CXX) -std=c++17 $(WARN) -c tests/compile/user.cpp -o $(BUILD)/check/user-cpp.o
+	@$(CXX) -std=c++17 $(WARN) -c $< -o $@
+
+$(BUILD)/check/two-tu: tests/compile/impl.c tests/compile/user.c plasmavk.h
+	@mkdir -p $(@D)
 	@echo "== two translation units, no link flags"
-	@$(CC) -std=c99 $(WARN) tests/compile/impl.c tests/compile/user.c -o $(BUILD)/check/two-tu
-	@./$(BUILD)/check/two-tu
+	@$(CC) -std=c99 $(WARN) tests/compile/impl.c tests/compile/user.c -o $@
+
+$(BUILD)/check/ios: tests/compile/impl.c tests/compile/user.c plasmavk.h
+	@mkdir -p $(@D)
 	@echo "== iOS (arm64, iOS 26)"
-	@$(IOS_CC) -std=c99 $(WARN) tests/compile/impl.c tests/compile/user.c -o $(BUILD)/check/ios
-	@$(MAKE) --no-print-directory test
-	@$(MAKE) --no-print-directory conformance
+	@$(IOS_CC) -std=c99 $(WARN) tests/compile/impl.c tests/compile/user.c -o $@
+
+run-two-tu: $(CHECKS)
+	@./$(BUILD)/check/two-tu
 
 # Every benchmark runs even if an earlier one reports an error (wrong output);
 # the target fails at the end if any did. See bench/README.md.
