@@ -56386,6 +56386,16 @@ struct pvk_render_query {
 #define PVK_TILE_BYTES 64u
 #define PVK_TILE_PIXEL_BYTES 128u
 
+/* The tile memory a sample takes with one more color attachment of format f
+ * than `total`: its size, aligned to it, formats of fewer than 4 bytes
+ * counting as 8 (Metal takes more for them: 6 bytes a sample for B5G6R5,
+ * M4 Max). */
+static uint32_t pvk_tile_add(uint32_t total, const struct pvk_format *f)
+{
+    uint32_t b = f->bytes < 4 ? 8u : f->bytes;
+    return (total + b - 1) / b * b + b;
+}
+
 struct pvk_render {
     id enc;                /* MTL4RenderCommandEncoder; NULL outside render passes */
     bool suspended;        /* ended by a suspending vkCmdEndRendering, still open */
@@ -59488,16 +59498,14 @@ static void pvk_render_split_resolve(struct pvk_encoder *e)
 }
 
 /* Color slots of BEGIN_PASS packet c in groups that fit tile memory
- * (struct pvk_replay), in slot order; 0 when all fit together, or one
- * alone does not. Formats of fewer than 4 bytes count as 8: Metal's tile
- * memory takes more for them (6 a sample for B5G6R5, M4 Max). */
+ * (struct pvk_replay, pvk_tile_add), in slot order; 0 when all fit
+ * together, or one alone does not. */
 static uint32_t pvk_render_groups(const struct pvk_cmd_begin_pass *c, uint32_t *groups)
 {
     uint32_t s, n = 0, cur = 0, total = 0, samples = 1, b;
     for (s = 0; s < c->color_count; s++)
         if (c->colors[s].texture) {
-            b = c->colors[s].fmt->bytes < 4 ? 8u : c->colors[s].fmt->bytes;
-            total = (total + b - 1) / b * b + b;
+            total = pvk_tile_add(total, c->colors[s].fmt);
             samples = c->colors[s].samples > samples ? c->colors[s].samples : samples;
         }
     if (total <= PVK_TILE_BYTES && total * samples <= PVK_TILE_PIXEL_BYTES)
@@ -59507,10 +59515,10 @@ static uint32_t pvk_render_groups(const struct pvk_cmd_begin_pass *c, uint32_t *
         uint32_t next;
         if (!c->colors[s].texture)
             continue;
-        b = c->colors[s].fmt->bytes < 4 ? 8u : c->colors[s].fmt->bytes;
+        b = pvk_tile_add(0, c->colors[s].fmt);
         if (b > PVK_TILE_BYTES || b * samples > PVK_TILE_PIXEL_BYTES)
             return 0;
-        next = (cur + b - 1) / b * b + b;
+        next = pvk_tile_add(cur, c->colors[s].fmt);
         if (cur && (next > PVK_TILE_BYTES || next * samples > PVK_TILE_PIXEL_BYTES)) {
             n++;
             next = b;
@@ -64586,8 +64594,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         if (!(f = pvk_format(format)) || !f->mtl)
             continue;
         d.formats[i] = (uint32_t)f->mtl;
-        k = f->bytes < 4 ? 8u : f->bytes; /* (as pvk_render_groups counts) */
-        tile = (tile + k - 1) / k * k + k;
+        if (rp)
+            tile = pvk_tile_add(tile, f);
         d.output_types[i] = pvk_output_type(f);
         if (loc_ids[i] == ids[i]) { /* a location the fragment shader writes */
             const VkPipelineColorBlendAttachmentState *a = cb && b < cb->attachmentCount ? &cb->pAttachments[b] : NULL;
@@ -64615,6 +64623,14 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         } else { /* an input attachment only: read, never written */
             d.write_masks[i] = PVK_MTLColorWriteMaskNone;
         }
+    }
+    /* Dynamic rendering: the tile memory of all its pass's attachments, also
+     * ones its locations leave out (a pass split for it draws through variants
+     * without them, struct pvk_gfx_groups) */
+    for (i = 0; i < color_count && !rp && !discard; i++) {
+        const struct pvk_format *f = pvk_format(rendering->pColorAttachmentFormats[i]);
+        if (f && f->mtl)
+            tile = pvk_tile_add(tile, f);
     }
     for (i = 0; i < PVK_MAX_INPUT_ATTACHMENTS; i++)
         input_colors[i] = input_logical[i];

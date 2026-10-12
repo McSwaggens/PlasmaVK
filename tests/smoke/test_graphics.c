@@ -7087,6 +7087,90 @@ static void test_tile_overflow(void)
     }
 }
 
+/* A pipeline whose locations and input attachment indices leave out four of
+ * a dynamic rendering pass's five R32G32B32A32_SFLOAT attachments (80
+ * bytes of tile memory a sample: the pass is rendered in groups) draws into
+ * the other alone; the group without it must not take its output. */
+static void test_tile_overflow_locations(void)
+{
+    enum { N = 5 };
+    static const uint32_t locations[N] = { 0, VK_ATTACHMENT_UNUSED, VK_ATTACHMENT_UNUSED, VK_ATTACHMENT_UNUSED,
+                                           VK_ATTACHMENT_UNUSED };
+    static const uint32_t inputs[N] = { VK_ATTACHMENT_UNUSED, VK_ATTACHMENT_UNUSED, VK_ATTACHMENT_UNUSED,
+                                        VK_ATTACHMENT_UNUSED, VK_ATTACHMENT_UNUSED };
+    VkRenderingAttachmentLocationInfo loc;
+    VkRenderingInputAttachmentIndexInfo idx;
+    struct img imgs[N];
+    struct buf out[N];
+    VkRenderingAttachmentInfo att[N];
+    VkRenderingInfo info;
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t i, k;
+    int bad = 0;
+
+    memset(&loc, 0, sizeof(loc));
+    loc.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_LOCATION_INFO;
+    loc.colorAttachmentCount = N;
+    loc.pColorAttachmentLocations = locations;
+    memset(&idx, 0, sizeof(idx));
+    idx.sType = VK_STRUCTURE_TYPE_RENDERING_INPUT_ATTACHMENT_INDEX_INFO;
+    idx.pNext = &loc;
+    idx.colorAttachmentCount = N;
+    idx.pColorAttachmentInputIndices = inputs;
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.colors = N;
+    p.next = &idx;
+    memset(att, 0, sizeof(att));
+    for (i = 0; i < N; i++) {
+        p.color_formats[i] = VK_FORMAT_R32G32B32A32_SFLOAT;
+        imgs[i] = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+        out[i] = make_buf(W * H * 16);
+        att[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att[i].imageView = imgs[i].view;
+        att[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        att[i].clearValue.color.float32[0] = att[i].clearValue.color.float32[1] = 0.25f;
+        att[i].clearValue.color.float32[2] = att[i].clearValue.color.float32[3] = 0.25f;
+    }
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = N;
+    info.pColorAttachments = att;
+    cb = begin_cmd();
+    vkCmdBeginRendering(cb, &info);
+    vkCmdSetRenderingAttachmentLocations(cb, &loc);
+    vkCmdSetRenderingInputAttachmentIndices(cb, &idx);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -1, -1, 1, 1, 1.0f, 0.5f, 0.75f, 1.0f, 0);
+    vkCmdEndRendering(cb);
+    for (i = 0; i < N; i++)
+        download(cb, &imgs[i], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out[i]);
+    submit(cb);
+    for (i = 0; i < N; i++)
+        for (k = 0; k < W * H; k++) {
+            const float *t = (const float *)out[i].data + 4 * k;
+            bool ok = i ? t[0] == 0.25f && t[1] == 0.25f && t[2] == 0.25f && t[3] == 0.25f
+                        : t[0] == 1.0f && t[1] == 0.5f && t[2] == 0.75f && t[3] == 1.0f;
+            if (!ok && bad++ < 4)
+                fprintf(stderr, "tile overflow locations: attachment %u texel %u is %g %g %g %g\n", i, k, t[0], t[1],
+                        t[2], t[3]);
+        }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    for (i = 0; i < N; i++) {
+        free_buf(&out[i]);
+        free_img(&imgs[i]);
+    }
+}
+
 /* Bresenham lines with 4 samples cover pixels whole (Vulkan treats their
  * samples as at the pixel center; Metal covers samples apart): a resolved
  * line strip with a diagonal has only line and background pixels. */
@@ -8553,6 +8637,7 @@ int main(void)
     RUN(test_stencil_view_attachment);
     RUN(test_bresenham_msaa);
     RUN(test_tile_overflow);
+    RUN(test_tile_overflow_locations);
     RUN(test_alpha_coverage);
     RUN(test_sample_mask);
     RUN(test_logic_ops);
