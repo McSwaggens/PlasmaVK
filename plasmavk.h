@@ -42195,6 +42195,7 @@ struct pvk_spv {
     bool use_storage;           /* emit pvk_storage */
     bool use_math;              /* emit pvk_atan2, pvk_tanh */
     bool use_ia;                /* emit pvk_ia_tex, pvk_ia_tex_ms */
+    bool derivatives;           /* a fragment shader uses derivatives or quad operations (pvk_spv_emit_stage) */
     bool at_centroid;           /* interpolateAtCentroid is used: centroid inputs are read as it reads them */
     bool use_ycbcr;             /* emit pvk_ycbcr_d (Y'CBCR SAMPLING) */
     const struct pvk_ycbcr *ycbcr_fns[PVK_SPV_MAX_YCBCR]; /* conversions with a pvk_ycbcr_<k> function */
@@ -48429,6 +48430,11 @@ static void pvk_spv_image_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     case PVK_SPV_OpImageSampleProjImplicitLod: case PVK_SPV_OpImageSampleProjDrefImplicitLod:
     case PVK_SPV_OpImageSparseSampleImplicitLod: case PVK_SPV_OpImageSparseSampleExplicitLod:
     case PVK_SPV_OpImageSparseSampleDrefImplicitLod: case PVK_SPV_OpImageSparseSampleDrefExplicitLod:
+        ctx->derivatives |= in->op == PVK_SPV_OpImageSampleImplicitLod || in->op == PVK_SPV_OpImageSampleDrefImplicitLod ||
+                            in->op == PVK_SPV_OpImageSampleProjImplicitLod ||
+                            in->op == PVK_SPV_OpImageSampleProjDrefImplicitLod ||
+                            in->op == PVK_SPV_OpImageSparseSampleImplicitLod ||
+                            in->op == PVK_SPV_OpImageSparseSampleDrefImplicitLod;
         pvk_spv_image_sample(ctx, in);
         return;
     case PVK_SPV_OpImageSparseTexelsResident: /* the code of pvk_spv_sparse_result */
@@ -48444,6 +48450,7 @@ static void pvk_spv_image_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         const char *c;
         if (ctx->model != PVK_SPV_ExecutionModelFragment)
             pvk_spv_fail(ctx, "OpImageQueryLod needs derivatives, which only fragment shaders have");
+        ctx->derivatives = true;
         if (r->op != PVK_SPV_OpTypeVector || r->count != 2 || pvk_spv_type(ctx, r->elem)->op != PVK_SPV_OpTypeFloat ||
             it->img.ms || it->img.dim == PVK_SPV_DimBuffer ||
             (it->img.dim == PVK_SPV_Dim1D && !pvk_spv_image_as_2d(ctx, it)))
@@ -48794,9 +48801,11 @@ static void pvk_spv_subgroup(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
                             : pvk_spv_fmt(ctx, "simd_shuffle($, ushort(ushort(pvk_lane) + %s))", lane);
         break;
     case PVK_SPV_OpGroupNonUniformQuadBroadcast:
+        ctx->derivatives = true; /* (quads: as for derivatives) */
         e = pvk_spv_fmt(ctx, "quad_broadcast($, %s)", lane);
         break;
     case PVK_SPV_OpGroupNonUniformQuadSwap:
+        ctx->derivatives = true;
         if (k > 2)
             pvk_spv_fail(ctx, "OpGroupNonUniformQuadSwap direction must be a constant 0-2");
         e = pvk_spv_fmt(ctx, "quad_shuffle_xor($, ushort(%uu))", k + 1); /* horizontal, vertical, diagonal */
@@ -49311,6 +49320,7 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         struct pvk_spv_type *s = pvk_spv_scalar_of(ctx, r);
         if (ctx->model != PVK_SPV_ExecutionModelFragment)
             pvk_spv_fail(ctx, "derivatives are only available in fragment shaders");
+        ctx->derivatives = true;
         if (!s || s->op != PVK_SPV_OpTypeFloat || pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 3))->type != rtype)
             pvk_spv_fail(ctx, "derivative of a non-float value");
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", names[(op - PVK_SPV_OpDPdx) % 3], pvk_spv_val(ctx, in->w[3])));
@@ -50757,6 +50767,7 @@ static void pvk_spv_vertex_fetch(struct pvk_spv *ctx, uint32_t loc, enum pvk_msl
 #define PVK_SPV_NEED_PRIMITIVE_ID 0x1000u
 #define PVK_SPV_NEED_LANE 0x2000u
 #define PVK_SPV_NEED_DRAW_INDEX 0x4000u
+#define PVK_SPV_NEED_BARYCENTRIC 0x8000u
 
 /* Global indices the entry point's OpEntryPoint lists. */
 static uint32_t *pvk_spv_interface_list(struct pvk_spv *ctx)
@@ -51618,6 +51629,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
             z = o->hidden_depth_bits == 16 ? "pvk_d16(pvk_out.pvk_frag_depth)" : "pvk_out.pvk_frag_depth";
         } else {
             z = pvk_msl_depth_expr(o->hidden_depth_bits, o->hidden_depth_samples);
+            ctx->derivatives |= o->hidden_depth_samples > 1; /* (dfdx of the depth) */
             if (o->hidden_depth_samples > 1) /* runs per sample (the inputs keep their interpolation) */
                 need |= PVK_SPV_NEED_SAMPLE_ID;
         }
@@ -51638,6 +51650,16 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
             pvk_spv_line(ctx, "pvk_out.pvk_hidden_depth = float4(%s);", z);
         }
         depth_copy = true;
+    }
+    /* Fragment shaders using derivatives or quads read the barycentric
+     * coordinates: else Apple GPUs pack fragments of adjacent triangles of a
+     * draw into one 2x2 quad, and derivatives (implicit LODs) mix the
+     * triangles (M4 Max; the Khronos CTS's projected mipmaps). Kept by a use
+     * no interpolation takes (NaN bits). */
+    if (!vertex && ctx->derivatives && outs.len) {
+        need |= PVK_SPV_NEED_BARYCENTRIC;
+        pvk_spv_line(ctx, "if (as_type<uint>(pvk_barycentric.x) == 0xffffffffu)");
+        pvk_spv_line(ctx, "    pvk_out = {};");
     }
     if (outs.len)
         pvk_spv_line(ctx, "return pvk_out;");
@@ -51681,6 +51703,8 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_primitive_id [[primitive_id]]");
     if (need & PVK_SPV_NEED_LANE)
         PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_lane [[thread_index_in_simdgroup]]");
+    if (need & PVK_SPV_NEED_BARYCENTRIC)
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "float3 pvk_barycentric [[barycentric_coord]]");
     if (need & PVK_SPV_NEED_DRAW_INDEX) {
         if ((res->set_mask >> PVK_MSL_DRAW_INDEX_BUFFER) & 1u)
             pvk_spv_fail(ctx, "the draw index's buffer index %u is taken", PVK_MSL_DRAW_INDEX_BUFFER);
