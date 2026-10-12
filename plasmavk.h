@@ -62670,8 +62670,11 @@ static bool pvk_rp_resolves_into(const struct pvk_rp_pass *mp, uint32_t a)
 
 /* Tile memory a Metal pass's color attachments and depth/stencil copies take
  * per sample: each its texel size, aligned to that. Metal allows 64 bytes
- * ("Per sample storage" validation, M4 Max, macOS 27.2). */
+ * ("Per sample storage" validation, M4 Max, macOS 27.2), and 32 KB for a
+ * tile of 16x16 pixels, its smallest ("Total allocated tile memory"): 128
+ * bytes a pixel, its samples together. */
 #define PVK_TILE_BYTES 64u
+#define PVK_TILE_PIXEL_BYTES 128u
 static uint32_t pvk_rp_storage(const struct pvk_render_pass *rp, const struct pvk_rp_pass *mp)
 {
     uint32_t s, total = 0, b;
@@ -62763,8 +62766,10 @@ static bool pvk_rp_can_merge(const struct pvk_render_pass *rp, const struct pvk_
         return false; /* (the depth and stencil copies take color slots too) */
     {
         struct pvk_rp_pass merged = *mp;
+        uint32_t storage;
         pvk_rp_pass_add(rp, &merged, k);
-        if (pvk_rp_storage(rp, &merged) > PVK_TILE_BYTES)
+        storage = pvk_rp_storage(rp, &merged);
+        if (storage > PVK_TILE_BYTES || storage * (merged.samples ? merged.samples : 1u) > PVK_TILE_PIXEL_BYTES)
             return false;
     }
     for (i = 0; i < info->dependencyCount; i++) {

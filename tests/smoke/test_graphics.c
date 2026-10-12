@@ -4078,10 +4078,11 @@ static void test_subpass_ms_input(void)
     subpass_ms_input_case(true);
 }
 
-/* Five subpasses, each rendering its own R32G32B32A32_SFLOAT attachment:
- * one Metal pass would take 80 bytes of tile memory a sample, more than the
- * 64 Metal allows, so they are not all merged. */
-static void test_subpass_tile_storage(void)
+/* n subpasses, each rendering its own R32G32B32A32_SFLOAT attachment: five
+ * in one Metal pass would take 80 bytes of tile memory a sample, more than
+ * the 64 Metal allows, and three with 4 samples 192 bytes a pixel, more than
+ * the 128 it allows; so they are not all merged. */
+static void subpass_tile_storage_case(uint32_t n, VkSampleCountFlagBits samples)
 {
     enum { N = 5 };
     VkAttachmentDescription a[N];
@@ -4090,7 +4091,7 @@ static void test_subpass_tile_storage(void)
     VkSubpassDependency deps[N - 1];
     VkRenderPassCreateInfo info;
     VkRenderPass rp = VK_NULL_HANDLE;
-    struct img imgs[N];
+    struct img imgs[N], single = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
     struct buf out = make_buf(W * H * 16);
     VkImageView views[N];
     VkFramebuffer fb;
@@ -4104,11 +4105,11 @@ static void test_subpass_tile_storage(void)
     memset(sp, 0, sizeof(sp));
     memset(deps, 0, sizeof(deps));
     memset(clears, 0, sizeof(clears));
-    for (i = 0; i < N; i++) {
-        imgs[i] = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    for (i = 0; i < n; i++) {
+        imgs[i] = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, samples);
         views[i] = imgs[i].view;
         a[i].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-        a[i].samples = VK_SAMPLE_COUNT_1_BIT;
+        a[i].samples = samples;
         a[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         a[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         a[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -4130,25 +4131,26 @@ static void test_subpass_tile_storage(void)
     }
     memset(&info, 0, sizeof(info));
     info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    info.attachmentCount = N;
+    info.attachmentCount = n;
     info.pAttachments = a;
-    info.subpassCount = N;
+    info.subpassCount = n;
     info.pSubpasses = sp;
-    info.dependencyCount = N - 1;
+    info.dependencyCount = n - 1;
     info.pDependencies = deps;
     CHECK_VK(vkCreateRenderPass(device, &info, NULL, &rp), VK_SUCCESS);
-    fb = make_fb(rp, views, N, W, H, 1);
-    for (i = 0; i < N; i++) {
+    fb = make_fb(rp, views, n, W, H, 1);
+    for (i = 0; i < n; i++) {
         pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
         p.color_formats[0] = VK_FORMAT_R32G32B32A32_SFLOAT;
+        p.samples = samples;
         p.rp = rp;
         p.subpass = i;
         pipes[i] = make_pipe(&p);
         REQUIRE(pipes[i]);
     }
     cb = begin_cmd();
-    begin_pass(cb, rp, fb, 0, 0, W, H, clears, N);
-    for (i = 0; i < N; i++) {
+    begin_pass(cb, rp, fb, 0, 0, W, H, clears, n);
+    for (i = 0; i < n; i++) {
         if (i)
             vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[i]);
@@ -4156,24 +4158,43 @@ static void test_subpass_tile_storage(void)
     }
     vkCmdEndRenderPass(cb);
     submit(cb);
-    for (i = 0; i < N; i++) {
+    for (i = 0; i < n; i++) {
         cb = begin_cmd();
-        download(cb, &imgs[i], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        if (samples > 1) { /* through a single-sampled image */
+            VkImageResolve rs;
+            memset(&rs, 0, sizeof(rs));
+            rs.srcSubresource.aspectMask = rs.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            rs.srcSubresource.layerCount = rs.dstSubresource.layerCount = 1;
+            rs.extent.width = W;
+            rs.extent.height = H;
+            rs.extent.depth = 1;
+            vkCmdResolveImage(cb, imgs[i].image, VK_IMAGE_LAYOUT_GENERAL, single.image, VK_IMAGE_LAYOUT_GENERAL, 1,
+                              &rs);
+        }
+        download(cb, samples > 1 ? &single : &imgs[i], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
         submit(cb);
         for (k = 0; k < W * H; k++) {
             const float *t = (const float *)out.data + 4 * k;
             if ((t[0] != (float)(i + 1) || t[1] != 0.5f || t[2] != 0.25f || t[3] != 1.0f) && bad++ < 4)
-                fprintf(stderr, "tile storage: attachment %u texel %u is %g %g %g %g\n", i, k, t[0], t[1], t[2], t[3]);
+                fprintf(stderr, "tile storage: %ux attachment %u texel %u is %g %g %g %g\n", (unsigned)samples, i, k,
+                        t[0], t[1], t[2], t[3]);
         }
     }
     CHECK(bad == 0);
-    for (i = 0; i < N; i++) {
+    for (i = 0; i < n; i++) {
         vkDestroyPipeline(device, pipes[i], NULL);
         free_img(&imgs[i]);
     }
     vkDestroyFramebuffer(device, fb, NULL);
     vkDestroyRenderPass(device, rp, NULL);
+    free_img(&single);
     free_buf(&out);
+}
+
+static void test_subpass_tile_storage(void)
+{
+    subpass_tile_storage_case(5, VK_SAMPLE_COUNT_1_BIT);
+    subpass_tile_storage_case(3, VK_SAMPLE_COUNT_4_BIT);
 }
 
 /* Dynamic rendering local read: draw into attachment 0, then map location 0
