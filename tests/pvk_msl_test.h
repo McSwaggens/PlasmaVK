@@ -335,6 +335,12 @@ static inline void mt_fill_sets(const struct pvk_msl_result *res, const struct m
             }
             break;
         }
+        case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: { /* { image, residency texture: the image itself } */
+            pvk_MTLResourceID t = pvk_MTLTexture_gpuResourceID(b->texture);
+            memcpy(p, &t, 8);
+            memcpy(p + 8, &t, 8);
+            break;
+        }
         case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK:
             memcpy((unsigned char *)sets[b->set].data + r->offset + b->index, b->bytes, b->nbytes);
             break;

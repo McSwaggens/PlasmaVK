@@ -1737,19 +1737,16 @@ static VkImageView make_view(VkImage image, VkFormat format, VkImageAspectFlags 
     return view;
 }
 
-/* spv_residency2 on a 256x256 RGBA8 image and a D32_SFLOAT image, sampled,
- * each with block (1, 0) bound: red (gathers of its red: 1), and depth 0.25
- * compared with 0.5 (GREATER: 1). The storage image is a red sparse image
- * without residency (residency is not offered with storage usage), bound
- * whole: always resident, and outside it the robust read is zero. */
+/* spv_residency2 on a 256x256 RGBA8 image (storage and sampled) and a
+ * D32_SFLOAT image, each with block (1, 0) bound: red (gathers of its red:
+ * 1), and depth 0.25 compared with 0.5 (GREATER: 1). Outside the color
+ * image, the robust storage read is resident and zero. */
 static void test_sparse_shader_residency2(void)
 {
     VkImageCreateInfo cinfo = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 256, 256, 1, 1, 1,
-                                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                             VK_IMAGE_USAGE_STORAGE_BIT,
                                          VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT);
-    VkImageCreateInfo sinfo = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 256, 256, 1, 1, 1,
-                                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
-                                         VK_IMAGE_CREATE_SPARSE_BINDING_BIT);
     VkImageCreateInfo dinfo = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_D32_SFLOAT, 256, 256, 1, 1, 1,
                                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                          VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT);
@@ -1771,10 +1768,9 @@ static void test_sparse_shader_residency2(void)
     VkPipelineLayout layout;
     VkPipeline pipeline;
     VkSampler sampler, shadow_sampler;
-    VkImageView cview, dview, sview;
-    VkImage color, depth_image, simg;
-    VkMemoryRequirements sreq;
-    VkDeviceMemory memory, smem;
+    VkImageView cview, dview;
+    VkImage color, depth_image;
+    VkDeviceMemory memory;
     VkCommandBuffer cb;
     VkBufferImageCopy copy;
     VkDeviceAddress dst;
@@ -1786,13 +1782,9 @@ static void test_sparse_shader_residency2(void)
         return;
     REQUIRE_VK(vkCreateImage(device, &cinfo, NULL, &color));
     REQUIRE_VK(vkCreateImage(device, &dinfo, NULL, &depth_image));
-    REQUIRE_VK(vkCreateImage(device, &sinfo, NULL, &simg));
-    vkGetImageMemoryRequirements(device, simg, &sreq);
     memory = allocate(private_type, 2 * BLOCK);
-    smem = allocate(private_type, sreq.size);
     host = host_buf(264 * 264 * 16);
-    REQUIRE(memory && smem && host.data);
-    bind_opaque(simg, 0, sreq.size, smem, 0);
+    REQUIRE(memory && host.data);
     words = (uint32_t *)host.data;
     bind_region(color, VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 128, 0, 0, 128, 128, 1, memory, 0);
     bind_region(depth_image, VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 128, 0, 0, 128, 128, 1, memory, BLOCK);
@@ -1800,11 +1792,9 @@ static void test_sparse_shader_residency2(void)
         words[i] = red;
     cb = begin();
     to_general(cb, color, VK_IMAGE_ASPECT_COLOR_BIT);
-    to_general(cb, simg, VK_IMAGE_ASPECT_COLOR_BIT);
     to_general(cb, depth_image, VK_IMAGE_ASPECT_DEPTH_BIT);
     copy_region(&copy, 0, 0, 0, 0, 0, 0, 256, 256, 1);
     vkCmdCopyBufferToImage(cb, host.buffer, color, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
-    vkCmdCopyBufferToImage(cb, host.buffer, simg, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
     depth.depth = 0.25f;
     depth.stencil = 0;
     memset(&sub, 0, sizeof(sub));
@@ -1827,7 +1817,6 @@ static void test_sparse_shader_residency2(void)
     REQUIRE_VK(vkCreateSampler(device, &sampler_info, NULL, &shadow_sampler));
     cview = make_view(color, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
     dview = make_view(depth_image, VK_FORMAT_D32_SFLOAT, VK_IMAGE_ASPECT_DEPTH_BIT);
-    sview = make_view(simg, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
     memset(bindings, 0, sizeof(bindings));
     for (i = 0; i < 3; i++) {
         bindings[i].binding = i;
@@ -1857,7 +1846,7 @@ static void test_sparse_shader_residency2(void)
     set_info.pSetLayouts = &set_layout;
     REQUIRE_VK(vkAllocateDescriptorSets(device, &set_info, &set));
     descs[0].sampler = VK_NULL_HANDLE;
-    descs[0].imageView = sview;
+    descs[0].imageView = cview;
     descs[1].sampler = sampler;
     descs[1].imageView = cview;
     descs[2].sampler = shadow_sampler;
@@ -1900,15 +1889,18 @@ static void test_sparse_shader_residency2(void)
             const uint32_t *o = &words[(gy * 264 + gx) * 4];
             int x = (int)gx - 4, y = (int)gy - 4;
             int outside = x < 0 || y < 0 || x >= 256 || y >= 256;
+            int in = x >= 128 && x < 256 && y >= 0 && y < 128;
             int interior = x >= 130 && x < 250 && y >= 2 && y < 120;
             int unbound = x >= 2 && x < 120 && y >= 2 && y < 250;
-            uint32_t want = 1, mask = 1; /* the storage image: always resident */
+            uint32_t want = 0, mask = 1;
+            if (outside || in)
+                want |= 1;
             if (interior || unbound) {
                 mask |= 2 | 4 | 8;
                 if (interior)
                     want |= 2 | 4 | 8;
             }
-            if ((o[0] & mask) != want || o[1] != (outside ? 0u : red) ||
+            if ((o[0] & mask) != want || o[1] != (in ? red : 0u) ||
                 (interior && (o[2] != 0xFFFFFFFFu || o[3] != 0xFFFFu))) {
                 if (bad++ < 4)
                     PVK_TEST_FAIL("(%d, %d): residency 0x%x (want 0x%x of 0x%x), load %08x, gather %08x, depth %08x", x,
@@ -1923,14 +1915,11 @@ static void test_sparse_shader_residency2(void)
     vkDestroyDescriptorSetLayout(device, set_layout, NULL);
     vkDestroyImageView(device, cview, NULL);
     vkDestroyImageView(device, dview, NULL);
-    vkDestroyImageView(device, sview, NULL);
     vkDestroySampler(device, sampler, NULL);
     vkDestroySampler(device, shadow_sampler, NULL);
     vkDestroyImage(device, color, NULL);
-    vkDestroyImage(device, simg, NULL);
     vkDestroyImage(device, depth_image, NULL);
     vkFreeMemory(device, memory, NULL);
-    vkFreeMemory(device, smem, NULL);
     free_buf(&host);
 }
 
@@ -2348,33 +2337,6 @@ static void test_sparse_device_requirements(void)
     }
 }
 
-/* Sparse residency is not offered with storage usage (Metal gets the
- * residency of a ShaderWrite texture's mip tail wrong); sparse binding is. */
-static void test_sparse_storage_formats(void)
-{
-    VkImageFormatProperties props;
-    VkSparseImageFormatProperties sp[2];
-    uint32_t count = 2;
-
-    if (!has_sparse() || !supported.sparseResidencyImage2D)
-        return;
-    CHECK_VK(vkGetPhysicalDeviceImageFormatProperties(
-                 pd, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_STORAGE_BIT,
-                 VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT, &props),
-             VK_ERROR_FORMAT_NOT_SUPPORTED);
-    vkGetPhysicalDeviceSparseImageFormatProperties(pd, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D, VK_SAMPLE_COUNT_1_BIT,
-                                                   VK_IMAGE_USAGE_STORAGE_BIT, VK_IMAGE_TILING_OPTIMAL, &count, sp);
-    CHECK(count == 0);
-    count = 2;
-    vkGetPhysicalDeviceSparseImageFormatProperties(pd, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D, VK_SAMPLE_COUNT_1_BIT,
-                                                   VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_TILING_OPTIMAL, &count, sp);
-    CHECK(count == 1);
-    CHECK_VK(vkGetPhysicalDeviceImageFormatProperties(pd, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D,
-                                                      VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_STORAGE_BIT,
-                                                      VK_IMAGE_CREATE_SPARSE_BINDING_BIT, &props),
-             VK_SUCCESS);
-}
-
 /* 3D images without residency whose Metal tail is many tiles (10 for
  * 1024x128x8 32-bit texels; 3, the whole image, for 11x137x3): binds of the
  * memory alignment, each from memory of its own, hold a whole tail, and
@@ -2484,16 +2446,10 @@ static void test_sparse_residency_3d_tail(void)
     free_buf(&host);
 }
 
-/* spv_storage_tail on an 11x37 storage image without residency, every level
- * in Metal's tail: sparse loads of a ShaderWrite texture's tail hang the GPU
- * on macOS 27.2, so PlasmaVK reads storage images plainly. All resident,
- * with the uploaded texels. */
-static void test_sparse_storage_tail(void)
+/* spv_storage_tail on level `level` (w x h) of an RGBA8_UINT storage image:
+ * each texel's { resident, R, G, 7 } into out (w * h * 4 uints). */
+static void storage_read(VkImage image, uint32_t level, uint32_t w, uint32_t h, uint32_t *out)
 {
-    const uint32_t W = 11, H = 37;
-    VkImageCreateInfo info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UINT, W, H, 1, 6, 1,
-                                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
-                                        VK_IMAGE_CREATE_SPARSE_BINDING_BIT);
     VkDescriptorSetLayoutBinding binding;
     VkDescriptorSetLayoutCreateInfo set_layout_info;
     VkDescriptorPoolSize pool_size;
@@ -2503,43 +2459,31 @@ static void test_sparse_storage_tail(void)
     VkWriteDescriptorSet write;
     VkPushConstantRange range;
     VkPipelineLayoutCreateInfo layout_info;
-    VkMemoryRequirements req;
+    VkImageViewCreateInfo view_info;
     VkDescriptorSetLayout set_layout;
     VkDescriptorPool desc_pool;
     VkDescriptorSet set;
     VkPipelineLayout layout;
     VkPipeline pipeline;
     VkImageView view;
-    VkImage image;
-    VkDeviceMemory memory;
     VkCommandBuffer cb;
-    VkBufferImageCopy copy;
-    struct buf host;
+    struct buf host = host_buf((VkDeviceSize)w * h * 16);
     struct {
         VkDeviceAddress dst;
         uint32_t w, h;
     } push;
-    uint32_t *words, i, bad = 0;
 
-    if (!has_sparse())
-        return;
-    REQUIRE_VK(vkCreateImage(device, &info, NULL, &image));
-    vkGetImageMemoryRequirements(device, image, &req);
-    memory = allocate(private_type, req.size);
-    host = host_buf(W * H * 4 + W * H * 16);
-    REQUIRE(memory && host.data);
-    bind_opaque(image, 0, req.size, memory, 0);
-    words = (uint32_t *)host.data;
-    for (i = 0; i < W * H; i++)
-        words[i] = pattern(i, 50);
-    cb = begin();
-    to_general(cb, image, VK_IMAGE_ASPECT_COLOR_BIT);
-    copy_region(&copy, 0, 0, 0, 0, 0, 0, W, H, 1);
-    vkCmdCopyBufferToImage(cb, host.buffer, image, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
-    barrier(cb);
-    submit(cb);
-
-    view = make_view(image, VK_FORMAT_R8G8B8A8_UINT, VK_IMAGE_ASPECT_COLOR_BIT);
+    REQUIRE(host.data);
+    memset(&view_info, 0, sizeof(view_info));
+    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image = image;
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format = VK_FORMAT_R8G8B8A8_UINT;
+    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info.subresourceRange.baseMipLevel = level;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.layerCount = 1;
+    REQUIRE_VK(vkCreateImageView(device, &view_info, NULL, &view));
     memset(&binding, 0, sizeof(binding));
     binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     binding.descriptorCount = 1;
@@ -2587,31 +2531,147 @@ static void test_sparse_storage_tail(void)
     REQUIRE(pipeline);
 
     memset(&push, 0, sizeof(push));
-    push.dst = host.address + W * H * 4;
-    push.w = W;
-    push.h = H;
+    push.dst = host.address;
+    push.w = w;
+    push.h = h;
     cb = begin();
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, NULL);
     vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-    vkCmdDispatch(cb, (W + 7) / 8, (H + 7) / 8, 1);
+    vkCmdDispatch(cb, (w + 7) / 8, (h + 7) / 8, 1);
     barrier(cb);
     submit(cb);
-    for (i = 0; i < W * H; i++) {
-        const uint32_t *o = &words[W * H + i * 4], p = pattern(i, 50);
-        if ((o[0] != 1 || o[1] != (p & 0xFF) || o[2] != ((p >> 8) & 0xFF) || o[3] != 7) && bad++ < 4)
-            PVK_TEST_FAIL("texel %u: %u %u %u %u", i, o[0], o[1], o[2], o[3]);
-    }
-    CHECK(bad == 0);
+    memcpy(out, host.data, (size_t)w * h * 16);
 
     vkDestroyPipeline(device, pipeline, NULL);
     vkDestroyPipelineLayout(device, layout, NULL);
     vkDestroyDescriptorPool(device, desc_pool, NULL);
     vkDestroyDescriptorSetLayout(device, set_layout, NULL);
     vkDestroyImageView(device, view, NULL);
+    free_buf(&host);
+}
+
+/* Uploads pattern(i, seed) texels to level `level` (w x h) of an image. */
+static void upload_level(VkImage image, uint32_t level, uint32_t w, uint32_t h, uint32_t seed)
+{
+    struct buf host = host_buf((VkDeviceSize)w * h * 4);
+    uint32_t *words = (uint32_t *)host.data, i;
+    VkCommandBuffer cb;
+    VkBufferImageCopy copy;
+    REQUIRE(words);
+    for (i = 0; i < w * h; i++)
+        words[i] = pattern(i, seed);
+    cb = begin();
+    to_general(cb, image, VK_IMAGE_ASPECT_COLOR_BIT);
+    copy_region(&copy, 0, level, 0, 0, 0, 0, w, h, 1);
+    vkCmdCopyBufferToImage(cb, host.buffer, image, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
+    barrier(cb);
+    submit(cb);
+    free_buf(&host);
+}
+
+/* Whether out (storage_read) says each texel is `resident` and, if so, holds
+ * pattern(i, seed); reports the first few that don't. */
+static int storage_check(const uint32_t *out, uint32_t n, int resident, uint32_t seed, const char *what)
+{
+    uint32_t i, bad = 0;
+    for (i = 0; i < n; i++) {
+        const uint32_t *o = &out[i * 4], p = pattern(i, seed);
+        int ok = o[0] == (uint32_t)resident && o[3] == 7 &&
+                 (!resident || (o[1] == (p & 0xFF) && o[2] == ((p >> 8) & 0xFF)));
+        if (!ok && bad++ < 4)
+            PVK_TEST_FAIL("%s: texel %u: %u %u %u %u", what, i, o[0], o[1], o[2], o[3]);
+    }
+    return bad == 0;
+}
+
+/* Sparse loads of storage images (spv_storage_tail). Metal's residency
+ * queries of ShaderWrite textures are wrong for levels smaller than a tile,
+ * and a shader with a sparse read hangs the GPU reading one whose every
+ * level is in the tail (section 7); sparse storage images answer through a
+ * residency texture, and those entirely in the tail are ordinary textures:
+ * - 11x37, every level in the tail: resident with its texels while the tail
+ *   is bound, not resident once it is unbound;
+ * - 256x256, level 2 (64x64, in the Vulkan tail; ShaderWrite puts it before
+ *   Metal's tail) and level 4 (in Metal's tail): resident once the tail is
+ *   bound, level 0 not;
+ * - 11x37 without residency (sparse binding only), and not sparse: always
+ *   resident. */
+static void test_sparse_storage_reads(void)
+{
+    const VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+    const VkImageCreateFlags residency = VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT;
+    VkImageCreateInfo info;
+    VkSparseImageMemoryRequirements sr;
+    VkMemoryRequirements req;
+    VkImage image;
+    VkDeviceMemory memory;
+    static uint32_t out[256 * 256 * 4];
+
+    if (!has_sparse() || !supported.sparseResidencyImage2D || !supported.shaderResourceResidency)
+        return;
+    /* 11x37 */
+    info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UINT, 11, 37, 1, 6, 1, usage, residency);
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &image));
+    sr = sparse_requirements(image);
+    CHECK(sr.imageMipTailFirstLod == 0);
+    memory = allocate(private_type, sr.imageMipTailSize);
+    REQUIRE(memory);
+    bind_opaque(image, sr.imageMipTailOffset, sr.imageMipTailSize, memory, 0);
+    upload_level(image, 0, 11, 37, 50);
+    storage_read(image, 0, 11, 37, out);
+    CHECK(storage_check(out, 11 * 37, 1, 50, "11x37 bound"));
+    bind_opaque(image, sr.imageMipTailOffset, sr.imageMipTailSize, VK_NULL_HANDLE, 0);
+    storage_read(image, 0, 11, 37, out);
+    CHECK(storage_check(out, 11 * 37, 0, 50, "11x37 unbound"));
     vkDestroyImage(device, image, NULL);
     vkFreeMemory(device, memory, NULL);
-    free_buf(&host);
+
+    /* 256x256, levels 2 and 4 */
+    info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UINT, 256, 256, 1, 9, 1, usage, residency);
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &image));
+    sr = sparse_requirements(image);
+    REQUIRE(sr.imageMipTailFirstLod == 2);
+    memory = allocate(private_type, sr.imageMipTailSize);
+    REQUIRE(memory);
+    bind_opaque(image, sr.imageMipTailOffset, sr.imageMipTailSize, memory, 0);
+    upload_level(image, 2, 64, 64, 51);
+    storage_read(image, 2, 64, 64, out);
+    CHECK(storage_check(out, 64 * 64, 1, 51, "256x256 level 2"));
+    upload_level(image, 4, 16, 16, 54);
+    storage_read(image, 4, 16, 16, out);
+    CHECK(storage_check(out, 16 * 16, 1, 54, "256x256 level 4"));
+    storage_read(image, 0, 256, 256, out);
+    CHECK(storage_check(out, 256 * 256, 0, 0, "256x256 level 0 unbound"));
+    vkDestroyImage(device, image, NULL);
+    vkFreeMemory(device, memory, NULL);
+
+    /* 11x37 without residency */
+    info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UINT, 11, 37, 1, 6, 1, usage,
+                      VK_IMAGE_CREATE_SPARSE_BINDING_BIT);
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &image));
+    vkGetImageMemoryRequirements(device, image, &req);
+    memory = allocate(private_type, req.size);
+    REQUIRE(memory);
+    bind_opaque(image, 0, req.size, memory, 0);
+    upload_level(image, 0, 11, 37, 52);
+    storage_read(image, 0, 11, 37, out);
+    CHECK(storage_check(out, 11 * 37, 1, 52, "11x37 without residency"));
+    vkDestroyImage(device, image, NULL);
+    vkFreeMemory(device, memory, NULL);
+
+    /* not sparse: the image answers for itself */
+    info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UINT, 11, 37, 1, 6, 1, usage, 0);
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &image));
+    vkGetImageMemoryRequirements(device, image, &req);
+    memory = allocate(private_type, req.size);
+    REQUIRE(memory);
+    REQUIRE_VK(vkBindImageMemory(device, image, memory, 0));
+    upload_level(image, 0, 11, 37, 53);
+    storage_read(image, 0, 11, 37, out);
+    CHECK(storage_check(out, 11 * 37, 1, 53, "11x37 not sparse"));
+    vkDestroyImage(device, image, NULL);
+    vkFreeMemory(device, memory, NULL);
 }
 
 int main(void)
@@ -2633,10 +2693,9 @@ int main(void)
     RUN(test_sparse_texel_view);
     RUN(test_sparse_free_bound_memory);
     RUN(test_sparse_device_requirements);
-    RUN(test_sparse_storage_formats);
     RUN(test_sparse_binding_3d_tail);
     RUN(test_sparse_residency_3d_tail);
-    RUN(test_sparse_storage_tail);
+    RUN(test_sparse_storage_reads);
     teardown();
     return TEST_RESULT();
 }

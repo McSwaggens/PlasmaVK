@@ -20,9 +20,7 @@ extensions promoted to Vulkan 1.1-1.4 whose features it has (sampler min/max
 filtering only on Apple10 GPUs), with their KHR/EXT command names; and a
 built-in debug layer (below). Sparse resources (sparse binding; partially resident buffers and
 2D, 3D and multisampled images; aliasing) map onto Metal 4's placement sparse
-buffers and textures (macOS/iOS 26.4). Partially resident images can't have
-storage usage, because Metal reports the residency of such a texture's mip
-tail wrongly (and can hang the GPU doing it). SPIR-V compute, vertex and fragment
+buffers and textures (macOS/iOS 26.4). SPIR-V compute, vertex and fragment
 shaders are translated to MSL inside the header, including subgroups,
 robustness, Y'CbCr sampling, sparse residency codes and buffer device
 addresses. PlasmaVK passes its own black-box conformance suite

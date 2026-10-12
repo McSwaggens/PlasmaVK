@@ -8740,7 +8740,7 @@ static void test_sets(void)
     static const struct pvk_msl_binding set0[] = { { 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, 0, 16, false } };
     static const struct pvk_msl_binding set1[] = { { 0, VK_DESCRIPTOR_TYPE_SAMPLER, 2, 0, 8, false },
                                                    { 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, 16, 16, false } };
-    static const struct pvk_msl_binding set2[] = { { 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, 0, 8, false },
+    static const struct pvk_msl_binding set2[] = { { 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, 0, 16, false },
                                                    { 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4, 32, 48, false } };
     static const struct pvk_msl_set_layout layouts[3] = { { set0, 1 }, { set1, 2 }, { set2, 2 } };
     struct pvk_msl_options options;
@@ -10196,11 +10196,11 @@ static const struct pvk_msl_binding desc_set0[] = {
     { 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4, 0, 16, false },
     { 1, VK_DESCRIPTOR_TYPE_SAMPLER, 2, 64, 8, false },
     { 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, 80, 32, false },
-    { 3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2, 176, 8, false },
-    { 4, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 2, 192, 8, false },
-    { 5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4, 208, 16, false },
-    { 6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, 272, 8, false }, /* not used by the shader */
-    { 7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, 288, 16, false },
+    { 3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2, 176, 16, false },
+    { 4, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 2, 208, 8, false },
+    { 5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4, 224, 16, false },
+    { 6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, 288, 16, false }, /* not used by the shader */
+    { 7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, 304, 16, false },
 };
 static const struct pvk_msl_binding desc_set1[] = { { 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 8, 0, 8, true } };
 
@@ -10661,9 +10661,9 @@ static void test_reject_layouts(void)
         d[0].count = 2; /* texs[4] */
         CHECK(layout_result(spv_descarrays, PVK_ARRAY_SIZE(spv_descarrays), d, 8, &set1, 2, "descriptors"));
         d[0].count = 4;
-        d[7].offset = 224; /* out of offset order */
+        d[7].offset = 240; /* out of offset order */
         CHECK(layout_result(spv_descarrays, PVK_ARRAY_SIZE(spv_descarrays), d, 8, &set1, 2, "overlaps"));
-        d[7].offset = 288;
+        d[7].offset = 304;
         set1.binding_count = 0; /* the runtime array's set lacks it */
         CHECK(layout_result(spv_descarrays, PVK_ARRAY_SIZE(spv_descarrays), d, 8, &set1, 2, "not in the set layout"));
     }
