@@ -64114,6 +64114,11 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
             const VkPipelineColorBlendAttachmentState *a = cb && b < cb->attachmentCount ? &cb->pAttachments[b] : NULL;
             d.outputs |= 1u << i;
             d.write_masks[i] = a ? pvk_write_mask(a->colorWriteMask) : PVK_MTLColorWriteMaskAll;
+            /* Metal takes All or None on RGB9E5 (no alpha to leave alone); a
+             * mask of some of red, green and blue is not honored */
+            if (f->mtl == PVK_MTLPixelFormatRGB9E5Float)
+                d.write_masks[i] = d.write_masks[i] & ~PVK_MTLColorWriteMaskAlpha ? PVK_MTLColorWriteMaskAll
+                                                                                   : PVK_MTLColorWriteMaskNone;
             if (d.logic_op_enable) {
                 struct pvk_msl_logic_target lt = pvk_logic_target(format);
                 if (lt.kind && d.write_masks[i])

@@ -6685,6 +6685,49 @@ static void test_frag_depth_initializer(void)
     free_img(&target);
 }
 
+/* A shared-exponent attachment written through a mask of red, green and blue
+ * (all it has; Metal takes only All or None for RGB9E5). */
+static void test_rgb9e5_write_mask(void)
+{
+    static const float black[4] = { 0, 0, 0, 0 };
+    struct img target;
+    struct buf out;
+    VkFormatProperties fp;
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t v, e;
+    double scale;
+
+    vkGetPhysicalDeviceFormatProperties(pd, VK_FORMAT_E5B9G9R9_UFLOAT_PACK32, &fp);
+    if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT))
+        return;
+    target = make_img(VK_FORMAT_E5B9G9R9_UFLOAT_PACK32, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    out = make_buf(W * H * 4);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.color_formats[0] = VK_FORMAT_E5B9G9R9_UFLOAT_PACK32;
+    p.has_blend = true;
+    memset(p.blend, 0, sizeof(p.blend));
+    p.blend[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -1, -1, 1, 1, 0.5f, 0.25f, 1.0f, 1.0f, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    v = px(&out, W / 2, H / 2);
+    e = v >> 27;
+    scale = ldexp(1.0, (int)e - 15 - 9);
+    CHECK(fabs((v & 511) * scale - 0.5) < 0.01 && fabs((v >> 9 & 511) * scale - 0.25) < 0.01 &&
+          fabs((v >> 18 & 511) * scale - 1.0) < 0.01);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&target);
+}
+
 /* Alpha to coverage (alpha 0.5 covers about half the samples) and alpha to
  * one, resolved. */
 static void test_alpha_coverage(void)
@@ -7921,6 +7964,7 @@ int main(void)
     RUN(test_dual_source_unwritten);
     RUN(test_copy_ms_depth);
     RUN(test_frag_depth_initializer);
+    RUN(test_rgb9e5_write_mask);
     RUN(test_alpha_coverage);
     RUN(test_sample_mask);
     RUN(test_logic_ops);
