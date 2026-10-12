@@ -410,6 +410,58 @@ static void test_unsupported_feature(void)
     CHECK_VK(vkCreateDevice(physical_device, &info, NULL, &device), VK_ERROR_FEATURE_NOT_PRESENT);
 }
 
+/* The queue family reports one global priority, MEDIUM: with
+ * globalPriorityQuery, a queue asking for another fails device creation;
+ * without it, the priority is a hint. */
+static void test_global_priority(void)
+{
+    static const VkQueueGlobalPriority asked[] = { VK_QUEUE_GLOBAL_PRIORITY_LOW, VK_QUEUE_GLOBAL_PRIORITY_MEDIUM,
+                                                   VK_QUEUE_GLOBAL_PRIORITY_HIGH };
+    float priority = 1.0f;
+    VkQueueFamilyGlobalPriorityProperties gp;
+    VkQueueFamilyProperties2 family;
+    VkPhysicalDeviceGlobalPriorityQueryFeatures query;
+    VkDeviceQueueGlobalPriorityCreateInfo global;
+    VkDeviceQueueCreateInfo queue_info;
+    VkDeviceCreateInfo info;
+    VkDevice device;
+    uint32_t count = 1, i, q;
+
+    memset(&gp, 0, sizeof(gp));
+    gp.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES;
+    memset(&family, 0, sizeof(family));
+    family.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
+    family.pNext = &gp;
+    vkGetPhysicalDeviceQueueFamilyProperties2(physical_device, &count, &family);
+    CHECK(gp.priorityCount == 1 && gp.priorities[0] == VK_QUEUE_GLOBAL_PRIORITY_MEDIUM);
+
+    for (q = 0; q < 2; q++)
+        for (i = 0; i < sizeof(asked) / sizeof(asked[0]); i++) {
+            VkResult want = q && asked[i] != VK_QUEUE_GLOBAL_PRIORITY_MEDIUM ? VK_ERROR_INITIALIZATION_FAILED
+                                                                             : VK_SUCCESS;
+            memset(&query, 0, sizeof(query));
+            query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GLOBAL_PRIORITY_QUERY_FEATURES;
+            query.globalPriorityQuery = q ? VK_TRUE : VK_FALSE;
+            memset(&global, 0, sizeof(global));
+            global.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO;
+            global.globalPriority = asked[i];
+            memset(&queue_info, 0, sizeof(queue_info));
+            queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            queue_info.pNext = &global;
+            queue_info.queueCount = 1;
+            queue_info.pQueuePriorities = &priority;
+            memset(&info, 0, sizeof(info));
+            info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+            info.pNext = &query;
+            info.queueCreateInfoCount = 1;
+            info.pQueueCreateInfos = &queue_info;
+            device = VK_NULL_HANDLE;
+            CHECK_VK(vkCreateDevice(physical_device, &info, NULL, &device), want);
+            if (device)
+                vkDestroyDevice(device, NULL);
+        }
+}
+
 int main(void)
 {
     setup();
@@ -424,6 +476,7 @@ int main(void)
     RUN(test_promoted_extension_features);
     RUN(test_promoted_extension_commands);
     RUN(test_unsupported_feature);
+    RUN(test_global_priority);
     vkDestroyInstance(instance, NULL);
     return TEST_RESULT();
 }

@@ -36595,6 +36595,17 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
             pvk_device_free(device);
             return VK_ERROR_INITIALIZATION_FAILED;
         }
+        /* A global priority the family does not report fails with
+         * globalPriorityQuery (Metal queues have one: MEDIUM). */
+        if (features.v14.globalPriorityQuery) {
+            const VkBaseInStructure *s;
+            for (s = info->pNext; s; s = s->pNext)
+                if (s->sType == VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO &&
+                    ((const VkDeviceQueueGlobalPriorityCreateInfo *)s)->globalPriority != VK_QUEUE_GLOBAL_PRIORITY_MEDIUM) {
+                    pvk_device_free(device);
+                    return VK_ERROR_INITIALIZATION_FAILED;
+                }
+        }
         for (j = 0; j < info->queueCount; j++) {
             struct pvk_queue *queue;
             if (device->queue_count == PVK_MAX_QUEUES) {
