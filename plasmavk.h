@@ -41832,6 +41832,7 @@ struct pvk_spv_type {
     uint32_t storage;   /* pointer */
     uint32_t nmembers;
     struct pvk_spv_member *members;
+    uint32_t *order;        /* struct: member indices by offset (pvk_spv_layout_struct) */
     const uint32_t *params; /* function parameter types (in the module words) */
     bool explicit_layout;   /* struct with Offset decorations */
     uint32_t pad_to;        /* struct: size an ArrayStride asks for (0: none) */
@@ -43959,6 +43960,15 @@ static uint32_t pvk_spv_min_align(uint32_t a, uint32_t b)
     return !a ? b : !b ? a : a < b ? a : b;
 }
 
+/* A matrix, or an array (of arrays) of them: what pvk_spv_member_node stores. */
+static bool pvk_spv_holds_matrices(struct pvk_spv *ctx, const struct pvk_spv_type *t)
+{
+    uint32_t depth = 0;
+    while ((t->op == PVK_SPV_OpTypeArray || t->op == PVK_SPV_OpTypeRuntimeArray) && depth++ < PVK_SPV_MAX_TYPE_DEPTH)
+        t = pvk_spv_type(ctx, t->elem);
+    return t->op == PVK_SPV_OpTypeMatrix;
+}
+
 /* Whether pvk_spv_slot can place an element (size, align, vec3) at stride. */
 static bool pvk_spv_slot_fits(uint32_t size, uint32_t align, uint32_t vec3, uint32_t stride)
 {
@@ -44001,7 +44011,7 @@ static void pvk_spv_name_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_sp
 
 static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_spv_type *t)
 {
-    uint32_t i, cur = 0, align = 1, nexplicit = 0, limit = t->need_align;
+    uint32_t i, k, cur = 0, align = 1, nexplicit = 0, limit = t->need_align;
     char buf[48];
 
     for (i = 0; i < t->nmembers; i++)
@@ -44011,8 +44021,19 @@ static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_
         pvk_spv_fail(ctx, "struct %u: some members have no Offset", tid);
     t->explicit_layout = nexplicit != 0;
 
+    /* Members in offset order (Vulkan allows any declaration order): the MSL
+     * struct declares and initializes them so */
+    t->order = pvk_spv_alloc(ctx, sizeof(*t->order) * (t->nmembers ? t->nmembers : 1));
     for (i = 0; i < t->nmembers; i++) {
-        struct pvk_spv_member *m = &t->members[i];
+        uint32_t j = i;
+        while (j > 0 && t->explicit_layout && t->members[t->order[j - 1]].offset > t->members[i].offset) {
+            t->order[j] = t->order[j - 1];
+            j--;
+        }
+        t->order[j] = i;
+    }
+    for (k = 0; k < t->nmembers; k++) {
+        struct pvk_spv_member *m = &t->members[i = t->order[k]];
         struct pvk_spv_type *mt = pvk_spv_type(ctx, m->type);
         uint32_t size, a;
 
@@ -44318,7 +44339,7 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
                     ealign = sc->size;
                     vec3 = 0;
                 }
-                if (e->op == PVK_SPV_OpTypeMatrix && !pvk_spv_slot_fits(esize, ealign, vec3, stride))
+                if (pvk_spv_holds_matrices(ctx, e) && !pvk_spv_slot_fits(esize, ealign, vec3, stride))
                     stride = 0; /* stored as a struct member's node (lines): the value keeps the natural layout */
                 s = pvk_spv_slot(ctx, emsl, esize, ealign, vec3, stride);
             }
@@ -44453,14 +44474,17 @@ static const char *pvk_spv_zero(struct pvk_spv *ctx, uint32_t tid)
 static const char *pvk_spv_storage_expr(struct pvk_spv *ctx, const struct pvk_spv_node *n, uint32_t tid,
                                         const char *value, uint32_t depth);
 
-/* The aggregate that initializes a struct from member value expressions. */
+/* The aggregate that initializes a struct from member value expressions (vals
+ * by member index; the struct declares them in offset order). */
 static const char *pvk_spv_struct_init(struct pvk_spv *ctx, struct pvk_spv_type *t, const char *const *vals)
 {
     const char **items = pvk_spv_alloc(ctx, sizeof(*items) * (t->nmembers ? t->nmembers : 1));
     uint32_t i;
     for (i = 0; i < t->nmembers; i++) {
-        const struct pvk_spv_member *m = &t->members[i];
-        const char *v = m->node ? pvk_spv_storage_expr(ctx, m->node, m->type, vals[i], 0) : vals[i];
+        const struct pvk_spv_member *m = &t->members[t->order[i]];
+        const char *v = vals[t->order[i]];
+        if (m->node)
+            v = pvk_spv_storage_expr(ctx, m->node, m->type, v, 0);
         items[i] = m->pad_before ? pvk_spv_fmt(ctx, "{}, %s", v) : v; /* padding fields come first */
     }
     return pvk_spv_join(ctx, pvk_spv_fmt(ctx, "%s{", t->msl), items, t->nmembers, ", ", "}");
@@ -44609,7 +44633,7 @@ static void pvk_spv_emit_types(struct pvk_spv *ctx)
             continue;
         pvk_sb_printf(ctx, &ctx->types, "struct %s\n{\n", t->msl);
         for (j = 0; j < t->nmembers; j++) {
-            const struct pvk_spv_member *m = &t->members[j];
+            const struct pvk_spv_member *m = &t->members[t->order[j]];
             if (m->pad_before)
                 pvk_sb_printf(ctx, &ctx->types, "    char pvk_pad%u[%u];\n", m->offset - m->pad_before,
                               m->pad_before);
@@ -48273,8 +48297,10 @@ static void pvk_spv_subgroup(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
             if (pvk_spv_get(ctx, c)->kind != PVK_SPV_K_CONST || pvk_spv_vtype(ctx, c)->op != PVK_SPV_OpTypeInt)
                 pvk_spv_fail(ctx, "the rotate cluster size must be an integer constant");
             size = (uint32_t)pvk_spv_const_uint(ctx, c);
-            if (!size || size > 32 || (size & (size - 1)))
+            if (!size || (size & (size - 1)))
                 pvk_spv_fail(ctx, "invalid rotate cluster size %u", size);
+            if (size > 32) /* (code for larger subgroups, which never runs here) */
+                size = 32;
         }
         e = size == 32 ? pvk_spv_fmt(ctx, "simd_shuffle_rotate_down($, %s)", lane)
                        : pvk_spv_fmt(ctx, "simd_shuffle($, ushort((pvk_lane & %uu) | ((pvk_lane + uint(%s)) & %uu)))",
