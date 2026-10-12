@@ -54023,11 +54023,12 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
  *   (pvk_pass_att_actions), except that a render area smaller than the
  *   attachment, or a view mask missing views below its last, clears by
  *   drawing (Metal clears the whole attachment, every layer up to the last
- *   view's) and always stores (DONT_CARE would lose what lies outside), memoryless
- *   (transient) attachments neither load nor store, and an attachment used
- *   by subpasses of several encoders is stored and loaded between them (a
- *   memoryless one has memory committed to it for that, which such render
- *   passes render to instead: pvk_image_committed).
+ *   view's) and always stores (DONT_CARE would lose what lies outside), an
+ *   attachment used by subpasses of several encoders is stored and loaded
+ *   between them, and memoryless (transient) attachments neither load nor
+ *   store, except that render passes that load or store one, or use it in
+ *   several encoders (or suspend or resume with it), render to memory
+ *   committed to it instead (pvk_image_committed).
  *   Color, depth and stencil resolves are store actions of their encoder,
  *   except that a stored depth/stencil attachment is resolved by an
  *   internal pass after it (pvk_render_resolve_ds, section 16).
@@ -54095,7 +54096,7 @@ struct pvk_rp_attachment {
     VkAttachmentLoadOp load_op, stencil_load_op;
     VkAttachmentStoreOp store_op, stencil_store_op;
     uint32_t first_use, last_use; /* subpasses; first_use UINT32_MAX: unused */
-    bool kept;                    /* used in more than one Metal pass (memoryless: pvk_image_committed) */
+    bool kept;                    /* contents outlive a Metal pass: used in several, loaded or stored */
 };
 
 struct pvk_subpass {
@@ -54928,6 +54929,23 @@ VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass(VkCommandBuffer commandBuffer)
 }
 
 /* Dynamic rendering: attachment i is color slot i. */
+/* The committed memory a memoryless attachment of vkCmdBeginRendering, view,
+ * renders to (pvk_image_committed) when one of atts[0, n) (it; or the depth
+ * and stencil attachments, one texture) loads or stores, or the instance is
+ * suspended or resumed (to go on in another Metal pass); else NULL. */
+static id pvk_dr_committed(struct pvk_command_buffer *cb, const VkRenderingInfo *info,
+                           const struct pvk_image_view *view, const VkRenderingAttachmentInfo *const *atts, uint32_t n)
+{
+    bool kept = (info->flags & (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT)) != 0;
+    uint32_t k;
+    if (!view || !view->image->memoryless)
+        return NULL;
+    for (k = 0; k < n; k++)
+        if (atts[k] && atts[k]->imageView)
+            kept |= atts[k]->loadOp == VK_ATTACHMENT_LOAD_OP_LOAD || atts[k]->storeOp == VK_ATTACHMENT_STORE_OP_STORE;
+    return kept ? pvk_image_committed(cb->pool->device, view->image, true) : NULL;
+}
+
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, const VkRenderingInfo *pRenderingInfo)
 {
     struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
@@ -54968,11 +54986,11 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
         const VkRenderingAttachmentInfo *a = &info->pColorAttachments[i];
         const struct pvk_image_view *view = (const struct pvk_image_view *)a->imageView;
         struct pvk_pass_attachment *pa = &c->colors[i];
-        pvk_pass_att_view(pa, view, NULL);
+        pvk_pass_att_view(pa, view, pvk_dr_committed(cb, info, view, &a, 1));
         if (a->resolveMode != VK_RESOLVE_MODE_NONE)
             pvk_pass_att_resolve(pa, (const struct pvk_image_view *)a->resolveImageView);
         pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, info->viewMask,
-                             view && view->image->memoryless);
+                             pa->memoryless != 0);
         pa->clear = a->clearValue;
     }
     ds[0] = info->pDepthAttachment;
@@ -54985,14 +55003,14 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
         struct pvk_pass_attachment *pa = k ? &c->stencil : &c->depth;
         if (!view)
             continue;
-        pvk_pass_att_view(pa, view, NULL);
+        pvk_pass_att_view(pa, view, pvk_dr_committed(cb, info, view, ds, 2));
         if (a->resolveMode != VK_RESOLVE_MODE_NONE) {
             pvk_pass_att_resolve(pa, (const struct pvk_image_view *)a->resolveImageView);
             if (!k)
                 pa->resolve_filter = pvk_depth_resolve_filter(a->resolveMode);
         }
         pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, info->viewMask,
-                             view->image->memoryless);
+                             pa->memoryless != 0);
         pa->clear = a->clearValue;
     }
     pvk_cmd_subpass_dynamic(cb, r);
@@ -63049,9 +63067,13 @@ static VkResult pvk_render_pass_create(struct pvk_device *device, const VkRender
         pvk_rp_pass_add(rp, mp, i);
         rp->subpasses[i].pass = rp->pass_count - 1;
     }
-    for (i = 0; i < na; i++) {
+    for (i = 0; i < na; i++) { /* (the load ops the application gave: not those of input attachments, above) */
         struct pvk_rp_attachment *ra = &rp->attachments[i];
-        ra->kept = ra->first_use < ns && rp->subpasses[ra->first_use].pass != rp->subpasses[ra->last_use].pass;
+        const VkAttachmentDescription2 *a = &info->pAttachments[i];
+        ra->kept = (ra->first_use < ns && rp->subpasses[ra->first_use].pass != rp->subpasses[ra->last_use].pass) ||
+                   a->loadOp == VK_ATTACHMENT_LOAD_OP_LOAD || a->storeOp == VK_ATTACHMENT_STORE_OP_STORE ||
+                   (ra->fmt && pvk_format_has_stencil(ra->fmt) && (a->stencilLoadOp == VK_ATTACHMENT_LOAD_OP_LOAD ||
+                                                        a->stencilStoreOp == VK_ATTACHMENT_STORE_OP_STORE));
     }
     for (i = 0; i < ns; i++) {
         struct pvk_subpass *sp = &rp->subpasses[i];

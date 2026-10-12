@@ -3902,6 +3902,107 @@ static void test_subpass_feedback(void)
     subpass_feedback_case(true, true);
 }
 
+static uint32_t expect_blue(uint32_t x, uint32_t y)
+{
+    (void)x, (void)y;
+    return BLUE;
+}
+
+/* A transient (lazily allocated) image whose contents outlive a render pass:
+ * one clears it to red and stores it, the next loads it and reads it as an
+ * input attachment (.bgra) into B. */
+static void test_transient_stored(void)
+{
+    VkAttachmentDescription a[2];
+    VkAttachmentReference rc = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+    VkAttachmentReference rin = { 0, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    VkAttachmentReference rb = { 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+    VkSubpassDescription sp;
+    VkRenderPassCreateInfo info;
+    VkRenderPass rp1 = VK_NULL_HANDLE, rp2 = VK_NULL_HANDLE;
+    struct img ia = make_img_mem(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT,
+                                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
+                                     VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+                                 lazy_type);
+    struct img ib = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkImageView views[2];
+    VkFramebuffer fb1, fb2;
+    VkDescriptorPool dpool = VK_NULL_HANDLE;
+    VkDescriptorSet set;
+    VkClearValue clears[2];
+    VkPipeline p1;
+    struct pipe p;
+    VkCommandBuffer cb;
+
+    memset(a, 0, sizeof(a));
+    a[0].format = a[1].format = VK_FORMAT_R8G8B8A8_UNORM;
+    a[0].samples = a[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    a[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    a[1].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    a[0].storeOp = a[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    a[0].stencilLoadOp = a[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    a[0].stencilStoreOp = a[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    a[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    a[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    memset(&sp, 0, sizeof(sp));
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &rc;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    info.attachmentCount = 1;
+    info.pAttachments = a;
+    info.subpassCount = 1;
+    info.pSubpasses = &sp;
+    CHECK_VK(vkCreateRenderPass(device, &info, NULL, &rp1), VK_SUCCESS);
+    a[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; /* the second pass */
+    a[0].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    a[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    a[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    a[1].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    sp.inputAttachmentCount = 1;
+    sp.pInputAttachments = &rin;
+    sp.pColorAttachments = &rb;
+    info.attachmentCount = 2;
+    CHECK_VK(vkCreateRenderPass(device, &info, NULL, &rp2), VK_SUCCESS);
+    views[0] = ia.view;
+    views[1] = ib.view;
+    fb1 = make_fb(rp1, views, 1, W, H, 1);
+    fb2 = make_fb(rp2, views, 2, W, H, 1);
+    set = input_set(&dpool, ia.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_input_fs, sizeof(spv_input_fs));
+    p.layout = input_layout;
+    p.rp = rp2;
+    p1 = make_pipe(&p);
+    REQUIRE(p1);
+    memset(clears, 0, sizeof(clears));
+    clears[0].color.float32[0] = clears[0].color.float32[3] = 1.0f;
+    cb = begin_cmd();
+    begin_pass(cb, rp1, fb1, 0, 0, W, H, clears, 1);
+    vkCmdEndRenderPass(cb);
+    barrier(cb);
+    begin_pass(cb, rp2, fb2, 0, 0, W, H, clears, 2);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p1);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, input_layout, 0, 1, &set, 0, NULL);
+    vkCmdPushConstants(cb, input_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16,
+                       (const float[4]){ -1, -1, 1, 1 });
+    vkCmdDraw(cb, 4, 1, 0, 0);
+    vkCmdEndRenderPass(cb);
+    download(cb, &ib, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    CHECK(count_bad(&out, expect_blue, "transient image stored and loaded") == 0);
+    vkDestroyPipeline(device, p1, NULL);
+    vkDestroyDescriptorPool(device, dpool, NULL);
+    vkDestroyFramebuffer(device, fb1, NULL);
+    vkDestroyFramebuffer(device, fb2, NULL);
+    vkDestroyRenderPass(device, rp1, NULL);
+    vkDestroyRenderPass(device, rp2, NULL);
+    free_buf(&out);
+    free_img(&ia);
+    free_img(&ib);
+}
+
 /*
  * #version 450
  * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
@@ -7211,6 +7312,7 @@ int main(void)
     RUN(test_clear_attachments);
     RUN(test_subpasses);
     RUN(test_subpass_feedback);
+    RUN(test_transient_stored);
     RUN(test_subpass_ms_input);
     RUN(test_subpass_tile_storage);
     RUN(test_local_read);
