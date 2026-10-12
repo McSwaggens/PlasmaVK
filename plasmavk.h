@@ -50720,6 +50720,11 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
             bool raw; /* an SNORM attachment bound as SINT: the logical operation converts (FRAGMENT OPERATIONS) */
             if (k == PVK_SPV_SLOT_NONE)
                 continue;
+            /* an integer output of the other signedness than its attachment: its bits */
+            if (!vertex && o && o->color_attachments_valid && loc < 8 && (o->color_attachments & (1u << loc)) &&
+                ((k == PVK_MSL_SCALAR_INT && o->color_attachment_types[loc] == PVK_MSL_SCALAR_UINT) ||
+                 (k == PVK_MSL_SCALAR_UINT && o->color_attachment_types[loc] == PVK_MSL_SCALAR_INT)))
+                k = out_type[idx][loc] = o->color_attachment_types[loc];
             raw = !vertex && !idx && o && o->color_attachments_valid && loc < 8 &&
                   o->logic_targets[loc].kind == PVK_MSL_LOGIC_SNORM_INT && k == PVK_MSL_SCALAR_FLOAT &&
                   o->color_attachment_types[loc] == PVK_MSL_SCALAR_INT;

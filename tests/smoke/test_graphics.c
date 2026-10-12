@@ -2721,8 +2721,9 @@ struct uvec4 {
  * gl_DrawID, each + 1) of points drawn by every kind of draw, the indirect
  * ones with and without count buffers; in the primary command buffer, or in
  * a secondary one that begins and ends the rendering itself (its draws are
- * preprocessed from there). */
-static void draw_kinds(int secondary)
+ * preprocessed from there); into a UINT attachment, or a SINT one the uvec4
+ * outputs reach as their bits. */
+static void draw_kinds(int secondary, VkFormat format)
 {
     static const VkVertexInputBindingDescription binding = { 0, 8, VK_VERTEX_INPUT_RATE_VERTEX };
     static const VkVertexInputAttributeDescription attr = { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 };
@@ -2735,7 +2736,7 @@ static void draw_kinds(int secondary)
         { 12, 7, { 8, 10, 8, 1 } }, { 13, 8, { 9, 14, 9, 1 } },  { 14, 11, { 12, 12, 12, 1 } },
     };
     VkPipelineVertexInputStateCreateInfo vi;
-    struct img target = make_img(VK_FORMAT_R32G32B32A32_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img target = make_img(format, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
     struct buf out = make_buf(W * H * 16), vb = make_buf(16 * 8), ib = make_buf(16), ind = make_buf(256),
                cnt = make_buf(16);
     uint32_t *u, i, x, y;
@@ -2754,7 +2755,7 @@ static void draw_kinds(int secondary)
     vi.pVertexAttributeDescriptions = &attr;
     pipe_init(&p, spv_params_vs, sizeof(spv_params_vs), spv_params_fs, sizeof(spv_params_fs));
     p.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
-    p.color_formats[0] = VK_FORMAT_R32G32B32A32_UINT;
+    p.color_formats[0] = format;
     p.vertex = &vi;
     pipeline = make_pipe(&p);
     REQUIRE(pipeline);
@@ -2830,12 +2831,17 @@ static void draw_kinds(int secondary)
 
 static void test_draw_kinds(void)
 {
-    draw_kinds(0);
+    draw_kinds(0, VK_FORMAT_R32G32B32A32_UINT);
 }
 
 static void test_draw_kinds_secondary(void)
 {
-    draw_kinds(1);
+    draw_kinds(1, VK_FORMAT_R32G32B32A32_UINT);
+}
+
+static void test_output_signedness(void)
+{
+    draw_kinds(0, VK_FORMAT_R32G32B32A32_SINT);
 }
 
 /* Multi-draw indirect (multiDrawIndirect, drawIndirectCount): every draw of
@@ -6080,6 +6086,7 @@ int main(void)
     RUN(test_occlusion);
     RUN(test_draw_kinds);
     RUN(test_draw_kinds_secondary);
+    RUN(test_output_signedness);
     RUN(test_multi_draw);
     RUN(test_indices);
     RUN(test_vertex_input);
