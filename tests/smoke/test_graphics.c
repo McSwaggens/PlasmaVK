@@ -4364,6 +4364,258 @@ static void test_subpass_eight_inputs(void)
 
 /*
  * #version 450
+ * layout(location = 0) out vec4 o0;
+ * layout(location = 1) out vec4 o1;
+ * layout(location = 2) out vec4 o2;
+ * layout(location = 3) out vec4 o3;
+ * layout(location = 4) out vec4 o4;
+ * void main()
+ * {
+ *     o0 = vec4(1.0, 0.0, 0.0, 0.0);
+ *     o1 = vec4(0.0, 2.0, 0.0, 0.0);
+ *     o2 = vec4(0.0, 0.0, 4.0, 0.0);
+ *     o3 = vec4(0.0, 0.0, 0.0, 8.0);
+ *     o4 = vec4(16.0, 0.0, 0.0, 0.0);
+ * }
+ */
+static const uint32_t spv_write5_fs[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x00000019, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x000a000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000d, 0x00000010,
+    0x00000013, 0x00000016, 0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2,
+    0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000009, 0x0000306f, 0x00030005,
+    0x0000000d, 0x0000316f, 0x00030005, 0x00000010, 0x0000326f, 0x00030005, 0x00000013, 0x0000336f,
+    0x00030005, 0x00000016, 0x0000346f, 0x00040047, 0x00000009, 0x0000001e, 0x00000000, 0x00040047,
+    0x0000000d, 0x0000001e, 0x00000001, 0x00040047, 0x00000010, 0x0000001e, 0x00000002, 0x00040047,
+    0x00000013, 0x0000001e, 0x00000003, 0x00040047, 0x00000016, 0x0000001e, 0x00000004, 0x00020013,
+    0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017,
+    0x00000007, 0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b,
+    0x00000008, 0x00000009, 0x00000003, 0x0004002b, 0x00000006, 0x0000000a, 0x3f800000, 0x0004002b,
+    0x00000006, 0x0000000b, 0x00000000, 0x0007002c, 0x00000007, 0x0000000c, 0x0000000a, 0x0000000b,
+    0x0000000b, 0x0000000b, 0x0004003b, 0x00000008, 0x0000000d, 0x00000003, 0x0004002b, 0x00000006,
+    0x0000000e, 0x40000000, 0x0007002c, 0x00000007, 0x0000000f, 0x0000000b, 0x0000000e, 0x0000000b,
+    0x0000000b, 0x0004003b, 0x00000008, 0x00000010, 0x00000003, 0x0004002b, 0x00000006, 0x00000011,
+    0x40800000, 0x0007002c, 0x00000007, 0x00000012, 0x0000000b, 0x0000000b, 0x00000011, 0x0000000b,
+    0x0004003b, 0x00000008, 0x00000013, 0x00000003, 0x0004002b, 0x00000006, 0x00000014, 0x41000000,
+    0x0007002c, 0x00000007, 0x00000015, 0x0000000b, 0x0000000b, 0x0000000b, 0x00000014, 0x0004003b,
+    0x00000008, 0x00000016, 0x00000003, 0x0004002b, 0x00000006, 0x00000017, 0x41800000, 0x0007002c,
+    0x00000007, 0x00000018, 0x00000017, 0x0000000b, 0x0000000b, 0x0000000b, 0x00050036, 0x00000002,
+    0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0003003e, 0x00000009, 0x0000000c,
+    0x0003003e, 0x0000000d, 0x0000000f, 0x0003003e, 0x00000010, 0x00000012, 0x0003003e, 0x00000013,
+    0x00000015, 0x0003003e, 0x00000016, 0x00000018, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 450
+ * layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInput i0;
+ * layout(input_attachment_index = 1, set = 0, binding = 1) uniform subpassInput i1;
+ * layout(input_attachment_index = 2, set = 0, binding = 2) uniform subpassInput i2;
+ * layout(input_attachment_index = 3, set = 0, binding = 3) uniform subpassInput i3;
+ * layout(input_attachment_index = 4, set = 0, binding = 4) uniform subpassInput i4;
+ * layout(location = 0) out vec4 o;
+ * void main()
+ * {
+ *     o = subpassLoad(i0) + subpassLoad(i1) + subpassLoad(i2) + subpassLoad(i3) + subpassLoad(i4);
+ * }
+ */
+static const uint32_t spv_read5_fs[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x00000023, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000028, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
+    0x00000000, 0x00000001, 0x0006000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009,
+    0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004,
+    0x6e69616d, 0x00000000, 0x00030005, 0x00000009, 0x0000006f, 0x00030005, 0x0000000c, 0x00003069,
+    0x00030005, 0x00000013, 0x00003169, 0x00030005, 0x00000017, 0x00003269, 0x00030005, 0x0000001b,
+    0x00003369, 0x00030005, 0x0000001f, 0x00003469, 0x00040047, 0x00000009, 0x0000001e, 0x00000000,
+    0x00040047, 0x0000000c, 0x00000021, 0x00000000, 0x00040047, 0x0000000c, 0x00000022, 0x00000000,
+    0x00040047, 0x0000000c, 0x0000002b, 0x00000000, 0x00040047, 0x00000013, 0x00000021, 0x00000001,
+    0x00040047, 0x00000013, 0x00000022, 0x00000000, 0x00040047, 0x00000013, 0x0000002b, 0x00000001,
+    0x00040047, 0x00000017, 0x00000021, 0x00000002, 0x00040047, 0x00000017, 0x00000022, 0x00000000,
+    0x00040047, 0x00000017, 0x0000002b, 0x00000002, 0x00040047, 0x0000001b, 0x00000021, 0x00000003,
+    0x00040047, 0x0000001b, 0x00000022, 0x00000000, 0x00040047, 0x0000001b, 0x0000002b, 0x00000003,
+    0x00040047, 0x0000001f, 0x00000021, 0x00000004, 0x00040047, 0x0000001f, 0x00000022, 0x00000000,
+    0x00040047, 0x0000001f, 0x0000002b, 0x00000004, 0x00020013, 0x00000002, 0x00030021, 0x00000003,
+    0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000004,
+    0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008, 0x00000009, 0x00000003,
+    0x00090019, 0x0000000a, 0x00000006, 0x00000006, 0x00000000, 0x00000000, 0x00000000, 0x00000002,
+    0x00000000, 0x00040020, 0x0000000b, 0x00000000, 0x0000000a, 0x0004003b, 0x0000000b, 0x0000000c,
+    0x00000000, 0x00040015, 0x0000000e, 0x00000020, 0x00000001, 0x0004002b, 0x0000000e, 0x0000000f,
+    0x00000000, 0x00040017, 0x00000010, 0x0000000e, 0x00000002, 0x0005002c, 0x00000010, 0x00000011,
+    0x0000000f, 0x0000000f, 0x0004003b, 0x0000000b, 0x00000013, 0x00000000, 0x0004003b, 0x0000000b,
+    0x00000017, 0x00000000, 0x0004003b, 0x0000000b, 0x0000001b, 0x00000000, 0x0004003b, 0x0000000b,
+    0x0000001f, 0x00000000, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8,
+    0x00000005, 0x0004003d, 0x0000000a, 0x0000000d, 0x0000000c, 0x00050062, 0x00000007, 0x00000012,
+    0x0000000d, 0x00000011, 0x0004003d, 0x0000000a, 0x00000014, 0x00000013, 0x00050062, 0x00000007,
+    0x00000015, 0x00000014, 0x00000011, 0x00050081, 0x00000007, 0x00000016, 0x00000012, 0x00000015,
+    0x0004003d, 0x0000000a, 0x00000018, 0x00000017, 0x00050062, 0x00000007, 0x00000019, 0x00000018,
+    0x00000011, 0x00050081, 0x00000007, 0x0000001a, 0x00000016, 0x00000019, 0x0004003d, 0x0000000a,
+    0x0000001c, 0x0000001b, 0x00050062, 0x00000007, 0x0000001d, 0x0000001c, 0x00000011, 0x00050081,
+    0x00000007, 0x0000001e, 0x0000001a, 0x0000001d, 0x0004003d, 0x0000000a, 0x00000020, 0x0000001f,
+    0x00050062, 0x00000007, 0x00000021, 0x00000020, 0x00000011, 0x00050081, 0x00000007, 0x00000022,
+    0x0000001e, 0x00000021, 0x0003003e, 0x00000009, 0x00000022, 0x000100fd, 0x00010038,
+};
+
+/* A subpass reads its color attachment (R32G32B32A32_SFLOAT) and four more
+ * of that format as input attachments of one type: all five would take 80
+ * bytes of tile memory a sample, more than the 64 Metal allows, so it
+ * fetches its own and reads the others from their textures. */
+static void test_subpass_mixed_inputs(void)
+{
+    enum { N = 5 };
+    VkAttachmentDescription a[N];
+    VkAttachmentReference rc[N], rin[N];
+    VkSubpassDescription sp[2];
+    VkSubpassDependency dep;
+    VkRenderPassCreateInfo info;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    VkDescriptorSetLayoutBinding binds[N];
+    VkDescriptorSetLayoutCreateInfo sli;
+    VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
+    VkPushConstantRange range = { VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(struct pc) };
+    VkPipelineLayoutCreateInfo pli;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkDescriptorPoolSize size = { VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, N };
+    VkDescriptorPoolCreateInfo dpi;
+    VkDescriptorPool dpool = VK_NULL_HANDLE;
+    VkDescriptorSetAllocateInfo dai;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VkDescriptorImageInfo ii[N];
+    VkWriteDescriptorSet w;
+    struct img imgs[N];
+    struct buf out = make_buf(W * H * 16);
+    VkImageView views[N];
+    VkFramebuffer fb;
+    VkClearValue clears[N];
+    VkPipeline p0, p1;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t i, bad = 0;
+
+    memset(a, 0, sizeof(a));
+    for (i = 0; i < N; i++) {
+        imgs[i] = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+        views[i] = imgs[i].view;
+        a[i].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        a[i].samples = VK_SAMPLE_COUNT_1_BIT;
+        a[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        a[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        a[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        a[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        a[i].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        a[i].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        rc[i].attachment = rin[i].attachment = i;
+        rc[i].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        rin[i].layout = i ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
+        memset(&binds[i], 0, sizeof(binds[i]));
+        binds[i].binding = i;
+        binds[i].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+        binds[i].descriptorCount = 1;
+        binds[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        ii[i].sampler = VK_NULL_HANDLE;
+        ii[i].imageView = imgs[i].view;
+        ii[i].imageLayout = rin[i].layout;
+    }
+    rc[0].layout = VK_IMAGE_LAYOUT_GENERAL;
+    memset(sp, 0, sizeof(sp));
+    sp[0].pipelineBindPoint = sp[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp[0].colorAttachmentCount = N;
+    sp[0].pColorAttachments = rc;
+    sp[1].inputAttachmentCount = N;
+    sp[1].pInputAttachments = rin;
+    sp[1].colorAttachmentCount = 1;
+    sp[1].pColorAttachments = rc;
+    memset(&dep, 0, sizeof(dep));
+    dep.srcSubpass = 0;
+    dep.dstSubpass = 1;
+    dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+    dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    info.attachmentCount = N;
+    info.pAttachments = a;
+    info.subpassCount = 2;
+    info.pSubpasses = sp;
+    info.dependencyCount = 1;
+    info.pDependencies = &dep;
+    CHECK_VK(vkCreateRenderPass(device, &info, NULL, &rp), VK_SUCCESS);
+    fb = make_fb(rp, views, N, W, H, 1);
+    memset(&sli, 0, sizeof(sli));
+    sli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    sli.bindingCount = N;
+    sli.pBindings = binds;
+    CHECK_VK(vkCreateDescriptorSetLayout(device, &sli, NULL, &set_layout), VK_SUCCESS);
+    memset(&pli, 0, sizeof(pli));
+    pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pli.setLayoutCount = 1;
+    pli.pSetLayouts = &set_layout;
+    pli.pushConstantRangeCount = 1;
+    pli.pPushConstantRanges = &range;
+    CHECK_VK(vkCreatePipelineLayout(device, &pli, NULL, &layout), VK_SUCCESS);
+    memset(&dpi, 0, sizeof(dpi));
+    dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpi.maxSets = 1;
+    dpi.poolSizeCount = 1;
+    dpi.pPoolSizes = &size;
+    CHECK_VK(vkCreateDescriptorPool(device, &dpi, NULL, &dpool), VK_SUCCESS);
+    memset(&dai, 0, sizeof(dai));
+    dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dai.descriptorPool = dpool;
+    dai.descriptorSetCount = 1;
+    dai.pSetLayouts = &set_layout;
+    CHECK_VK(vkAllocateDescriptorSets(device, &dai, &set), VK_SUCCESS);
+    memset(&w, 0, sizeof(w));
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = set;
+    w.descriptorCount = N;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    w.pImageInfo = ii;
+    vkUpdateDescriptorSets(device, 1, &w, 0, NULL);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_write5_fs, sizeof(spv_write5_fs));
+    p.rp = rp;
+    p.colors = N;
+    p0 = make_pipe(&p);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_read5_fs, sizeof(spv_read5_fs));
+    p.layout = layout;
+    p.rp = rp;
+    p.subpass = 1;
+    p1 = make_pipe(&p);
+    REQUIRE(p0 && p1);
+    memset(clears, 0, sizeof(clears));
+    cb = begin_cmd();
+    begin_pass(cb, rp, fb, 0, 0, W, H, clears, N);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p0);
+    rect(cb, -1, -1, 1, 1, 0, 0, 0, 0, 0);
+    vkCmdNextSubpass(cb, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p1);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, NULL);
+    vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16,
+                       (const float[4]){ -1, -1, 1, 1 });
+    vkCmdDraw(cb, 4, 1, 0, 0);
+    vkCmdEndRenderPass(cb);
+    download(cb, &imgs[0], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    for (i = 0; i < W * H; i++) {
+        const float *t = (const float *)out.data + 4 * i;
+        if ((t[0] != 17.0f || t[1] != 2.0f || t[2] != 4.0f || t[3] != 8.0f) && bad++ < 4)
+            fprintf(stderr, "mixed inputs: texel %u is %g %g %g %g\n", i, t[0], t[1], t[2], t[3]);
+    }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, p0, NULL);
+    vkDestroyPipeline(device, p1, NULL);
+    vkDestroyDescriptorPool(device, dpool, NULL);
+    vkDestroyPipelineLayout(device, layout, NULL);
+    vkDestroyDescriptorSetLayout(device, set_layout, NULL);
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+    for (i = 0; i < N; i++)
+        free_img(&imgs[i]);
+    free_buf(&out);
+}
+
+/*
+ * #version 450
  * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
  * layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInputMS u_ms;
  * layout(location = 0) out vec4 o_color;
@@ -8278,6 +8530,7 @@ int main(void)
     RUN(test_subpass_feedback);
     RUN(test_transient_stored);
     RUN(test_subpass_eight_inputs);
+    RUN(test_subpass_mixed_inputs);
     RUN(test_subpass_ms_input);
     RUN(test_subpass_tile_storage);
     RUN(test_local_read);

@@ -40782,7 +40782,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   reads the current sample (the shader should run per sample). One mapped
  *   to PVK_MSL_IA_TEXTURE (section 15: not in the pass's tile memory) is read
  *   from [[texture(i)]] at the fragment's pixel and the Sample operand's
- *   sample: its value is a pvk_ia_tex(_ms) of the texture and the pixel.
+ *   sample: its value is a pvk_ia_tex(_ms) of the texture and the pixel (a
+ *   pvk_ia_mix(_ms) holding either, when variables of its type are read
+ *   both ways).
  *   result->input_attachments / color_fetches.
  *   DEPTH/STENCIL INPUT ATTACHMENTS: Metal fetches color attachments only,
  *   so the render pass keeps copies of the depth (R32Float) and stencil
@@ -41973,7 +41975,7 @@ struct pvk_spv_type {
         uint32_t dim, depth, arrayed, ms, sampled, format, access;
     } img;
     bool opaque; /* image, sampler, sampled image, or an array of them: descriptors */
-    uint8_t ia_use; /* input attachment types: 1 fetched variables have it, 2 ones read from textures */
+    uint8_t ia_use; /* input attachment types: 1 fetched variables have it, 2 ones read from textures (3 both) */
     uint32_t desc_emitted; /* block struct: bit 0 pvk_ubuf_, bit 1 pvk_sbuf_ declared */
     /* MSL value type */
     const char *msl;
@@ -43796,13 +43798,11 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
             x->p->ia_texture = x->ia_index + 1;
             ctx->use_ia = true;
         }
-        if (x->p->value) { /* (a type is one or the other) */
+        if (x->p->value) {
             struct pvk_spv_type *it = pvk_spv_type(ctx, x->p->type);
             while (it->op == PVK_SPV_OpTypeArray || it->op == PVK_SPV_OpTypeRuntimeArray)
                 it = pvk_spv_type(ctx, it->elem);
-            if (it->ia_use && it->ia_use != (x->p->ia_texture ? 2 : 1))
-                pvk_spv_fail(ctx, "input attachments of one type are fetched and read from textures");
-            it->ia_use = x->p->ia_texture ? 2 : 1;
+            it->ia_use |= x->p->ia_texture ? 2 : 1;
         }
         if ((storage == PVK_SPV_StorageUniformConstant) != (pvk_spv_type(ctx, x->p->type)->opaque || x->p->value))
             pvk_spv_fail(ctx, "variable %u: images and samplers must be UniformConstant variables (and only they)", rid);
@@ -44619,9 +44619,9 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
             }
             break;
         case PVK_SPV_OpTypeImage:
-            if (t->img.dim == PVK_SPV_DimSubpassData) { /* the fetched color, or a texture and the pixel */
-                t->msl = t->ia_use == 2 ? pvk_spv_fmt(ctx, "%s<%s>", t->img.ms ? "pvk_ia_tex_ms" : "pvk_ia_tex",
-                                                      pvk_spv_type(ctx, t->elem)->msl)
+            if (t->img.dim == PVK_SPV_DimSubpassData) { /* the fetched color, or a texture and the pixel, or either */
+                t->msl = t->ia_use >= 2 ? pvk_spv_fmt(ctx, "pvk_ia_%s%s<%s>", t->ia_use == 3 ? "mix" : "tex",
+                                                      t->img.ms ? "_ms" : "", pvk_spv_type(ctx, t->elem)->msl)
                                         : pvk_spv_fmt(ctx, "%s4", pvk_spv_type(ctx, t->elem)->msl);
                 t->size = t->align = 16;
                 break;
@@ -48218,7 +48218,7 @@ static void pvk_spv_image_read(struct pvk_spv *ctx, const struct pvk_spv_insn *i
          * sample (multisampled input attachments need per-sample shading). */
         if (fetch || o.lod || o.const_offset || o.offset || (it->img.ms != 0) != (o.sample != 0))
             pvk_spv_fail(ctx, "malformed input attachment read");
-        if (pvk_spv_get(ctx, img)->ia_texture) /* from a texture (PVK_MSL_IA_TEXTURE): the Sample operand's sample */
+        if (pvk_spv_get(ctx, img)->ia_texture || it->ia_use == 3) /* from a texture: the Sample operand's sample */
             tex = pvk_spv_fmt(ctx, "%s.read(%s)", tex, o.sample ? pvk_spv_fmt(ctx, "uint(%s)", pvk_spv_val(ctx, o.sample)) : "");
         pvk_spv_texel_result(ctx, rid, tex, 4, it);
         return;
@@ -51283,6 +51283,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         for (k = 0; k < n; k++) {
             struct pvk_spv_type *it = pvk_spv_type(ctx, t->op == PVK_SPV_OpTypeArray ? t->elem : tid);
             uint32_t ia = x->ia_index + k, c = ia;
+            bool mix = it->ia_use == 3; /* a pvk_ia_mix: the color, or the texture and the pixel */
             const char *lv = t->op == PVK_SPV_OpTypeArray ? pvk_spv_fmt(ctx, "%s[%u]%s", x->msl, k, t->slot_padded ? ".v" : "")
                                                           : x->msl;
             if (undecorated) {
@@ -51307,7 +51308,11 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
                 res->depth_stencil_fetches |= depth ? 1u : 2u;
                 if (!undecorated)
                     res->input_attachments |= 1u << ia;
-                pvk_spv_line(ctx, "%s = %s(pvk_color%u);", lv, it->msl, c);
+                if (mix)
+                    pvk_spv_line(ctx, "%s = %s{%s4(pvk_color%u), {}, uint2(0), false};", lv, it->msl,
+                                 pvk_spv_type(ctx, it->elem)->msl, c);
+                else
+                    pvk_spv_line(ctx, "%s = %s(pvk_color%u);", lv, it->msl, c);
                 if (!(fetch_colors & (1u << c)))
                     PVK_SPV_PUSH(ctx, params, nparams, cap,
                                  pvk_spv_fmt(ctx, "%s pvk_color%u [[color(%u)]]", depth ? "float4" : "uint4", c, c));
@@ -51326,12 +51331,16 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
                 ia_textures |= (uint64_t)1 << ti;
                 need |= PVK_SPV_NEED_POSITION;
                 res->input_attachments |= 1u << ia;
-                pvk_spv_line(ctx, "%s = %s{pvk_ia_tex%u, uint2(pvk_frag_coord.xy)};", lv, it->msl, ti);
+                pvk_spv_line(ctx, mix ? "%s = %s{{}, pvk_ia_tex%u, uint2(pvk_frag_coord.xy), true};"
+                                      : "%s = %s{pvk_ia_tex%u, uint2(pvk_frag_coord.xy)};",
+                             lv, it->msl, ti);
                 continue;
             }
             if (c >= 8)
                 pvk_spv_fail(ctx, "input attachment index %u maps to color attachment %u (0-7)", ia, c);
-            const char *et = pvk_spv_type(ctx, t->op == PVK_SPV_OpTypeArray ? t->elem : tid)->msl, *value;
+            const char *et = mix ? pvk_spv_fmt(ctx, "%s4", pvk_spv_type(ctx, it->elem)->msl)
+                                 : pvk_spv_type(ctx, t->op == PVK_SPV_OpTypeArray ? t->elem : tid)->msl,
+                       *value;
             const struct pvk_msl_logic_target *lt = o ? &o->logic_targets[c] : NULL;
             bool raw = lt && lt->kind == PVK_MSL_LOGIC_SNORM_INT; /* bound as SINT (FRAGMENT OPERATIONS) */
             res->input_attachments |= 1u << ia;
@@ -51343,7 +51352,10 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
                 value = pvk_spv_fmt(ctx, "%s(max(float4(%s) / float4(%u.0f, %u.0f, %u.0f, %u.0f), float4(-1.0f)))", et,
                                     value, sc[0], sc[1], sc[2], sc[3]);
             }
-            pvk_spv_line(ctx, "%s = %s;", lv, value);
+            if (mix)
+                pvk_spv_line(ctx, "%s = %s{%s, {}, uint2(0), false};", lv, it->msl, value);
+            else
+                pvk_spv_line(ctx, "%s = %s;", lv, value);
             if (!(fetch_colors & (1u << c)))
                 PVK_SPV_PUSH(ctx, params, nparams, cap,
                              pvk_spv_fmt(ctx, "%s pvk_color%u [[color(%u)]]", raw ? "int4" : et, c, c));
@@ -51817,6 +51829,23 @@ static const char pvk_spv_ia_template[] =
     "    texture2d_ms<T, access::read> t;\n"
     "    uint2 p;\n"
     "    vec<T, 4> read(uint s) const { return t.read(p, s); }\n"
+    "};\n"
+    "/* One of a type also fetched: the color, or the texture and the pixel. */\n"
+    "template <typename T> struct pvk_ia_mix\n"
+    "{\n"
+    "    vec<T, 4> v;\n"
+    "    texture2d<T, access::read> t;\n"
+    "    uint2 p;\n"
+    "    bool tex;\n"
+    "    vec<T, 4> read() const { return tex ? t.read(p) : v; }\n"
+    "};\n"
+    "template <typename T> struct pvk_ia_mix_ms\n"
+    "{\n"
+    "    vec<T, 4> v;\n"
+    "    texture2d_ms<T, access::read> t;\n"
+    "    uint2 p;\n"
+    "    bool tex;\n"
+    "    vec<T, 4> read(uint s) const { return tex ? t.read(p, s) : v; }\n"
     "};\n\n";
 
 static const char pvk_spv_math_template[] =
@@ -63211,9 +63240,8 @@ static uint32_t pvk_subpass_texture_inputs(const struct pvk_render_pass *rp, con
             bits |= 1u << j;
     }
     { /* color inputs needing more logical indices than its color attachments and the copies leave
-       * (8 in all): all from textures (shaders read one input attachment type one way) */
+       * (8 in all): all from textures */
         uint32_t free = 0, need = 0, others = 0, l, k;
-        bool fetched = false; /* an input is one of its color attachments */
         for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS; l++)
             if (l >= sp->color_count || sp->colors[l] == VK_ATTACHMENT_UNUSED)
                 free++;
@@ -63225,10 +63253,8 @@ static uint32_t pvk_subpass_texture_inputs(const struct pvk_render_pass *rp, con
                 continue;
             for (k = 0; k < sp->color_count && sp->colors[k] != a; k++)
                 ;
-            if (k < sp->color_count) { /* fetched at its color attachment's index */
-                fetched = true;
+            if (k < sp->color_count) /* fetched at its color attachment's index */
                 continue;
-            }
             others |= 1u << j;
             for (k = 0; k < j && sp->inputs[k] != a; k++)
                 ;
@@ -63236,7 +63262,7 @@ static uint32_t pvk_subpass_texture_inputs(const struct pvk_render_pass *rp, con
         }
         if (need > free) {
             bits |= others;
-        } else if (others && !fetched) { /* or more than tile memory holds beside them (PVK_TILE_BYTES) */
+        } else if (others) { /* or more than tile memory holds beside them (PVK_TILE_BYTES) */
             uint32_t total = 0, b;
             for (k = 0; k < sp->color_count; k++)
                 if (sp->colors[k] < rp->attachment_count && rp->attachments[sp->colors[k]].fmt) {
