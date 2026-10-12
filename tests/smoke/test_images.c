@@ -2316,6 +2316,55 @@ static void test_host_copy(void)
     free(out);
 }
 
+/* Texels the host writes into a PREINITIALIZED optimal image's memory read
+ * the same through host copies as through the GPU: 32x32 (memory pooled) and
+ * 512x512 (memory of its own). */
+static void test_host_copy_preinitialized(void)
+{
+    static const uint32_t sizes[2] = { 32, 512 };
+    unsigned char *out = malloc(512 * 512 * 4);
+    uint32_t s;
+
+    REQUIRE(out);
+    for (s = 0; s < 2; s++) {
+        uint32_t n = sizes[s];
+        VkImageCreateInfo info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, n, n, 1, 1, 1,
+                                            VK_IMAGE_USAGE_HOST_TRANSFER_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+        VkBufferImageCopy r = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, n, n, 1);
+        VkImageToMemoryCopy down;
+        VkCopyImageToMemoryInfo di;
+        struct buf g = make_buf((VkDeviceSize)n * n * 4, shared_type, 0);
+        struct img a;
+        void *p;
+
+        info.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
+        a = make_image_in(&info, shared_type);
+        REQUIRE_VK(vkMapMemory(device, a.memory, 0, VK_WHOLE_SIZE, 0, &p));
+        fill_pattern(p, (size_t)n * n * 4, 11);
+        vkUnmapMemory(device, a.memory);
+        memset(&down, 0, sizeof(down));
+        down.sType = VK_STRUCTURE_TYPE_IMAGE_TO_MEMORY_COPY;
+        down.pHostPointer = out;
+        down.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        down.imageSubresource.layerCount = 1;
+        down.imageExtent.width = down.imageExtent.height = n;
+        down.imageExtent.depth = 1;
+        memset(&di, 0, sizeof(di));
+        di.sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_MEMORY_INFO;
+        di.srcImage = a.image;
+        di.srcImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        di.regionCount = 1;
+        di.pRegions = &down;
+        CHECK_VK(vkCopyImageToMemory(device, &di), VK_SUCCESS);
+        download(a.image, &r, &g);
+        if (memcmp(out, g.data, (size_t)n * n * 4))
+            PVK_TEST_FAIL("%ux%u: host copy and GPU copy differ", n, n);
+        free_image(&a);
+        free_buf(&g);
+    }
+    free(out);
+}
+
 /* ---- Linear images ---- */
 
 static void test_linear(void)
@@ -2435,6 +2484,7 @@ int main(void)
     RUN(test_samplers);
     RUN(test_buffer_views);
     RUN(test_host_copy);
+    RUN(test_host_copy_preinitialized);
     RUN(test_linear);
     RUN(test_ordering);
     harness_done();

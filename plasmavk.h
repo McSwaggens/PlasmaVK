@@ -37485,7 +37485,9 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  * HOST IMAGE COPY
  *   Images with VK_IMAGE_USAGE_HOST_TRANSFER_BIT are shared-storage textures
  *   (their memory types are host-visible), which -[MTLTexture replaceRegion:]
- *   and -getBytes: access directly. Metal cannot address one aspect of a
+ *   and -getBytes: access directly, without lossless compression: the host
+ *   may write a PREINITIALIZED image's memory, and compressed, the GPU reads
+ *   it as other texels than -getBytes: does. Metal cannot address one aspect of a
  *   combined depth/stencil texture that way, so those go through a staging
  *   buffer and a blit on an internal queue, waited for. VK_HOST_IMAGE_COPY_MEMCPY
  *   data is the subresource's texels, tightly packed.
@@ -37749,7 +37751,8 @@ static void pvk_image_init(const struct pvk_physical_device *pd, struct pvk_imag
  * (allowGPUOptimizedContents) rewrites the packed float formats' values in
  * canonical form (RGB9E5: exponent down and mantissas doubled while their
  * top bits are 0; checked on M4 Max with copies through buffers), where
- * Vulkan copies must keep every bit: their textures go without it. */
+ * Vulkan copies must keep every bit: their textures go without it. So do
+ * those of images with VK_IMAGE_USAGE_HOST_TRANSFER_BIT (HOST IMAGE COPY). */
 static id pvk_texture_descriptor(const struct pvk_image *image, pvk_MTLPixelFormat format, uint32_t width,
                                  uint32_t height, pvk_MTLResourceOptions options)
 {
@@ -37766,7 +37769,8 @@ static id pvk_texture_descriptor(const struct pvk_image *image, pvk_MTLPixelForm
     pvk_MTLTextureDescriptor_setArrayLength(desc, image->type == VK_IMAGE_TYPE_3D ? 1 : image->layers);
     pvk_MTLTextureDescriptor_setResourceOptions(desc, options);
     pvk_MTLTextureDescriptor_setUsage(desc, image->mtl_usage);
-    if (format == PVK_MTLPixelFormatRGB9E5Float || format == PVK_MTLPixelFormatRG11B10Float)
+    if (format == PVK_MTLPixelFormatRGB9E5Float || format == PVK_MTLPixelFormatRG11B10Float ||
+        (image->usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT))
         pvk_MTLTextureDescriptor_setAllowGPUOptimizedContents(desc, false);
     return desc;
 }
