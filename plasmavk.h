@@ -51410,6 +51410,7 @@ static VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_t vs_wo
  *   atIndex:] between encoders; later in the batch (pvk_encode_query_flush)
  *   the entry is resolved into `results` (-resolveCounterHeap:withRange:
  *   intoBuffer:waitFence:updateFence:) and the query made available.
+ *   Inside a render pass it is written once the pass ends (section 16).
  *   Measured on M4 Max, macOS 27.2:
  *   - The command buffer's timestamp is taken once all earlier work of the
  *     queue finished, also that of earlier command buffers: the execution
@@ -57901,9 +57902,16 @@ static void pvk_render_end(struct pvk_encoder *e)
     r->counting = false;
     r->vis_pool = NULL;
     e->pp_count = e->pp_next = 0;
-    for (i = 0; i < r->pending_count; i++) /* now that the pass's counts and timestamps are written */
-        pvk_encoder_query_available(e, r->pending[i].pool, r->pending[i].first, r->pending[i].count,
-                                    r->pending[i].zero);
+    for (i = 0; i < r->pending_count; i++) { /* now that the pass's counts are written */
+        const struct pvk_render_query *q = &r->pending[i];
+        uint32_t k;
+        if (q->pool->heap && !q->zero) { /* its timestamps, after it (pvk_render_timestamp) */
+            pvk_encoder_end(e);
+            for (k = 0; k < q->count; k++)
+                pvk_MTL4CommandBuffer_writeTimestampIntoHeap_atIndex(e->cb, q->pool->heap, q->first + k);
+        }
+        pvk_encoder_query_available(e, q->pool, q->first, q->count, q->zero);
+    }
     r->pending_count = 0;
 }
 
@@ -57966,13 +57974,13 @@ static void pvk_encode_occlusion(struct pvk_encoder *e, const struct pvk_cmd_que
         pvk_encoder_query_available(e, c->pool, c->first, c->count, false);
 }
 
-/* A timestamp inside a render pass: written by the render encoder after its
- * fragment work so far, made available when it ends. Multiview: one query
- * per view, the others 0 (Queries > Timestamp Queries). */
+/* A timestamp inside a render pass: written after the pass ends, when it is
+ * made available (pvk_render_end). The render encoder's timestamps after
+ * its fragment stage come out of order on Apple's tile-based GPUs (an end
+ * earlier than its start); a logically later point is allowed. Multiview:
+ * one query per view, the others 0 (Queries > Timestamp Queries). */
 static void pvk_render_timestamp(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t query, uint32_t views)
 {
-    pvk_MTL4RenderCommandEncoder_writeTimestampWithGranularity_afterStage_intoHeap_atIndex(
-        e->render.enc, PVK_MTL4TimestampGranularityPrecise, PVK_MTLRenderStageFragment, pool->heap, query);
     pvk_render_pending(&e->render, pool, query, 1, false);
     if (views > 1)
         pvk_render_pending(&e->render, pool, query + 1, views - 1, true);
