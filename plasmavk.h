@@ -50612,7 +50612,9 @@ static void pvk_spv_stage_prepare(struct pvk_spv *ctx)
         struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
         bool used = pvk_spv_bit(entry->globals, g);
         if (!used && pvk_spv_bit(listed, g) && x->p->storage == PVK_SPV_StorageOutput &&
-            ctx->model == PVK_SPV_ExecutionModelVertex && !x->msl) { /* declared outputs the fragment may read */
+            ctx->model != PVK_SPV_ExecutionModelGLCompute && !x->msl) {
+            /* declared outputs: the fragment shader may read a vertex shader's, and blending needs a
+             * fragment shader's even unwritten (with dual-source factors, both indices) */
             x->msl = pvk_spv_name(ctx, ctx->globals[g]);
             x->p->expr = x->msl;
             used = true;

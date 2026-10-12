@@ -6097,6 +6097,79 @@ static void test_dual_source(void)
     free_img(&target);
 }
 
+/*
+ * #version 450
+ * layout(location = 0, index = 0) out vec4 o_color;
+ * layout(location = 0, index = 1) out vec4 o_factor;
+ * void main()
+ * {
+ *     o_factor = vec4(0.5, 0.25, 1.0, 1.0);
+ * }
+ */
+static const uint32_t spv_dual_factor_only_fs[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x0000000f, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0007000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000e, 0x00030010,
+    0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d,
+    0x00000000, 0x00050005, 0x00000009, 0x61665f6f, 0x726f7463, 0x00000000, 0x00040005, 0x0000000e,
+    0x6f635f6f, 0x00726f6c, 0x00040047, 0x00000009, 0x0000001e, 0x00000000, 0x00040047, 0x00000009,
+    0x00000020, 0x00000001, 0x00040047, 0x0000000e, 0x0000001e, 0x00000000, 0x00040047, 0x0000000e,
+    0x00000020, 0x00000000, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016,
+    0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040020, 0x00000008,
+    0x00000003, 0x00000007, 0x0004003b, 0x00000008, 0x00000009, 0x00000003, 0x0004002b, 0x00000006,
+    0x0000000a, 0x3f000000, 0x0004002b, 0x00000006, 0x0000000b, 0x3e800000, 0x0004002b, 0x00000006,
+    0x0000000c, 0x3f800000, 0x0007002c, 0x00000007, 0x0000000d, 0x0000000a, 0x0000000b, 0x0000000c,
+    0x0000000c, 0x0004003b, 0x00000008, 0x0000000e, 0x00000003, 0x00050036, 0x00000002, 0x00000004,
+    0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0003003e, 0x00000009, 0x0000000d, 0x000100fd,
+    0x00010038,
+};
+
+static uint32_t expect_dual_factor(uint32_t x, uint32_t y)
+{
+    (void)x, (void)y;
+    return RGBA(128, 64, 255, 255);
+}
+
+/* Dual-source blending by a fragment shader that leaves index 0 unwritten
+ * (Metal wants every output blending reads written: an undefined one). */
+static void test_dual_source_unwritten(void)
+{
+    static const float white[4] = { 1, 1, 1, 1 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+
+    if (!features.dualSrcBlend) {
+        free_buf(&out);
+        free_img(&target);
+        return;
+    }
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_dual_factor_only_fs, sizeof(spv_dual_factor_only_fs));
+    p.has_blend = true;
+    memset(p.blend, 0, sizeof(p.blend));
+    p.blend[0].blendEnable = VK_TRUE;
+    p.blend[0].colorWriteMask = 0xf;
+    p.blend[0].srcColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+    p.blend[0].dstColorBlendFactor = VK_BLEND_FACTOR_SRC1_COLOR;
+    p.blend[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    p.blend[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_SRC1_ALPHA;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, white, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -1, -1, 1, 1, 0, 0, 0, 0, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    CHECK(count_far(&out, expect_dual_factor, 1, "dual source, index 0 unwritten") == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&target);
+}
+
 /* Alpha to coverage (alpha 0.5 covers about half the samples) and alpha to
  * one, resolved. */
 static void test_alpha_coverage(void)
@@ -7328,6 +7401,7 @@ int main(void)
     RUN(test_suspend_secondary);
     RUN(test_imageless_noattachment);
     RUN(test_dual_source);
+    RUN(test_dual_source_unwritten);
     RUN(test_alpha_coverage);
     RUN(test_sample_mask);
     RUN(test_logic_ops);
