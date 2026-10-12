@@ -49023,12 +49023,21 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
     case PVK_SPV_OpBitwiseXor: case PVK_SPV_OpBitwiseAnd: case PVK_SPV_OpUDiv: case PVK_SPV_OpUMod:
     case PVK_SPV_OpSDiv: case PVK_SPV_OpSRem: case PVK_SPV_OpSMod: {
         bool sg = pvk_spv_scalar_of(ctx, r) && pvk_spv_scalar_of(ctx, r)->is_signed;
-        if (op == PVK_SPV_OpUDiv || op == PVK_SPV_OpUMod)
+        /* (SPIR-V's integer arithmetic wraps; MSL's signed overflow is
+         * undefined, and its compiler folds on it: computed unsigned, narrow
+         * scalars as uint, or C++ promotes them to int) */
+        bool wrap = op == PVK_SPV_OpIAdd || op == PVK_SPV_OpISub || op == PVK_SPV_OpIMul;
+        if (op == PVK_SPV_OpUDiv || op == PVK_SPV_OpUMod || wrap)
             sg = false;
         if (op == PVK_SPV_OpSDiv || op == PVK_SPV_OpSRem || op == PVK_SPV_OpSMod)
             sg = true;
         a = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 3), sg);
         b = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 4), sg);
+        if (wrap && r->op != PVK_SPV_OpTypeVector && pvk_spv_scalar_of(ctx, r) &&
+            pvk_spv_scalar_of(ctx, r)->width < 32) {
+            a = pvk_spv_fmt(ctx, "uint(%s)", a);
+            b = pvk_spv_fmt(ctx, "uint(%s)", b);
+        }
         if (op == PVK_SPV_OpSMod)
             s = pvk_spv_fmt(ctx, "%s(%s, %s)", pvk_spv_helper(ctx, PVK_SPV_H_SMOD, "pvk_smod"), a, b);
         else
@@ -49048,8 +49057,8 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         return;
     }
     case PVK_SPV_OpNot:
-    case PVK_SPV_OpSNegate: {
-        bool sg = op == PVK_SPV_OpSNegate || (pvk_spv_scalar_of(ctx, r) && pvk_spv_scalar_of(ctx, r)->is_signed);
+    case PVK_SPV_OpSNegate: { /* (negation unsigned too: of the most negative value it wraps) */
+        bool sg = op == PVK_SPV_OpNot && pvk_spv_scalar_of(ctx, r) && pvk_spv_scalar_of(ctx, r)->is_signed;
         pvk_spv_set_int(ctx, rid, pvk_spv_fmt(ctx, "%s%s", op == PVK_SPV_OpNot ? "~" : "-",
                                               pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 3), sg)), sg);
         return;
