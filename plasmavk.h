@@ -31670,6 +31670,7 @@ static inline void pvk_MTL4CommandQueue_updateBufferMappings_heap_operations_cou
 /* Debug labels: VK_EXT_debug_utils object names and labels (sections 9-16) */
 static inline id pvk_MTLResource_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline void pvk_MTLResource_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
+static inline unsigned long pvk_MTLResource_allocatedSize(id self) { PVK_SEL_CACHE("allocatedSize"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
 static inline id pvk_MTLHeap_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline void pvk_MTLHeap_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
 static inline id pvk_MTLEvent_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
@@ -34385,7 +34386,8 @@ static uint32_t pvk_mip_levels(uint32_t w, uint32_t h, uint32_t d)
  *     that queue signals, for that queue's later command buffers and for
  *     other queues (10000 remapped pages checked).
  *   - Depth32Float_Stencil8 tiles hold the depth only: the stencil reads 0.
- *     Combined depth/stencil formats are not offered.
+ *     Combined depth/stencil formats are offered for sparse binding only, as
+ *     ordinary textures (section 11, SPARSE IMAGES).
  *   - 3D tiles are one slice deep (128x128x1 for 32-bit texels), unlike
  *     Vulkan's standard 3D shapes; 2-sample tiles are Vulkan's standard 2x
  *     shapes transposed (256x128 for 8-bit texels), 4-sample ones are the
@@ -34444,6 +34446,15 @@ static pvk_MTLTextureType pvk_sparse_mtl_type(VkImageType type, uint32_t samples
 
 /* The sparse block of sparse images of a format, type and sample count, in
  * texels (Metal's 64 KB tile); false where sparse images are not offered. */
+/* Sparse images of combined depth/stencil formats, binding only: Metal's
+ * sparse tiles hold their depth only, so they are ordinary textures with
+ * memory of their own (section 11, SPARSE IMAGES). */
+static bool pvk_sparse_dedicated_format(const struct pvk_physical_device *pd, const struct pvk_format *f,
+                                        VkImageCreateFlags flags)
+{
+    return pd->sparse && f && f->kind == PVK_FK_DEPTH_STENCIL && !(flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT);
+}
+
 static bool pvk_sparse_block(const struct pvk_physical_device *pd, const struct pvk_format *f, VkImageType type,
                              uint32_t samples, VkExtent3D *block)
 {
@@ -34657,10 +34668,11 @@ static VkResult pvk_image_format_properties(const struct pvk_physical_device *pd
         return VK_ERROR_FORMAT_NOT_SUPPORTED;
     if (info->flags & PVK_IMAGE_CREATE_SPARSE) {
         /* Sparse images (SPARSE RESOURCES): optimal tiling, private storage
-         * (no host image copies), 2D or 3D with residency. */
+         * (no host image copies), 2D or 3D with residency; combined
+         * depth/stencil formats without. */
         VkExtent3D block;
         if (linear || (usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT) ||
-            !pvk_sparse_block(pd, f, info->type, 1, &block) ||
+            (!pvk_sparse_block(pd, f, info->type, 1, &block) && !pvk_sparse_dedicated_format(pd, f, info->flags)) ||
             ((info->flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) && info->type == VK_IMAGE_TYPE_1D))
             return VK_ERROR_FORMAT_NOT_SUPPORTED;
     }
@@ -34690,7 +34702,7 @@ static VkResult pvk_image_format_properties(const struct pvk_physical_device *pd
                                                      props->maxExtent.depth);
     props->maxArrayLayers = linear || info->type == VK_IMAGE_TYPE_3D ? 1 : l->maxImageArrayLayers;
     props->sampleCounts = pvk_image_sample_counts(pd, f, info->type, info->tiling, info->flags, usage, optimal);
-    if (info->flags & PVK_IMAGE_CREATE_SPARSE) {
+    if ((info->flags & PVK_IMAGE_CREATE_SPARSE) && !pvk_sparse_dedicated_format(pd, f, info->flags)) {
         VkSampleCountFlags s, counts = props->sampleCounts;
         VkExtent3D block;
         props->sampleCounts = 0;
@@ -37918,7 +37930,9 @@ static uint32_t pvk_image_memory_type_bits(const struct pvk_physical_device *pd,
  *   memory of its own instead (a shader with a sparse read hangs reading
  *   such a ShaderWrite sparse texture): binds map only its residency
  *   texture, it does not alias the memory bound to it, and its texels stay
- *   when unbound.
+ *   when unbound. So is a combined depth/stencil image, whose stencil
+ *   Metal's sparse tiles do not hold (section 7; sparse binding only): its
+ *   memory requirements cover the texture, and binds do nothing.
  *   The mip tail (VK_SPARSE_IMAGE_FORMAT_ALIGNED_MIP_SIZE_BIT) starts at the
  *   first level that is not a whole number of blocks in each dimension, or
  *   at Metal's tail if that comes first; Metal's tail starts at the same
@@ -37927,12 +37941,18 @@ static uint32_t pvk_image_memory_type_bits(const struct pvk_physical_device *pd,
  *   blocks). There is no metadata aspect. */
 
 /* A new placement sparse texture of a sparse image (section 7's checks
- * passed), with a usage: the image's, or its residency texture's. */
+ * passed), with a usage: the image's, or its residency texture's. A combined
+ * depth/stencil image's is an ordinary texture with memory of its own. */
 static id pvk_sparse_texture(const struct pvk_physical_device *pd, const struct pvk_image *image,
                              pvk_MTLTextureUsage usage)
 {
     id desc = pvk_image_descriptor(image, PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked);
     id texture = NULL;
+    if (desc && pvk_sparse_dedicated_format(pd, image->fmt, image->flags)) {
+        texture = pvk_MTLDevice_newTextureWithDescriptor(pd->mtl_device, desc);
+        pvk_release(desc);
+        return texture;
+    }
     if (desc) {
         pvk_MTLTextureDescriptor_setUsage(desc, usage);
         pvk_MTLTextureDescriptor_setAllowGPUOptimizedContents(desc, false);
@@ -37967,6 +37987,18 @@ static bool pvk_sparse_layout_init(const struct pvk_physical_device *pd, const s
     uint32_t lv;
 
     memset(l, 0, sizeof(*l));
+    if (pvk_sparse_dedicated_format(pd, image->fmt, image->flags)) {
+        /* An ordinary texture: its size as one range of blocks, bound for the
+         * record only (SPARSE IMAGES) */
+        l->layers = 1;
+        l->levels = image->levels;
+        l->tail_tiles =
+            (uint32_t)(pvk_round_up(pvk_MTLResource_allocatedSize(texture), PVK_SPARSE_BLOCK) / PVK_SPARSE_BLOCK);
+        l->align = PVK_SPARSE_BLOCK;
+        l->layer_size = (VkDeviceSize)l->tail_tiles * PVK_SPARSE_BLOCK;
+        l->dedicated = true;
+        return true;
+    }
     if (!pvk_sparse_block(pd, image->fmt, image->type, image->samples, &l->block) ||
         image->levels > PVK_SPARSE_MAX_LEVELS)
         return false;

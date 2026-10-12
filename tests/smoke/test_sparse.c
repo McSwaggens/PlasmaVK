@@ -2446,6 +2446,71 @@ static void test_sparse_residency_3d_tail(void)
     free_buf(&host);
 }
 
+/* A sparse binding image of a combined depth/stencil format (an ordinary
+ * texture: Metal's sparse tiles hold no stencil), bound in two pieces,
+ * cleared, and both aspects read back. */
+static void test_sparse_depth_stencil(void)
+{
+    VkImageCreateInfo info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_D32_SFLOAT_S8_UINT, 64, 64, 1, 1, 1,
+                                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                        VK_IMAGE_CREATE_SPARSE_BINDING_BIT);
+    VkImageFormatProperties props;
+    VkMemoryRequirements req;
+    VkClearDepthStencilValue value;
+    VkImageSubresourceRange range;
+    VkBufferImageCopy copy[2];
+    VkCommandBuffer cb;
+    VkImage image;
+    VkDeviceMemory memory;
+    struct buf host;
+    const float *depth;
+    const unsigned char *stencil;
+    uint32_t i, bad = 0;
+
+    if (!has_sparse())
+        return;
+    REQUIRE_VK(vkGetPhysicalDeviceImageFormatProperties(pd, info.format, info.imageType, info.tiling, info.usage,
+                                                        info.flags, &props));
+    CHECK_VK(vkGetPhysicalDeviceImageFormatProperties(pd, info.format, info.imageType, info.tiling, info.usage,
+                                                      info.flags | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT, &props),
+             VK_ERROR_FORMAT_NOT_SUPPORTED);
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &image));
+    vkGetImageMemoryRequirements(device, image, &req);
+    CHECK(req.alignment == BLOCK && req.size >= 64 * 64 * 5 && req.size % BLOCK == 0);
+    memory = allocate(private_type, req.size);
+    host = host_buf(64 * 64 * 5);
+    REQUIRE(memory && host.data);
+    bind_opaque(image, 0, BLOCK, memory, 0);
+    if (req.size > BLOCK)
+        bind_opaque(image, BLOCK, req.size - BLOCK, memory, BLOCK);
+    memset(&range, 0, sizeof(range));
+    range.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+    value.depth = 0.375f;
+    value.stencil = 0x5a;
+    cb = begin();
+    to_general(cb, image, VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+    vkCmdClearDepthStencilImage(cb, image, VK_IMAGE_LAYOUT_GENERAL, &value, 1, &range);
+    barrier(cb);
+    copy_region(&copy[0], 0, 0, 0, 0, 0, 0, 64, 64, 1);
+    copy[0].imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    copy[1] = copy[0];
+    copy[1].bufferOffset = 64 * 64 * 4;
+    copy[1].imageSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
+    vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_GENERAL, host.buffer, 2, copy);
+    barrier(cb);
+    submit(cb);
+    depth = (const float *)(const void *)host.data;
+    stencil = host.data + 64 * 64 * 4;
+    for (i = 0; i < 64 * 64; i++)
+        bad += depth[i] != 0.375f || stencil[i] != 0x5a;
+    CHECK(bad == 0);
+    vkDestroyImage(device, image, NULL);
+    vkFreeMemory(device, memory, NULL);
+    free_buf(&host);
+}
+
 /* spv_storage_tail on level `level` (w x h) of an RGBA8_UINT storage image:
  * each texel's { resident, R, G, 7 } into out (w * h * 4 uints). */
 static void storage_read(VkImage image, uint32_t level, uint32_t w, uint32_t h, uint32_t *out)
@@ -2696,6 +2761,7 @@ int main(void)
     RUN(test_sparse_binding_3d_tail);
     RUN(test_sparse_residency_3d_tail);
     RUN(test_sparse_storage_reads);
+    RUN(test_sparse_depth_stencil);
     teardown();
     return TEST_RESULT();
 }
