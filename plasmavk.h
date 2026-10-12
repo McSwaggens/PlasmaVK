@@ -41898,6 +41898,9 @@ struct pvk_spv_ptr {
      * address is rb_vec's plus rb_comp elements. */
     bool robust;
     const char *rb, *rb_vec, *rb_comp;
+    /* A vector component, which MSL takes no address of or reference to:
+     * the vector and the component (pvk_spv_comp_addr) */
+    const char *vec, *comp;
     /* OpImageTexelPointer (storage Image): texture and coordinate arguments */
     const char *texel_image;
     const char *texel_args;
@@ -43193,7 +43196,7 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
             (t->img.arrayed && (t->img.dim == PVK_SPV_Dim3D || t->img.dim == PVK_SPV_DimBuffer)))
             pvk_spv_fail(ctx, "unsupported image type (multisampled or arrayed)");
         if (t->img.depth == 1 && e->op != PVK_SPV_OpTypeFloat)
-            pvk_spv_fail(ctx, "depth images must have a float sampled type");
+            t->img.depth = 0; /* (Vulkan ignores Depth; only comparisons, of float images, need a depth texture) */
         break;
     case PVK_SPV_OpTypeSampler:
         t->opaque = true;
@@ -43551,9 +43554,32 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         pvk_spv_decorate(ctx, in);
         break;
     case PVK_SPV_OpDecorationGroup:
-    case PVK_SPV_OpGroupDecorate:
+        pvk_spv_arg(ctx, in, 1);
+        break;
+    case PVK_SPV_OpGroupDecorate: { /* the group's decorations (before it) on each target */
+        uint32_t group = pvk_spv_arg(ctx, in, 1), off, t, k;
+        for (off = 5; off < in->off;) {
+            struct pvk_spv_insn d = pvk_spv_insn_at(ctx, off);
+            off += d.wc;
+            if ((d.op != PVK_SPV_OpDecorate && d.op != PVK_SPV_OpDecorateId && d.op != PVK_SPV_OpDecorateString) ||
+                d.wc < 3 || d.w[1] != group)
+                continue;
+            for (t = 2; t < in->wc; t++) {
+                uint32_t words[64];
+                struct pvk_spv_insn copy = d;
+                if (d.wc > PVK_ARRAY_SIZE(words))
+                    pvk_spv_fail(ctx, "decoration too long");
+                for (k = 0; k < d.wc; k++)
+                    words[k] = d.w[k];
+                words[1] = in->w[t];
+                copy.w = words;
+                pvk_spv_decorate(ctx, &copy);
+            }
+        }
+        break;
+    }
     case PVK_SPV_OpGroupMemberDecorate:
-        pvk_spv_fail(ctx, "decoration groups are not supported");
+        pvk_spv_fail(ctx, "member decoration groups are not supported");
     case PVK_SPV_OpTypeForwardPointer: {
         /* Declares the pointer type early (structs may contain pointers to
          * themselves); its OpTypePointer fills it in. Not in type_order. */
@@ -45498,6 +45524,16 @@ static bool pvk_spv_vptr_value(struct pvk_spv *ctx, const struct pvk_spv_id *x)
     return t && pvk_spv_is_vptr(t) && t->msl;
 }
 
+static const char *pvk_spv_space(struct pvk_spv *ctx, const struct pvk_spv_ptr *p);
+
+/* The address of a vector component (p->vec): the vector's as a pointer to
+ * the component type, plus the component. */
+static const char *pvk_spv_comp_addr(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
+{
+    return pvk_spv_fmt(ctx, "((%s %s*)&%s + %s)", pvk_spv_space(ctx, p), pvk_spv_type(ctx, p->type)->msl, p->vec,
+                       p->comp);
+}
+
 /* MSL expression of a value operand. */
 static const char *pvk_spv_val(struct pvk_spv *ctx, uint32_t v)
 {
@@ -45515,8 +45551,8 @@ static const char *pvk_spv_val(struct pvk_spv *ctx, uint32_t v)
     case PVK_SPV_K_VALUE:
     case PVK_SPV_K_PARAM:
         if (x->p || x->func != pvk_spv_fidx(ctx) || !x->msl) {
-            if (x->p && x->p->expr && x->func == pvk_spv_fidx(ctx) && pvk_spv_vptr_value(ctx, x))
-                return pvk_spv_fmt(ctx, "(&%s)", x->p->expr); /* a pointer parameter (a reference) as a value */
+            if (x->p && x->p->expr && x->func == pvk_spv_fidx(ctx) && pvk_spv_vptr_value(ctx, x)) /* a pointer parameter (a reference) as a value */
+                return x->p->vec ? pvk_spv_comp_addr(ctx, x->p) : pvk_spv_fmt(ctx, "(&%s)", x->p->expr);
             break;
         }
         pvk_spv_data_type(ctx, x->type);
@@ -45530,7 +45566,7 @@ static const char *pvk_spv_val(struct pvk_spv *ctx, uint32_t v)
         pvk_spv_data_type(ctx, x->type);
         if (pvk_spv_type(ctx, x->p->type)->op == PVK_SPV_OpTypeRuntimeArray)
             return pvk_spv_fmt(ctx, "(%s)", x->p->expr); /* decays to its first element */
-        return pvk_spv_fmt(ctx, "(&%s)", x->p->expr);
+        return x->p->vec ? pvk_spv_comp_addr(ctx, x->p) : pvk_spv_fmt(ctx, "(&%s)", x->p->expr);
     default:
         break;
     }
@@ -45741,6 +45777,10 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
         if (p->rb) { /* a component: not addressable (ROBUSTNESS) */
             p->rb_vec = p->rm_col ? pvk_spv_fmt(ctx, "%s[%s]%s", p->expr, idx, p->node->padded ? ".v" : "") : p->expr;
             p->rb_comp = p->rm_col ? p->rm_col : cidx >= 0 ? pvk_spv_fmt(ctx, "%u", (uint32_t)cidx) : idx;
+        }
+        if (!p->rm_col) {
+            p->vec = p->expr;
+            p->comp = cidx >= 0 ? pvk_spv_fmt(ctx, "%u", (uint32_t)cidx) : idx;
         }
         if (p->rm_col) {
             p->expr = pvk_spv_fmt(ctx, "%s[%s]%s[%s]", p->expr, idx, p->node->padded ? ".v" : "", p->rm_col);
@@ -46834,7 +46874,7 @@ static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
             if (p->ycbcr)
                 pvk_spv_fail(ctx, "OpFunctionCall: combined image samplers with Y'CbCr conversions cannot be passed "
                                   "to functions");
-            arg = p->expr;
+            arg = p->vec ? pvk_spv_fmt(ctx, "(*%s)", pvk_spv_comp_addr(ctx, p)) : p->expr; /* (a reference) */
         } else {
             if (pvk_spv_get(ctx, in->w[4 + i])->type != ft->params[i])
                 pvk_spv_fail(ctx, "OpFunctionCall: argument %u has the wrong type", i);
@@ -50531,6 +50571,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         case PVK_SPV_ExecutionModeDepthReplacing:
         case 16: /* DepthUnchanged */
         case 4459: case 4460: case 4461: case 4462: case 4463: /* float controls: Metal's defaults */
+        case 6028: /* FPFastMathDefault: shaders compile with MTLMathModeSafe, which any flags allow */
             break;
         case PVK_SPV_ExecutionModeEarlyFragmentTests:
             early = true;

@@ -10830,6 +10830,133 @@ static void test_reject_layouts(void)
     }
 }
 
+/*
+ * SPIR-V assembly (spirv-as from the Vulkan SDK):
+ *        OpCapability Shader
+ *        OpCapability FloatControls2
+ *        OpExtension "SPV_KHR_float_controls2"
+ *        OpMemoryModel Logical GLSL450
+ *        OpEntryPoint Fragment %main "main" %coord %out %tex
+ *        OpExecutionMode %main OriginUpperLeft
+ *        OpExecutionModeId %main FPFastMathDefault %float %none
+ *        OpDecorate %grp DescriptorSet 0
+ * %grp = OpDecorationGroup
+ *        OpGroupDecorate %grp %tex
+ *        OpDecorate %tex Binding 3
+ *        OpDecorate %coord BuiltIn FragCoord
+ *        OpDecorate %out Location 0
+ * ...
+ * %image = OpTypeImage %uint 2D 1 0 0 1 Unknown    ; Depth 1, an integer image
+ * ...
+ *    %v = OpImageFetch %v4uint %t %ixy Lod %int_0  ; at FragCoord.xy, stored to %out
+ */
+static const uint32_t spv_spirv_odds[] = {
+    0x07230203, 0x00010600, 0x00070000, 0x0000001b, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x0000178d, 0x0007000a, 0x5f565053, 0x5f52484b, 0x616f6c66, 0x6f635f74, 0x6f72746e, 0x0032736c,
+    0x0003000e, 0x00000000, 0x00000001, 0x0008000f, 0x00000004, 0x00000001, 0x6e69616d, 0x00000000,
+    0x00000002, 0x00000003, 0x00000004, 0x00030010, 0x00000001, 0x00000007, 0x0005014b, 0x00000001,
+    0x0000178c, 0x00000005, 0x00000006, 0x00040047, 0x00000007, 0x00000022, 0x00000000, 0x00020049,
+    0x00000007, 0x0003004a, 0x00000007, 0x00000004, 0x00040047, 0x00000004, 0x00000021, 0x00000003,
+    0x00040047, 0x00000002, 0x0000000b, 0x0000000f, 0x00040047, 0x00000003, 0x0000001e, 0x00000000,
+    0x00020013, 0x00000008, 0x00030021, 0x00000009, 0x00000008, 0x00030016, 0x00000005, 0x00000020,
+    0x00040015, 0x0000000a, 0x00000020, 0x00000000, 0x00040015, 0x0000000b, 0x00000020, 0x00000001,
+    0x0004002b, 0x0000000a, 0x00000006, 0x00000000, 0x00040017, 0x0000000c, 0x0000000a, 0x00000004,
+    0x00040017, 0x0000000d, 0x00000005, 0x00000004, 0x00040017, 0x0000000e, 0x0000000b, 0x00000002,
+    0x00040017, 0x0000000f, 0x00000005, 0x00000002, 0x00090019, 0x00000010, 0x0000000a, 0x00000001,
+    0x00000001, 0x00000000, 0x00000000, 0x00000001, 0x00000000, 0x00040020, 0x00000011, 0x00000000,
+    0x00000010, 0x0004003b, 0x00000011, 0x00000004, 0x00000000, 0x00040020, 0x00000012, 0x00000001,
+    0x0000000d, 0x0004003b, 0x00000012, 0x00000002, 0x00000001, 0x00040020, 0x00000013, 0x00000003,
+    0x0000000c, 0x0004003b, 0x00000013, 0x00000003, 0x00000003, 0x0004002b, 0x0000000b, 0x00000014,
+    0x00000000, 0x00050036, 0x00000008, 0x00000001, 0x00000000, 0x00000009, 0x000200f8, 0x00000015,
+    0x0004003d, 0x0000000d, 0x00000016, 0x00000002, 0x0007004f, 0x0000000f, 0x00000017, 0x00000016,
+    0x00000016, 0x00000000, 0x00000001, 0x0004006e, 0x0000000e, 0x00000018, 0x00000017, 0x0004003d,
+    0x00000010, 0x00000019, 0x00000004, 0x0007005f, 0x0000000c, 0x0000001a, 0x00000019, 0x00000018,
+    0x00000002, 0x00000014, 0x0003003e, 0x00000003, 0x0000001a, 0x000100fd, 0x00010038,
+};
+
+/* A decoration group (DescriptorSet through OpGroupDecorate), an integer
+ * image with Depth 1 (Vulkan ignores Depth: a color texture) and
+ * FPFastMathDefault (Metal's safe math is what any flags allow). */
+static void test_spirv_odds(void)
+{
+    struct pvk_msl_result res;
+    REQUIRE(mt_translate(spv_spirv_odds, PVK_ARRAY_SIZE(spv_spirv_odds), NULL, &res));
+    CHECK(res.resource_count == 1 && res.resources[0].set == 0 && res.resources[0].binding == 3);
+    CHECK(strstr(res.msl, "texture2d<uint") != NULL && strstr(res.msl, "depth2d") == NULL);
+    pvk_msl_result_free(&res);
+}
+
+/*
+ * SPIR-V assembly (spirv-as from the Vulkan SDK), a compute shader over
+ *     buffer B { vec4 v; float out1; float out2; uint sel; }:
+ *   OpCapability VariablePointers
+ *   %f = function (%p: StorageBuffer pointer to float) { *%p = *%p + 1.0; }
+ *   main:
+ *     %cy = OpAccessChain %sb_fptr %buf %uint_0 %uint_1    ; &v.y
+ *           OpFunctionCall %void %f %cy
+ *     out1 = *%cy
+ *     %c0 = OpAccessChain %sb_fptr %buf %uint_0 %uint_0    ; &v.x
+ *     %c2 = OpAccessChain %sb_fptr %buf %uint_0 %uint_2    ; &v.z
+ *     %pc = OpSelect %sb_fptr (sel == 0) %c0 %c2
+ *     out2 = *%pc
+ */
+static const uint32_t spv_comp_ptrs[] = {
+    0x07230203, 0x00010600, 0x00070000, 0x00000028, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x0000115a, 0x0003000e, 0x00000000, 0x00000001, 0x0006000f, 0x00000005, 0x00000001, 0x6e69616d,
+    0x00000000, 0x00000002, 0x00060010, 0x00000001, 0x00000011, 0x00000001, 0x00000001, 0x00000001,
+    0x00030047, 0x00000003, 0x00000002, 0x00050048, 0x00000003, 0x00000000, 0x00000023, 0x00000000,
+    0x00050048, 0x00000003, 0x00000001, 0x00000023, 0x00000010, 0x00050048, 0x00000003, 0x00000002,
+    0x00000023, 0x00000014, 0x00050048, 0x00000003, 0x00000003, 0x00000023, 0x00000018, 0x00040047,
+    0x00000002, 0x00000022, 0x00000000, 0x00040047, 0x00000002, 0x00000021, 0x00000000, 0x00020013,
+    0x00000004, 0x00020014, 0x00000005, 0x00030016, 0x00000006, 0x00000020, 0x00040015, 0x00000007,
+    0x00000020, 0x00000000, 0x00040017, 0x00000008, 0x00000006, 0x00000004, 0x0006001e, 0x00000003,
+    0x00000008, 0x00000006, 0x00000006, 0x00000007, 0x00040020, 0x00000009, 0x0000000c, 0x00000003,
+    0x0004003b, 0x00000009, 0x00000002, 0x0000000c, 0x00040020, 0x0000000a, 0x0000000c, 0x00000008,
+    0x00040020, 0x0000000b, 0x0000000c, 0x00000006, 0x00040020, 0x0000000c, 0x0000000c, 0x00000007,
+    0x00040020, 0x0000000d, 0x00000007, 0x00000008, 0x00040020, 0x0000000e, 0x00000007, 0x00000006,
+    0x00030021, 0x0000000f, 0x00000004, 0x00040021, 0x00000010, 0x00000004, 0x0000000b, 0x0004002b,
+    0x00000007, 0x00000011, 0x00000000, 0x0004002b, 0x00000007, 0x00000012, 0x00000001, 0x0004002b,
+    0x00000007, 0x00000013, 0x00000002, 0x0004002b, 0x00000007, 0x00000014, 0x00000003, 0x0004002b,
+    0x00000006, 0x00000015, 0x3f800000, 0x00050036, 0x00000004, 0x00000016, 0x00000000, 0x00000010,
+    0x00030037, 0x0000000b, 0x00000017, 0x000200f8, 0x00000018, 0x0004003d, 0x00000006, 0x00000019,
+    0x00000017, 0x00050081, 0x00000006, 0x0000001a, 0x00000019, 0x00000015, 0x0003003e, 0x00000017,
+    0x0000001a, 0x000100fd, 0x00010038, 0x00050036, 0x00000004, 0x00000001, 0x00000000, 0x0000000f,
+    0x000200f8, 0x0000001b, 0x00060041, 0x0000000b, 0x0000001c, 0x00000002, 0x00000011, 0x00000012,
+    0x00050039, 0x00000004, 0x0000001d, 0x00000016, 0x0000001c, 0x0004003d, 0x00000006, 0x0000001e,
+    0x0000001c, 0x00050041, 0x0000000b, 0x0000001f, 0x00000002, 0x00000012, 0x0003003e, 0x0000001f,
+    0x0000001e, 0x00050041, 0x0000000c, 0x00000020, 0x00000002, 0x00000014, 0x0004003d, 0x00000007,
+    0x00000021, 0x00000020, 0x000500aa, 0x00000005, 0x00000022, 0x00000021, 0x00000011, 0x00060041,
+    0x0000000b, 0x00000023, 0x00000002, 0x00000011, 0x00000011, 0x00060041, 0x0000000b, 0x00000024,
+    0x00000002, 0x00000011, 0x00000013, 0x000600a9, 0x0000000b, 0x00000025, 0x00000022, 0x00000023,
+    0x00000024, 0x0004003d, 0x00000006, 0x00000026, 0x00000025, 0x00050041, 0x0000000b, 0x00000027,
+    0x00000002, 0x00000013, 0x0003003e, 0x00000027, 0x00000026, 0x000100fd, 0x00010038,
+};
+
+/* Pointers to vector components (MSL takes no address of or reference to
+ * one): a function argument and a variable pointer. */
+static void test_component_pointers(void)
+{
+    struct pvk_msl_result res;
+    struct mt_buffer buf;
+    struct mt_binding b;
+    uint32_t sel;
+    id pso;
+
+    MT_BUILD(spv_comp_ptrs, NULL, res, pso);
+    for (sel = 0; sel < 2; sel++) {
+        float init[8] = { 10.0f, 20.0f, 30.0f, 40.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+        memcpy(&init[6], &sel, 4);
+        buf = mt_buffer(sizeof(init), init, sizeof(init));
+        b = bind(0, 0, &buf);
+        CHECK(mt_dispatch(pso, &res, &b, 1, NULL, 0, 1, 1, 1));
+        CHECK(get_f32(buf.data, 4) == 21.0f && get_f32(buf.data, 16) == 21.0f);
+        CHECK(get_f32(buf.data, 20) == (sel == 0 ? 10.0f : 30.0f));
+        mt_buffer_free(&buf);
+    }
+    pvk_release(pso);
+    pvk_msl_result_free(&res);
+}
+
 static void test_reject_image_ops(void)
 {
     CHECK(fails_with(spv_reject_deriv, PVK_ARRAY_SIZE(spv_reject_deriv), "derivatives"));
@@ -10899,6 +11026,8 @@ int main(void)
     RUN(test_descriptor_aliases);
     RUN(test_reject_layouts);
     RUN(test_reject_image_ops);
+    RUN(test_spirv_odds);
+    RUN(test_component_pointers);
     RUN(test_reject_double);
     RUN(test_reject_malformed);
     RUN(test_corrupted_modules);
