@@ -43928,8 +43928,13 @@ static void pvk_spv_parse_body(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     case PVK_SPV_OpUndef: {
         struct pvk_spv_type *t = pvk_spv_type(ctx, in->w[1]);
         x->func = 0;
-        if (t->op == PVK_SPV_OpTypePointer || t->op == PVK_SPV_OpTypeVoid)
+        if (t->op == PVK_SPV_OpTypeVoid)
             pvk_spv_fail(ctx, "OpUndef of unsupported type");
+        if (t->op == PVK_SPV_OpTypePointer && !pvk_spv_is_vptr(t)) { /* nothing may use it */
+            x->kind = PVK_SPV_K_OTHER;
+            ctx->seen_non_phi = true;
+            return;
+        }
         pvk_spv_make_const(ctx, x, in->w[1])->null = true;
         PVK_SPV_PUSH(ctx, ctx->const_order, ctx->nconsts, ctx->cap_consts, in->w[2]);
         ctx->seen_non_phi = true;

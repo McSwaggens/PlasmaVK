@@ -11118,6 +11118,53 @@ static void test_member_decoration_group(void)
 }
 
 /*
+ * SPIR-V assembly (spirv-as from the Vulkan SDK), a compute shader over
+ *     buffer B { uint x; uint y; }, with VariablePointers:
+ *   %uf = OpUndef %ptr_Function_uint                  ; unused
+ *   %us = OpUndef %ptr_StorageBuffer_uint
+ *   y = *OpSelect(true, &x, %us)
+ */
+static const uint32_t spv_undef_pointers[] = {
+    0x07230203, 0x00010300, 0x00070000, 0x00000015, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x0000115a, 0x0008000a, 0x5f565053, 0x5f52484b, 0x69726176, 0x656c6261, 0x696f705f, 0x7265746e,
+    0x00000073, 0x0003000e, 0x00000000, 0x00000001, 0x0005000f, 0x00000005, 0x00000001, 0x6e69616d,
+    0x00000000, 0x00060010, 0x00000001, 0x00000011, 0x00000001, 0x00000001, 0x00000001, 0x00030047,
+    0x00000002, 0x00000002, 0x00050048, 0x00000002, 0x00000000, 0x00000023, 0x00000000, 0x00050048,
+    0x00000002, 0x00000001, 0x00000023, 0x00000004, 0x00040047, 0x00000003, 0x00000022, 0x00000000,
+    0x00040047, 0x00000003, 0x00000021, 0x00000000, 0x00020013, 0x00000004, 0x00030021, 0x00000005,
+    0x00000004, 0x00020014, 0x00000006, 0x00040015, 0x00000007, 0x00000020, 0x00000000, 0x0004001e,
+    0x00000002, 0x00000007, 0x00000007, 0x00040020, 0x00000008, 0x0000000c, 0x00000002, 0x00040020,
+    0x00000009, 0x0000000c, 0x00000007, 0x00040020, 0x0000000a, 0x00000007, 0x00000007, 0x0004003b,
+    0x00000008, 0x00000003, 0x0000000c, 0x0004002b, 0x00000007, 0x0000000b, 0x00000000, 0x0004002b,
+    0x00000007, 0x0000000c, 0x00000001, 0x00030029, 0x00000006, 0x0000000d, 0x00050036, 0x00000004,
+    0x00000001, 0x00000000, 0x00000005, 0x000200f8, 0x0000000e, 0x00030001, 0x0000000a, 0x0000000f,
+    0x00030001, 0x00000009, 0x00000010, 0x00050041, 0x00000009, 0x00000011, 0x00000003, 0x0000000b,
+    0x000600a9, 0x00000009, 0x00000012, 0x0000000d, 0x00000011, 0x00000010, 0x0004003d, 0x00000007,
+    0x00000013, 0x00000012, 0x00050041, 0x00000009, 0x00000014, 0x00000003, 0x0000000c, 0x0003003e,
+    0x00000014, 0x00000013, 0x000100fd, 0x00010038,
+};
+
+/* OpUndef of pointer types in a function: a variable pointer (null), and
+ * one nothing uses. */
+static void test_undef_pointers(void)
+{
+    uint32_t init[2] = { 5, 0 };
+    struct pvk_msl_result res;
+    struct mt_buffer buf;
+    struct mt_binding b;
+    id pso;
+
+    MT_BUILD(spv_undef_pointers, NULL, res, pso);
+    buf = mt_buffer(sizeof(init), init, sizeof(init));
+    b = bind(0, 0, &buf);
+    CHECK(mt_dispatch(pso, &res, &b, 1, NULL, 0, 1, 1, 1));
+    CHECK(get_u32(buf.data, 4) == 5);
+    mt_buffer_free(&buf);
+    pvk_release(pso);
+    pvk_msl_result_free(&res);
+}
+
+/*
  * #version 450
  * layout(local_size_x = 1) in;
  * layout(std430, binding = 0) buffer B { float inf; float nzero; float qnan; float one; float o[16]; };
@@ -11760,6 +11807,7 @@ int main(void)
     RUN(test_quantize_to_f16);
     RUN(test_compute_beside_vertex);
     RUN(test_member_decoration_group);
+    RUN(test_undef_pointers);
     RUN(test_ieee_specials);
     RUN(test_layout_odds);
     RUN(test_layout_tight);
