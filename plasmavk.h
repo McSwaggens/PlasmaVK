@@ -44325,6 +44325,8 @@ static void pvk_spv_layout_struct(struct pvk_spv *ctx, uint32_t tid, struct pvk_
     t->end = cur;
     t->size = pvk_spv_round(cur, align);
     t->align = align;
+    if (!t->nmembers) /* an empty struct: a byte in MSL (as in C++) */
+        t->end = t->size = 1;
     if (t->explicit_layout && t->max_size && t->size > t->max_size && cur <= t->max_size) {
         /* still past the space its placements leave (a member's scalars need more
          * alignment than fits): a packed struct, exactly its bytes (Metal
