@@ -49731,6 +49731,14 @@ static bool pvk_spv_based(struct pvk_spv *ctx, const struct pvk_spv_id *x)
            (x->builtin == PVK_SPV_BuiltInWorkgroupId || x->builtin == PVK_SPV_BuiltInGlobalInvocationId);
 }
 
+/* A compute built-in declared signed: Metal's attributes take unsigned types,
+ * so the kernel takes it as pvk_raw_ and makes the variable from that. */
+static bool pvk_spv_signed_builtin(struct pvk_spv *ctx, const struct pvk_spv_id *x)
+{
+    const char *t = pvk_spv_type(ctx, x->p->type)->msl;
+    return t && strncmp(t, "int", 3) == 0;
+}
+
 static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
 {
     bool entry = fn->fid == ctx->entry_fid && !ctx->graphics; /* graphics: a helper behind the stage function */
@@ -49806,9 +49814,10 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             if (pvk_spv_bit(fn->globals, g) && x->p->storage == PVK_SPV_StorageInput &&
                 !pvk_spv_derived_builtin(x->builtin))
                 PVK_SPV_PUSH(ctx, params, nparams, cap,
-                             pvk_spv_fmt(ctx, "%s %s%s [[%s]]", pvk_spv_type(ctx, x->p->type)->msl,
-                                         pvk_spv_based(ctx, x) ? "pvk_raw_" : "", x->msl,
-                                         pvk_spv_builtin_attr(x->builtin)));
+                             pvk_spv_fmt(ctx, "%s%s %s%s [[%s]]", pvk_spv_signed_builtin(ctx, x) ? "u" : "",
+                                         pvk_spv_type(ctx, x->p->type)->msl,
+                                         pvk_spv_based(ctx, x) || pvk_spv_signed_builtin(ctx, x) ? "pvk_raw_" : "",
+                                         x->msl, pvk_spv_builtin_attr(x->builtin)));
         }
         if (fn->implicit & PVK_SPV_I_LANE)
             PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_lane [[thread_index_in_simdgroup]]");
@@ -49854,10 +49863,13 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
                 pvk_spv_line(ctx, "constant %s& %s = *(constant %s*)pvk_push_data;", t, x->msl, t);
             else if (x->p->storage == PVK_SPV_StorageInput && pvk_spv_based(ctx, x) &&
                      x->builtin == PVK_SPV_BuiltInWorkgroupId)
-                pvk_spv_line(ctx, "%s %s = pvk_raw_%s + %s(pvk_dispatch_base);", t, x->msl, x->msl, t);
+                pvk_spv_line(ctx, "%s %s = %s(pvk_raw_%s) + %s(pvk_dispatch_base);", t, x->msl, t, x->msl, t);
             else if (x->p->storage == PVK_SPV_StorageInput && pvk_spv_based(ctx, x))
-                pvk_spv_line(ctx, "%s %s = pvk_raw_%s + %s(pvk_dispatch_base * uint3(%uu, %uu, %uu));", t, x->msl,
-                             x->msl, t, res->workgroup_size[0], res->workgroup_size[1], res->workgroup_size[2]);
+                pvk_spv_line(ctx, "%s %s = %s(pvk_raw_%s) + %s(pvk_dispatch_base * uint3(%uu, %uu, %uu));", t, x->msl,
+                             t, x->msl, t, res->workgroup_size[0], res->workgroup_size[1], res->workgroup_size[2]);
+            else if (x->p->storage == PVK_SPV_StorageInput && pvk_spv_signed_builtin(ctx, x) &&
+                     !pvk_spv_derived_builtin(x->builtin))
+                pvk_spv_line(ctx, "%s %s = %s(pvk_raw_%s);", t, x->msl, t, x->msl);
             else if (x->p->storage == PVK_SPV_StorageInput && pvk_spv_derived_builtin(x->builtin))
                 pvk_spv_line(ctx, "%s %s = %s(%s);", t, x->msl, t, pvk_spv_derived_builtin(x->builtin));
         }

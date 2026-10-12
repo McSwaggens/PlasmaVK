@@ -11306,6 +11306,53 @@ static void test_private_pointer_init(void)
 }
 
 /*
+ * SPIR-V assembly (spirv-as from the Vulkan SDK), a compute shader with
+ * workgroups of 4 over buffer B { int o[4]; }, LocalInvocationId declared
+ * as an ivec3:
+ *   o[lid.x] = lid.x + 10
+ */
+static const uint32_t spv_signed_builtin[] = {
+    0x07230203, 0x00010300, 0x00070000, 0x00000015, 0x00000000, 0x00020011, 0x00000001, 0x0003000e,
+    0x00000000, 0x00000001, 0x0006000f, 0x00000005, 0x00000001, 0x6e69616d, 0x00000000, 0x00000002,
+    0x00060010, 0x00000001, 0x00000011, 0x00000004, 0x00000001, 0x00000001, 0x00040047, 0x00000002,
+    0x0000000b, 0x0000001b, 0x00040047, 0x00000003, 0x00000006, 0x00000004, 0x00030047, 0x00000004,
+    0x00000002, 0x00050048, 0x00000004, 0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x00000005,
+    0x00000022, 0x00000000, 0x00040047, 0x00000005, 0x00000021, 0x00000000, 0x00020013, 0x00000006,
+    0x00030021, 0x00000007, 0x00000006, 0x00040015, 0x00000008, 0x00000020, 0x00000001, 0x00040017,
+    0x00000009, 0x00000008, 0x00000003, 0x0004002b, 0x00000008, 0x0000000a, 0x00000004, 0x0004002b,
+    0x00000008, 0x0000000b, 0x00000000, 0x0004002b, 0x00000008, 0x0000000c, 0x0000000a, 0x0004001c,
+    0x00000003, 0x00000008, 0x0000000a, 0x0003001e, 0x00000004, 0x00000003, 0x00040020, 0x0000000d,
+    0x0000000c, 0x00000004, 0x00040020, 0x0000000e, 0x0000000c, 0x00000008, 0x00040020, 0x0000000f,
+    0x00000001, 0x00000009, 0x0004003b, 0x0000000f, 0x00000002, 0x00000001, 0x0004003b, 0x0000000d,
+    0x00000005, 0x0000000c, 0x00050036, 0x00000006, 0x00000001, 0x00000000, 0x00000007, 0x000200f8,
+    0x00000010, 0x0004003d, 0x00000009, 0x00000011, 0x00000002, 0x00050051, 0x00000008, 0x00000012,
+    0x00000011, 0x00000000, 0x00050080, 0x00000008, 0x00000013, 0x00000012, 0x0000000c, 0x00060041,
+    0x0000000e, 0x00000014, 0x00000005, 0x0000000b, 0x00000012, 0x0003003e, 0x00000014, 0x00000013,
+    0x000100fd, 0x00010038,
+};
+
+/* A built-in of a signed type (Metal's attributes are unsigned). */
+static void test_signed_builtin(void)
+{
+    int32_t init[4] = { 0, 0, 0, 0 };
+    struct pvk_msl_result res;
+    struct mt_buffer buf;
+    struct mt_binding b;
+    uint32_t i;
+    id pso;
+
+    MT_BUILD(spv_signed_builtin, NULL, res, pso);
+    buf = mt_buffer(sizeof(init), init, sizeof(init));
+    b = bind(0, 0, &buf);
+    CHECK(mt_dispatch(pso, &res, &b, 1, NULL, 0, 1, 1, 1));
+    for (i = 0; i < 4; i++)
+        CHECK(get_u32(buf.data, 4 * i) == 10 + i);
+    mt_buffer_free(&buf);
+    pvk_release(pso);
+    pvk_msl_result_free(&res);
+}
+
+/*
  * #version 450
  * layout(local_size_x = 1) in;
  * layout(std430, binding = 0) buffer B { float inf; float nzero; float qnan; float one; float o[16]; };
@@ -11952,6 +11999,7 @@ int main(void)
     RUN(test_runtime_array_param);
     RUN(test_sparse_ids);
     RUN(test_private_pointer_init);
+    RUN(test_signed_builtin);
     RUN(test_ieee_specials);
     RUN(test_layout_odds);
     RUN(test_layout_tight);
