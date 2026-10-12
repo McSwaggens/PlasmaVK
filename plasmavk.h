@@ -51344,8 +51344,8 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         if (!pvk_spv_stage_global(ctx, entry, g) || x->p->storage != PVK_SPV_StorageOutput)
             continue;
         t = pvk_spv_type(ctx, x->p->type);
-        if (x->flags & PVK_SPV_F_BUILTIN) {
-            if (pvk_spv_bit(entry->globals, g))
+        if (x->flags & PVK_SPV_F_BUILTIN) { /* written, or initialized (its initializer then) */
+            if (pvk_spv_bit(entry->globals, g) || (x->msl && pvk_spv_insn_at(ctx, x->insn).wc > 4))
                 pvk_spv_stage_builtin(ctx, x->builtin, x->p->type, x->msl, true, &outs, &need, per_sample);
         } else if (t->op == PVK_SPV_OpTypeStruct && t->nmembers && (t->members[0].flags & PVK_SPV_M_BUILTIN)) {
             for (i = 0; i < t->nmembers; i++) { /* gl_PerVertex: the members the shader writes */

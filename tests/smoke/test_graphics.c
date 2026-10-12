@@ -6537,6 +6537,84 @@ static void test_copy_ms_depth(void)
     free_img(&resolved);
 }
 
+/*
+ * SPIR-V assembly (spirv-as from the Vulkan SDK): a fragment shader whose
+ * FragDepth has an initializer and is never stored.
+ *
+ *                OpCapability Shader
+ *                OpMemoryModel Logical GLSL450
+ *                OpEntryPoint Fragment %main "main" %color %depth
+ *                OpExecutionMode %main OriginUpperLeft
+ *                OpExecutionMode %main DepthReplacing
+ *                OpDecorate %color Location 0
+ *                OpDecorate %depth BuiltIn FragDepth
+ *        %void = OpTypeVoid
+ *          %fn = OpTypeFunction %void
+ *       %float = OpTypeFloat 32
+ *        %vec4 = OpTypeVector %float 4
+ *    %out_vec4 = OpTypePointer Output %vec4
+ *   %out_float = OpTypePointer Output %float
+ *        %zero = OpConstant %float 0
+ *         %one = OpConstant %float 1
+ *     %quarter = OpConstant %float 0.25
+ *         %red = OpConstantComposite %vec4 %one %zero %zero %one
+ *       %color = OpVariable %out_vec4 Output
+ *       %depth = OpVariable %out_float Output %quarter
+ *        %main = OpFunction %void None %fn
+ *       %entry = OpLabel
+ *                OpStore %color %red
+ *                OpReturn
+ *                OpFunctionEnd
+ */
+static const uint32_t spv_depth_init_fs[] = {
+    0x07230203, 0x00010000, 0x00070000, 0x0000000f, 0x00000000, 0x00020011, 0x00000001, 0x0003000e,
+    0x00000000, 0x00000001, 0x0007000f, 0x00000004, 0x00000001, 0x6e69616d, 0x00000000, 0x00000002,
+    0x00000003, 0x00030010, 0x00000001, 0x00000007, 0x00030010, 0x00000001, 0x0000000c, 0x00040047,
+    0x00000002, 0x0000001e, 0x00000000, 0x00040047, 0x00000003, 0x0000000b, 0x00000016, 0x00020013,
+    0x00000004, 0x00030021, 0x00000005, 0x00000004, 0x00030016, 0x00000006, 0x00000020, 0x00040017,
+    0x00000007, 0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x00040020,
+    0x00000009, 0x00000003, 0x00000006, 0x0004002b, 0x00000006, 0x0000000a, 0x00000000, 0x0004002b,
+    0x00000006, 0x0000000b, 0x3f800000, 0x0004002b, 0x00000006, 0x0000000c, 0x3e800000, 0x0007002c,
+    0x00000007, 0x0000000d, 0x0000000b, 0x0000000a, 0x0000000a, 0x0000000b, 0x0004003b, 0x00000008,
+    0x00000002, 0x00000003, 0x0005003b, 0x00000009, 0x00000003, 0x00000003, 0x0000000c, 0x00050036,
+    0x00000004, 0x00000001, 0x00000000, 0x00000005, 0x000200f8, 0x0000000e, 0x0003003e, 0x00000002,
+    0x0000000d, 0x000100fd, 0x00010038,
+};
+
+/* A FragDepth that is only initialized replaces the depth with its initializer:
+ * a draw at 1.0 passes LESS against the 1.0 clear at 0.25. */
+static void test_frag_depth_initializer(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_depth_init_fs, sizeof(spv_depth_init_fs));
+    p.depth_format = VK_FORMAT_D32_SFLOAT;
+    p.has_ds = true;
+    memset(&p.ds, 0, sizeof(p.ds));
+    p.ds.depthTestEnable = VK_TRUE;
+    p.ds.depthCompareOp = VK_COMPARE_OP_LESS;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, black, &depth);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -1, -1, 1, 1, 0, 0, 0, 0, 1.0f);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    CHECK(count_bad(&out, expect_red_all, "initialized FragDepth") == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&depth);
+    free_img(&target);
+}
+
 /* Alpha to coverage (alpha 0.5 covers about half the samples) and alpha to
  * one, resolved. */
 static void test_alpha_coverage(void)
@@ -7771,6 +7849,7 @@ int main(void)
     RUN(test_dual_source);
     RUN(test_dual_source_unwritten);
     RUN(test_copy_ms_depth);
+    RUN(test_frag_depth_initializer);
     RUN(test_alpha_coverage);
     RUN(test_sample_mask);
     RUN(test_logic_ops);
