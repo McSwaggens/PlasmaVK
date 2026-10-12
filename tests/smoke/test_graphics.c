@@ -3637,6 +3637,273 @@ static void test_subpasses(void)
 
 /*
  * #version 450
+ * layout(location = 0) out uvec4 o_color;
+ * void main()
+ * {
+ *     o_color = uvec4(uint(gl_FragCoord.x) & 1u, uint(gl_FragCoord.y) & 1u, 7u, 9u);
+ * }
+ */
+static const uint32_t spv_pattern_fs[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x0000001c, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0007000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000d, 0x00030010,
+    0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d,
+    0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c, 0x00060005, 0x0000000d, 0x465f6c67,
+    0x43676172, 0x64726f6f, 0x00000000, 0x00040047, 0x00000009, 0x0000001e, 0x00000000, 0x00040047,
+    0x0000000d, 0x0000000b, 0x0000000f, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002,
+    0x00040015, 0x00000006, 0x00000020, 0x00000000, 0x00040017, 0x00000007, 0x00000006, 0x00000004,
+    0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008, 0x00000009, 0x00000003,
+    0x00030016, 0x0000000a, 0x00000020, 0x00040017, 0x0000000b, 0x0000000a, 0x00000004, 0x00040020,
+    0x0000000c, 0x00000001, 0x0000000b, 0x0004003b, 0x0000000c, 0x0000000d, 0x00000001, 0x0004002b,
+    0x00000006, 0x0000000e, 0x00000000, 0x00040020, 0x0000000f, 0x00000001, 0x0000000a, 0x0004002b,
+    0x00000006, 0x00000013, 0x00000001, 0x0004002b, 0x00000006, 0x00000019, 0x00000007, 0x0004002b,
+    0x00000006, 0x0000001a, 0x00000009, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
+    0x000200f8, 0x00000005, 0x00050041, 0x0000000f, 0x00000010, 0x0000000d, 0x0000000e, 0x0004003d,
+    0x0000000a, 0x00000011, 0x00000010, 0x0004006d, 0x00000006, 0x00000012, 0x00000011, 0x000500c7,
+    0x00000006, 0x00000014, 0x00000012, 0x00000013, 0x00050041, 0x0000000f, 0x00000015, 0x0000000d,
+    0x00000013, 0x0004003d, 0x0000000a, 0x00000016, 0x00000015, 0x0004006d, 0x00000006, 0x00000017,
+    0x00000016, 0x000500c7, 0x00000006, 0x00000018, 0x00000017, 0x00000013, 0x00070050, 0x00000007,
+    0x0000001b, 0x00000014, 0x00000018, 0x00000019, 0x0000001a, 0x0003003e, 0x00000009, 0x0000001b,
+    0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 450
+ * layout(input_attachment_index = 0, set = 0, binding = 0) uniform usubpassInput u_a;
+ * layout(location = 0) out uvec4 o_b;
+ * layout(location = 1) out uvec4 o_a;
+ * void main()
+ * {
+ *     uvec4 v = subpassLoad(u_a);
+ *     o_b = v + uvec4(1u);
+ *     o_a = v;
+ * }
+ */
+static const uint32_t spv_feedback_fs[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x0000001b, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000028, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
+    0x00000000, 0x00000001, 0x0007000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000014,
+    0x00000019, 0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000009, 0x00000076, 0x00030005, 0x0000000c,
+    0x00615f75, 0x00030005, 0x00000014, 0x00625f6f, 0x00030005, 0x00000019, 0x00615f6f, 0x00040047,
+    0x0000000c, 0x00000021, 0x00000000, 0x00040047, 0x0000000c, 0x00000022, 0x00000000, 0x00040047,
+    0x0000000c, 0x0000002b, 0x00000000, 0x00040047, 0x00000014, 0x0000001e, 0x00000000, 0x00040047,
+    0x00000019, 0x0000001e, 0x00000001, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002,
+    0x00040015, 0x00000006, 0x00000020, 0x00000000, 0x00040017, 0x00000007, 0x00000006, 0x00000004,
+    0x00040020, 0x00000008, 0x00000007, 0x00000007, 0x00090019, 0x0000000a, 0x00000006, 0x00000006,
+    0x00000000, 0x00000000, 0x00000000, 0x00000002, 0x00000000, 0x00040020, 0x0000000b, 0x00000000,
+    0x0000000a, 0x0004003b, 0x0000000b, 0x0000000c, 0x00000000, 0x00040015, 0x0000000e, 0x00000020,
+    0x00000001, 0x0004002b, 0x0000000e, 0x0000000f, 0x00000000, 0x00040017, 0x00000010, 0x0000000e,
+    0x00000002, 0x0005002c, 0x00000010, 0x00000011, 0x0000000f, 0x0000000f, 0x00040020, 0x00000013,
+    0x00000003, 0x00000007, 0x0004003b, 0x00000013, 0x00000014, 0x00000003, 0x0004002b, 0x00000006,
+    0x00000016, 0x00000001, 0x0007002c, 0x00000007, 0x00000017, 0x00000016, 0x00000016, 0x00000016,
+    0x00000016, 0x0004003b, 0x00000013, 0x00000019, 0x00000003, 0x00050036, 0x00000002, 0x00000004,
+    0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003b, 0x00000008, 0x00000009, 0x00000007,
+    0x0004003d, 0x0000000a, 0x0000000d, 0x0000000c, 0x00050062, 0x00000007, 0x00000012, 0x0000000d,
+    0x00000011, 0x0003003e, 0x00000009, 0x00000012, 0x0004003d, 0x00000007, 0x00000015, 0x00000009,
+    0x00050080, 0x00000007, 0x00000018, 0x00000015, 0x00000017, 0x0003003e, 0x00000014, 0x00000018,
+    0x0004003d, 0x00000007, 0x0000001a, 0x00000009, 0x0003003e, 0x00000019, 0x0000001a, 0x000100fd,
+    0x00010038,
+};
+
+/* Records subpass i of subpass_feedback_case. */
+static void feedback_record(VkCommandBuffer c, uint32_t i, VkPipeline p0, VkPipeline p1, VkDescriptorSet set,
+                            const VkClearAttachment *ca, const VkClearRect *cr)
+{
+    if (i == 0) {
+        vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, p0);
+        rect(c, -1, -1, 1, 1, 0, 0, 0, 0, 0);
+        return;
+    }
+    vkCmdClearAttachments(c, 1, ca, 1, cr);
+    vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, p1);
+    vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, input_layout, 0, 1, &set, 0, NULL);
+    vkCmdPushConstants(c, input_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16,
+                       (const float[4]){ -1, -1, 1, 1 });
+    vkCmdDraw(c, 4, 1, 0, 0);
+}
+
+/* A feedback loop after a clear: the first subpass draws a pattern into A
+ * (R32G32_UINT, never stored); the second clears A's left half
+ * (vkCmdClearAttachments), then reads A as an input attachment, writing
+ * A + 1 into B (R8G8_UINT) and A back into A. With A transient (lazily
+ * allocated), a dependency without VK_DEPENDENCY_BY_REGION_BIT for shader
+ * reads puts the subpasses in Metal passes of their own: A's memory is
+ * committed to keep its contents from one to the other. */
+static void subpass_feedback_case(bool secondary, bool transient)
+{
+    VkAttachmentDescription a[2];
+    VkAttachmentReference ra0 = { 0, VK_IMAGE_LAYOUT_GENERAL };
+    VkAttachmentReference rc1[2] = { { 1, VK_IMAGE_LAYOUT_GENERAL }, { 0, VK_IMAGE_LAYOUT_GENERAL } };
+    VkSubpassDescription sp[2];
+    VkSubpassDependency dep;
+    VkRenderPassCreateInfo info;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    struct img ia, ib = make_img(VK_FORMAT_R8G8_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 2);
+    VkImageView views[2];
+    VkFramebuffer fb;
+    VkDescriptorPool dpool = VK_NULL_HANDLE;
+    VkDescriptorSet set;
+    VkClearValue clears[2];
+    VkClearAttachment ca;
+    VkClearRect cr;
+    VkPipeline p0, p1;
+    struct pipe p;
+    VkCommandBuffer cb, sc[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+    VkSubpassContents contents;
+    uint32_t i, x, y, bad = 0;
+
+    if (transient)
+        ia = make_img_mem(VK_FORMAT_R32G32_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT,
+                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
+                              VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+                          lazy_type);
+    else
+        ia = make_img(VK_FORMAT_R32G32_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    memset(a, 0, sizeof(a));
+    a[0].format = VK_FORMAT_R32G32_UINT;
+    a[1].format = VK_FORMAT_R8G8_UINT;
+    for (i = 0; i < 2; i++) {
+        a[i].samples = VK_SAMPLE_COUNT_1_BIT;
+        a[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        a[i].storeOp = i ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        a[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        a[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        a[i].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        a[i].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    memset(sp, 0, sizeof(sp));
+    sp[0].pipelineBindPoint = sp[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp[0].colorAttachmentCount = 1;
+    sp[0].pColorAttachments = &ra0;
+    sp[1].colorAttachmentCount = 2;
+    sp[1].pColorAttachments = rc1;
+    sp[1].inputAttachmentCount = 1;
+    sp[1].pInputAttachments = &ra0;
+    memset(&dep, 0, sizeof(dep));
+    dep.srcSubpass = 0;
+    dep.dstSubpass = 1;
+    dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep.dependencyFlags = transient ? 0 : VK_DEPENDENCY_BY_REGION_BIT;
+    if (transient)
+        dep.dstAccessMask |= VK_ACCESS_SHADER_READ_BIT;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    info.attachmentCount = 2;
+    info.pAttachments = a;
+    info.subpassCount = 2;
+    info.pSubpasses = sp;
+    info.dependencyCount = 1;
+    info.pDependencies = &dep;
+    CHECK_VK(vkCreateRenderPass(device, &info, NULL, &rp), VK_SUCCESS);
+    views[0] = ia.view;
+    views[1] = ib.view;
+    fb = make_fb(rp, views, 2, W, H, 1);
+    set = input_set(&dpool, ia.view, VK_IMAGE_LAYOUT_GENERAL);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_pattern_fs, sizeof(spv_pattern_fs));
+    p.rp = rp;
+    p0 = make_pipe(&p);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_feedback_fs, sizeof(spv_feedback_fs));
+    p.layout = input_layout;
+    p.rp = rp;
+    p.subpass = 1;
+    p1 = make_pipe(&p);
+    REQUIRE(p0 && p1);
+    memset(clears, 0, sizeof(clears));
+    memset(&ca, 0, sizeof(ca));
+    ca.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ca.colorAttachment = 1; /* A */
+    ca.clearValue.color.uint32[0] = ca.clearValue.color.uint32[1] = 5;
+    memset(&cr, 0, sizeof(cr));
+    cr.rect.extent.width = W / 2;
+    cr.rect.extent.height = H;
+    cr.layerCount = 1;
+    contents = secondary ? VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS : VK_SUBPASS_CONTENTS_INLINE;
+    for (i = 0; secondary && i < 2; i++) {
+        VkCommandBufferAllocateInfo al;
+        VkCommandBufferInheritanceInfo inh;
+        VkCommandBufferBeginInfo bi;
+        memset(&al, 0, sizeof(al));
+        al.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        al.commandPool = cmd_pool;
+        al.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+        al.commandBufferCount = 1;
+        vkAllocateCommandBuffers(device, &al, &sc[i]);
+        memset(&inh, 0, sizeof(inh));
+        inh.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+        inh.renderPass = rp;
+        inh.subpass = i;
+        inh.framebuffer = fb;
+        memset(&bi, 0, sizeof(bi));
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+        bi.pInheritanceInfo = &inh;
+        vkBeginCommandBuffer(sc[i], &bi);
+        feedback_record(sc[i], i, p0, p1, set, &ca, &cr);
+        vkEndCommandBuffer(sc[i]);
+    }
+    cb = begin_cmd();
+    {
+        VkRenderPassBeginInfo bi;
+        memset(&bi, 0, sizeof(bi));
+        bi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        bi.renderPass = rp;
+        bi.framebuffer = fb;
+        bi.renderArea.extent.width = W;
+        bi.renderArea.extent.height = H;
+        bi.clearValueCount = 2;
+        bi.pClearValues = clears;
+        vkCmdBeginRenderPass(cb, &bi, contents);
+    }
+    for (i = 0; i < 2; i++) {
+        if (i)
+            vkCmdNextSubpass(cb, contents);
+        if (secondary)
+            vkCmdExecuteCommands(cb, 1, &sc[i]);
+        else
+            feedback_record(cb, i, p0, p1, set, &ca, &cr);
+    }
+    vkCmdEndRenderPass(cb);
+    download(cb, &ib, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            const unsigned char *px_ = out.data + (y * W + x) * 2;
+            unsigned ex = x < W / 2 ? 6 : (x & 1) + 1, ey = x < W / 2 ? 6 : (y & 1) + 1;
+            if ((px_[0] != ex || px_[1] != ey) && bad++ < 4)
+                printf("    feedback after clear (%s%s) at (%u, %u): (%u, %u), expected (%u, %u)\n",
+                       secondary ? "secondary" : "inline", transient ? ", transient" : "", x, y, px_[0], px_[1], ex,
+                       ey);
+        }
+    CHECK(bad == 0);
+    for (i = 0; i < 2; i++)
+        if (sc[i])
+            vkFreeCommandBuffers(device, cmd_pool, 1, &sc[i]);
+    vkDestroyPipeline(device, p0, NULL);
+    vkDestroyPipeline(device, p1, NULL);
+    vkDestroyDescriptorPool(device, dpool, NULL);
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+    free_buf(&out);
+    free_img(&ia);
+    free_img(&ib);
+}
+
+static void test_subpass_feedback(void)
+{
+    subpass_feedback_case(false, false);
+    subpass_feedback_case(true, false);
+    subpass_feedback_case(false, true);
+    subpass_feedback_case(true, true);
+}
+
+/*
+ * #version 450
  * layout(push_constant) uniform P { vec4 rect; vec4 color; float depth; int layer; int viewport; } pc;
  * layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInputMS u_ms;
  * layout(location = 0) out vec4 o_color;
@@ -6918,6 +7185,7 @@ int main(void)
     RUN(test_vertex_input);
     RUN(test_clear_attachments);
     RUN(test_subpasses);
+    RUN(test_subpass_feedback);
     RUN(test_subpass_ms_input);
     RUN(test_subpass_tile_storage);
     RUN(test_local_read);

@@ -37655,6 +37655,7 @@ struct pvk_image {
     struct pvk_device_memory *memory;
     VkDeviceSize offset;
     bool memoryless;
+    id committed;            /* memoryless: committed memory (pvk_image_committed), else NULL */
     const struct pvk_ycbcr_format *ycbcr; /* a format requiring a sampler Y'CbCr conversion */
     uint32_t plane_count;                 /* multi-planar formats: 2 or 3 planes[], else 0 */
     struct pvk_image_plane planes[3];
@@ -38280,6 +38281,10 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyImage(VkDevice _device, VkImage _image, cons
         pvk_sparse_residency_free(device, image->sparse);
         pvk_free(alloc, image->sparse);
     }
+    if (image->committed) {
+        pvk_device_evict_commit(device, image->committed);
+        pvk_release(image->committed);
+    }
     if (image->plane_count)
         for (p = 0; p < image->plane_count; p++)
             pvk_release(image->planes[p].mtl_texture);
@@ -38465,6 +38470,35 @@ static VkResult pvk_image_bind(struct pvk_device *device, struct pvk_image *imag
     image->memory = memory;
     image->offset = offset;
     return VK_SUCCESS;
+}
+
+/* The memory committed to a memoryless (lazily allocated) image: a texture
+ * in private storage, made (`commit`) the first time a render pass keeps the
+ * image's contents from one Metal pass to another (section 15, RENDER
+ * PASSES) and rendered to by such passes from then on. NULL: none (or out of
+ * memory). Under residency_lock, which guards image->committed. */
+static id pvk_image_committed(struct pvk_device *device, struct pvk_image *image, bool commit)
+{
+    id texture, desc;
+    void *pool;
+    pthread_mutex_lock(&device->residency_lock);
+    if (!(texture = image->committed) && commit) {
+        pool = objc_autoreleasePoolPush();
+        desc = pvk_image_descriptor(image, PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked);
+        if (desc) {
+            pvk_MTLTextureDescriptor_setUsage(desc, PVK_MTLTextureUsageRenderTarget | PVK_MTLTextureUsageShaderRead);
+            texture = pvk_MTLDevice_newTextureWithDescriptor(device->physical_device->mtl_device, desc);
+        }
+        pvk_release(desc);
+        objc_autoreleasePoolPop(pool);
+        if (texture) {
+            pvk_MTLResidencySet_addAllocation(device->residency_set, texture);
+            pvk_device_residency_changed(device, false);
+            image->committed = texture;
+        }
+    }
+    pthread_mutex_unlock(&device->residency_lock);
+    return texture;
 }
 
 /* Section 18: the memory of a swapchain's image (bound at offset 0). */
@@ -53885,7 +53919,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
  *   drawing (Metal clears the whole attachment, every layer up to the last
  *   view's) and always stores (DONT_CARE would lose what lies outside), memoryless
  *   (transient) attachments neither load nor store, and an attachment used
- *   by subpasses of several encoders is stored and loaded between them.
+ *   by subpasses of several encoders is stored and loaded between them (a
+ *   memoryless one has memory committed to it for that, which such render
+ *   passes render to instead: pvk_image_committed).
  *   Color, depth and stencil resolves are store actions of their encoder,
  *   except that a stored depth/stencil attachment is resolved by an
  *   internal pass after it (pvk_render_resolve_ds, section 16).
@@ -53953,6 +53989,7 @@ struct pvk_rp_attachment {
     VkAttachmentLoadOp load_op, stencil_load_op;
     VkAttachmentStoreOp store_op, stencil_store_op;
     uint32_t first_use, last_use; /* subpasses; first_use UINT32_MAX: unused */
+    bool kept;                    /* used in more than one Metal pass (memoryless: pvk_image_committed) */
 };
 
 struct pvk_subpass {
@@ -54448,12 +54485,14 @@ static uint32_t pvk_view_height(const struct pvk_image_view *v)
 }
 
 /* An attachment's texture: its view (memoryless images have no views, so
- * their own texture with the view's level and layer). */
-static void pvk_pass_att_view(struct pvk_pass_attachment *pa, const struct pvk_image_view *view)
+ * their own texture with the view's level and layer, or that of their
+ * committed memory, `committed`, when a render pass keeps them from one
+ * Metal pass to another). */
+static void pvk_pass_att_view(struct pvk_pass_attachment *pa, const struct pvk_image_view *view, id committed)
 {
     if (!view)
         return;
-    pa->texture = view->mtl_attachment;
+    pa->texture = committed ? committed : view->mtl_attachment;
     pa->fmt = pvk_format(view->format);
     if (view->image->memoryless) {
         pa->level = view->base_level;
@@ -54466,7 +54505,7 @@ static void pvk_pass_att_view(struct pvk_pass_attachment *pa, const struct pvk_i
     pa->array = view->view_type == VK_IMAGE_VIEW_TYPE_1D_ARRAY || view->view_type == VK_IMAGE_VIEW_TYPE_2D_ARRAY ||
                 view->view_type == VK_IMAGE_VIEW_TYPE_CUBE || view->view_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
     pa->int_texture = view->mtl_int_attachment;
-    pa->memoryless = view->image->memoryless;
+    pa->memoryless = view->image->memoryless && !committed;
 }
 
 static void pvk_pass_att_resolve(struct pvk_pass_attachment *pa, const struct pvk_image_view *view)
@@ -54539,6 +54578,17 @@ static uint32_t pvk_pass_layers(uint32_t view_mask, uint32_t layers)
     return layers > 1 ? layers : 0;
 }
 
+/* The committed memory a memoryless attachment of the render pass being
+ * recorded renders to (pvk_image_committed, made at vkCmdBeginRenderPass2),
+ * else NULL. */
+static id pvk_rp_committed(struct pvk_command_buffer *cb, const struct pvk_cb_render *r, uint32_t a)
+{
+    const struct pvk_image_view *view = r->views[a];
+    return view && view->image->memoryless && r->pass->attachments[a].kept
+               ? pvk_image_committed(cb->pool->device, view->image, false)
+               : NULL;
+}
+
 /* The BEGIN_PASS packet of Metal pass p of the render pass being recorded. */
 static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pvk_cb_render *r, uint32_t p)
 {
@@ -54582,20 +54632,21 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
         uint32_t a = mp->colors[s];
         const struct pvk_rp_attachment *att = &pass->attachments[a];
         struct pvk_pass_attachment *pa = &c->colors[s];
-        pvk_pass_att_view(pa, r->views[a]);
+        pvk_pass_att_view(pa, r->views[a], pvk_rp_committed(cb, r, a));
         if (mp->resolves[s] != VK_ATTACHMENT_UNUSED)
             pvk_pass_att_resolve(pa, r->views[mp->resolves[s]]);
         pvk_pass_att_actions(pa, att->load_op, att->store_op, att->first_use >= mp->first, att->last_use <= mp->last,
-                             &r->area, mp->view_mask, r->views[a] && r->views[a]->image->memoryless);
+                             &r->area, mp->view_mask, pa->memoryless != 0);
         pa->clear = r->clears[a];
     }
     if (mp->depth != VK_ATTACHMENT_UNUSED) {
         const struct pvk_rp_attachment *att = &pass->attachments[mp->depth];
         const struct pvk_image_view *view = r->views[mp->depth];
         bool first = att->first_use >= mp->first, last = att->last_use <= mp->last;
-        bool memoryless = view && view->image->memoryless;
+        id committed = pvk_rp_committed(cb, r, mp->depth);
+        bool memoryless = view && view->image->memoryless && !committed;
         if (pvk_format_has_depth(att->fmt)) {
-            pvk_pass_att_view(&c->depth, view);
+            pvk_pass_att_view(&c->depth, view, committed);
             if (mp->depth_resolve != VK_ATTACHMENT_UNUSED && mp->depth_resolve_mode != VK_RESOLVE_MODE_NONE) {
                 pvk_pass_att_resolve(&c->depth, r->views[mp->depth_resolve]);
                 c->depth.resolve_filter = pvk_depth_resolve_filter(mp->depth_resolve_mode);
@@ -54605,7 +54656,7 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
             c->depth.clear = r->clears[mp->depth];
         }
         if (pvk_format_has_stencil(att->fmt)) {
-            pvk_pass_att_view(&c->stencil, view);
+            pvk_pass_att_view(&c->stencil, view, committed);
             if (mp->depth_resolve != VK_ATTACHMENT_UNUSED && mp->stencil_resolve_mode != VK_RESOLVE_MODE_NONE)
                 pvk_pass_att_resolve(&c->stencil, r->views[mp->depth_resolve]);
             pvk_pass_att_actions(&c->stencil, att->stencil_load_op, att->stencil_store_op, first, last, &r->area,
@@ -54703,6 +54754,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass2(VkCommandBuffer commandBuffer, 
             r->clears[a] = pRenderPassBegin->pClearValues[a];
         else
             memset(&r->clears[a], 0, sizeof(r->clears[a]));
+        /* memoryless contents a Metal pass leaves to the next */
+        if (r->views[a] && r->views[a]->image->memoryless && pass->attachments[a].kept)
+            pvk_image_committed(cb->pool->device, r->views[a]->image, true);
     }
     if (!pass->subpass_count)
         return;
@@ -54807,7 +54861,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
         const VkRenderingAttachmentInfo *a = &info->pColorAttachments[i];
         const struct pvk_image_view *view = (const struct pvk_image_view *)a->imageView;
         struct pvk_pass_attachment *pa = &c->colors[i];
-        pvk_pass_att_view(pa, view);
+        pvk_pass_att_view(pa, view, NULL);
         if (a->resolveMode != VK_RESOLVE_MODE_NONE)
             pvk_pass_att_resolve(pa, (const struct pvk_image_view *)a->resolveImageView);
         pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, info->viewMask,
@@ -54824,7 +54878,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
         struct pvk_pass_attachment *pa = k ? &c->stencil : &c->depth;
         if (!view)
             continue;
-        pvk_pass_att_view(pa, view);
+        pvk_pass_att_view(pa, view, NULL);
         if (a->resolveMode != VK_RESOLVE_MODE_NONE) {
             pvk_pass_att_resolve(pa, (const struct pvk_image_view *)a->resolveImageView);
             if (!k)
@@ -62881,6 +62935,10 @@ static VkResult pvk_render_pass_create(struct pvk_device *device, const VkRender
         }
         pvk_rp_pass_add(rp, mp, i);
         rp->subpasses[i].pass = rp->pass_count - 1;
+    }
+    for (i = 0; i < na; i++) {
+        struct pvk_rp_attachment *ra = &rp->attachments[i];
+        ra->kept = ra->first_use < ns && rp->subpasses[ra->first_use].pass != rp->subpasses[ra->last_use].pass;
     }
     for (i = 0; i < ns; i++) {
         struct pvk_subpass *sp = &rp->subpasses[i];
