@@ -41400,6 +41400,10 @@ struct pvk_msl_result {
     bool discards;                   /* may kill or demote */
     uint32_t input_attachments;      /* bit i: input attachment index i is read */
     uint32_t color_fetches;          /* bit n: color attachment n is read by framebuffer fetch */
+    /* fetch_deps[l]: the input attachment indices output location l depends on
+     * (when fetch_deps_known: pvk_spv_fetch_deps) */
+    uint32_t fetch_deps[8];
+    bool fetch_deps_known;
     uint32_t depth_stencil_fetches;  /* bit 0: the depth copy is read, bit 1: the stencil copy */
     char error[256];
 };
@@ -51180,6 +51184,348 @@ static uint32_t pvk_spv_fragment_ops(struct pvk_spv *ctx, uint32_t colors, const
 /* The vertex or fragment function: it declares the SPIR-V entry point's
  * globals, fills the inputs from the stage's built-ins, varyings or vertex
  * buffers, calls the entry point and returns the outputs. */
+/* The blocks block `b`'s terminator may branch to (pvk_spv_fetch_deps), as
+ * block indices; the count. */
+static uint32_t pvk_spv_succs(struct pvk_spv *ctx, uint32_t fidx, const struct pvk_spv_block *blk, uint32_t **out)
+{
+    struct pvk_spv_insn t = pvk_spv_insn_at(ctx, blk->end);
+    uint32_t n = 0, k, lw;
+    *out = NULL;
+    if (t.op == PVK_SPV_OpBranch) {
+        *out = pvk_spv_alloc(ctx, sizeof(uint32_t));
+        (*out)[n++] = pvk_spv_label_block(ctx, fidx, t.w[1]);
+    } else if (t.op == PVK_SPV_OpBranchConditional) {
+        *out = pvk_spv_alloc(ctx, 2 * sizeof(uint32_t));
+        (*out)[n++] = pvk_spv_label_block(ctx, fidx, t.w[2]);
+        (*out)[n++] = pvk_spv_label_block(ctx, fidx, t.w[3]);
+    } else if (t.op == PVK_SPV_OpSwitch) { /* the default, then (literal, label) pairs */
+        lw = pvk_spv_type(ctx, pvk_spv_get(ctx, t.w[1])->type)->width == 64 ? 2u : 1u;
+        *out = pvk_spv_alloc(ctx, sizeof(uint32_t) * (1 + (t.wc - 3) / (lw + 1)));
+        (*out)[n++] = pvk_spv_label_block(ctx, fidx, t.w[2]);
+        for (k = 3 + lw; k < t.wc; k += lw + 1)
+            (*out)[n++] = pvk_spv_label_block(ctx, fidx, t.w[k]);
+    }
+    return n;
+}
+
+static bool pvk_spv_dominates(const uint32_t *idom, uint32_t a, uint32_t b)
+{
+    if (idom[b] == UINT32_MAX)
+        return false; /* (unreachable) */
+    while (b != a && idom[b] != b)
+        b = idom[b];
+    return b == a;
+}
+
+/* Fragment shaders reading input attachments by framebuffer fetch: for each
+ * output location, the input attachment indices its value, or whether it is
+ * written, depends on. Data flows through values and through function,
+ * private and output variables (by element of their first index); control
+ * through the condition of each construct around a store (the blocks its
+ * header dominates and its merge does not). A condition of a construct a
+ * break or continue leaves counts for the loop around it; one a return or
+ * kill leaves, kills, and FragDepth and SampleMask writes count for every
+ * output. A pass split for tile memory may leave out the colors of other
+ * groups that a pipeline's outputs in a group do not depend on (struct
+ * pvk_gfx_groups). False when the entry point calls functions or writes
+ * memory others see. */
+static bool pvk_spv_fetch_deps(struct pvk_spv *ctx, struct pvk_spv_func *fn, uint32_t deps[8])
+{
+    enum { WHOLE = 64, DYN = 65 };
+    uint32_t fidx = pvk_spv_get(ctx, fn->fid)->func, bound = ctx->bound, nb = fn->nblocks;
+    uint32_t *t = pvk_spv_alloc(ctx, sizeof(uint32_t) * bound), *root = pvk_spv_alloc(ctx, sizeof(uint32_t) * bound);
+    uint32_t *first = pvk_spv_alloc(ctx, sizeof(uint32_t) * bound), *ctl = pvk_spv_alloc(ctx, sizeof(uint32_t) * nb);
+    uint32_t **mem = pvk_spv_alloc(ctx, sizeof(uint32_t *) * bound), **succ = pvk_spv_alloc(ctx, sizeof(uint32_t *) * nb);
+    uint32_t *nsucc = pvk_spv_alloc(ctx, sizeof(uint32_t) * nb), *idom = pvk_spv_alloc(ctx, sizeof(uint32_t) * nb);
+    uint32_t *order = pvk_spv_alloc(ctx, sizeof(uint32_t) * nb), *rpo = pvk_spv_alloc(ctx, sizeof(uint32_t) * nb);
+    uint32_t *stack = pvk_spv_alloc(ctx, sizeof(uint32_t) * nb * 2), *loop_of = pvk_spv_alloc(ctx, sizeof(uint32_t) * nb);
+    uint8_t *seen = pvk_spv_alloc(ctx, nb), *in = pvk_spv_alloc(ctx, nb);
+    uint32_t global = 0, sweep, b, i, k, n = 0, sp = 0;
+    bool changed = true;
+
+    memset(deps, 0, sizeof(uint32_t) * 8);
+    if (!nb)
+        return false;
+    /* Dominators (Cooper, Harvey and Kennedy), in reverse postorder */
+    for (b = 0; b < nb; b++) {
+        nsucc[b] = pvk_spv_succs(ctx, fidx, &fn->blocks[b], &succ[b]);
+        idom[b] = UINT32_MAX;
+    }
+    stack[sp++] = 0;
+    stack[sp++] = 0;
+    seen[0] = 1;
+    while (sp) { /* (block, next successor) pairs */
+        uint32_t x = stack[sp - 2], s = stack[sp - 1];
+        if (s < nsucc[x]) {
+            uint32_t y = succ[x][s];
+            stack[sp - 1]++;
+            if (!seen[y]) {
+                seen[y] = 1;
+                stack[sp++] = y;
+                stack[sp++] = 0;
+            }
+        } else {
+            order[n++] = x; /* postorder */
+            sp -= 2;
+        }
+    }
+    for (i = 0; i < n; i++)
+        rpo[order[i]] = n - 1 - i;
+    idom[0] = 0;
+    for (changed = true; changed;) {
+        changed = false;
+        for (i = n; i-- > 0;) {
+            uint32_t x = order[i], d = UINT32_MAX, p;
+            if (x == 0)
+                continue;
+            for (p = 0; p < nb; p++) /* predecessors with dominators so far */
+                for (k = 0; k < nsucc[p]; k++)
+                    if (succ[p][k] == x && idom[p] != UINT32_MAX) {
+                        uint32_t a = p, c = d;
+                        if (c == UINT32_MAX) {
+                            d = p;
+                            continue;
+                        }
+                        while (a != c) {
+                            while (rpo[a] > rpo[c])
+                                a = idom[a];
+                            while (rpo[c] > rpo[a])
+                                c = idom[c];
+                        }
+                        d = a;
+                    }
+            if (d != idom[x]) {
+                idom[x] = d;
+                changed = true;
+            }
+        }
+    }
+    /* The innermost loop of each block: the loop header up its dominators
+     * whose construct (up to the merge) holds it */
+    for (b = 0; b < nb; b++) {
+        uint32_t h = b;
+        loop_of[b] = UINT32_MAX;
+        while (idom[b] != UINT32_MAX) {
+            const struct pvk_spv_block *hb = &fn->blocks[h];
+            if (hb->merge && pvk_spv_insn_at(ctx, hb->merge).op == PVK_SPV_OpLoopMerge) {
+                uint32_t m = pvk_spv_label_block(ctx, fidx, pvk_spv_insn_at(ctx, hb->merge).w[1]);
+                if (!pvk_spv_dominates(idom, m, b)) {
+                    loop_of[b] = h;
+                    break;
+                }
+            }
+            if (idom[h] == h)
+                break;
+            h = idom[h];
+        }
+    }
+
+    for (i = 0; i < bound; i++)
+        root[i] = first[i] = UINT32_MAX;
+    for (sweep = 0, changed = true; changed; sweep++) {
+        if (sweep == 64)
+            return false;
+        changed = false;
+        for (b = 0; b < nb; b++) { /* data */
+            const struct pvk_spv_block *blk = &fn->blocks[b];
+            uint32_t off = blk->begin, c = ctl[b] | global;
+            while (off <= blk->end) {
+                struct pvk_spv_insn ins = pvk_spv_insn_at(ctx, off);
+                uint32_t op = ins.op, r = 0, v = 0, p, var, f, *m;
+                const struct pvk_spv_id *x;
+                off += ins.wc;
+                if (op == PVK_SPV_OpFunctionCall || op == PVK_SPV_OpImageWrite || op == 64 /* OpCopyMemorySized */ ||
+                    (op >= PVK_SPV_OpAtomicLoad && op <= PVK_SPV_OpAtomicXor) || op == 318 || op == 319 ||
+                    op == 5614 || op == 5615 || op == PVK_SPV_OpAtomicFAddEXT)
+                    return false;
+                if (op == PVK_SPV_OpKill || op == PVK_SPV_OpTerminateInvocation ||
+                    op == PVK_SPV_OpDemoteToHelperInvocation) {
+                    if ((global | c) != global) {
+                        global |= c;
+                        changed = true;
+                    }
+                    continue;
+                }
+                if (ins.wc >= 3 && ins.w[2] && ins.w[2] < bound && pvk_spv_get(ctx, ins.w[2])->insn == off - ins.wc)
+                    r = ins.w[2];
+                switch (op) {
+                case PVK_SPV_OpVariable:
+                    root[r] = r;
+                    first[r] = WHOLE;
+                    continue;
+                case PVK_SPV_OpAccessChain: case PVK_SPV_OpInBoundsAccessChain: case PVK_SPV_OpPtrAccessChain:
+                case 70: /* OpInBoundsPtrAccessChain */
+                    p = ins.w[3];
+                    root[r] = p < bound && root[p] != UINT32_MAX ? root[p] : p;
+                    if (p < bound && first[p] != UINT32_MAX && first[p] != WHOLE) {
+                        first[r] = first[p];
+                    } else if (ins.wc > 4 && op != PVK_SPV_OpPtrAccessChain && op != 70) {
+                        x = pvk_spv_get(ctx, ins.w[4]);
+                        first[r] = x->kind == PVK_SPV_K_CONST && pvk_spv_const_value(ctx, ins.w[4]) < 64
+                                       ? (uint32_t)pvk_spv_const_value(ctx, ins.w[4])
+                                       : DYN;
+                    } else {
+                        first[r] = ins.wc > 4 ? DYN : WHOLE;
+                    }
+                    v = p < bound ? t[p] : 0;
+                    for (k = 4; k < ins.wc; k++)
+                        v |= ins.w[k] < bound ? t[ins.w[k]] : 0;
+                    break;
+                case PVK_SPV_OpLoad:
+                    p = ins.w[3];
+                    var = p < bound && root[p] != UINT32_MAX ? root[p] : p;
+                    f = p < bound && first[p] != UINT32_MAX ? first[p] : WHOLE;
+                    x = var && var < bound ? pvk_spv_get(ctx, var) : NULL;
+                    v = p < bound ? t[p] : 0;
+                    if (x && x->kind == PVK_SPV_K_VAR && (x->flags & PVK_SPV_F_IA_INDEX)) { /* an input attachment */
+                        const struct pvk_spv_type *vt = pvk_spv_type(ctx, x->p->type);
+                        uint32_t span = vt->op == PVK_SPV_OpTypeArray && vt->count < 32 ? vt->count : 32u;
+                        if (f < 64 && x->ia_index + f < 32)
+                            v |= 1u << (x->ia_index + f);
+                        else if (f == WHOLE && vt->op != PVK_SPV_OpTypeArray && x->ia_index < 32)
+                            v |= 1u << x->ia_index; /* (not an array) */
+                        else if (x->ia_index < 32)
+                            v |= (span >= 32 ? ~0u : (1u << span) - 1u) << x->ia_index;
+                    } else if (var < bound && mem[var]) {
+                        for (k = 0; k <= DYN; k++)
+                            if (f >= 64 || k == f || k >= WHOLE)
+                                v |= mem[var][k];
+                    }
+                    break;
+                case PVK_SPV_OpStore: case PVK_SPV_OpCopyMemory:
+                    p = ins.w[1];
+                    var = p < bound && root[p] != UINT32_MAX ? root[p] : p;
+                    f = p < bound && first[p] != UINT32_MAX ? first[p] : WHOLE;
+                    x = var && var < bound ? pvk_spv_get(ctx, var) : NULL;
+                    v = (p < bound ? t[p] : 0) | c;
+                    if (op == PVK_SPV_OpStore) {
+                        v |= ins.w[2] < bound ? t[ins.w[2]] : 0;
+                    } else { /* (the whole source) */
+                        uint32_t src = ins.w[2] < bound && root[ins.w[2]] != UINT32_MAX ? root[ins.w[2]] : ins.w[2];
+                        if (src >= bound || (pvk_spv_get(ctx, src)->flags & PVK_SPV_F_IA_INDEX))
+                            return false;
+                        if (mem[src])
+                            for (k = 0; k <= DYN; k++)
+                                v |= mem[src][k];
+                        f = WHOLE;
+                    }
+                    if (!x || x->kind != PVK_SPV_K_VAR || !x->p ||
+                        (x->p->storage != PVK_SPV_StorageFunction && x->p->storage != PVK_SPV_StoragePrivate &&
+                         x->p->storage != PVK_SPV_StorageOutput))
+                        return false; /* memory others see */
+                    if (x->p->storage == PVK_SPV_StorageOutput) {
+                        if (x->flags & PVK_SPV_F_BUILTIN) {
+                            if ((global | v) != global) {
+                                global |= v; /* FragDepth, SampleMask: every output */
+                                changed = true;
+                            }
+                        } else if (!(x->flags & PVK_SPV_F_LOCATION)) {
+                            return false;
+                        } else {
+                            bool arr = pvk_spv_type(ctx, x->p->type)->op == PVK_SPV_OpTypeArray; /* (else f is a component) */
+                            uint32_t lo = x->location + (arr && f < 64 ? f : 0u), hi = !arr || f < 64 ? lo : 7u;
+                            for (k = lo; k <= hi && k < 8; k++)
+                                if ((deps[k] | v) != deps[k]) {
+                                    deps[k] |= v;
+                                    changed = true;
+                                }
+                        }
+                    }
+                    if (!mem[var])
+                        mem[var] = pvk_spv_alloc(ctx, sizeof(uint32_t) * (DYN + 1));
+                    m = &mem[var][f];
+                    if ((*m | v) != *m) {
+                        *m |= v;
+                        changed = true;
+                    }
+                    continue;
+                case PVK_SPV_OpPhi:
+                    for (k = 3; k + 1 < ins.wc; k += 2) {
+                        const struct pvk_spv_id *pl = pvk_spv_get(ctx, ins.w[k + 1]);
+                        v |= (ins.w[k] < bound ? t[ins.w[k]] : 0) |
+                             (pl->kind == PVK_SPV_K_LABEL && pl->func == fidx ? ctl[pl->block] : 0u);
+                    }
+                    break;
+                default:
+                    if (!r)
+                        continue;
+                    for (k = 3; k < ins.wc; k++) /* (a literal taken for an id only adds) */
+                        v |= ins.w[k] < bound ? t[ins.w[k]] : 0;
+                    break;
+                }
+                if (r && (t[r] | v) != t[r]) {
+                    t[r] |= v;
+                    changed = true;
+                }
+            }
+        }
+        for (b = 0; b < nb; b++) { /* control */
+            const struct pvk_spv_block *blk = &fn->blocks[b];
+            struct pvk_spv_insn term = pvk_spv_insn_at(ctx, blk->end);
+            uint32_t v, m = UINT32_MAX, l, target;
+            bool loop = false, breaks = false, returns = false;
+            if (term.op != PVK_SPV_OpBranchConditional && term.op != PVK_SPV_OpSwitch)
+                continue;
+            v = (term.w[1] < bound ? t[term.w[1]] : 0) | ctl[b];
+            if (!v || idom[b] == UINT32_MAX)
+                continue;
+            if (blk->merge) {
+                struct pvk_spv_insn mi = pvk_spv_insn_at(ctx, blk->merge);
+                m = pvk_spv_label_block(ctx, fidx, mi.w[1]);
+                loop = mi.op == PVK_SPV_OpLoopMerge;
+            }
+            if (blk->merge && !loop) { /* a selection: its construct, and how it is left */
+                for (l = 0; l < nb; l++)
+                    in[l] = l != b && l != m && pvk_spv_dominates(idom, b, l) && !pvk_spv_dominates(idom, m, l);
+                for (l = 0; l < nb; l++) {
+                    struct pvk_spv_insn lt;
+                    if (!in[l])
+                        continue;
+                    lt = pvk_spv_insn_at(ctx, fn->blocks[l].end);
+                    if (lt.op != PVK_SPV_OpBranch && lt.op != PVK_SPV_OpBranchConditional && lt.op != PVK_SPV_OpSwitch)
+                        returns = true;
+                    for (k = 0; k < nsucc[l]; k++)
+                        if (!in[succ[l][k]] && succ[l][k] != m)
+                            breaks = true;
+                }
+                target = returns ? UINT32_MAX : breaks ? loop_of[b] : b;
+                if (returns || (breaks && target == UINT32_MAX)) {
+                    if ((global | v) != global) {
+                        global |= v;
+                        changed = true;
+                    }
+                    continue;
+                }
+                if (target != b) { /* the loop around it */
+                    uint32_t lm = pvk_spv_label_block(ctx, fidx, pvk_spv_insn_at(ctx, fn->blocks[target].merge).w[1]);
+                    for (l = 0; l < nb; l++)
+                        in[l] |= pvk_spv_dominates(idom, target, l) && !pvk_spv_dominates(idom, lm, l);
+                }
+            } else { /* a loop's condition, a break or continue: the loop */
+                target = loop ? b : loop_of[b];
+                if (target == UINT32_MAX) {
+                    if ((global | v) != global) {
+                        global |= v;
+                        changed = true;
+                    }
+                    continue;
+                }
+                m = pvk_spv_label_block(ctx, fidx, pvk_spv_insn_at(ctx, fn->blocks[target].merge).w[1]);
+                for (l = 0; l < nb; l++) /* (its construct: what its header dominates, its merge does not) */
+                    in[l] = pvk_spv_dominates(idom, target, l) && !pvk_spv_dominates(idom, m, l);
+            }
+            for (l = 0; l < nb; l++)
+                if (in[l] && (ctl[l] | v) != ctl[l]) {
+                    ctl[l] |= v;
+                    changed = true;
+                }
+        }
+    }
+    for (k = 0; k < 8; k++)
+        deps[k] |= global;
+    return true;
+}
+
 static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
 {
     struct pvk_msl_result *res = ctx->result;
@@ -51386,6 +51732,8 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         }
     }
     res->color_fetches = fetch_colors;
+    if (!vertex && fetch_colors)
+        res->fetch_deps_known = pvk_spv_fetch_deps(ctx, entry, res->fetch_deps);
 
     /* Built-in inputs */
     for (g = 0; g < ctx->nglobals; g++) {
@@ -51782,13 +52130,40 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     }
     free(outs.data);
     free(ins.data);
-    if (early && early_attr)
-        pvk_sb_append(ctx, text, "[[early_fragment_tests]]\n", 25);
-    pvk_sb_printf(ctx, text, "%s %s%s %s(", vertex ? "vertex" : "fragment", outs.len ? name : "void",
-                  outs.len ? "_out" : "", name);
-    for (i = 0; i < nparams; i++)
-        pvk_sb_printf(ctx, text, "%s%s", i ? ",\n    " : "\n    ", params[i]);
+    /* Colors read by framebuffer fetch, last: a variant defining
+     * PVK_DROP_COLOR<n> reads 0 instead (a group of a pass split for tile
+     * memory, struct pvk_gfx_groups) */
+    {
+        uint32_t plain = 0, n, k;
+        for (i = 0; i < nparams; i++)
+            plain += !strstr(params[i], "[[color(");
+        if (early && early_attr)
+            pvk_sb_append(ctx, text, "[[early_fragment_tests]]\n", 25);
+        pvk_sb_printf(ctx, text, "%s %s%s %s(", vertex ? "vertex" : "fragment", outs.len ? name : "void",
+                      outs.len ? "_out" : "", name);
+        if (!plain && nparams)
+            pvk_sb_printf(ctx, text, "\n    float4 pvk_guard_position [[position]]");
+        for (i = 0, k = 0; i < nparams; i++)
+            if (!strstr(params[i], "[[color("))
+                pvk_sb_printf(ctx, text, "%s%s", k++ ? ",\n    " : "\n    ", params[i]);
+        for (i = 0; i < nparams; i++) {
+            const char *pc = strstr(params[i], " pvk_color");
+            if (!strstr(params[i], "[[color("))
+                continue;
+            if (pc && sscanf(pc, " pvk_color%u", &n) == 1)
+                pvk_sb_printf(ctx, text, "\n#ifndef PVK_DROP_COLOR%u\n    , %s\n#endif\n", n, params[i]);
+            else
+                pvk_sb_printf(ctx, text, ",\n    %s", params[i]);
+        }
+    }
     pvk_sb_append(ctx, text, ")\n{\n", 4);
+    for (i = 0; i < nparams; i++) { /* (the colors a variant drops) */
+        const char *pc = strstr(params[i], " pvk_color");
+        uint32_t n;
+        if (strstr(params[i], "[[color(") && pc && sscanf(pc, " pvk_color%u", &n) == 1)
+            pvk_sb_printf(ctx, text, "#ifdef PVK_DROP_COLOR%u\n    %.*s pvk_color%u = %.*s(0);\n#endif\n", n,
+                          (int)(pc - params[i]), params[i], n, (int)(pc - params[i]), params[i]);
+    }
     pvk_sb_append(ctx, text, ctx->body.data, ctx->body.len);
     pvk_sb_append(ctx, text, "}\n", 2);
 }
@@ -54590,6 +54965,11 @@ struct pvk_gfx_pipeline {
      * write from textures (pvk_encode_begin_pass) */
     uint32_t writes, fetched;
     bool tex_variant;
+    /* fetch_deps[l]: the logical colors fetched that its output l depends on
+     * (pvk_spv_fetch_deps), known with fetch_split: a pass split for tile
+     * memory drops the others' colors in its variants (pvk_gfx_group_variant) */
+    uint8_t fetch_deps[PVK_MAX_COLOR_ATTACHMENTS];
+    bool fetch_split;
     bool has_fragment;
     bool draw_index;                /* the vertex shader reads DrawIndex (buffer index 28) */
     bool bounds;                    /* may test depth bounds (with the depth copy) */
@@ -56412,6 +56792,10 @@ struct pvk_draw_track {
      * textures (pvk_encode_begin_pass) */
     uint32_t tex, written;
     bool tex_bad;
+    /* The groups a split for tile memory would bind (pvk_render_groups), and
+     * whether a draw's outputs in one depend on colors it fetches in another */
+    uint32_t split[PVK_MAX_COLOR_ATTACHMENTS], nsplit;
+    bool fetch_bad;
     uint32_t hidden;     /* PVK_HIDDEN_* copies the pipelines bound read (or depth bounds need) */
     uint32_t int_colors; /* a pipeline renders SNORM attachments through SINT views (pvk_render_rebind) */
     /* The slots the pass's first draw binds through SINT views (first_slots,
@@ -58223,6 +58607,24 @@ static bool pvk_scan_packet(struct pvk_encoder *e, struct pvk_draw_track *t, con
             }
         t->tex_bad |= only && !t->gfx->tex_variant;
     }
+    if ((c->op == PVK_CMD_DRAW || c->op == PVK_CMD_DRAW_INDEXED || c->op == PVK_CMD_DRAW_INDIRECT) && t->gfx &&
+        t->gfx->fetches && t->nsplit > 1 && !t->fetch_bad) {
+        uint32_t g, h;
+        t->fetch_bad = !t->gfx->fetch_split;
+        for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS && !t->fetch_bad; i++) {
+            uint32_t deps = t->gfx->fetch_deps[i], k;
+            if (!(t->gfx->writes >> i & 1u) || t->map[i] == PVK_NO_SLOT)
+                continue;
+            for (g = 0; g < t->nsplit && !(t->split[g] >> t->map[i] & 1u); g++)
+                ;
+            for (k = 0; k < PVK_MAX_COLOR_ATTACHMENTS; k++)
+                if (deps >> k & 1u) {
+                    for (h = 0; t->map[k] != PVK_NO_SLOT && h < t->nsplit && !(t->split[h] >> t->map[k] & 1u); h++)
+                        ;
+                    t->fetch_bad |= t->map[k] == PVK_NO_SLOT || h != g;
+                }
+        }
+    }
     if (!t->first_draw && (c->op == PVK_CMD_DRAW || c->op == PVK_CMD_DRAW_INDEXED || c->op == PVK_CMD_DRAW_INDIRECT)) {
         t->first_draw = true;
         for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
@@ -59823,6 +60225,8 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     track.fetches = r->pipeline && r->pipeline->gfx && r->pipeline->gfx->fetches;
     track.tex = track.written = 0;
     track.tex_bad = false;
+    track.nsplit = pvk_render_groups(c, track.split);
+    track.fetch_bad = false;
     track.draws = 0;
     memset(track.map, PVK_NO_SLOT, sizeof(track.map));
     track.hidden = r->pipeline && r->pipeline->gfx /* the depth/stencil copies its pipelines need */
@@ -59849,7 +60253,7 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
         return;
     }
     if (!(c->flags & (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT)) && !track.vis_pool &&
-        !e->occ_pool && !track.int_colors && !track.fetches &&
+        !e->occ_pool && !track.int_colors && (!track.fetches || !track.fetch_bad) &&
         !((c->hidden | track.hidden) &
           ((c->depth.texture ? PVK_HIDDEN_DEPTH : 0u) | (c->stencil.texture ? PVK_HIDDEN_STENCIL : 0u))))
         n = pvk_render_groups(c, p->groups);
@@ -64353,10 +64757,20 @@ static id pvk_gfx_group_variant(struct pvk_device *device, struct pvk_pipeline *
             pso = pvk_gfx_compile(device, &d, g->tex_msl[0], g->tex_entry[0], g->tex_msl[1], g->tex_entry[1],
                                   g->layered, g->invariant, "PlasmaVK tile memory texture input variant", error,
                                   sizeof(error));
-        else
-            pso = pvk_gfx_compile(device, &d, g->msl[0], g->entry[0], g->msl[1], g->msl[1] ? g->entry[1] : NULL,
-                                  g->layered, g->invariant, "PlasmaVK tile memory group variant", error,
-                                  sizeof(error));
+        else { /* (the colors it fetches there read 0: their outputs do not depend on them, fetch_split) */
+            uint32_t drop = mask & p->gfx->fetched & 0xffu;
+            size_t len = g->msl[1] ? strlen(g->msl[1]) : 0;
+            char *fs = drop && g->msl[1] ? malloc(len + 8 * 32 + 1) : NULL, *at = fs;
+            for (l = 0; fs && l < PVK_MAX_COLOR_ATTACHMENTS; l++)
+                if (drop >> l & 1u)
+                    at += snprintf(at, 32, "#define PVK_DROP_COLOR%u 1\n", l);
+            if (fs)
+                memcpy(at, g->msl[1], len + 1);
+            pso = pvk_gfx_compile(device, &d, g->msl[0], g->entry[0], fs ? fs : g->msl[1],
+                                  g->msl[1] ? g->entry[1] : NULL, g->layered, g->invariant,
+                                  "PlasmaVK tile memory group variant", error, sizeof(error));
+            free(fs);
+        }
         if (!pso)
             pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-compilation", VK_OBJECT_TYPE_PIPELINE,
                      (uint64_t)(uintptr_t)p, "a graphics pipeline's tile memory group variant: %s", error);
@@ -64493,6 +64907,8 @@ static void pvk_gfx_hidden_formats(struct pvk_gfx_desc *d, uint32_t flags)
 struct pvk_gfx_kept {
     char *msl[2];
     char entry[2][64];
+    uint32_t fetch_deps[8]; /* (pvk_msl_result) */
+    bool fetch_deps_known;
 };
 
 static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cache *cache, const struct pvk_gfx_sources *src,
@@ -64611,6 +65027,21 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
     }
     pvk_cache_insert(cache, &key, ci, names[0], names[1], sources[0], sources[1], *pso);
     if (kept) { /* (msl NULL when out of memory: no variants) */
+        if (*hit) { /* the dependencies of fetched colors, translated again (pvk_spv_fetch_deps) */
+            struct pvk_msl_result kv, kf;
+            memset(&kv, 0, sizeof(kv));
+            memset(&kf, 0, sizeof(kf));
+            if (fs && pvk_spirv_to_msl_graphics(src->vs_code, src->vs_words, vs->pName, vo, src->fs_code, src->fs_words,
+                                                fs->pName, fo, &kv, &kf) == VK_SUCCESS) {
+                memcpy(kept->fetch_deps, kf.fetch_deps, sizeof(kept->fetch_deps));
+                kept->fetch_deps_known = kf.fetch_deps_known;
+            }
+            pvk_msl_result_free(&kv);
+            pvk_msl_result_free(&kf);
+        } else {
+            memcpy(kept->fetch_deps, fres.fetch_deps, sizeof(kept->fetch_deps));
+            kept->fetch_deps_known = fres.fetch_deps_known;
+        }
         kept->msl[0] = sources[0] ? pvk_strdup_alloc(alloc, sources[0]) : NULL;
         kept->msl[1] = sources[1] ? pvk_strdup_alloc(alloc, sources[1]) : NULL;
         snprintf(kept->entry[0], sizeof(kept->entry[0]), "%s", names[0] ? names[0] : "");
@@ -65161,6 +65592,18 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
                 gfx.tex_variant = true;
             }
             gfx.groups = g;
+            if (kept.fetch_deps_known) {
+                uint32_t l;
+                gfx.fetch_split = true;
+                for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS; l++)
+                    for (i = 0; i < 32; i++)
+                        if (kept.fetch_deps[l] >> i & 1u) {
+                            if (i >= PVK_MAX_INPUT_ATTACHMENTS)
+                                gfx.fetch_split = false;
+                            else if (input_colors[i] < PVK_MAX_COLOR_ATTACHMENTS)
+                                gfx.fetch_deps[l] |= (uint8_t)(1u << input_colors[i]);
+                        }
+            }
         } else {
             pvk_free(alloc, g);
         }
