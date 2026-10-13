@@ -46798,9 +46798,8 @@ static uint32_t pvk_spv_const_u32(struct pvk_spv *ctx, uint32_t cid)
  * release (Release, AcquireRelease, SequentiallyConsistent, MakeAvailable)
  * is atomic_thread_fence before the operation, an acquire (Acquire, ...,
  * MakeVisible) one after it, over the storage classes the semantics name
- * and the atomic's own, at the memory scope's
- * thread_scope (Device and QueueFamily: thread_scope_device, as are fences
- * over both workgroup and device memory: pvk_spv_fence_scope). Device-scope
+ * and the atomic's own (pvk_spv_fence_sem), at a SIMD-group's thread_scope
+ * for Subgroup and the device's otherwise (pvk_spv_fence_scope). Device-scope
  * coherence of buffer memory itself: COHERENCE in pvk_spv_coherence. */
 
 #define PVK_SPV_SEM_RELEASE \
@@ -46810,36 +46809,23 @@ static uint32_t pvk_spv_const_u32(struct pvk_spv *ctx, uint32_t cid)
     (PVK_SPV_SemanticsAcquire | PVK_SPV_SemanticsAcquireRelease | PVK_SPV_SemanticsSequentiallyConsistent | \
      PVK_SPV_SemanticsMakeVisible)
 
-static const char *pvk_spv_thread_scope(uint32_t scope)
+/* The thread_scope of a fence at memory scope `scope`. Metal's
+ * threadgroup-scope fences don't order memory for other SIMD-groups (M4 Max,
+ * macOS 27.2): with a payload in threadgroup memory and a guard in either,
+ * a reader saw the guard but a stale payload a few dozen times per 1,500
+ * back-to-back dispatches of 64 threadgroups of 961, whatever the fence's
+ * flags; and once in a CTS run, a SIMD-group's buffer reads before a
+ * workgroup-scope release returned its partner's writes made after the
+ * matching acquire. So only Subgroup fences are narrower than the device. */
+static const char *pvk_spv_fence_scope(uint32_t scope)
 {
-    return scope == PVK_SPV_ScopeWorkgroup ? "thread_scope_threadgroup"
-           : scope == PVK_SPV_ScopeSubgroup ? "thread_scope_simdgroup"
-                                            : "thread_scope_device";
+    return scope == PVK_SPV_ScopeSubgroup ? "thread_scope_simdgroup" : "thread_scope_device";
 }
 
-/* The thread_scope of a fence at memory scope `scope` over semantics sem.
- * Metal's threadgroup-scope fences don't order threadgroup memory against
- * device memory for other SIMD-groups (M4 Max, macOS 27.2: a payload in
- * threadgroup memory written before a release fence was read stale after a
- * buffer guard written after it was seen, about once in 50,000 handoffs;
- * never with thread_scope_device and both in the fence's flags), so fences
- * over both are device-scope. */
-static const char *pvk_spv_fence_scope(uint32_t scope, uint32_t sem)
-{
-    if ((sem & PVK_SPV_SemanticsWorkgroupMemory) &&
-        (sem & (PVK_SPV_SemanticsUniformMemory | PVK_SPV_SemanticsCrossWorkgroupMemory)))
-        return "thread_scope_device";
-    return pvk_spv_thread_scope(scope);
-}
-
-/* The semantics a fence covers. Metal's fences don't order threadgroup
- * memory alone for other SIMD-groups either (M4 Max, macOS 27.2: with
- * payload and guard both in threadgroup memory, a few dozen stale payloads
- * per 1,500 back-to-back dispatches of 64 threadgroups of 961, at
- * threadgroup or device scope; none with device memory added to a
- * device-scope fence, while threadgroup-scope ones failed with any flags),
- * so fences over threadgroup memory wider than a SIMD-group cover device
- * memory too, which makes them device-scope (pvk_spv_fence_scope). */
+/* The semantics a fence covers. A device-scope fence over threadgroup
+ * memory alone doesn't order it for other SIMD-groups either (as above, at
+ * the same rate); with device memory in its flags none failed. So fences
+ * over threadgroup memory wider than a SIMD-group cover device memory too. */
 static uint32_t pvk_spv_fence_sem(uint32_t scope, uint32_t sem)
 {
     if ((sem & PVK_SPV_SemanticsWorkgroupMemory) && scope != PVK_SPV_ScopeSubgroup &&
@@ -46851,16 +46837,15 @@ static uint32_t pvk_spv_fence_sem(uint32_t scope, uint32_t sem)
 /* The fence of a release (want PVK_SPV_SEM_RELEASE) or acquire for memory
  * scope `scope` and semantics `sem`; own: the storage class semantics of
  * the atomic it orders (0: none), which the fence covers too (a fence over
- * threadgroup memory alone does not order it against a device atomic, as
- * pvk_spv_fence_scope found). Emitted when the semantics ask for it. */
+ * threadgroup memory alone does not order it against a device atomic).
+ * Emitted when the semantics ask for it. */
 static void pvk_spv_fence(struct pvk_spv *ctx, uint32_t scope, uint32_t sem, uint32_t want, uint32_t own)
 {
-    uint32_t all = pvk_spv_fence_sem(scope, sem | own);
-    const char *flags = pvk_spv_mem_flags(ctx, all);
+    const char *flags = pvk_spv_mem_flags(ctx, pvk_spv_fence_sem(scope, sem | own));
     if (!(sem & want) || scope == PVK_SPV_ScopeInvocation)
         return;
     if (flags)
-        pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, pvk_spv_fence_scope(scope, all));
+        pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, pvk_spv_fence_scope(scope));
 }
 
 static void pvk_spv_barrier(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
@@ -46890,7 +46875,7 @@ static void pvk_spv_barrier(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         uint32_t sem = pvk_spv_fence_sem(scope, pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2)));
         const char *flags = pvk_spv_mem_flags(ctx, sem);
         if (flags && scope != PVK_SPV_ScopeInvocation)
-            pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, pvk_spv_fence_scope(scope, sem));
+            pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, pvk_spv_fence_scope(scope));
     }
 }
 
