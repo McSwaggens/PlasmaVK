@@ -32261,7 +32261,7 @@ struct pvk_device {
     id compiler;                              /* MTL4Compiler of render pipelines */
     struct pvk_ds_state *ds_states[64];       /* MTLDepthStencilStates by state (hash buckets) */
     struct pvk_clear_pipeline *clear_pipelines; /* vkCmdClearAttachments draws, by formats */
-    id prepass_pipelines[3];                  /* draw preprocessing kernels (section 16) */
+    id prepass_pipelines[4];                  /* draw preprocessing kernels (section 16) */
     struct pvk_fan_buffer *fan_buffers;       /* triangle fan index patterns, newest first */
     id draw_indices;                          /* MTLBuffer of uints 0, 1, 2, ...: DrawIndex values */
     pvk_MTLGPUAddress draw_indices_address;
@@ -33243,7 +33243,6 @@ static void pvk_physical_device_init_descriptor_features(struct pvk_physical_dev
  *                          tested, and its depth and stencil written, before
  *                          the discard; with several samples the copy can be
  *                          a few ULP off the stored depth at triangle edges.
- * fillModeNonSolid needs points too (Metal fills triangles or lines only),
  * wideLines has no Metal equivalent. */
 static void pvk_physical_device_init_graphics_features(struct pvk_physical_device *pd)
 {
@@ -33256,6 +33255,7 @@ static void pvk_physical_device_init_graphics_features(struct pvk_physical_devic
     c->multiDrawIndirect = VK_TRUE;
     c->logicOp = VK_TRUE;     /* by framebuffer fetch */
     c->depthBounds = VK_TRUE; /* with the depth copy */
+    c->fillModeNonSolid = VK_TRUE; /* POINT drawn as 3 points per triangle (section 13, POLYGON POINTS) */
     pd->features.v11.shaderDrawParameters = VK_TRUE;
     pd->features.v12.drawIndirectCount = VK_TRUE;
     pd->features.v12.shaderOutputViewportIndex = VK_TRUE;
@@ -41106,6 +41106,8 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
 #define PVK_MSL_VERTEX_TABLE_BUFFER 29u
 #define PVK_MSL_DRAW_INDEX_BUFFER 28u
 #define PVK_MSL_DEPTH_BOUNDS_BUFFER 27u
+#define PVK_MSL_POINTS_BUFFER 26u       /* struct pvk_msl_points (POLYGON POINTS) */
+#define PVK_MSL_POINTS_STATE_BUFFER 25u /* struct pvk_msl_points_state */
 #define PVK_MSL_MAX_SETS 30u
 #define PVK_MSL_MAX_LOCATIONS 32u /* stage input/output locations */
 
@@ -41160,6 +41162,32 @@ struct pvk_msl_vertex_buffer {
     uint64_t size;    /* bytes there (robust_vertex_input: attributes past it read 0) */
     uint32_t stride;  /* bytes between elements, read with dynamic_vertex_strides */
     uint32_t reserved;
+};
+
+/* Where a polygon-point draw's triangles find their vertices, at buffer
+ * index PVK_MSL_POINTS_BUFFER (POLYGON POINTS): triangle t's vertices are
+ * those of a list (mode 0), strip (1) or fan (2) from element `first` of
+ * the vertices or of `indices` (index_size 1, 2 or 4; 0: none), or
+ * indices[3t..3t+2] (mode 3, 4-byte vertex numbers, ~0: none); indices
+ * get vertex_offset added. */
+struct pvk_msl_points {
+    uint64_t indices;
+    uint32_t index_size, mode, first;
+    int32_t vertex_offset;
+    uint32_t pad[2];
+};
+
+/* How a polygon-point draw culls and biases depth, at
+ * PVK_MSL_POINTS_STATE_BUFFER: VkCullModeFlags, front face
+ * COUNTER_CLOCKWISE, viewports with a negative height (bit per viewport),
+ * depth bias enabled and its factors (Metal biases no points), r the depth
+ * format's minimum resolvable difference (0: floating point, from the
+ * triangle's largest depth), each viewport's width, height, minDepth and
+ * maxDepth. */
+struct pvk_msl_points_state {
+    uint32_t cull, ccw, flips, bias;
+    float bias_constant, bias_clamp, bias_slope, bias_r;
+    float viewports[16][4];
 };
 
 /* One binding of a descriptor set layout: where its descriptors sit in the
@@ -41263,6 +41291,10 @@ struct pvk_msl_options {
     bool point_size;             /* point topology: output a point size (1.0 unless the shader writes one) */
     bool no_point_size;          /* line or triangle topology: PointSize is dropped (Vulkan ignores it, and
                                   * Metal rejects it with a primitive topology class) */
+    /* Polygon mode POINT (POLYGON POINTS): a vertex function drawing each
+     * triangle's vertices as three points of its own, a fragment function
+     * reading PrimitiveId as the triangle's. */
+    bool polygon_points;
     /* Multiview (VK_KHR_multiview): the view mask. ViewIndex for vertex
      * amplification id n is the mask's n-th set bit; 0: ViewIndex is 0. */
     uint32_t view_mask;
@@ -51534,6 +51566,162 @@ static bool pvk_spv_fetch_deps(struct pvk_spv *ctx, struct pvk_spv_func *fn, uin
     return true;
 }
 
+/* ---- Polygon points ----
+ *
+ * Polygon mode POINT draws each triangle's vertices as points, after
+ * culling the triangle by its facing; Metal has no such mode, and points
+ * are never culled. So a pipeline drawing triangles in point mode draws 3
+ * points per triangle (vertex t * 3 + c: corner c of triangle t), and its
+ * vertex function runs the shader for all three corners (Vulkan lets a
+ * vertex be shaded more than once), works out the triangle's facing as
+ * Vulkan does (framebuffer area, viewport height signs: struct
+ * pvk_msl_points_state) and returns its own corner, moved outside the clip
+ * volume if the triangle is culled. struct pvk_msl_points says where a
+ * triangle's vertices are: lists, strips and fans of vertices or indices
+ * from `first`, or a list of vertex numbers the encoder made (mode 3:
+ * strips and fans with primitive restart, ~0 for no triangle). The
+ * vertices are those of the triangle as drawn, unclipped. Points are 1.0
+ * (polygonModePointSize is VK_FALSE). Metal biases no points: the vertex
+ * function adds the triangle's depth bias. Deviation: flat-shaded outputs come
+ * from each point's own vertex, not the triangle's provoking vertex. */
+
+static const char pvk_msl_points_text[] =
+    "/* struct pvk_msl_points and pvk_msl_points_state */\n"
+    "struct pvk_points\n{\n    device const uchar* indices;\n    uint index_size, mode, first;\n"
+    "    int vertex_offset;\n    uint pad0, pad1;\n};\n\n"
+    "struct pvk_points_state\n{\n    uint cull, ccw, flips, bias;\n"
+    "    float bias_constant, bias_clamp, bias_slope, bias_r;\n    float4 viewports[16];\n};\n\n";
+
+/* A parameter's name: the identifier before its attribute. */
+static const char *pvk_spv_param_name(struct pvk_spv *ctx, const char *param)
+{
+    const char *end = strstr(param, " [[");
+    const char *p;
+    if (!end)
+        end = param + strlen(param);
+    for (p = end; p > param && (p[-1] == '_' || (p[-1] >= '0' && p[-1] <= '9') ||
+                                (p[-1] >= 'a' && p[-1] <= 'z') || (p[-1] >= 'A' && p[-1] <= 'Z'));
+         p--)
+        ;
+    return pvk_spv_fmt(ctx, "%.*s", (int)(end - p), p);
+}
+
+/* The vertex function of polygon mode POINT: <name>_corner runs the
+ * shader for one vertex, <name> draws a triangle's corner. */
+static void pvk_spv_emit_points_entry(struct pvk_spv *ctx, const char *name, const char *const *params,
+                                      uint32_t nparams)
+{
+    struct pvk_msl_result *res = ctx->result;
+    struct pvk_sb *text = &ctx->text, call;
+    bool has_vid = false;
+    uint32_t i;
+
+    memset(&call, 0, sizeof(call));
+    pvk_sb_append(ctx, text, pvk_msl_points_text, sizeof(pvk_msl_points_text) - 1);
+    pvk_sb_printf(ctx, text, "static %s_out %s_corner(", name, name);
+    for (i = 0; i < nparams; i++) {
+        const char *end = strstr(params[i], " [[");
+        const char *arg = pvk_spv_param_name(ctx, params[i]);
+        pvk_sb_printf(ctx, text, "%s%.*s", i ? ",\n    " : "\n    ",
+                      (int)(end ? (size_t)(end - params[i]) : strlen(params[i])), params[i]);
+        if (!strcmp(arg, "pvk_vertex_id"))
+            arg = "pvk_v[pvk_k]";
+        else if (!strcmp(arg, "pvk_base_vertex"))
+            arg = "pvk_bv";
+        pvk_sb_printf(ctx, &call, "%s%s", i ? ", " : "", arg);
+    }
+    pvk_sb_append(ctx, text, ")\n{\n", 4);
+    pvk_sb_append(ctx, text, ctx->body.data, ctx->body.len);
+    pvk_sb_append(ctx, text, "}\n\n", 3);
+
+    pvk_sb_printf(ctx, text, "vertex %s_out %s(", name, name);
+    for (i = 0; i < nparams; i++) {
+        const char *p = params[i];
+        if (strstr(p, "[[base_vertex]]"))
+            continue;
+        if (strstr(p, "[[vertex_id]]")) {
+            p = "uint pvk_point_id [[vertex_id]]";
+            has_vid = true;
+        }
+        pvk_sb_printf(ctx, text, "\n    %s,", p);
+    }
+    if (!has_vid)
+        pvk_sb_append(ctx, text, "\n    uint pvk_point_id [[vertex_id]],", 36);
+    pvk_sb_printf(ctx, text,
+                  "\n    constant pvk_points& pvk_pts [[buffer(%u)]],\n"
+                  "    constant pvk_points_state& pvk_pst [[buffer(%u)]])\n{\n",
+                  PVK_MSL_POINTS_BUFFER, PVK_MSL_POINTS_STATE_BUFFER);
+    pvk_sb_printf(ctx, text,
+                  "    uint pvk_t = pvk_point_id / 3u, pvk_c = pvk_point_id - pvk_t * 3u, pvk_v[3];\n"
+                  "    uint pvk_bv = pvk_pts.index_size != 0u ? uint(pvk_pts.vertex_offset) : pvk_pts.first;\n"
+                  "    %s_out pvk_o[3];\n"
+                  "    for (uint pvk_k = 0u; pvk_k < 3u; pvk_k++) {\n"
+                  "        uint pvk_s = pvk_pts.mode == 1u ? pvk_t + (pvk_k == 0u ? 0u : pvk_k == 1u ? 1u + (pvk_t & 1u)"
+                  " : 2u - (pvk_t & 1u))\n"
+                  "                   : pvk_pts.mode == 2u ? (pvk_k == 2u ? 0u : pvk_t + pvk_k + 1u)\n"
+                  "                                        : pvk_t * 3u + pvk_k;\n"
+                  "        uint pvk_e = pvk_pts.first + pvk_s;\n"
+                  "        if (pvk_pts.index_size == 0u) {\n"
+                  "            pvk_v[pvk_k] = pvk_e;\n"
+                  "            continue;\n"
+                  "        }\n"
+                  "        pvk_v[pvk_k] = pvk_pts.index_size == 1u ? uint(pvk_pts.indices[pvk_e])\n"
+                  "                     : pvk_pts.index_size == 2u ? uint(((device const ushort*)pvk_pts.indices)[pvk_e])\n"
+                  "                                               : ((device const uint*)pvk_pts.indices)[pvk_e];\n"
+                  "        if (pvk_pts.mode == 3u && pvk_v[pvk_k] == 0xffffffffu) {\n"
+                  "            %s_out pvk_none = {};\n"
+                  "            pvk_none.pvk_position = float4(0.0f, 0.0f, 0.0f, -1.0f);\n"
+                  "            return pvk_none;\n"
+                  "        }\n"
+                  "        pvk_v[pvk_k] += uint(pvk_pts.vertex_offset);\n"
+                  "    }\n"
+                  "    for (uint pvk_k = 0u; pvk_k < 3u; pvk_k++)\n"
+                  "        pvk_o[pvk_k] = %s_corner(%.*s);\n",
+                  name, name, name, (int)call.len, call.data ? call.data : "");
+    /* Vulkan's framebuffer area: a = -(width * height / 8) * the cross
+     * product in Vulkan's NDC (y down: the shader's y negated back). */
+    pvk_sb_printf(ctx, text,
+                  "    float2 pvk_a = float2(pvk_o[0].pvk_position.x, -pvk_o[0].pvk_position.y) / pvk_o[0].pvk_position.w;\n"
+                  "    float2 pvk_b = float2(pvk_o[1].pvk_position.x, -pvk_o[1].pvk_position.y) / pvk_o[1].pvk_position.w;\n"
+                  "    float2 pvk_d = float2(pvk_o[2].pvk_position.x, -pvk_o[2].pvk_position.y) / pvk_o[2].pvk_position.w;\n"
+                  "    float pvk_cross = (pvk_b.x - pvk_a.x) * (pvk_d.y - pvk_a.y) - (pvk_d.x - pvk_a.x) * (pvk_b.y - pvk_a.y);\n"
+                  "    %s_out pvk_r = pvk_c == 0u ? pvk_o[0] : pvk_c == 1u ? pvk_o[1] : pvk_o[2];\n"
+                  "    uint pvk_vp = %s;\n"
+                  "    bool pvk_positive = ((pvk_pst.flips >> (pvk_vp & 31u)) & 1u) != 0u ? pvk_cross > 0.0f : pvk_cross < 0.0f;\n"
+                  "    bool pvk_front = pvk_pst.ccw != 0u ? pvk_positive : !pvk_positive;\n"
+                  /* Depth bias: o = m * slope + r * constant (clamped), for the
+                   * triangle in window coordinates */
+                  "    if (pvk_pst.bias != 0u) {\n"
+                  "        float4 pvk_vw = pvk_pst.viewports[pvk_vp & 15u];\n"
+                  "        float pvk_pz = pvk_vw.w - pvk_vw.z;\n"
+                  "        float3 pvk_z = float3(pvk_o[0].pvk_position.z / pvk_o[0].pvk_position.w,\n"
+                  "                              pvk_o[1].pvk_position.z / pvk_o[1].pvk_position.w,\n"
+                  "                              pvk_o[2].pvk_position.z / pvk_o[2].pvk_position.w) * pvk_pz + pvk_vw.z;\n"
+                  "        float2 pvk_s = pvk_vw.xy * 0.5f;\n"
+                  "        float3 pvk_n = cross(float3((pvk_b - pvk_a) * pvk_s, pvk_z.y - pvk_z.x),\n"
+                  "                             float3((pvk_d - pvk_a) * pvk_s, pvk_z.z - pvk_z.x));\n"
+                  "        float pvk_m = pvk_n.z != 0.0f ? max(abs(pvk_n.x), abs(pvk_n.y)) / abs(pvk_n.z) : 0.0f;\n"
+                  "        float pvk_rr = pvk_pst.bias_r;\n"
+                  "        if (pvk_rr == 0.0f) {\n"
+                  "            int pvk_e;\n"
+                  "            frexp(max(max(abs(pvk_z.x), abs(pvk_z.y)), abs(pvk_z.z)), pvk_e);\n"
+                  "            pvk_rr = ldexp(1.0f, pvk_e - 24);\n"
+                  "        }\n"
+                  "        float pvk_bo = pvk_m * pvk_pst.bias_slope + pvk_rr * pvk_pst.bias_constant;\n"
+                  "        if (pvk_pst.bias_clamp > 0.0f)\n"
+                  "            pvk_bo = min(pvk_bo, pvk_pst.bias_clamp);\n"
+                  "        else if (pvk_pst.bias_clamp < 0.0f)\n"
+                  "            pvk_bo = max(pvk_bo, pvk_pst.bias_clamp);\n"
+                  "        if (pvk_pz != 0.0f)\n"
+                  "            pvk_r.pvk_position.z += pvk_bo / pvk_pz * pvk_r.pvk_position.w;\n"
+                  "    }\n"
+                  "    if ((pvk_pst.cull & (pvk_front ? 1u : 2u)) != 0u)\n"
+                  "        pvk_r.pvk_position = float4(0.0f, 0.0f, 0.0f, -1.0f);\n"
+                  "    return pvk_r;\n}\n",
+                  name, (res->builtins & PVK_MSL_BUILTIN_VIEWPORT_INDEX) ? "pvk_r.pvk_viewport" : "0u");
+    free(call.data);
+}
+
 static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
 {
     struct pvk_msl_result *res = ctx->result;
@@ -52067,8 +52255,10 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_layer [[render_target_array_index]]");
     if (need & PVK_SPV_NEED_VIEWPORT)
         PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_viewport [[viewport_array_index]]");
-    if (need & PVK_SPV_NEED_PRIMITIVE_ID)
-        PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_primitive_id [[primitive_id]]");
+    if (need & PVK_SPV_NEED_PRIMITIVE_ID) /* polygon points: 3 per triangle (POLYGON POINTS) */
+        PVK_SPV_PUSH(ctx, params, nparams, cap,
+                     !vertex && o && o->polygon_points ? "uint pvk_primitive_point [[primitive_id]]"
+                                                       : "uint pvk_primitive_id [[primitive_id]]");
     if (need & PVK_SPV_NEED_LANE)
         PVK_SPV_PUSH(ctx, params, nparams, cap, "uint pvk_lane [[thread_index_in_simdgroup]]");
     if (need & PVK_SPV_NEED_BARYCENTRIC)
@@ -52138,6 +52328,10 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     }
     free(outs.data);
     free(ins.data);
+    if (vertex && o && o->polygon_points && outs.len && (res->builtins & PVK_MSL_BUILTIN_POSITION)) {
+        pvk_spv_emit_points_entry(ctx, name, params, nparams);
+        return;
+    }
     /* Colors read by framebuffer fetch, last: a variant defining
      * PVK_DROP_COLOR<n> reads 0 instead (a group of a pass split for tile
      * memory, struct pvk_gfx_groups) */
@@ -52165,6 +52359,8 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         }
     }
     pvk_sb_append(ctx, text, ")\n{\n", 4);
+    if (!vertex && o && o->polygon_points && (need & PVK_SPV_NEED_PRIMITIVE_ID))
+        pvk_sb_printf(ctx, text, "    uint pvk_primitive_id = pvk_primitive_point / 3u;\n");
     for (i = 0; i < nparams; i++) { /* (the colors a variant drops) */
         const char *pc = strstr(params[i], " pvk_color");
         uint32_t n;
@@ -54966,6 +55162,7 @@ struct pvk_gfx_pipeline {
     uint32_t view_mask;
     bool depth_clamp;
     bool lines;                     /* polygon mode LINE */
+    bool points;                    /* polygon mode POINT, drawing triangles (POLYGON POINTS) */
     bool bresenham;                 /* lines rasterized Bresenham with several samples (pvk_render_open) */
     bool fetches;                   /* reads input attachments from tile memory (framebuffer fetch) */
     /* Logical color indices its fragment shader writes (all of them when
@@ -56782,6 +56979,8 @@ struct pvk_pp_result {
     pvk_MTLGPUAddress records;       /* rewritten indirect records, 0: the application's */
     uint32_t record_stride;
     uint32_t pad;
+    pvk_MTLGPUAddress points;        /* polygon points: the struct pvk_msl_points (one per record), or vertex
+                                      * numbers (mode 3) of a direct draw */
 };
 
 /* The state a draw's preprocessing depends on (pvk_draw_conv), tracked by
@@ -58278,20 +58477,23 @@ static bool pvk_render_draw_index(struct pvk_encoder *e, uint32_t d)
 /* ---- Draw preprocessing ---- */
 
 /* struct pvk_pp_args in MSL; kernels take it at the push-constant index. */
-static const char pvk_prepass_msl[] =
-    "#include <metal_stdlib>\n"
-    "using namespace metal;\n"
-    "struct pvk_pp {\n"
-    "    device const uchar *indices; device uint *out; device const uchar *records; device uint *out_records;\n"
-    "    device const uint *count;\n"
-    "    uint n, first, index_size, restart, stride, region, mode, fan_max, has_count, pad0, pad1, pad2;\n"
-    "};\n"
-    "static uint pvk_index(constant pvk_pp &a, uint i)\n"
-    "{\n"
-    "    if (a.index_size == 1u) return a.indices[i];\n"
-    "    if (a.index_size == 2u) return ((device const ushort *)a.indices)[i];\n"
-    "    return ((device const uint *)a.indices)[i];\n"
+#define PVK_PREPASS_MSL_HEAD \
+    "#include <metal_stdlib>\n" \
+    "using namespace metal;\n" \
+    "struct pvk_pp {\n" \
+    "    device const uchar *indices; device uint *out; device const uchar *records; device uint *out_records;\n" \
+    "    device const uint *count; device uint *headers;\n" \
+    "    uint n, first, index_size, restart, stride, region, mode, fan_max, has_count, pmode, pad0, pad1;\n" \
+    "};\n" \
+    "static uint pvk_index(constant pvk_pp &a, uint i)\n" \
+    "{\n" \
+    "    if (a.index_size == 1u) return a.indices[i];\n" \
+    "    if (a.index_size == 2u) return ((device const ushort *)a.indices)[i];\n" \
+    "    return ((device const uint *)a.indices)[i];\n" \
     "}\n"
+
+static const char pvk_prepass_msl[] =
+    PVK_PREPASS_MSL_HEAD
     "static uint pvk_fan(constant pvk_pp &a, uint first, uint n, device uint *out)\n"
     "{\n"
     "    uint rv = a.index_size == 1u ? 0xffu : a.index_size == 2u ? 0xffffu : 0xffffffffu;\n"
@@ -58344,12 +58546,71 @@ static const char pvk_prepass_msl[] =
     "    }\n"
     "}\n";
 
+static const char pvk_prepass_points_msl[] =
+    PVK_PREPASS_MSL_HEAD
+    /* polygon points (POLYGON POINTS): the vertex numbers of the triangles of
+     * a strip (pmode 1) or fan (2) with primitive restart, ~0 past the end */
+    "static void pvk_corners(constant pvk_pp &a, uint first, uint n, uint total, device uint *out)\n"
+    "{\n"
+    "    uint rv = a.index_size == 1u ? 0xffu : a.index_size == 2u ? 0xffffu : 0xffffffffu;\n"
+    "    uint o = 0u, have = 0u, v0 = 0u, v1 = 0u;\n"
+    "    for (uint i = 0u; i < n && o + 3u <= total; i++) {\n"
+    "        uint v = pvk_index(a, first + i);\n"
+    "        if (a.restart != 0u && v == rv) { have = 0u; continue; }\n"
+    "        if (a.pmode == 2u) {\n"
+    "            if (have == 0u) v0 = v;\n"
+    "            else if (have >= 2u) { out[o] = v1; out[o + 1u] = v; out[o + 2u] = v0; o += 3u; }\n"
+    "            v1 = v;\n"
+    "        } else {\n"
+    "            if (have >= 2u) {\n"
+    "                bool odd = ((have - 2u) & 1u) != 0u;\n"
+    "                out[o] = v0; out[o + 1u] = odd ? v : v1; out[o + 2u] = odd ? v1 : v; o += 3u;\n"
+    "            }\n"
+    "            v0 = v1; v1 = v;\n"
+    "        }\n"
+    "        have++;\n"
+    "    }\n"
+    "    for (; o < total; o++) out[o] = 0xffffffffu;\n"
+    "}\n"
+    /* mode 0: one draw's (n indices from first); mode 1: indirect draw d's
+     * MTLDrawPrimitivesIndirectArguments of 3 points per triangle and struct
+     * pvk_msl_points, its vertex numbers (restart) at out + d * region */
+    "kernel void pvk_pp_points(constant pvk_pp &a [[buffer(30)]], uint d [[thread_position_in_grid]])\n"
+    "{\n"
+    "    constant ulong *va = (constant ulong *)&a; /* indices, out */\n"
+    "    if (a.mode == 0u) {\n"
+    "        if (d == 0u) pvk_corners(a, a.first, a.n, a.n >= 3u ? 3u * (a.n - 2u) : 0u, a.out);\n"
+    "        return;\n"
+    "    }\n"
+    "    if (d >= a.n) return;\n"
+    "    uint count = a.has_count != 0u ? min(a.count[0], a.n) : a.n;\n"
+    "    device const uint *src = (device const uint *)(a.records + d * a.stride);\n"
+    "    device uint *rec = a.out_records + d * 4u, *h = a.headers + d * 8u;\n"
+    "    for (uint k = 0u; k < 8u; k++) h[k] = 0u;\n"
+    "    if (d >= count) { for (uint k = 0u; k < 4u; k++) rec[k] = 0u; return; }\n"
+    "    bool indexed = a.index_size != 0u;\n"
+    "    uint vc = src[0], tris;\n"
+    "    ulong at = indexed ? va[0] : 0ul;\n"
+    "    h[2] = a.index_size; h[3] = a.pmode; h[4] = src[2]; h[5] = indexed ? src[3] : 0u;\n"
+    "    if (indexed && a.restart != 0u && a.pmode != 0u) {\n"
+    "        uint total = min(a.region, vc >= 3u ? 3u * (vc - 2u) : 0u);\n"
+    "        pvk_corners(a, src[2], vc, total, a.out + d * a.region);\n"
+    "        tris = total / 3u;\n"
+    "        at = va[1] + (ulong)d * a.region * 4ul;\n"
+    "        h[2] = 4u; h[3] = 3u; h[4] = 0u;\n"
+    "    } else {\n"
+    "        tris = a.pmode != 0u ? (vc >= 3u ? vc - 2u : 0u) : vc / 3u;\n"
+    "    }\n"
+    "    h[0] = uint(at); h[1] = uint(at >> 32);\n"
+    "    rec[0] = 3u * min(tris, 0x55555555u); rec[1] = src[1]; rec[2] = 0u; rec[3] = indexed ? src[4] : src[3];\n"
+    "}\n";
+
 struct pvk_pp_args {
-    uint64_t indices, out, records, out_records, count;
-    uint32_t n, first, index_size, restart, stride, region, mode, fan_max, has_count, pad[3];
+    uint64_t indices, out, records, out_records, count, headers;
+    uint32_t n, first, index_size, restart, stride, region, mode, fan_max, has_count, pmode, pad[2];
 };
 
-enum { PVK_PP_WIDEN, PVK_PP_FAN, PVK_PP_RECORDS, PVK_PP_KERNEL_COUNT };
+enum { PVK_PP_WIDEN, PVK_PP_FAN, PVK_PP_RECORDS, PVK_PP_POINTS, PVK_PP_KERNEL_COUNT };
 
 static id pvk_compile_compute(struct pvk_device *device, const char *msl, const char *entry, unsigned long max_threads,
                               char *error, size_t error_size);
@@ -58358,9 +58619,20 @@ static id pvk_compile_compute(struct pvk_device *device, const char *msl, const 
 #define PVK_CV_WIDEN 1u   /* indices widened */
 #define PVK_CV_FAN 2u     /* a triangle fan rewritten */
 #define PVK_CV_RECORDS 4u /* indirect records rewritten */
+#define PVK_CV_POINTS 8u  /* polygon points: records and vertex numbers made (POLYGON POINTS) */
 
 static uint32_t pvk_draw_conv(const struct pvk_draw_track *t, const struct pvk_cmd *c)
 {
+    if (t->gfx && t->gfx->points &&
+        (t->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST || t->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
+         t->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN)) { /* polygon points (POLYGON POINTS) */
+        bool restart = t->restart && t->index_address && t->topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        if (c->op == PVK_CMD_DRAW_INDEXED)
+            return restart ? PVK_CV_POINTS : 0;
+        if (c->op == PVK_CMD_DRAW_INDIRECT)
+            return ((const struct pvk_cmd_draw_indirect *)c)->indexed && !t->index_address ? 0 : PVK_CV_POINTS;
+        return 0;
+    }
     bool fan = t->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
     bool strip = t->topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP || t->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
     bool widen = t->index_address &&
@@ -58385,13 +58657,14 @@ static uint32_t pvk_index_size(uint32_t type)
 
 static id pvk_prepass_pipeline(struct pvk_device *device, unsigned kernel)
 {
-    static const char *const names[PVK_PP_KERNEL_COUNT] = { "pvk_pp_widen", "pvk_pp_fan", "pvk_pp_records" };
+    static const char *const names[PVK_PP_KERNEL_COUNT] = { "pvk_pp_widen", "pvk_pp_fan", "pvk_pp_records",
+                                                            "pvk_pp_points" };
     id pso;
     pthread_mutex_lock(&pvk_graphics_lock);
     if (!device->prepass_pipelines[kernel]) {
         char error[256];
         device->prepass_pipelines[kernel] =
-            pvk_compile_compute(device, pvk_prepass_msl, names[kernel], 64, error, sizeof(error));
+            pvk_compile_compute(device, kernel == PVK_PP_POINTS ? pvk_prepass_points_msl : pvk_prepass_msl, names[kernel], 64, error, sizeof(error));
         if (!device->prepass_pipelines[kernel])
             pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
                      "internal draw preprocessing kernel %s: %s", names[kernel], error);
@@ -58477,6 +58750,50 @@ static void pvk_prepass_draw(struct pvk_encoder *e, const struct pvk_draw_track 
     a.indices = t->index_address;
     a.index_size = isize;
     a.restart = t->restart;
+    if (conv & PVK_CV_POINTS) { /* polygon points (POLYGON POINTS) */
+        a.pmode = t->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ? 1 : t->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN ? 2 : 0;
+        if (c->op == PVK_CMD_DRAW_INDEXED) { /* a strip or fan with primitive restart */
+            const struct pvk_cmd_draw_indexed *d = (const struct pvk_cmd_draw_indexed *)c;
+            uint64_t total = d->index_count >= 3 ? 3ull * (d->index_count - 2) : 0;
+            if (!total || total > UINT32_MAX || !(a.out = pvk_prepass_memory(e, total * 4)))
+                return;
+            a.n = d->index_count;
+            a.first = d->first_index;
+            pvk_prepass_dispatch(e, PVK_PP_POINTS, &a, 1);
+            res->points = a.out;
+            res->index_count = (uint32_t)total;
+        } else {
+            const struct pvk_cmd_draw_indirect *d = (const struct pvk_cmd_draw_indirect *)c;
+            uint64_t elements = d->indexed ? t->index_size / isize : 0;
+            a.mode = 1;
+            a.records = d->address;
+            a.stride = d->stride;
+            a.n = d->draw_count;
+            if (a.n > e->device->physical_device->properties.limits.maxDrawIndirectCount)
+                a.n = e->device->physical_device->properties.limits.maxDrawIndirectCount;
+            a.has_count = d->count_address != 0;
+            a.count = d->count_address;
+            a.index_size = d->indexed ? isize : 0;
+            a.restart = d->indexed && t->restart;
+            if (!a.n)
+                return;
+            if (a.index_size && a.restart && a.pmode) { /* 3 * (elements - 2) vertex numbers per draw, 64 MB in all */
+                uint64_t region = elements >= 3 ? 3 * (elements - 2) : 3;
+                if (region * 4 * a.n > (64u << 20))
+                    region = (64u << 20) / 4 / a.n / 3 * 3;
+                if (!region || !(a.out = pvk_prepass_memory(e, region * 4 * a.n)))
+                    return;
+                a.region = (uint32_t)region;
+            }
+            if (!(a.out_records = pvk_prepass_memory(e, 16ull * a.n)) || !(a.headers = pvk_prepass_memory(e, 32ull * a.n)))
+                return;
+            pvk_prepass_dispatch(e, PVK_PP_POINTS, &a, a.n);
+            res->records = a.out_records;
+            res->record_stride = 16;
+            res->points = a.headers;
+        }
+        return;
+    }
     if (c->op == PVK_CMD_DRAW_INDEXED) {
         const struct pvk_cmd_draw_indexed *d = (const struct pvk_cmd_draw_indexed *)c;
         if (conv & PVK_CV_FAN) {
@@ -59542,6 +59859,7 @@ static struct pvk_draw_track pvk_render_track(const struct pvk_render *r)
     struct pvk_draw_track t = r->track;
     t.topology = r->dyn.topology;
     t.restart = r->dyn.primitive_restart;
+    t.gfx = r->pipeline ? r->pipeline->gfx : NULL; /* (pvk_draw_conv: polygon points) */
     return t;
 }
 
@@ -60790,11 +61108,82 @@ static bool pvk_render_flush(struct pvk_encoder *e)
 
 /* ---- Draws ---- */
 
+/* Whether the bound pipeline draws these triangles as polygon points (POLYGON POINTS). */
+static bool pvk_render_points(const struct pvk_render *r)
+{
+    return r->pipeline->gfx->points && (r->dyn.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ||
+                                        r->dyn.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
+                                        r->dyn.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
+}
+
+static uint32_t pvk_points_mode(uint32_t topology)
+{
+    return topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ? 1u : topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN ? 2u : 0u;
+}
+
+/* Triangles of n vertices or indices. */
+static unsigned long pvk_points_triangles(uint32_t topology, uint32_t n)
+{
+    if (topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP || topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN)
+        return n >= 3 ? n - 2 : 0;
+    return n / 3;
+}
+
+/* Binds a polygon-point draw's struct pvk_msl_points_state and, unless
+ * NULL (made by preprocessing), its struct pvk_msl_points. */
+static bool pvk_render_points_bind(struct pvk_encoder *e, const struct pvk_msl_points *g)
+{
+    struct pvk_render *r = &e->render;
+    struct pvk_msl_points_state *s;
+    pvk_MTLGPUAddress address;
+    uint32_t i;
+    if (!(s = pvk_upload(e, sizeof(*s), 16, NULL, NULL, &address)))
+        return false;
+    memset(s, 0, sizeof(*s));
+    s->cull = r->dyn.cull_mode & VK_CULL_MODE_FRONT_AND_BACK;
+    s->ccw = r->dyn.front_face == VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    for (i = 0; i < r->dyn.viewport_count && i < PVK_MAX_VIEWPORTS && i < 16; i++) {
+        if (r->dyn.viewports[i].height < 0.0f)
+            s->flips |= 1u << i;
+        s->viewports[i][0] = r->dyn.viewports[i].width;
+        s->viewports[i][1] = r->dyn.viewports[i].height;
+        s->viewports[i][2] = r->dyn.viewports[i].minDepth;
+        s->viewports[i][3] = r->dyn.viewports[i].maxDepth;
+    }
+    if (r->dyn.depth_bias_enable && r->depth_fmt) {
+        s->bias = 1;
+        s->bias_constant = r->dyn.depth_bias[0];
+        s->bias_clamp = r->dyn.depth_bias[1];
+        s->bias_slope = r->dyn.depth_bias[2];
+        s->bias_r = r->depth_fmt->mtl == PVK_MTLPixelFormatDepth16Unorm ? 1.0f / 65536.0f : 0.0f;
+    }
+    pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_POINTS_STATE_BUFFER);
+    if (g) {
+        void *p = pvk_upload(e, sizeof(*g), 16, NULL, NULL, &address);
+        if (!p)
+            return false;
+        memcpy(p, g, sizeof(*g));
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_POINTS_BUFFER);
+    }
+    return true;
+}
+
 static void pvk_encode_draw(struct pvk_encoder *e, const struct pvk_cmd_draw *c)
 {
     struct pvk_render *r = &e->render;
     if (!pvk_render_flush(e) || pvk_render_discards(r))
         return;
+    if (pvk_render_points(r)) {
+        struct pvk_msl_points g;
+        unsigned long n = pvk_points_triangles(r->dyn.topology, c->vertex_count);
+        memset(&g, 0, sizeof(g));
+        g.mode = pvk_points_mode(r->dyn.topology);
+        g.first = c->first_vertex;
+        if (n && pvk_render_points_bind(e, &g))
+            pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
+                r->enc, PVK_MTLPrimitiveTypePoint, 0, 3 * n, c->instance_count, c->first_instance);
+        return;
+    }
     if (r->dyn.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
         const struct pvk_fan_buffer *f;
         if (c->vertex_count < 3)
@@ -60825,6 +61214,42 @@ static void pvk_encode_draw_indexed(struct pvk_encoder *e, const struct pvk_cmd_
 
     if (!pvk_render_flush(e) || pvk_render_discards(r))
         return;
+    if (pvk_render_points(r)) {
+        struct pvk_msl_points g;
+        unsigned long n;
+        memset(&g, 0, sizeof(g));
+        g.vertex_offset = c->vertex_offset;
+        if (conv) { /* primitive restart: the triangles' vertex numbers */
+            if (!res || !res->points)
+                return;
+            g.indices = res->points;
+            g.index_size = 4;
+            g.mode = 3;
+            n = res->index_count / 3;
+        } else {
+            g.mode = pvk_points_mode(r->dyn.topology);
+            n = pvk_points_triangles(r->dyn.topology, c->index_count);
+            if (!t.index_address) { /* maintenance6: no index buffer reads index 0 */
+                pvk_MTLGPUAddress address;
+                void *zeros = pvk_upload(e, (size_t)c->index_count * 4, 16, NULL, NULL, &address);
+                if (!zeros)
+                    return;
+                memset(zeros, 0, (size_t)c->index_count * 4);
+                g.indices = address;
+                g.index_size = 4;
+            } else {
+                if (at >= t.index_size)
+                    return;
+                g.indices = t.index_address;
+                g.index_size = size;
+                g.first = c->first_index;
+            }
+        }
+        if (n && pvk_render_points_bind(e, &g))
+            pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
+                r->enc, PVK_MTLPrimitiveTypePoint, 0, 3 * n, c->instance_count, c->first_instance);
+        return;
+    }
     if (conv) {
         if (res && res->index_count)
             pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferLength_instanceCount_baseVertex_baseInstance(
@@ -60879,6 +61304,19 @@ static void pvk_encode_draw_indirect(struct pvk_encoder *e, const struct pvk_cmd
         indexed = true; /* non-indexed fans draw the fan pattern */
     if (n > max) /* drawCount, and the count of a count buffer, are at most maxDrawIndirectCount */
         n = max;
+    if (pvk_render_points(r)) { /* records of points and struct pvk_msl_points per draw */
+        if (!res || !res->points || !res->records || !pvk_render_points_bind(e, NULL))
+            return;
+        for (d = 0; d < n; d++) {
+            if (r->pipeline->gfx->draw_index && !pvk_render_draw_index(e, d))
+                return;
+            pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, res->points + 32ull * d,
+                                                     PVK_MSL_POINTS_BUFFER);
+            pvk_MTL4RenderCommandEncoder_drawPrimitives_indirectBuffer(r->enc, PVK_MTLPrimitiveTypePoint,
+                                                                       res->records + 16ull * d);
+        }
+        return;
+    }
     if (indexed && !indices)
         return;
     for (d = 0; d < n; d++) {
@@ -64384,7 +64822,7 @@ struct pvk_gfx_desc {
     uint32_t input_colors[PVK_MAX_INPUT_ATTACHMENTS]; /* logical index of input attachment i */
     uint32_t outputs;                                 /* fragment output locations with an attachment */
     uint32_t output_types[PVK_MAX_COLOR_ATTACHMENTS]; /* enum pvk_msl_scalar_type */
-    uint32_t sample_shading, view_mask, point_size, dynamic_strides, robust, has_fragment;
+    uint32_t sample_shading, view_mask, point_size, dynamic_strides, robust, has_fragment, polygon_points;
     /* fragment operations the fragment function does (section 13, FRAGMENT OPERATIONS) */
     uint32_t sample_mask_enable, sample_mask;     /* pSampleMask, when it clears samples */
     uint32_t logic_op_enable, logic_op;
@@ -65195,6 +65633,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     if (rs) {
         gfx.depth_clamp = rs->depthClampEnable != VK_FALSE;
         gfx.lines = rs->polygonMode == VK_POLYGON_MODE_LINE;
+        gfx.points = rs->polygonMode == VK_POLYGON_MODE_POINT;
         gfx.state.rasterizer_discard = rs->rasterizerDiscardEnable != VK_FALSE;
         gfx.state.cull_mode = rs->cullMode;
         gfx.state.front_face = rs->frontFace;
@@ -65384,6 +65823,11 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     d.rasterization = 1;
     d.amplification = (uint32_t)__builtin_popcount(view_mask);
     d.topology_class = pvk_topology_class(gfx.state.topology);
+    gfx.points = gfx.points && d.topology_class == PVK_MTLPrimitiveTopologyClassTriangle;
+    if (gfx.points) { /* triangles drawn as 3 points each (POLYGON POINTS) */
+        d.polygon_points = 1;
+        d.topology_class = PVK_MTLPrimitiveTopologyClassPoint;
+    }
     d.view_mask = view_mask;
     d.point_size = d.topology_class == PVK_MTLPrimitiveTopologyClassPoint;
     d.dynamic_strides = (dynamic & PVK_DYN_BIT(VERTEX_STRIDE)) != 0;
@@ -65429,7 +65873,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     }
     vo.dynamic_vertex_strides = d.dynamic_strides != 0;
     vo.point_size = d.point_size != 0;
-    vo.no_point_size = !vo.point_size;
+    vo.no_point_size = !vo.point_size || d.polygon_points; /* (polygon points are 1.0: polygonModePointSize) */
+    vo.polygon_points = fo.polygon_points = d.polygon_points != 0;
     vo.view_mask = fo.view_mask = view_mask;
     if (fs)
         fo.specialization = fs->pSpecializationInfo;

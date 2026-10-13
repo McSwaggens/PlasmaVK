@@ -3324,6 +3324,117 @@ static void test_indices(void)
     free_img(&target);
 }
 
+/* Polygon mode POINT: each triangle's vertices drawn as 1-pixel points
+ * (at pixel centers), culled with their triangle (back faces, front face
+ * COUNTER_CLOCKWISE), by every kind of draw: a list, an indexed strip with
+ * primitive restart (the second strip's triangles alternate winding), an
+ * indirect fan with a count buffer, an indexed indirect strip with
+ * restart. Lit: (x, y, color) below. */
+static const uint32_t points_lit[][3] = {
+    { 1, 1, RED },   { 1, 4, RED },   { 4, 1, RED },  /* list: (6,1) (9,1) (6,4) culled */
+    { 1, 6, GREEN }, { 1, 9, GREEN }, { 4, 6, GREEN }, { 6, 6, GREEN }, { 6, 9, GREEN }, { 9, 6, GREEN },
+    { 9, 9, GREEN },
+    { 11, 1, BLUE }, { 11, 4, BLUE }, { 14, 4, BLUE }, /* fan: (11,7) only in a culled triangle */
+    { 1, 11, WHITE }, { 1, 14, WHITE }, { 4, 11, WHITE }, /* indirect strip: (6,11) (9,11) (6,14) culled */
+};
+
+static uint32_t expect_points(uint32_t x, uint32_t y)
+{
+    uint32_t i;
+    for (i = 0; i < PVK_ARRAY_SIZE(points_lit); i++)
+        if (points_lit[i][0] == x && points_lit[i][1] == y)
+            return points_lit[i][2];
+    return BLACK;
+}
+
+static void test_polygon_points(void)
+{
+    static const VkVertexInputBindingDescription binding = { 0, sizeof(struct vtx), VK_VERTEX_INPUT_RATE_VERTEX };
+    static const VkVertexInputAttributeDescription attrs[2] = {
+        { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 },
+        { 1, 0, VK_FORMAT_R8G8B8A8_UNORM, 8 },
+    };
+    static const VkDynamicState states[] = { VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
+                                             VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE };
+    static const float black[4] = { 0, 0, 0, 1 };
+    static const uint32_t pos[][2] = {
+        { 1, 1 }, { 1, 4 }, { 4, 1 }, { 6, 1 }, { 9, 1 }, { 6, 4 },              /* 0-5: list */
+        { 1, 6 }, { 1, 9 }, { 4, 6 }, { 6, 6 }, { 6, 9 }, { 9, 6 }, { 9, 9 },    /* 6-12: strips */
+        { 11, 1 }, { 11, 4 }, { 14, 4 }, { 11, 7 },                              /* 13-16: fan */
+        { 1, 11 }, { 1, 14 }, { 4, 11 }, { 6, 11 }, { 9, 11 }, { 6, 14 },        /* 17-22: strips */
+    };
+    static const uint32_t colors[] = { RED, RED, RED, RED, RED, RED, GREEN, GREEN, GREEN, GREEN, GREEN, GREEN,
+                                       GREEN, BLUE, BLUE, BLUE, BLUE, WHITE, WHITE, WHITE, WHITE, WHITE, WHITE };
+    static const uint16_t strips16[] = { 6, 7, 8, 0xffff, 9, 10, 11, 12 };
+    static const uint32_t strips32[] = { 17, 18, 19, 0xffffffffu, 20, 21, 22 };
+    VkPipelineVertexInputStateCreateInfo vi;
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4), vb = make_buf(sizeof(struct vtx) * 32), ib = make_buf(256);
+    struct buf args = make_buf(256);
+    struct vtx *v = (struct vtx *)vb.data;
+    uint32_t *a = (uint32_t *)args.data, i;
+    VkDeviceSize zero_offset = 0;
+    struct pipe p;
+    VkPipeline pipeline;
+    VkCommandBuffer cb;
+
+    CHECK(features.fillModeNonSolid);
+    if (!features.fillModeNonSolid)
+        return;
+    memset(&vi, 0, sizeof(vi));
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount = 1;
+    vi.pVertexBindingDescriptions = &binding;
+    vi.vertexAttributeDescriptionCount = 2;
+    vi.pVertexAttributeDescriptions = attrs;
+    pipe_init(&p, spv_basic_vs, sizeof(spv_basic_vs), spv_basic_fs, sizeof(spv_basic_fs));
+    p.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    p.vertex = &vi;
+    p.dynamic = states;
+    p.dynamic_count = 2;
+    p.polygon = VK_POLYGON_MODE_POINT;
+    p.cull = VK_CULL_MODE_BACK_BIT;
+    p.front = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    for (i = 0; i < PVK_ARRAY_SIZE(pos); i++) {
+        v[i].x = ndc_x((float)pos[i][0] + 0.5f);
+        v[i].y = ndc_y((float)pos[i][1] + 0.5f);
+        v[i].rgba = colors[i];
+    }
+    memcpy(ib.data, strips16, sizeof(strips16));
+    memcpy(ib.data + 64, strips32, sizeof(strips32));
+    a[0] = 4, a[1] = 1, a[2] = 13, a[3] = 0;          /* fan: VkDrawIndirectCommand */
+    a[4] = 3, a[5] = 1, a[6] = 0, a[7] = 0;           /* (beyond the count) */
+    a[8] = 1;                                         /* count */
+    a[16] = 7, a[17] = 1, a[18] = 0, a[19] = 0, a[20] = 0; /* VkDrawIndexedIndirectCommand */
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindVertexBuffers(cb, 0, 1, &vb.buffer, &zero_offset);
+    vkCmdSetPrimitiveRestartEnable(cb, VK_TRUE);
+    vkCmdSetPrimitiveTopology(cb, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    vkCmdDraw(cb, 6, 1, 0, 0);
+    vkCmdSetPrimitiveTopology(cb, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
+    vkCmdBindIndexBuffer(cb, ib.buffer, 0, VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexed(cb, 8, 1, 0, 0, 0);
+    vkCmdSetPrimitiveTopology(cb, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
+    vkCmdDrawIndirectCount(cb, args.buffer, 0, args.buffer, 32, 2, 16);
+    vkCmdSetPrimitiveTopology(cb, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
+    vkCmdBindIndexBuffer(cb, ib.buffer, 64, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexedIndirect(cb, args.buffer, 64, 1, 20);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    CHECK(count_bad(&out, expect_points, "polygon points") == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_buf(&vb);
+    free_buf(&ib);
+    free_buf(&args);
+    free_img(&target);
+}
+
 /* Vertex input: interleaved attributes at odd offsets, an instance-rate
  * binding with a divisor (2), and dynamic strides. Instances 0-1 read
  * instance element 0 (row 0, color x 0.25), 2-3 element 1 (row 1, x 0.5). */
@@ -9373,6 +9484,7 @@ int main(void)
     RUN(test_output_signedness);
     RUN(test_multi_draw);
     RUN(test_indices);
+    RUN(test_polygon_points);
     RUN(test_vertex_input);
     RUN(test_clear_attachments);
     RUN(test_subpasses);
