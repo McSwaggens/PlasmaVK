@@ -36,6 +36,14 @@
 
 extern char **environ;
 
+/* An Info.plist section: with a bundle identifier, Metal caches the tests'
+ * pipelines in files of their own (see tests/pvk_test.h), not the files
+ * every program without one shares, which other conformance runs fill to
+ * gigabytes and AddressSanitizer takes minutes to open. */
+static const char ct_info_plist[] __attribute__((used, section("__TEXT,__info_plist"))) =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    "<plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>plasmavk.conformance</string></dict></plist>\n";
+
 /* ==========================================================================
  * Registry
  * ========================================================================== */
