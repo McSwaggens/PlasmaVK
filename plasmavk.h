@@ -32919,7 +32919,14 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
     p12->driverID = (VkDriverId)0; /* TODO: register a VkDriverId with Khronos; 0 names no driver */
     snprintf(p12->driverName, sizeof(p12->driverName), "PlasmaVK");
     snprintf(p12->driverInfo, sizeof(p12->driverInfo), "PlasmaVK %s on Metal 4", version);
-    /* conformanceVersion stays 0.0.0.0: PlasmaVK is not conformant. */
+    /* conformanceVersion: the Khronos CTS release PlasmaVK was last tested
+     * against (as the spec defines it), 1.4.7.0 on an M4 Max: every must-pass
+     * case passes but driver_id_match, which needs a driver ID registered
+     * with Khronos. No conformance submission has been made. */
+    p12->conformanceVersion.major = 1;
+    p12->conformanceVersion.minor = 4;
+    p12->conformanceVersion.subminor = 7;
+    p12->conformanceVersion.patch = 0;
 
     /* Shaders are compiled with MTLMathModeSafe (section 13): signed zeros,
      * Inf and NaN are kept and results rounded to nearest even. MSL offers

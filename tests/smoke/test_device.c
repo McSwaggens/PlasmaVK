@@ -145,6 +145,26 @@ static void test_memory_properties(void)
     CHECK(found_host); /* required by the spec */
 }
 
+/* The driver's identification (VkPhysicalDeviceDriverProperties):
+ * conformanceVersion is the Khronos CTS release PlasmaVK was last tested
+ * against with every must-pass case passing but driver_id_match, which
+ * needs a driver ID registered with Khronos (driverID is still 0). */
+static void test_driver_properties(void)
+{
+    VkPhysicalDeviceDriverProperties drv;
+    VkPhysicalDeviceProperties2 props;
+
+    memset(&drv, 0, sizeof(drv));
+    drv.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+    memset(&props, 0, sizeof(props));
+    props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    props.pNext = &drv;
+    vkGetPhysicalDeviceProperties2(physical_device, &props);
+    CHECK(strcmp(drv.driverName, "PlasmaVK") == 0);
+    CHECK(drv.conformanceVersion.major == 1 && drv.conformanceVersion.minor == 4 &&
+          drv.conformanceVersion.subminor == 7 && drv.conformanceVersion.patch == 0);
+}
+
 static void test_device_and_queues(void)
 {
     float priorities[2] = { 1.0f, 0.5f };
@@ -471,6 +491,7 @@ int main(void)
     RUN(test_compute_family_queue);
     RUN(test_lazily_allocated_memory);
     RUN(test_memory_properties);
+    RUN(test_driver_properties);
     RUN(test_device_and_queues);
     RUN(test_promoted_extensions);
     RUN(test_promoted_extension_features);
