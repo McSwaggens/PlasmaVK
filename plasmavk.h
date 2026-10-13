@@ -54459,8 +54459,9 @@ static void pvk_cmd_resolve(struct pvk_command_buffer *cb, const struct pvk_imag
     c->dst0[1] = r->dstOffset.y;
     c->dst1[0] = r->dstOffset.x + (int32_t)r->extent.width;
     c->dst1[1] = r->dstOffset.y + (int32_t)r->extent.height;
-    c->dst0[2] = 0;
-    c->dst1[2] = 1;
+    c->dst_3d = dst->type == VK_IMAGE_TYPE_3D; /* one layer into depth plane dstOffset.z */
+    c->dst0[2] = c->dst_3d ? r->dstOffset.z : 0;
+    c->dst1[2] = c->dst0[2] + 1;
     pvk_blit_swizzle(f, c->swizzle);
 }
 

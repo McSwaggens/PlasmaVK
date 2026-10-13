@@ -1513,6 +1513,28 @@ static void test_resolve(void)
     dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, 8, 8, 1);
     download(single.image, &dl, &out);
     CHECK(all_texels(out.data, 64, &color.uint32[0], 4));
+    free_image(&single);
+
+    /* into a 3D image: depth plane dstOffset.z */
+    info = image_info(VK_IMAGE_TYPE_3D, VK_FORMAT_R32_UINT, 8, 8, 4, 1, 1, xfer);
+    single = make_image(&info);
+    {
+        VkClearColorValue zero;
+        uint32_t z;
+        memset(&zero, 0, sizeof(zero));
+        res.dstOffset.z = 2;
+        cb = begin();
+        vkCmdClearColorImage(cb, single.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+        barrier(cb, single.image);
+        vkCmdResolveImage(cb, ms.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, single.image,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &res);
+        CHECK_VK(finish(cb), VK_SUCCESS);
+        dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, 8, 8, 4);
+        download(single.image, &dl, &out);
+        for (z = 0; z < 4; z++)
+            if (!all_texels(out.data + z * 256, 64, z == 2 ? &color.uint32[0] : &zero.uint32[0], 4))
+                PVK_TEST_FAIL("depth plane %u", z);
+    }
     free_image(&ms);
     free_image(&single);
     free_buf(&out);
