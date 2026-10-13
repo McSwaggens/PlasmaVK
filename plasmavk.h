@@ -32212,6 +32212,7 @@ struct pvk_submission;
 struct pvk_names;
 struct pvk_upload_chunk;
 struct pvk_deferred;
+struct pvk_cmd_event;
 
 struct pvk_queue {
     struct pvk_device *device;
@@ -32229,6 +32230,10 @@ struct pvk_queue {
     struct pvk_upload_chunk *upload;               /* being filled */
     struct pvk_upload_chunk *retired, *retired_tail; /* full, in flight, oldest first */
     struct pvk_upload_chunk *free_chunks;
+    /* The event signals and resets of the submission being encoded, made
+     * pending on their events once it is sure to go ahead (section 16, EVENTS) */
+    const struct pvk_cmd_event **event_cmds;
+    uint32_t event_cmd_count, event_cmd_capacity;
     /* Batches whose semaphore waits the host resolves (section 16): the
      * queue's thread commits them in order. */
     pthread_mutex_t lock;
@@ -56584,9 +56589,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearAttachments(VkCommandBuffer commandBuffer, 
 
 /* ---- Query and event commands ----
  *
- * Query pools are section 14's. Events are section 16's, as the commands
- * see them: a word of shared memory, 0 when reset. Encoding is in section 16
- * (pvk_encode_query, pvk_encode_event).
+ * Query pools are section 14's. Events are section 16's (EVENTS): host
+ * memory, where a device signal or reset takes effect once its submission
+ * is done. Encoding is in section 16 (pvk_encode_query, pvk_encode_event).
  *
  * Device waits for events wait for nothing. Valid usage lets vkCmdWaitEvents2
  * wait only for an event signaled by a vkCmdSetEvent2 earlier in submission
@@ -56600,10 +56605,21 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearAttachments(VkCommandBuffer commandBuffer, 
  * (pvk_barrier_stages), so a host signal costs nothing, and no queue waits on
  * an event (section 16: Metal 4 queue waits give up after about 4 s). */
 
-struct pvk_event {
-    id buffer;       /* MTLBuffer of 8 bytes, shared, resident */
-    uint64_t *state; /* its contents: 0 reset, else set */
+/* A device signal or reset of an event, of a submission not known to be done. */
+struct pvk_event_op {
+    struct pvk_queue *queue;
+    uint64_t serial; /* the submission's (its queue's timeline reaches it when done) */
+    uint64_t value;  /* the new state */
 };
+
+/* Under pvk_events_lock. */
+struct pvk_event {
+    uint64_t state;           /* what the host sees: 0 reset, 1 set */
+    struct pvk_event_op *ops; /* pending, in submission order (device allocator) */
+    uint32_t count, capacity;
+};
+
+static pthread_mutex_t pvk_events_lock = PTHREAD_MUTEX_INITIALIZER;
 
 enum pvk_query_op {
     PVK_QUERY_RESET,
@@ -56714,8 +56730,8 @@ static void pvk_cmd_event(VkCommandBuffer cb, VkEvent event, uint64_t value)
     c->value = value;
 }
 
-/* A signal or reset waits for all earlier work (section 16), whatever the
- * stages. */
+/* A signal or reset takes effect once its submission is done (section 16,
+ * EVENTS): after all earlier work, whatever the stages. */
 VKAPI_ATTR void VKAPI_CALL vkCmdSetEvent(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags stageMask)
 {
     (void)stageMask;
@@ -56853,6 +56869,19 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   milliseconds; UINT64_MAX is infinite). Waiting for any of several
  *   objects polls them, sleeping at most 1 ms between looks.
  *
+ * EVENTS
+ *   An event is host memory (struct pvk_event). A device signal or reset
+ *   encodes nothing: the submission notes it on the event, pending with its
+ *   serial (pvk_queue_publish_events), and it takes effect once the queue's
+ *   timeline reaches that serial, when the host next looks at the event
+ *   (pvk_event_drain). Metal makes a command buffer's writes visible to the
+ *   CPU when it completes, not before: a word of shared memory that the GPU
+ *   set behind a barrier against all earlier work was seen set up to
+ *   milliseconds before those earlier writes were (M4 Max, macOS 27.2; a
+ *   1 MB fill, then the signal). Vulkan allows the delay: what
+ *   vkGetEventStatus returns may be out of date while a command buffer
+ *   that signals or resets the event is pending.
+ *
  * DEBUG LABELS (VK_EXT_debug_utils)
  *   Label regions become Metal debug groups. A Metal group lives in one
  *   encoder (or one command buffer), a Vulkan region may span encoders,
@@ -56875,7 +56904,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   (its heap and buffer), VkBuffer (a debug marker on its range of the
  *   memory's buffer; a sparse buffer's own buffer), VkImage, VkImageView and
  *   VkBufferView textures (a view that is its image's texture keeps the
- *   image's label), VkSemaphore events, VkEvent and VkQueryPool buffers; a
+ *   image's label), VkSemaphore events and VkQueryPool buffers; a
  *   resource named before it is bound is labeled when it is. Metal fixes the
  *   labels of command queues ("VkQueue <family>.<index>", section 9) and
  *   pipeline states at creation, before a name can come: a queue's name
@@ -57037,6 +57066,9 @@ static void pvk_queue_finish(struct pvk_queue *queue)
     pvk_release(queue->timeline);
     pvk_deferred_free(device, queue->deferred);
     pvk_deferred_free(device, queue->done);
+    pvk_free_raw(pvk_device_alloc(device), (void *)queue->event_cmds);
+    queue->event_cmds = NULL;
+    queue->event_cmd_count = queue->event_cmd_capacity = 0;
     if (queue->lock_ready) {
         pthread_cond_destroy(&queue->cond);
         pthread_mutex_destroy(&queue->lock);
@@ -57698,7 +57730,8 @@ static void pvk_encoder_end(struct pvk_encoder *e)
  * device stage is everything a compute encoder runs (vkCmdFillBuffer, a
  * transfer, may run as a dispatch). Host accesses need no GPU barrier: host
  * writes before vkQueueSubmit are visible to it, and the GPU's writes are
- * visible on the host once the fence or semaphore wait returns. */
+ * visible on the host once the fence or semaphore wait returns, or the
+ * event signaled after them is seen set (section 16, EVENTS). */
 static pvk_MTLStages pvk_barrier_stages(VkPipelineStageFlags2 stages, bool src)
 {
     stages &= ~(VkPipelineStageFlags2)VK_PIPELINE_STAGE_2_HOST_BIT;
@@ -61623,11 +61656,12 @@ static void pvk_device_finish_graphics(struct pvk_device *device)
  * against all earlier work of the queue (the resolves run in the blit stage,
  * occlusion counting render passes before them), sets the availability
  * words. Flushes come before what must see the queries available or must
- * not be undone by a late availability write: resets, result copies, event
- * signals (after which the host may read results) and the end of a batch.
+ * not be undone by a late availability write: resets, result copies and the
+ * end of a batch (event signals take effect after it, EVENTS).
  *
- * Resets, availability and event writes are compute encoders of their own,
- * so that their barriers do not hold back the work around them. */
+ * Resets and availability writes are compute encoders of their own, so that
+ * their barriers do not hold back the work around them. Event signals and
+ * resets encode nothing. */
 
 static id pvk_encoder_alone(struct pvk_encoder *e)
 {
@@ -61792,16 +61826,82 @@ static void pvk_encode_query(struct pvk_encoder *e, const struct pvk_cmd_query *
     }
 }
 
-/* After all earlier work: what the signal's first scope holds, and a reset
- * lands after an earlier signal. */
+/* Noted for pvk_queue_publish_events. */
 static void pvk_encode_event(struct pvk_encoder *e, const struct pvk_cmd_event *c)
 {
-    id enc;
-    pvk_encode_query_flush(e);
-    if (!(enc = pvk_encoder_alone(e)))
-        return;
-    pvk_encode_fill_words(enc, c->event->buffer, 0, 1, c->value ? 1 : 0);
-    pvk_encoder_close(e, enc);
+    struct pvk_queue *q = e->queue;
+    if (q->event_cmd_count == q->event_cmd_capacity) {
+        uint32_t capacity = q->event_cmd_capacity ? 2 * q->event_cmd_capacity : 16;
+        const struct pvk_cmd_event **cmds =
+            pvk_alloc(pvk_device_alloc(e->device), sizeof(*cmds) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+        if (!cmds) {
+            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+            return;
+        }
+        if (q->event_cmd_count)
+            memcpy(cmds, q->event_cmds, sizeof(*cmds) * q->event_cmd_count);
+        pvk_free_raw(pvk_device_alloc(e->device), (void *)q->event_cmds);
+        q->event_cmds = cmds;
+        q->event_cmd_capacity = capacity;
+    }
+    q->event_cmds[q->event_cmd_count++] = c;
+}
+
+/* The event's pending operations whose submissions are done take effect, in
+ * submission order. A queue's submissions are done in order; another
+ * queue's pending one before a done one was not waited for by it, so they
+ * may take effect in either order. Under pvk_events_lock. */
+static void pvk_event_drain(struct pvk_event *event)
+{
+    uint32_t i, n = 0;
+    for (i = 0; i < event->count; i++) {
+        const struct pvk_event_op *op = &event->ops[i];
+        if (pvk_MTLSharedEvent_signaledValue(op->queue->timeline) >= op->serial)
+            event->state = op->value;
+        else
+            event->ops[n++] = *op;
+    }
+    event->count = n;
+}
+
+/* The event commands of submission `serial` become pending on their events,
+ * the last one per event; nothing changes when out of memory (so it is the
+ * last thing a submission can fail at). */
+static VkResult pvk_queue_publish_events(struct pvk_queue *queue, uint64_t serial)
+{
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(queue->device);
+    uint32_t i;
+    pthread_mutex_lock(&pvk_events_lock);
+    for (i = 0; i < queue->event_cmd_count; i++) { /* room for one more operation */
+        struct pvk_event *event = queue->event_cmds[i]->event;
+        pvk_event_drain(event);
+        if (event->count == event->capacity) {
+            uint32_t capacity = event->capacity ? 2 * event->capacity : 4;
+            struct pvk_event_op *ops = pvk_alloc(alloc, sizeof(*ops) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+            if (!ops) {
+                pthread_mutex_unlock(&pvk_events_lock);
+                return VK_ERROR_OUT_OF_HOST_MEMORY;
+            }
+            if (event->count)
+                memcpy(ops, event->ops, sizeof(*ops) * event->count);
+            pvk_free_raw(alloc, event->ops);
+            event->ops = ops;
+            event->capacity = capacity;
+        }
+    }
+    for (i = 0; i < queue->event_cmd_count; i++) {
+        const struct pvk_cmd_event *c = queue->event_cmds[i];
+        struct pvk_event *event = c->event;
+        struct pvk_event_op *op = event->count ? &event->ops[event->count - 1] : NULL;
+        if (!op || op->queue != queue || op->serial != serial) {
+            op = &event->ops[event->count++];
+            op->queue = queue;
+            op->serial = serial;
+        }
+        op->value = c->value;
+    }
+    pthread_mutex_unlock(&pvk_events_lock);
+    return VK_SUCCESS;
 }
 
 static void pvk_encode_cb(struct pvk_encoder *e, const struct pvk_command_buffer *cb, uint32_t depth);
@@ -62309,6 +62409,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
     pvk_deferred_free(device, done);
     pvk_queue_recycle(queue);
     serial = queue->serial + 1;
+    queue->event_cmd_count = 0;
 
     /* Encode every batch before the queue sees any of them. */
     for (i = 0; i < count && result == VK_SUCCESS; i++) {
@@ -62350,6 +62451,8 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
         else
             result = VK_ERROR_OUT_OF_HOST_MEMORY;
     }
+    if (result == VK_SUCCESS && queue->event_cmd_count)
+        result = pvk_queue_publish_events(queue, serial);
     if (result != VK_SUCCESS) {
         pvk_deferred_free(device, deferred);
         pvk_free(pvk_device_alloc(device), binds);
@@ -63286,31 +63389,21 @@ VKAPI_ATTR VkResult VKAPI_CALL vkWaitSemaphores(VkDevice device, const VkSemapho
 
 /* ---- Events ----
  *
- * An event (struct pvk_event, section 15) is a word of shared memory that
- * the host and the GPU (pvk_encode_event) write and the host reads; no GPU
- * work waits on it (section 15, "Query and event commands"). */
+ * An event (struct pvk_event, section 15) is host memory: the host's
+ * signals and resets change its state at once, the device's once their
+ * submissions are done (EVENTS, above); no GPU work waits on it (section
+ * 15, "Query and event commands"). */
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateEvent(VkDevice _device, const VkEventCreateInfo *pCreateInfo,
                                              const VkAllocationCallbacks *pAllocator, VkEvent *pEvent)
 {
     struct pvk_device *device = (struct pvk_device *)_device;
-    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
-    struct pvk_event *event = pvk_alloc(alloc, sizeof(*event), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    struct pvk_event *event = pvk_alloc(pAllocator ? pAllocator : pvk_device_alloc(device), sizeof(*event),
+                                        VK_SYSTEM_ALLOCATION_SCOPE_OBJECT); /* unsignaled */
 
     (void)pCreateInfo; /* VK_EVENT_CREATE_DEVICE_ONLY_BIT changes nothing */
     if (!event)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
-    event->buffer = pvk_MTLDevice_newBufferWithLength_options(
-        device->physical_device->mtl_device, 8,
-        PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeDefaultCache |
-            PVK_MTLResourceHazardTrackingModeUntracked);
-    if (!event->buffer) {
-        pvk_free(alloc, event);
-        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-    }
-    event->state = pvk_MTLBuffer_contents(event->buffer);
-    *event->state = 0; /* created unsignaled */
-    pvk_device_make_resident(device, event->buffer);
     *pEvent = (VkEvent)event;
     return VK_SUCCESS;
 }
@@ -63321,29 +63414,43 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyEvent(VkDevice _device, VkEvent _event, cons
     struct pvk_event *event = (struct pvk_event *)_event;
     if (!event)
         return;
-    pvk_device_evict(device, event->buffer);
-    pvk_release(event->buffer);
+    pvk_free_raw(pvk_device_alloc(device), event->ops);
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc(device), event);
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL vkGetEventStatus(VkDevice device, VkEvent event)
+VKAPI_ATTR VkResult VKAPI_CALL vkGetEventStatus(VkDevice device, VkEvent _event)
 {
+    struct pvk_event *event = (struct pvk_event *)_event;
+    uint64_t state;
     if (pvk_device_lost((struct pvk_device *)device))
         return VK_ERROR_DEVICE_LOST;
-    return __atomic_load_n(((struct pvk_event *)event)->state, __ATOMIC_ACQUIRE) ? VK_EVENT_SET : VK_EVENT_RESET;
+    pthread_mutex_lock(&pvk_events_lock);
+    pvk_event_drain(event);
+    state = event->state;
+    pthread_mutex_unlock(&pvk_events_lock);
+    return state ? VK_EVENT_SET : VK_EVENT_RESET;
+}
+
+/* After the device's operations already done, before those still pending. */
+static void pvk_event_set_state(struct pvk_event *event, uint64_t state)
+{
+    pthread_mutex_lock(&pvk_events_lock);
+    pvk_event_drain(event);
+    event->state = state;
+    pthread_mutex_unlock(&pvk_events_lock);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkSetEvent(VkDevice device, VkEvent event)
 {
     (void)device;
-    __atomic_store_n(((struct pvk_event *)event)->state, 1, __ATOMIC_RELEASE);
+    pvk_event_set_state((struct pvk_event *)event, 1);
     return VK_SUCCESS;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkResetEvent(VkDevice device, VkEvent event)
 {
     (void)device;
-    __atomic_store_n(((struct pvk_event *)event)->state, 0, __ATOMIC_RELEASE);
+    pvk_event_set_state((struct pvk_event *)event, 0);
     return VK_SUCCESS;
 }
 
@@ -63373,7 +63480,6 @@ static void pvk_debug_label(struct pvk_device *device, VkObjectType type, uint64
     case VK_OBJECT_TYPE_IMAGE_VIEW:
     case VK_OBJECT_TYPE_BUFFER_VIEW:
     case VK_OBJECT_TYPE_SEMAPHORE:
-    case VK_OBJECT_TYPE_EVENT:
     case VK_OBJECT_TYPE_QUERY_POOL:
         break;
     default:
@@ -63426,9 +63532,6 @@ static void pvk_debug_label(struct pvk_device *device, VkObjectType type, uint64
         break;
     case VK_OBJECT_TYPE_SEMAPHORE:
         pvk_MTLEvent_setLabel(((struct pvk_semaphore *)(uintptr_t)handle)->event, label);
-        break;
-    case VK_OBJECT_TYPE_EVENT:
-        pvk_MTLResource_setLabel(((struct pvk_event *)(uintptr_t)handle)->buffer, label);
         break;
     case VK_OBJECT_TYPE_QUERY_POOL:
         if (((struct pvk_query_pool *)(uintptr_t)handle)->buffer)

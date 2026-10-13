@@ -321,17 +321,29 @@ static void test_event_device_set_reset(void)
     vkDestroyEvent(device, d, NULL);
 }
 
-/* The host sees a device signal only once the work before it is done: the
- * submission is held back by a semaphore. */
+/* The host sees a device signal only once the work before it is done (the
+ * submission is held back by a semaphore), and with a memory dependency to
+ * the host before the signal, that work's writes: vkCmdSetEvent alone orders
+ * execution only. The host polls without pausing, which once saw the signal
+ * before the fill (section 16, EVENTS). */
 static void test_event_device_set_host_sees(void)
 {
     VkEvent e = make_event(0);
     VkSemaphore gate = make_timeline();
     struct buf a = make_buf(1 << 20);
     VkCommandBuffer cb = begin();
-    int polls = 0;
+    VkMemoryBarrier to_host;
+    struct timespec start, now;
 
+    memset(&to_host, 0, sizeof(to_host));
+    to_host.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    to_host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    to_host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
     vkCmdFillBuffer(cb, a.buffer, 0, VK_WHOLE_SIZE, 0x5eed5eedu);
+    /* (the transfer stage too: the signal's first scope chains to it) */
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &to_host, 0, NULL, 0,
+                         NULL);
     vkCmdSetEvent(cb, e, VK_PIPELINE_STAGE_TRANSFER_BIT);
     REQUIRE_VK(submit(1, &cb, gate, 1));
     {
@@ -340,13 +352,12 @@ static void test_event_device_set_host_sees(void)
     }
     CHECK_VK(vkGetEventStatus(device, e), VK_EVENT_RESET);
     signal_value(gate, 1);
-    while (vkGetEventStatus(device, e) != VK_EVENT_SET && polls < 100000) {
-        struct timespec ts = { 0, 100000 };
-        nanosleep(&ts, NULL);
-        polls++;
-    }
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    do
+        clock_gettime(CLOCK_MONOTONIC, &now);
+    while (vkGetEventStatus(device, e) != VK_EVENT_SET && now.tv_sec - start.tv_sec < 10);
     CHECK_VK(vkGetEventStatus(device, e), VK_EVENT_SET);
-    CHECK(all_words(&a, 1 << 20, 0x5eed5eedu)); /* the fill was done before the signal */
+    CHECK(all_words(&a, 1 << 20, 0x5eed5eedu)); /* the fill was done and made available before the signal */
     CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
     free_buf(&a);
     vkDestroySemaphore(device, gate, NULL);
