@@ -56844,7 +56844,12 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   (pvk_barrier_stages): any device stage is all the work an encoder runs.
  *   Barriers flush to the device coherence point, and with sparseBinding
  *   also for aliased virtual addresses (device->visibility, section 7's
- *   SPARSE RESOURCES).
+ *   SPARSE RESOURCES). Render encoders also end with a producer barrier
+ *   (pvk_render_close): without one, a copy into a multisampled texture
+ *   after a render pass that stored it was sometimes undone by the pass's
+ *   stores, despite the copy's consumer barrier (M4 Max, macOS 27.2: about
+ *   1 in 100 copies, color and depth, whatever the consumer barrier's stages
+ *   or visibility; never for single-sampled textures, never with it).
  *
  * SNORM ATTACHMENTS (pvk_render_rebind)
  *   Metal converts SNORM attachments through floats when it loads, stores
@@ -57554,6 +57559,14 @@ static void pvk_encoder_close(struct pvk_encoder *e, id enc)
 {
     pvk_labels_close(e, enc);
     pvk_MTL4CommandEncoder_endEncoding(enc);
+}
+
+/* Ends a render encoder: later encoders wait for its work (BARRIERS). */
+static void pvk_render_close(struct pvk_encoder *e, id enc)
+{
+    pvk_MTL4CommandEncoder_barrierAfterStages_beforeQueueStages_visibilityOptions(
+        enc, PVK_STAGES_RENDER, PVK_STAGES_ALL, e->queue->device->visibility);
+    pvk_encoder_close(e, enc);
 }
 
 /* A label region begins (text in a packet: owned at the end of the batch
@@ -58353,7 +58366,7 @@ static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
             pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount(enc, PVK_MTLPrimitiveTypeTriangle, 0, 3);
         }
         if (enc)
-            pvk_encoder_close(e, enc);
+            pvk_render_close(e, enc);
         objc_autoreleasePoolPop(pool);
     }
 }
@@ -58407,7 +58420,7 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
             enc = pvk_encoder_render(e, pass);
             pvk_release(pass);
             if (enc)
-                pvk_encoder_close(e, enc);
+                pvk_render_close(e, enc);
             objc_autoreleasePoolPop(pool);
         }
     }
@@ -59981,7 +59994,7 @@ static void pvk_render_end(struct pvk_encoder *e)
     struct pvk_render *r = &e->render;
     uint32_t i;
     if (r->enc) {
-        pvk_encoder_close(e, r->enc);
+        pvk_render_close(e, r->enc);
         pvk_release(r->enc);
         r->enc = NULL;
         pvk_render_split_resolve(e);
@@ -60142,7 +60155,7 @@ static void pvk_render_resolve_ds(struct pvk_encoder *e)
         pvk_labels_open(e, enc, "Depth/stencil resolves");
         pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
             enc, PVK_STAGES_RENDER, PVK_STAGES_RENDER, e->queue->device->visibility);
-        pvk_encoder_close(e, enc);
+        pvk_render_close(e, enc);
     } else if (e->result == VK_SUCCESS) {
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
     }
@@ -60329,7 +60342,7 @@ static id pvk_render_seed_depth(struct pvk_encoder *e, const struct pvk_pass_att
         ok = true;
     }
     if (enc) {
-        pvk_encoder_close(e, enc);
+        pvk_render_close(e, enc);
         pvk_release(enc);
     }
     objc_autoreleasePoolPop(pool);
@@ -60532,7 +60545,7 @@ static void pvk_render_rebind(struct pvk_encoder *e, uint32_t int_slots)
     id enc;
     if (int_slots == r->int_slots || !r->enc || !r->split || e->result != VK_SUCCESS)
         return;
-    pvk_encoder_close(e, r->enc);
+    pvk_render_close(e, r->enc);
     pvk_release(r->enc);
     r->enc = NULL;
     enc = pvk_render_open(e, r->begin, &r->pass_depth, &r->pass_stencil, true, true, int_slots);
@@ -60564,7 +60577,7 @@ static void pvk_render_split_resolve(struct pvk_encoder *e)
     pvk_labels_open(e, enc, "Color resolves");
     pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
         enc, PVK_STAGES_RENDER, PVK_STAGES_RENDER, e->queue->device->visibility);
-    pvk_encoder_close(e, enc);
+    pvk_render_close(e, enc);
     pvk_release(enc);
 }
 

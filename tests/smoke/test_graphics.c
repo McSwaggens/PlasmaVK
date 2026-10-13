@@ -7175,6 +7175,74 @@ static void test_copy_ms_depth(void)
     free_img(&resolved);
 }
 
+/* Copies into multisampled images right after render passes stored them
+ * (clears): unless render encoders end with a producer barrier, Metal lets
+ * a pass's stores land after the copy (section 16, BARRIERS; here 14 to 60
+ * of the 128 copies). Checked through resolves. */
+static void test_copy_after_ms_store(void)
+{
+    enum { N = 32, ROUNDS = 4 };
+    static const VkClearColorValue red = { { 1, 0, 0, 1 } }, blue = { { 0, 0, 1, 1 } };
+    VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    struct img src = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img single = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(N * W * H * 4);
+    struct img dst[N];
+    VkImageResolve rs;
+    VkImageCopy copy;
+    uint32_t round, i, k;
+    int bad = 0;
+
+    memset(&copy, 0, sizeof(copy));
+    copy.srcSubresource.aspectMask = copy.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copy.srcSubresource.layerCount = copy.dstSubresource.layerCount = 1;
+    copy.extent.width = W;
+    copy.extent.height = H;
+    copy.extent.depth = 1;
+    memset(&rs, 0, sizeof(rs));
+    rs.srcSubresource = copy.srcSubresource;
+    rs.dstSubresource = copy.dstSubresource;
+    rs.extent = copy.extent;
+    for (i = 0; i < N; i++)
+        dst[i] = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    for (round = 0; round < ROUNDS; round++) {
+        VkCommandBuffer cb = begin_cmd();
+        vkCmdClearColorImage(cb, src.image, VK_IMAGE_LAYOUT_GENERAL, &red, 1, &range);
+        for (i = 0; i < N; i++) {
+            vkCmdClearColorImage(cb, dst[i].image, VK_IMAGE_LAYOUT_GENERAL, &blue, 1, &range);
+            barrier(cb);
+            vkCmdCopyImage(cb, src.image, VK_IMAGE_LAYOUT_GENERAL, dst[i].image, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
+        }
+        for (i = 0; i < N; i++) {
+            VkBufferImageCopy r;
+            barrier(cb);
+            vkCmdResolveImage(cb, dst[i].image, VK_IMAGE_LAYOUT_GENERAL, single.image, VK_IMAGE_LAYOUT_GENERAL, 1, &rs);
+            barrier(cb);
+            memset(&r, 0, sizeof(r));
+            r.bufferOffset = (VkDeviceSize)i * W * H * 4;
+            r.imageSubresource = copy.dstSubresource;
+            r.imageExtent = copy.extent;
+            vkCmdCopyImageToBuffer(cb, single.image, VK_IMAGE_LAYOUT_GENERAL, out.buffer, 1, &r);
+        }
+        barrier(cb);
+        submit(cb);
+        for (i = 0; i < N; i++)
+            for (k = 0; k < W * H; k++) {
+                uint32_t v;
+                memcpy(&v, out.data + 4 * ((size_t)i * W * H + k), 4);
+                if (v != RED && bad++ < 4)
+                    fprintf(stderr, "copy after a multisampled store: round %u image %u texel %u is %08x\n", round,
+                            i, k, v);
+            }
+    }
+    CHECK(bad == 0);
+    for (i = 0; i < N; i++)
+        free_img(&dst[i]);
+    free_buf(&out);
+    free_img(&single);
+    free_img(&src);
+}
+
 /*
  * SPIR-V assembly (spirv-as from the Vulkan SDK): a fragment shader whose
  * FragDepth has an initializer and is never stored.
@@ -9510,6 +9578,7 @@ int main(void)
     RUN(test_dual_source);
     RUN(test_dual_source_unwritten);
     RUN(test_copy_ms_depth);
+    RUN(test_copy_after_ms_store);
     RUN(test_frag_depth_initializer);
     RUN(test_rgb9e5_write_mask);
     RUN(test_stencil_view_attachment);
