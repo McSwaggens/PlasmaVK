@@ -46832,6 +46832,22 @@ static const char *pvk_spv_fence_scope(uint32_t scope, uint32_t sem)
     return pvk_spv_thread_scope(scope);
 }
 
+/* The semantics a fence covers. Metal's fences don't order threadgroup
+ * memory alone for other SIMD-groups either (M4 Max, macOS 27.2: with
+ * payload and guard both in threadgroup memory, a few dozen stale payloads
+ * per 1,500 back-to-back dispatches of 64 threadgroups of 961, at
+ * threadgroup or device scope; none with device memory added to a
+ * device-scope fence, while threadgroup-scope ones failed with any flags),
+ * so fences over threadgroup memory wider than a SIMD-group cover device
+ * memory too, which makes them device-scope (pvk_spv_fence_scope). */
+static uint32_t pvk_spv_fence_sem(uint32_t scope, uint32_t sem)
+{
+    if ((sem & PVK_SPV_SemanticsWorkgroupMemory) && scope != PVK_SPV_ScopeSubgroup &&
+        scope != PVK_SPV_ScopeInvocation)
+        sem |= PVK_SPV_SemanticsUniformMemory;
+    return sem;
+}
+
 /* The fence of a release (want PVK_SPV_SEM_RELEASE) or acquire for memory
  * scope `scope` and semantics `sem`; own: the storage class semantics of
  * the atomic it orders (0: none), which the fence covers too (a fence over
@@ -46839,12 +46855,12 @@ static const char *pvk_spv_fence_scope(uint32_t scope, uint32_t sem)
  * pvk_spv_fence_scope found). Emitted when the semantics ask for it. */
 static void pvk_spv_fence(struct pvk_spv *ctx, uint32_t scope, uint32_t sem, uint32_t want, uint32_t own)
 {
-    const char *flags = pvk_spv_mem_flags(ctx, sem | own);
+    uint32_t all = pvk_spv_fence_sem(scope, sem | own);
+    const char *flags = pvk_spv_mem_flags(ctx, all);
     if (!(sem & want) || scope == PVK_SPV_ScopeInvocation)
         return;
     if (flags)
-        pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags,
-                     pvk_spv_fence_scope(scope, sem | own));
+        pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, pvk_spv_fence_scope(scope, all));
 }
 
 static void pvk_spv_barrier(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
@@ -46871,7 +46887,7 @@ static void pvk_spv_barrier(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
             pvk_spv_fence(ctx, scope, dev | PVK_SPV_SemanticsAcquire, PVK_SPV_SEM_ACQUIRE, 0);
     } else {
         uint32_t scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 1));
-        uint32_t sem = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2));
+        uint32_t sem = pvk_spv_fence_sem(scope, pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2)));
         const char *flags = pvk_spv_mem_flags(ctx, sem);
         if (flags && scope != PVK_SPV_ScopeInvocation)
             pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, pvk_spv_fence_scope(scope, sem));
