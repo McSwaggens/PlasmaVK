@@ -31909,6 +31909,7 @@ static const VkExtensionProperties pvk_debug_layer_extensions[] = {
  * needs are in pvk_device_extension_features (section 7). */
 enum pvk_device_extension {
     PVK_DEVICE_EXT_KHR_swapchain,
+    PVK_DEVICE_EXT_KHR_calibrated_timestamps, /* the device's clock is the host's mach_absolute_time (section 14) */
     /* Promoted to Vulkan 1.1 */
     PVK_DEVICE_EXT_KHR_16bit_storage,
     PVK_DEVICE_EXT_KHR_bind_memory2,
@@ -32000,6 +32001,7 @@ enum pvk_device_extension {
 
 static const VkExtensionProperties pvk_device_extensions[PVK_DEVICE_EXTENSION_COUNT] = {
     PVK_EXT(PVK_DEVICE_EXT_, KHR_swapchain, KHR_SWAPCHAIN),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_calibrated_timestamps, KHR_CALIBRATED_TIMESTAMPS),
     /* Vulkan 1.1 */
     PVK_EXT(PVK_DEVICE_EXT_, KHR_16bit_storage, KHR_16BIT_STORAGE),
     PVK_EXT(PVK_DEVICE_EXT_, KHR_bind_memory2, KHR_BIND_MEMORY_2),
@@ -53013,6 +53015,7 @@ static VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_t vs_wo
  * is not reported, section 7).
  * ========================================================================== */
 
+#include <mach/mach_time.h>
 #include <time.h>
 
 struct pvk_query_pool {
@@ -53157,6 +53160,58 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetQueryPoolResults(VkDevice _device, VkQueryPo
             result = VK_NOT_READY;
     }
     return __atomic_load_n(&device->lost, __ATOMIC_ACQUIRE) ? VK_ERROR_DEVICE_LOST : result;
+}
+
+/* VK_KHR_calibrated_timestamps: timestamps are mach_absolute_time ticks
+ * (TIMESTAMPS above), so the device's clock is read on the host; the host
+ * domains are clock_gettime's. The deviation is the time the reads took,
+ * plus a tick. */
+static const VkTimeDomainKHR pvk_time_domains[] = { VK_TIME_DOMAIN_DEVICE_KHR, VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR,
+                                                    VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR };
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceCalibrateableTimeDomainsKHR(VkPhysicalDevice physicalDevice,
+                                                                              uint32_t *pTimeDomainCount,
+                                                                              VkTimeDomainKHR *pTimeDomains)
+{
+    (void)physicalDevice;
+    return pvk_enumerate(pvk_time_domains, sizeof(pvk_time_domains[0]), PVK_ARRAY_SIZE(pvk_time_domains),
+                         pTimeDomainCount, pTimeDomains);
+}
+
+static uint64_t pvk_clock_ns(clockid_t clock)
+{
+    struct timespec ts;
+    clock_gettime(clock, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetCalibratedTimestampsKHR(VkDevice _device, uint32_t timestampCount,
+                                                            const VkCalibratedTimestampInfoKHR *pTimestampInfos,
+                                                            uint64_t *pTimestamps, uint64_t *pMaxDeviation)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    float tick = device->physical_device->properties.limits.timestampPeriod;
+    uint64_t begin = pvk_clock_ns(CLOCK_MONOTONIC_RAW), end;
+    uint32_t i;
+    for (i = 0; i < timestampCount; i++) {
+        switch (pTimestampInfos[i].timeDomain) {
+        case VK_TIME_DOMAIN_DEVICE_KHR:
+            pTimestamps[i] = mach_absolute_time();
+            break;
+        case VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR:
+            pTimestamps[i] = pvk_clock_ns(CLOCK_MONOTONIC);
+            break;
+        case VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR:
+            pTimestamps[i] = pvk_clock_ns(CLOCK_MONOTONIC_RAW);
+            break;
+        default: /* not offered */
+            pTimestamps[i] = 0;
+            break;
+        }
+    }
+    end = pvk_clock_ns(CLOCK_MONOTONIC_RAW);
+    *pMaxDeviation = end - begin + (uint64_t)(tick + 1.0f);
+    return VK_SUCCESS;
 }
 
 /* vkCmdCopyQueryPoolResults (section 16): one query per thread, arguments
@@ -67326,6 +67381,7 @@ static const struct pvk_entrypoint {
     { "vkGetBufferMemoryRequirements2KHR", (PFN_vkVoidFunction)vkGetBufferMemoryRequirements2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_get_memory_requirements2) },
     { "vkGetBufferOpaqueCaptureAddress", (PFN_vkVoidFunction)vkGetBufferOpaqueCaptureAddress, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkGetBufferOpaqueCaptureAddressKHR", (PFN_vkVoidFunction)vkGetBufferOpaqueCaptureAddress, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_buffer_device_address) },
+    { "vkGetCalibratedTimestampsKHR", (PFN_vkVoidFunction)vkGetCalibratedTimestampsKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_calibrated_timestamps) },
     { "vkGetDescriptorSetLayoutSupport", (PFN_vkVoidFunction)vkGetDescriptorSetLayoutSupport, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkGetDescriptorSetLayoutSupportKHR", (PFN_vkVoidFunction)vkGetDescriptorSetLayoutSupport, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance3) },
     { "vkGetDeviceBufferMemoryRequirements", (PFN_vkVoidFunction)vkGetDeviceBufferMemoryRequirements, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
@@ -67361,6 +67417,7 @@ static const struct pvk_entrypoint {
     { "vkGetImageSubresourceLayout2EXT", (PFN_vkVoidFunction)vkGetImageSubresourceLayout2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_host_image_copy) },
     { "vkGetImageSubresourceLayout2KHR", (PFN_vkVoidFunction)vkGetImageSubresourceLayout2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance5) },
     { "vkGetInstanceProcAddr", (PFN_vkVoidFunction)vkGetInstanceProcAddr, PVK_SCOPE_GLOBAL },
+    { "vkGetPhysicalDeviceCalibrateableTimeDomainsKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceCalibrateableTimeDomainsKHR, PVK_SCOPE_INSTANCE | PVK_DEXT(PVK_DEVICE_EXT_KHR_calibrated_timestamps) },
     { "vkGetPhysicalDeviceExternalBufferProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalBufferProperties, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },
     { "vkGetPhysicalDeviceExternalBufferPropertiesKHR", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalBufferProperties, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_KHR_external_memory_capabilities) },
     { "vkGetPhysicalDeviceExternalFenceProperties", (PFN_vkVoidFunction)vkGetPhysicalDeviceExternalFenceProperties, PVK_SCOPE_INSTANCE | PVK_CORE_1_1 },

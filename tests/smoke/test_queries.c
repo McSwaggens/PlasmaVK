@@ -17,6 +17,7 @@ static VkQueue queue, compute_queue;
 static VkCommandPool pool, compute_pool;
 static uint32_t shared_type = UINT32_MAX, private_type = UINT32_MAX;
 static double period; /* ns per tick */
+static bool calibrated; /* VK_KHR_calibrated_timestamps offered (and enabled) */
 static uint32_t valid_bits;
 
 struct buf {
@@ -86,11 +87,23 @@ static void setup(void)
         queue_info[i].queueCount = 1;
         queue_info[i].pQueuePriorities = &priority;
     }
+    {
+        VkExtensionProperties exts[256];
+        uint32_t n = 256, e;
+        vkEnumerateDeviceExtensionProperties(pd, NULL, &n, exts);
+        for (e = 0; e < n; e++)
+            calibrated |= strcmp(exts[e].extensionName, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) == 0;
+    }
     memset(&device_info, 0, sizeof(device_info));
     device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     device_info.pNext = &v13;
     device_info.queueCreateInfoCount = 2;
     device_info.pQueueCreateInfos = queue_info;
+    if (calibrated) {
+        static const char *const ext = VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME;
+        device_info.enabledExtensionCount = 1;
+        device_info.ppEnabledExtensionNames = &ext;
+    }
     REQUIRE_VK(vkCreateDevice(pd, &device_info, NULL, &device));
     vkGetDeviceQueue(device, 0, 0, &queue);
     vkGetDeviceQueue(device, 1, 0, &compute_queue);
@@ -311,6 +324,55 @@ static void test_timestamp_basic(void)
     CHECK_VK(get64(p, 0, 2, r, VK_QUERY_RESULT_WAIT_BIT), VK_SUCCESS);
     free_buf(&a);
     free_buf(&b);
+    vkDestroyQueryPool(device, p, NULL);
+}
+
+/* VK_KHR_calibrated_timestamps: the device domain is the timestamps' clock,
+ * read with the host's: a GPU timestamp between two calibrations falls
+ * between their device values, and the device and raw host clocks advance
+ * alike (within the deviations and a millisecond). */
+static void test_calibrated_timestamps(void)
+{
+    PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR get_domains;
+    PFN_vkGetCalibratedTimestampsKHR get_timestamps;
+    VkCalibratedTimestampInfoKHR info[2];
+    VkTimeDomainKHR domains[8];
+    VkQueryPool p;
+    VkCommandBuffer cb;
+    uint64_t before[2], after[2], dev0 = 0, dev1 = 0, r[2];
+    uint32_t n = 8, i, found = 0;
+    double host_ns, device_ns;
+
+    CHECK(calibrated);
+    if (!calibrated)
+        return;
+    get_domains = (PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR)vkGetInstanceProcAddr(
+        instance, "vkGetPhysicalDeviceCalibrateableTimeDomainsKHR");
+    get_timestamps = (PFN_vkGetCalibratedTimestampsKHR)vkGetDeviceProcAddr(device, "vkGetCalibratedTimestampsKHR");
+    REQUIRE(get_domains && get_timestamps);
+    CHECK_VK(get_domains(pd, &n, domains), VK_SUCCESS);
+    for (i = 0; i < n; i++)
+        found |= domains[i] == VK_TIME_DOMAIN_DEVICE_KHR ? 1u : domains[i] == VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR ? 2u : 0u;
+    CHECK(found == 3);
+    memset(info, 0, sizeof(info));
+    for (i = 0; i < 2; i++)
+        info[i].sType = VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_KHR;
+    info[0].timeDomain = VK_TIME_DOMAIN_DEVICE_KHR;
+    info[1].timeDomain = VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR;
+    p = make_pool(VK_QUERY_TYPE_TIMESTAMP, 1);
+    vkResetQueryPool(device, p, 0, 1);
+    cb = begin();
+    vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, p, 0);
+    CHECK_VK(get_timestamps(device, 2, info, before, &dev0), VK_SUCCESS);
+    run(cb);
+    CHECK_VK(get_timestamps(device, 2, info, after, &dev1), VK_SUCCESS);
+    CHECK_VK(get64(p, 0, 1, r, VK_QUERY_RESULT_WAIT_BIT), VK_SUCCESS);
+    CHECK(before[0] <= r[0] && r[0] <= after[0]);
+    host_ns = (double)(after[1] - before[1]);
+    device_ns = (double)(after[0] - before[0]) * period;
+    CHECK(host_ns > 0.0 && device_ns > 0.0);
+    CHECK(host_ns - device_ns < 1e6 + (double)(dev0 + dev1) && device_ns - host_ns < 1e6 + (double)(dev0 + dev1));
+    CHECK(dev0 < 1000000 && dev1 < 1000000);
     vkDestroyQueryPool(device, p, NULL);
 }
 
@@ -695,6 +757,7 @@ int main(void)
     if (!device)
         return 1;
     RUN(test_timestamp_basic);
+    RUN(test_calibrated_timestamps);
     RUN(test_timestamp_order);
     RUN(test_timestamp_many);
     RUN(test_results_flags);
