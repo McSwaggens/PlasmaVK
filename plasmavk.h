@@ -40919,11 +40919,14 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   PVK_FAST_MATH (result->fast_math: the module has no float controls,
  *   FPFastMath* short of every flag, NoContraction or FPRoundingMode, so
  *   Vulkan's default floating-point environment applies) MTLMathModeRelaxed
- *   with MTLMathFloatingPointFunctionsPrecise (Vulkan's precision of
- *   individual operations). Not MTLMathModeFast: the CTS's precision tests
- *   want Inf where results overflow, and of Inf inputs (as GLSL's formulas
- *   give them; pvk_sinh, pvk_cosh and pvk_normalize keep that with relaxed
- *   math too). The kernel's name is
+ *   with MTLMathFloatingPointFunctionsFast (Metal's default functions, within
+ *   Vulkan's precision of individual operations; precise ones cost the
+ *   engine migration most of the gain). Not MTLMathModeFast: the CTS's
+ *   precision tests want Inf where results overflow, and of Inf inputs (as
+ *   GLSL's formulas give them; pvk_sinh, pvk_cosh and pvk_normalize keep
+ *   that with relaxed math too). The wrappers that only keep signed zeros,
+ *   Inf and NaN (pvk_fmin, pvk_fmax, pvk_sin, pvk_cos, pvk_fract) are the
+ *   plain functions there. The kernel's name is
  *   result->entry_point; dispatch with result->workgroup_size threads per
  *   threadgroup (declared with [[max_total_threads_per_threadgroup]], so the
  *   compiler fits up to 1024). A vertex function with result->invariant
@@ -52527,20 +52530,36 @@ static const char pvk_spv_math_template[] =
     "{\n"
     "    return select(tanh(clamp(x, T(-10.0f), T(10.0f))), x, isnan(x));\n"
     "}\n"
+    ;
+
+/* (the rest: one literal would pass C99's 4095 characters) */
+static const char pvk_spv_math_template2[] =
     "template <typename T>\n"
     "inline T pvk_sin(T x)\n"
     "{\n"
+    "#ifdef PVK_FAST_MATH\n"
+    "    return sin(x);\n"
+    "#else\n"
     "    return select(sin(x), x - x, !isfinite(x));\n"
+    "#endif\n"
     "}\n"
     "template <typename T>\n"
     "inline T pvk_cos(T x)\n"
     "{\n"
+    "#ifdef PVK_FAST_MATH\n"
+    "    return cos(x);\n"
+    "#else\n"
     "    return select(cos(x), x - x, !isfinite(x));\n"
+    "#endif\n"
     "}\n"
     "template <typename T>\n"
     "inline T pvk_fract(T x)\n"
     "{\n"
+    "#ifdef PVK_FAST_MATH\n"
+    "    return fract(x);\n"
+    "#else\n"
     "    return select(fract(x), x - x, !isfinite(x));\n"
+    "#endif\n"
     "}\n"
     "template <typename T>\n"
     "inline T pvk_asinh(T x)\n"
@@ -52555,12 +52574,20 @@ static const char pvk_spv_math_template[] =
     "template <typename T>\n"
     "inline T pvk_fmin(T a, T b)\n"
     "{\n"
+    "#ifdef PVK_FAST_MATH\n"
+    "    return fmin(a, b);\n"
+    "#else\n"
     "    return select(fmin(a, b), select(b, a, signbit(a)), a == b);\n"
+    "#endif\n"
     "}\n"
     "template <typename T>\n"
     "inline T pvk_fmax(T a, T b)\n"
     "{\n"
+    "#ifdef PVK_FAST_MATH\n"
+    "    return fmax(a, b);\n"
+    "#else\n"
     "    return select(fmax(a, b), select(a, b, signbit(a)), a == b);\n"
+    "#endif\n"
     "}\n"
     "template <typename T, typename E>\n"
     "inline T pvk_frexp(T x, thread E &e)\n"
@@ -52841,8 +52868,10 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         pvk_sb_append(ctx, out, pvk_spv_ycbcr_template, sizeof(pvk_spv_ycbcr_template) - 1);
     if (ctx->use_cast)
         pvk_sb_append(ctx, out, pvk_spv_cast_template, sizeof(pvk_spv_cast_template) - 1);
-    if (ctx->use_math)
+    if (ctx->use_math) {
         pvk_sb_append(ctx, out, pvk_spv_math_template, sizeof(pvk_spv_math_template) - 1);
+        pvk_sb_append(ctx, out, pvk_spv_math_template2, sizeof(pvk_spv_math_template2) - 1);
+    }
     if (ctx->use_ia)
         pvk_sb_append(ctx, out, pvk_spv_ia_template, sizeof(pvk_spv_ia_template) - 1);
     if (ctx->types.len)
@@ -58389,14 +58418,14 @@ static id pvk_device_compiler(struct pvk_device *device)
     return compiler;
 }
 
-/* Math mode for MSL (COMPILING THE OUTPUT): relaxed with precise functions
- * where the translator defined PVK_FAST_MATH, else safe (internal shaders
- * too). */
+/* Math mode for MSL (COMPILING THE OUTPUT): relaxed with fast functions
+ * where the translator defined PVK_FAST_MATH, else safe with Metal's
+ * default functions (internal shaders too). */
 static void pvk_msl_math_options(id options, const char *msl)
 {
     if (strstr(msl, "#define PVK_FAST_MATH 1 ")) {
         pvk_MTLCompileOptions_setMathMode(options, PVK_MTLMathModeRelaxed);
-        pvk_MTLCompileOptions_setMathFloatingPointFunctions(options, PVK_MTLMathFloatingPointFunctionsPrecise);
+        pvk_MTLCompileOptions_setMathFloatingPointFunctions(options, PVK_MTLMathFloatingPointFunctionsFast);
     } else {
         pvk_MTLCompileOptions_setMathMode(options, PVK_MTLMathModeSafe);
     }
