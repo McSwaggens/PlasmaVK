@@ -34,6 +34,20 @@ performance work has only started: shaders without float controls compile in
 Metal's relaxed math mode (Vulkan's default floating-point environment), the
 others in safe math.
 
+## Quad merging
+
+To compute derivatives, an Apple GPU runs fragments in 2x2 quads, and it
+packs fragments of two adjacent triangles into one quad unless the shader
+reads its barycentric coordinates. Vulkan requires a quad's derivatives to
+come from one triangle, so fragment shaders that use derivatives (including
+implicit-LOD sampling) read them. That costs time: 6-19% of the terrain
+passes' GPU time in one engine. Define `PLASMAVK_QUAD_MERGING` before
+`PLASMAVK_IMPLEMENTATION` to skip it, as MoltenVK does. Derivatives along
+shared triangle edges may then mix both triangles (usually harmless, but
+visible with projective texturing). A build with this define isn't the
+configuration tested against the CTS, so it reports `conformanceVersion`
+0.0.0.0 and says so in `driverInfo`.
+
 ## Debugging
 
 There is no loader, so the Khronos layers can't run on PlasmaVK; it has its

@@ -20,7 +20,15 @@
  * CONFIGURATION (define before including the implementation)
  *   PLASMAVK_ABORT_ON_UNIMPLEMENTED  abort() when an unimplemented command is
  *                                    called, instead of logging once.
- *   VK_LAYER_PLASMAVK_debug          (in VkInstanceCreateInfo::
+ *   PLASMAVK_QUAD_MERGING            let Apple GPUs pack fragments of two
+ *                                    triangles into one 2x2 quad, as
+ *                                    MoltenVK does: fragment shaders using
+ *                                    derivatives run faster, but their
+ *                                    derivatives (and implicit LODs) may
+ *                                    mix adjacent triangles of a draw. Not
+ *                                    conformant: conformanceVersion is
+ *                                    0.0.0.0 and driverInfo says so.
+ *   VK_LAYER_PLASMAVK_debug         (in VkInstanceCreateInfo::
  *                                    ppEnabledLayerNames) the debug layer,
  *                                    see DEBUGGING.
  *
@@ -31761,6 +31769,14 @@ static void pvk_logi(const struct pvk_instance *instance, enum pvk_log_level lev
     } while (0)
 #endif
 
+/* PLASMAVK_QUAD_MERGING (CONFIGURATION): fragment shaders don't keep their
+ * 2x2 quads within a triangle (section 13, the fragment entry point). */
+#ifdef PLASMAVK_QUAD_MERGING
+#define PVK_QUAD_MERGING 1
+#else
+#define PVK_QUAD_MERGING 0
+#endif
+
 /* ---- Allocation ---- */
 
 /* Zeroed allocation through the application's callbacks, if any. */
@@ -32921,15 +32937,20 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
     /* ---- Vulkan 1.2 ---- */
     p12->driverID = (VkDriverId)0; /* TODO: register a VkDriverId with Khronos; 0 names no driver */
     snprintf(p12->driverName, sizeof(p12->driverName), "PlasmaVK");
-    snprintf(p12->driverInfo, sizeof(p12->driverInfo), "PlasmaVK %s on Metal 4", version);
+    snprintf(p12->driverInfo, sizeof(p12->driverInfo), "PlasmaVK %s on Metal 4%s", version,
+             PVK_QUAD_MERGING ? " (PLASMAVK_QUAD_MERGING, not conformant)" : "");
     /* conformanceVersion: the Khronos CTS release PlasmaVK was last tested
      * against (as the spec defines it), 1.4.7.0 on an M4 Max: every must-pass
      * case passes but driver_id_match, which needs a driver ID registered
-     * with Khronos. No conformance submission has been made. */
-    p12->conformanceVersion.major = 1;
-    p12->conformanceVersion.minor = 4;
-    p12->conformanceVersion.subminor = 7;
-    p12->conformanceVersion.patch = 0;
+     * with Khronos. No conformance submission has been made. A
+     * PLASMAVK_QUAD_MERGING build isn't the configuration tested (its
+     * derivatives may mix triangles): 0.0.0.0, no conformance claimed. */
+    if (!PVK_QUAD_MERGING) {
+        p12->conformanceVersion.major = 1;
+        p12->conformanceVersion.minor = 4;
+        p12->conformanceVersion.subminor = 7;
+        p12->conformanceVersion.patch = 0;
+    }
 
     /* Shaders with float controls are compiled with MTLMathModeSafe (section
      * 13, COMPILING THE OUTPUT): signed zeros, Inf and NaN are kept and
@@ -33284,10 +33305,10 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     snprintf(p->deviceName, sizeof(p->deviceName), "%s", pvk_ns_utf8(pvk_MTLDevice_name(pd->mtl_device)));
     {
         /* Pipeline cache data (section 17) holds MSL of this PlasmaVK
-         * version's translator, compiled for this GPU. */
-        char name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE + 32];
-        snprintf(name, sizeof(name), "%s %d.%d.%d", p->deviceName, PLASMAVK_VERSION_MAJOR, PLASMAVK_VERSION_MINOR,
-                 PLASMAVK_VERSION_PATCH);
+         * version's translator and configuration, compiled for this GPU. */
+        char name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE + 64];
+        snprintf(name, sizeof(name), "%s %d.%d.%d%s", p->deviceName, PLASMAVK_VERSION_MAJOR, PLASMAVK_VERSION_MINOR,
+                 PLASMAVK_VERSION_PATCH, PVK_QUAD_MERGING ? " quad merging" : "");
         pvk_make_uuid(p->pipelineCacheUUID, "PlasmaVK pipeline cache", name);
     }
     pvk_physical_device_init_limits(pd);
@@ -40986,7 +41007,8 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   MinLod, the same variants) and OpImageQueryLod
  *   (calculate_clamped/unclamped_lod),
  *   derivatives (OpDPdx/y and Fwidth: Metal has no fine/coarse choice, its
- *   dfdx/dfdy serve both); OpImageFetch (Lod, Sample, offsets); OpImageGather and
+ *   dfdx/dfdy serve both; their 2x2 quads stay within a triangle, unless
+ *   PLASMAVK_QUAD_MERGING); OpImageFetch (Lod, Sample, offsets); OpImageGather and
  *   OpImageDrefGather (ConstOffsets: four gathers); OpImageRead/Write with a
  *   known or Unknown format (Metal converts from the texture's pixel format);
  *   OpImageQuerySize(Lod)/Levels/Samples; OpImageTexelPointer with 32-bit
@@ -52234,8 +52256,9 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
      * coordinates: else Apple GPUs pack fragments of adjacent triangles of a
      * draw into one 2x2 quad, and derivatives (implicit LODs) mix the
      * triangles (M4 Max; the Khronos CTS's projected mipmaps). Kept by a use
-     * no interpolation takes (NaN bits). */
-    if (!vertex && ctx->derivatives && outs.len) {
+     * no interpolation takes (NaN bits). PLASMAVK_QUAD_MERGING builds let
+     * the GPU pack quads as it likes (faster, not conformant). */
+    if (!PVK_QUAD_MERGING && !vertex && ctx->derivatives && outs.len) {
         need |= PVK_SPV_NEED_BARYCENTRIC;
         pvk_spv_line(ctx, "if (as_type<uint>(pvk_barycentric.x) == 0xffffffffu)");
         pvk_spv_line(ctx, "    pvk_out = {};");
