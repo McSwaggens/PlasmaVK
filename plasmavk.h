@@ -31461,6 +31461,7 @@ static inline void pvk_MTLSharedEvent_setSignaledValue(id self, uint64_t signale
 static inline bool pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(id self, uint64_t value, uint64_t milliseconds) { PVK_SEL_CACHE("waitUntilSignaledValue:timeoutMS:"); return PVK_MSG(bool, (id, SEL, uint64_t, uint64_t))(self, pvk_sel_, value, milliseconds); }
 static inline id pvk_MTLCompileOptions_new(void) { PVK_CLASS_CACHE("MTLCompileOptions"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
 static inline void pvk_MTLCompileOptions_setMathMode(id self, pvk_MTLMathMode mathMode) { PVK_SEL_CACHE("setMathMode:"); PVK_MSG(void, (id, SEL, pvk_MTLMathMode))(self, pvk_sel_, mathMode); }
+static inline void pvk_MTLCompileOptions_setMathFloatingPointFunctions(id self, pvk_MTLMathFloatingPointFunctions mathFloatingPointFunctions) { PVK_SEL_CACHE("setMathFloatingPointFunctions:"); PVK_MSG(void, (id, SEL, pvk_MTLMathFloatingPointFunctions))(self, pvk_sel_, mathFloatingPointFunctions); }
 static inline void pvk_MTLCompileOptions_setLanguageVersion(id self, pvk_MTLLanguageVersion languageVersion) { PVK_SEL_CACHE("setLanguageVersion:"); PVK_MSG(void, (id, SEL, pvk_MTLLanguageVersion))(self, pvk_sel_, languageVersion); }
 static inline id pvk_MTLLibrary_newFunctionWithName(id self, id functionName) { PVK_SEL_CACHE("newFunctionWithName:"); return PVK_MSG(id, (id, SEL, id))(self, pvk_sel_, functionName); }
 static inline id pvk_MTLComputePipelineDescriptor_new(void) { PVK_CLASS_CACHE("MTLComputePipelineDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
@@ -32928,9 +32929,11 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
     p12->conformanceVersion.subminor = 7;
     p12->conformanceVersion.patch = 0;
 
-    /* Shaders are compiled with MTLMathModeSafe (section 13): signed zeros,
-     * Inf and NaN are kept and results rounded to nearest even. MSL offers
-     * no control over denormals and has no 64-bit floats. */
+    /* Shaders with float controls are compiled with MTLMathModeSafe (section
+     * 13, COMPILING THE OUTPUT): signed zeros, Inf and NaN are kept and
+     * results rounded to nearest even; others with relaxed math, as Vulkan's
+     * default floating-point environment allows. MSL offers no control over
+     * denormals and has no 64-bit floats. */
     p12->denormBehaviorIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE;
     p12->roundingModeIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE;
     p12->shaderSignedZeroInfNanPreserveFloat16 = VK_TRUE;
@@ -40910,8 +40913,15 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *
  * COMPILING THE OUTPUT
  *   Needs MSL 3.2 or newer (atomic_thread_fence, texture atomics). Compile with
- *   MTLCompileOptions.mathMode = MTLMathModeSafe: fast math breaks the NaN,
- *   Inf and precision guarantees Vulkan gives. The kernel's name is
+ *   MTLCompileOptions.mathMode = MTLMathModeSafe, or where the output defines
+ *   PVK_FAST_MATH (result->fast_math: the module has no float controls,
+ *   FPFastMath* short of every flag, NoContraction or FPRoundingMode, so
+ *   Vulkan's default floating-point environment applies) MTLMathModeRelaxed
+ *   with MTLMathFloatingPointFunctionsPrecise (Vulkan's precision of
+ *   individual operations). Not MTLMathModeFast: the CTS's precision tests
+ *   want Inf where results overflow, and of Inf inputs (as GLSL's formulas
+ *   give them; pvk_sinh, pvk_cosh and pvk_normalize keep that with relaxed
+ *   math too). The kernel's name is
  *   result->entry_point; dispatch with result->workgroup_size threads per
  *   threadgroup (declared with [[max_total_threads_per_threadgroup]], so the
  *   compiler fits up to 1024). A vertex function with result->invariant
@@ -41010,7 +41020,7 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   allow.)
  *   Semantics to know: atomics are memory_order_relaxed, memory semantics
  *   become fences (Memory model); signed integer overflow is undefined in
- *   MSL where SPIR-V wraps; NoContraction is ignored; derivatives after a
+ *   MSL where SPIR-V wraps; NoContraction makes the module safe math; derivatives after a
  *   discard (OpKill/Terminate) are undefined, as in Vulkan.
  *
  * SHADER CAPABILITIES
@@ -41402,6 +41412,9 @@ struct pvk_msl_spec_constant {
 
 struct pvk_msl_result {
     char *msl; /* NUL-terminated MSL source */
+    /* The module asks for no more than Vulkan's default floating-point
+     * environment: the MSL defines PVK_FAST_MATH (COMPILING THE OUTPUT). */
+    bool fast_math;
     size_t msl_length;
     char entry_point[64]; /* name of the kernel, vertex or fragment function in msl */
     VkShaderStageFlagBits stage;
@@ -43642,7 +43655,7 @@ static void pvk_spv_capability(struct pvk_spv *ctx, uint32_t cap)
     case 4441: case 4442: /* VariablePointersStorageBuffer, VariablePointers */
     case 5629: /* ExpectAssumeKHR */
     case 6016: case 6017: case 6018: case 6019: /* integer dot product */
-    case 6029: /* FloatControls2 (MTLMathModeSafe is stricter than any FPFastMathMode) */
+    case 6029: /* FloatControls2 (FPFastMath* short of fast: MTLMathModeSafe, stricter than any) */
         return;
     case 3: case 6: case 23: case 24:
         pvk_spv_fail(ctx, "only vertex, fragment and compute shaders are supported (no tessellation or geometry)");
@@ -46637,7 +46650,8 @@ static void pvk_spv_glsl(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         if (nops != simple[i].nops)
             pvk_spv_fail(ctx, "GLSL.std.450 instruction %u: wrong operand count", inst);
         fn = simple[i].name;
-        if ((inst == PVK_SPV_GLSL_Atan2 && rs && rs->width == 32) || inst == PVK_SPV_GLSL_Tanh ||
+        if (((inst == PVK_SPV_GLSL_Atan2 || inst == PVK_SPV_GLSL_Sinh || inst == PVK_SPV_GLSL_Cosh) && rs &&
+             rs->width == 32) || inst == PVK_SPV_GLSL_Tanh ||
             inst == PVK_SPV_GLSL_Sin || inst == PVK_SPV_GLSL_Cos || inst == PVK_SPV_GLSL_Fract ||
             inst == PVK_SPV_GLSL_Asinh || inst == PVK_SPV_GLSL_Round || inst == PVK_SPV_GLSL_FMin ||
             inst == PVK_SPV_GLSL_FMax || inst == PVK_SPV_GLSL_NMin || inst == PVK_SPV_GLSL_NMax) {
@@ -46760,6 +46774,10 @@ static void pvk_spv_glsl(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         PVK_SPV_NOPS(1);
         vec = pvk_spv_vtype(ctx, in->w[5])->op == PVK_SPV_OpTypeVector;
         fn = inst == PVK_SPV_GLSL_Length ? (vec ? "length" : "abs") : (vec ? "normalize" : "sign");
+        if (inst == PVK_SPV_GLSL_Normalize && vec && rs && rs->width == 32) {
+            fn = "pvk_normalize"; /* (pvk_spv_math_template) */
+            ctx->use_math = true;
+        }
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", fn, pvk_spv_val(ctx, in->w[5])));
         return;
     case PVK_SPV_GLSL_Distance:
@@ -51759,8 +51777,8 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         case PVK_SPV_ExecutionModeOriginUpperLeft:
         case PVK_SPV_ExecutionModeDepthReplacing:
         case 16: /* DepthUnchanged */
-        case 4459: case 4460: case 4461: case 4462: case 4463: /* float controls: Metal's defaults */
-        case 6028: /* FPFastMathDefault: shaders compile with MTLMathModeSafe, which any flags allow */
+        case 4459: case 4460: case 4461: case 4462: case 4463: /* float controls: safe math (pvk_spv_fast_math) */
+        case 6028: /* FPFastMathDefault: safe math, which any flags allow, unless it allows all */
             break;
         case PVK_SPV_ExecutionModeEarlyFragmentTests:
             early = true;
@@ -52485,6 +52503,23 @@ static const char pvk_spv_math_template[] =
     "    r = select(r, select(copysign(T(M_PI_2_F), y), both, isinf(x)), isinf(y));\n"
     "    return select(select(r, x, isnan(x)), y, isnan(y));\n"
     "}\n"
+    "/* sinh and cosh are Inf where GLSL's (e^x -+ e^-x) / 2 overflows, and\n"
+    " * normalize of an Inf component 0 elsewhere, also with relaxed math */\n"
+    "template <typename T>\n"
+    "inline T pvk_sinh(T x)\n"
+    "{\n"
+    "    return select(sinh(x), copysign(T(INFINITY), x), abs(x) > T(88.7228394f));\n"
+    "}\n"
+    "template <typename T>\n"
+    "inline T pvk_cosh(T x)\n"
+    "{\n"
+    "    return select(cosh(x), T(INFINITY), abs(x) > T(88.7228394f));\n"
+    "}\n"
+    "template <typename T>\n"
+    "inline T pvk_normalize(T v)\n"
+    "{\n"
+    "    return v * rsqrt(dot(v, v));\n"
+    "}\n"
     "template <typename T>\n"
     "inline T pvk_tanh(T x)\n"
     "{\n"
@@ -52638,6 +52673,42 @@ static const char *pvk_spv_kernel_name(struct pvk_spv *ctx)
     return pvk_spv_fmt(ctx, "%s", buf);
 }
 
+/* Whether the module asks for no more than Vulkan's default floating-point
+ * environment (Precision and Operation of SPIR-V Instructions): without
+ * float controls on the entry point, FPFastMath* short of every flag,
+ * NoContraction or FPRoundingMode, Vulkan allows contraction,
+ * reassociation and reciprocals, and assumes no signed zeros, Inf or NaN,
+ * which is Metal's fast math. */
+static bool pvk_spv_fast_math(struct pvk_spv *ctx)
+{
+    const uint32_t all = 0x1u | 0x2u | 0x4u | 0x8u | 0x10000u | 0x20000u | 0x40000u; /* NotNaN ... AllowTransform */
+    uint32_t i = 5;
+    while (i < ctx->nw) {
+        const uint32_t *w = ctx->w + i;
+        uint32_t op = w[0] & 0xffffu, n = w[0] >> 16;
+        if (!n || n > ctx->nw - i || op == 54) /* (annotations come before the functions) */
+            break;
+        if ((op == 16 || op == 331) && n >= 3 && w[1] == ctx->entry_fid) { /* OpExecutionMode(Id) */
+            if (w[2] >= 4459 && w[2] <= 4463) /* Denorm*, SignedZeroInfNanPreserve, RoundingMode* */
+                return false;
+            if (w[2] == 6028 && n >= 5) { /* FPFastMathDefault */
+                uint32_t f = (uint32_t)pvk_spv_const_uint(ctx, w[4]);
+                if (!(f & 0x10u) && (f & all) != all)
+                    return false;
+            }
+        }
+        if ((op == 71 || op == 72) && n >= (op == 71 ? 3u : 4u)) { /* OpDecorate, OpMemberDecorate */
+            uint32_t dec = w[op == 71 ? 2 : 3], arg = n > (op == 71 ? 3u : 4u) ? w[op == 71 ? 3 : 4] : 0;
+            if (dec == 42 || dec == 39) /* NoContraction, FPRoundingMode */
+                return false;
+            if (dec == 40 && !(arg & 0x10u) && (arg & all) != all) /* FPFastMathMode */
+                return false;
+        }
+        i += n;
+    }
+    return true;
+}
+
 static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t word_count)
 {
     struct pvk_msl_result *res = ctx->result;
@@ -52705,6 +52776,7 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         fn->msl = fn->fid == ctx->entry_fid && !ctx->graphics ? kernel : pvk_spv_name(ctx, fn->fid);
     }
     pvk_spv_assign_resources(ctx);
+    res->fast_math = pvk_spv_fast_math(ctx);
     if (ctx->options && ctx->options->dispatch_base) {
         uint32_t end = res->has_push_constants ? pvk_spv_round(res->push_constant_offset + res->push_constant_size, 16) : 0;
         if (ctx->options->dispatch_base_offset > 65536)
@@ -52749,6 +52821,8 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
                   : ctx->model == PVK_SPV_ExecutionModelFragment ? "Fragment function"
                                                                  : "Kernel",
                   kernel);
+    if (res->fast_math)
+        pvk_sb_printf(ctx, out, "#define PVK_FAST_MATH 1 /* Vulkan's default floating-point environment */\n\n");
     if (ctx->use_array) {
         pvk_sb_append(ctx, out, pvk_spv_templates, sizeof(pvk_spv_templates) - 1);
         if (strcmp(ctx->dev, "device") != 0)
@@ -58260,6 +58334,19 @@ static id pvk_device_compiler(struct pvk_device *device)
     return compiler;
 }
 
+/* Math mode for MSL (COMPILING THE OUTPUT): relaxed with precise functions
+ * where the translator defined PVK_FAST_MATH, else safe (internal shaders
+ * too). */
+static void pvk_msl_math_options(id options, const char *msl)
+{
+    if (strstr(msl, "#define PVK_FAST_MATH 1 ")) {
+        pvk_MTLCompileOptions_setMathMode(options, PVK_MTLMathModeRelaxed);
+        pvk_MTLCompileOptions_setMathFloatingPointFunctions(options, PVK_MTLMathFloatingPointFunctionsPrecise);
+    } else {
+        pvk_MTLCompileOptions_setMathMode(options, PVK_MTLMathModeSafe);
+    }
+}
+
 /* MSL compiled as section 13 asks (MSL 3.2, safe math, invariance preserved
  * for an invariant position) into a library (retained), NULL with a message
  * in error[]. */
@@ -58268,7 +58355,7 @@ static id pvk_msl_library(struct pvk_device *device, const char *msl, bool invar
     void *pool = objc_autoreleasePoolPush();
     id options = pvk_MTLCompileOptions_new(), library = NULL, err = NULL;
     if (options) {
-        pvk_MTLCompileOptions_setMathMode(options, PVK_MTLMathModeSafe);
+        pvk_msl_math_options(options, msl);
         pvk_MTLCompileOptions_setLanguageVersion(options, PVK_MTLLanguageVersion3_2);
         if (invariant)
             pvk_MTLCompileOptions_setPreserveInvariance(options, true);
@@ -63316,7 +63403,7 @@ static id pvk_compile_compute_labeled(struct pvk_device *device, const char *msl
     id options = pvk_MTLCompileOptions_new(), library = NULL, function = NULL, desc = NULL, pso = NULL, err = NULL;
 
     if (options) {
-        pvk_MTLCompileOptions_setMathMode(options, PVK_MTLMathModeSafe);
+        pvk_msl_math_options(options, msl);
         pvk_MTLCompileOptions_setLanguageVersion(options, PVK_MTLLanguageVersion3_2);
         library = pvk_MTLDevice_newLibraryWithSource_options_error(mtl, pvk_NSString_stringWithUTF8String(msl), options,
                                                                  &err);
