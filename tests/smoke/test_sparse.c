@@ -12,6 +12,7 @@
 #include "../../plasmavk.h"
 
 #include <string.h>
+#include <time.h>
 
 #include "../pvk_test.h"
 
@@ -2446,6 +2447,110 @@ static void test_sparse_residency_3d_tail(void)
     free_buf(&host);
 }
 
+static uint64_t now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+}
+
+/* Two aliased partially resident 3D images bound in one vkQueueBindSparse,
+ * level by level to shared memory and their tails to memory of their own
+ * (as the CTS's image_sparse_memory_aliasing does). Metal stalled about 4 s
+ * on updates of several textures in flight at once; then a write through
+ * one image is read through the other. */
+static void test_sparse_aliased_3d(void)
+{
+    const uint32_t W = 256, H = 256, D = 16, levels = 9;
+    const VkDeviceSize back = (VkDeviceSize)W * H * D * 16;
+    VkImageCreateInfo info = image_info(VK_IMAGE_TYPE_3D, VK_FORMAT_R32G32B32A32_UINT, W, H, D, levels, 1,
+                                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                            VK_IMAGE_USAGE_STORAGE_BIT,
+                                        VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT |
+                                            VK_IMAGE_CREATE_SPARSE_ALIASED_BIT);
+    VkSparseImageMemoryRequirements sr;
+    VkSparseImageMemoryBind binds[2][PVK_SPARSE_MAX_LEVELS];
+    VkSparseImageMemoryBindInfo ib[2];
+    VkSparseMemoryBind tails[2];
+    VkSparseImageOpaqueMemoryBindInfo ob[2];
+    VkBindSparseInfo bind;
+    VkDeviceMemory memories[PVK_SPARSE_MAX_LEVELS + 2];
+    VkImage images[2];
+    struct buf host;
+    uint32_t *words, n = 0, lv, k, i;
+    uint64_t t0;
+
+    if (!has_sparse() || !supported.sparseResidencyImage3D || !supported.sparseResidencyAliased)
+        return;
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &images[0]));
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &images[1]));
+    sr = sparse_requirements(images[0]);
+    REQUIRE(sr.imageMipTailFirstLod > 0 && sr.imageMipTailFirstLod < levels);
+    memset(binds, 0, sizeof(binds));
+    for (lv = 0; lv < sr.imageMipTailFirstLod; lv++) {
+        VkExtent3D g = sr.formatProperties.imageGranularity;
+        uint32_t w = W >> lv, h = H >> lv, d = D >> lv;
+        memories[n] = allocate(private_type, (VkDeviceSize)((w + g.width - 1) / g.width) *
+                                                 ((h + g.height - 1) / g.height) * ((d + g.depth - 1) / g.depth) * BLOCK);
+        REQUIRE(memories[n]);
+        for (i = 0; i < 2; i++) {
+            binds[i][lv].subresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            binds[i][lv].subresource.mipLevel = lv;
+            binds[i][lv].extent.width = w;
+            binds[i][lv].extent.height = h;
+            binds[i][lv].extent.depth = d;
+            binds[i][lv].memory = memories[n];
+        }
+        n++;
+    }
+    memset(tails, 0, sizeof(tails));
+    memset(&bind, 0, sizeof(bind));
+    for (i = 0; i < 2; i++) {
+        memories[n] = allocate(private_type, sr.imageMipTailSize);
+        REQUIRE(memories[n]);
+        tails[i].resourceOffset = sr.imageMipTailOffset;
+        tails[i].size = sr.imageMipTailSize;
+        tails[i].memory = memories[n++];
+        ib[i].image = ob[i].image = images[i];
+        ib[i].bindCount = sr.imageMipTailFirstLod;
+        ib[i].pBinds = binds[i];
+        ob[i].bindCount = 1;
+        ob[i].pBinds = &tails[i];
+    }
+    bind.sType = VK_STRUCTURE_TYPE_BIND_SPARSE_INFO;
+    bind.imageOpaqueBindCount = 2;
+    bind.pImageOpaqueBinds = ob;
+    bind.imageBindCount = 2;
+    bind.pImageBinds = ib;
+    t0 = now_ns();
+    bind_sparse(&bind);
+    CHECK((now_ns() - t0) / 1000000 < 2000);
+
+    host = host_buf(2 * back);
+    REQUIRE(host.data);
+    words = (uint32_t *)host.data;
+    for (k = 0; k < W * H * D * 4; k++)
+        words[k] = pattern(k, 70);
+    memset(words + back / 4, 0, (size_t)back);
+    upload_download(images[0], &host, back, 0, 0, W, H, D);
+    {
+        VkCommandBuffer cb = begin();
+        to_general(cb, images[1], VK_IMAGE_ASPECT_COLOR_BIT);
+        submit(cb);
+    }
+    memset(words + back / 4, 0, (size_t)back);
+    download(images[1], &host, back, 0, 0, W, H, D);
+    for (k = 0; k < W * H * D * 4 && words[back / 4 + k] == pattern(k, 70); k++)
+        ;
+    if (k < W * H * D * 4)
+        PVK_TEST_FAIL("word %u of %u: %08x", k, W * H * D * 4, words[back / 4 + k]);
+    vkDestroyImage(device, images[0], NULL);
+    vkDestroyImage(device, images[1], NULL);
+    for (i = 0; i < n; i++)
+        vkFreeMemory(device, memories[i], NULL);
+    free_buf(&host);
+}
+
 /* A sparse binding image of a combined depth/stencil format (an ordinary
  * texture: Metal's sparse tiles hold no stencil), bound in two pieces,
  * cleared, and both aspects read back. */
@@ -3029,6 +3134,7 @@ int main(void)
     RUN(test_sparse_device_requirements);
     RUN(test_sparse_binding_3d_tail);
     RUN(test_sparse_residency_3d_tail);
+    RUN(test_sparse_aliased_3d);
     RUN(test_sparse_storage_reads);
     RUN(test_sparse_depth_stencil);
     RUN(test_sparse_compressed_tail);

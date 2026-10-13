@@ -61476,7 +61476,10 @@ static bool pvk_wait_covered(const VkSubmitInfo2 *submits, uint32_t batch, const
 }
 
 /* Issues a vkQueueBindSparse batch's mapping updates (SPARSE BINDING):
- * runs of operations on the same resource and heap go in one call. */
+ * runs of operations on the same resource and heap go in one call. Metal
+ * stalls for seconds, and can drop updates, when updates for two textures
+ * are in flight at once (an image and its residency or alias textures,
+ * aliased images): the queue drains between them. */
 static void pvk_sparse_execute(struct pvk_queue *queue, const struct pvk_sparse_binds *binds,
                                const struct pvk_sparse_batch *batch)
 {
@@ -61484,10 +61487,21 @@ static void pvk_sparse_execute(struct pvk_queue *queue, const struct pvk_sparse_
     pvk_MTL4UpdateSparseBufferMappingOperation bops[64];
     pvk_MTL4UpdateSparseTextureMappingOperation tops[64];
     uint32_t i = batch->first, end = batch->first + batch->count, n;
+    id issued = NULL; /* the texture updated since the queue last drained */
 
     pvk_device_commit_residency(device);
     while (i < end) {
         const struct pvk_sparse_op *op = &binds->ops[i];
+        if (op->texture && issued && issued != op->resource) {
+            pthread_mutex_lock(&device->sparse_lock);
+            pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, device->sparse_event, ++device->sparse_serial);
+            while (!pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(device->sparse_event, device->sparse_serial,
+                                                                        1000))
+                ;
+            pthread_mutex_unlock(&device->sparse_lock);
+        }
+        if (op->texture)
+            issued = op->resource;
         for (n = 0; i < end && n < 64 && binds->ops[i].resource == op->resource && binds->ops[i].heap == op->heap;
              i++, n++) {
             if (op->texture)
