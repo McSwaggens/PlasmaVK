@@ -7399,17 +7399,19 @@ static const uint32_t spv_mrt8_fs[] = {
 
 /* Eight RGBA16F attachments with 4 samples, resolved: 256 bytes a pixel,
  * twice what Metal's tile memory takes, so the pass renders them in groups
- * (struct pvk_replay). */
+ * (struct pvk_replay); also with the same pipeline made again from a
+ * pipeline cache holding its Metal pipeline (its group variants too). */
 static void test_tile_overflow(void)
 {
     struct img ms[8], resolved[8];
     struct buf out[8];
     VkRenderingAttachmentInfo att[8];
     VkRenderingInfo info;
-    VkPipeline pipeline;
+    VkPipelineCacheCreateInfo cache_info;
+    VkPipeline pipelines[2];
     struct pipe p;
     VkCommandBuffer cb;
-    uint32_t i, x, y;
+    uint32_t i, k, x, y;
     int bad = 0;
 
     pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_mrt8_fs, sizeof(spv_mrt8_fs));
@@ -7430,8 +7432,12 @@ static void test_tile_overflow(void)
         att[i].resolveImageView = resolved[i].view;
         att[i].resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
     }
-    pipeline = make_pipe(&p);
-    REQUIRE(pipeline);
+    memset(&cache_info, 0, sizeof(cache_info));
+    cache_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    REQUIRE_VK(vkCreatePipelineCache(device, &cache_info, NULL, &p.cache));
+    pipelines[0] = make_pipe(&p);
+    pipelines[1] = make_pipe(&p);
+    REQUIRE(pipelines[0] && pipelines[1]);
     memset(&info, 0, sizeof(info));
     info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     info.renderArea.extent.width = W;
@@ -7439,29 +7445,34 @@ static void test_tile_overflow(void)
     info.layerCount = 1;
     info.colorAttachmentCount = 8;
     info.pColorAttachments = att;
-    cb = begin_cmd();
-    vkCmdBeginRendering(cb, &info);
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    rect(cb, 0, -1, 1, 1, 1.0f, 0.5f, 0.25f, 1.0f, 0);
-    vkCmdEndRendering(cb);
-    for (i = 0; i < 8; i++)
-        download(cb, &resolved[i], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out[i]);
-    submit(cb);
-    for (i = 0; i < 8; i++)
-        for (y = 0; y < H; y++)
-            for (x = 0; x < W; x++) {
-                const uint16_t *h = (const uint16_t *)out[i].data + (y * W + x) * 4;
-                float k = x < W / 2 ? 0.0f : (float)(i + 1) / 8.0f;
-                if (fabsf(pvk_spv_half_to_float(h[0]) - k) > 0.01f || fabsf(pvk_spv_half_to_float(h[1]) - k * 0.5f) > 0.01f ||
-                    fabsf(pvk_spv_half_to_float(h[3]) - k) > 0.01f) {
-                    if (bad++ < 4)
-                        fprintf(stderr, "tile overflow: attachment %u pixel (%u, %u) is (%g, %g, %g, %g)\n", i, x, y,
-                                pvk_spv_half_to_float(h[0]), pvk_spv_half_to_float(h[1]),
-                                pvk_spv_half_to_float(h[2]), pvk_spv_half_to_float(h[3]));
+    for (k = 0; k < 2; k++) {
+        cb = begin_cmd();
+        vkCmdBeginRendering(cb, &info);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[k]);
+        rect(cb, 0, -1, 1, 1, 1.0f, 0.5f, 0.25f, 1.0f, 0);
+        vkCmdEndRendering(cb);
+        for (i = 0; i < 8; i++)
+            download(cb, &resolved[i], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out[i]);
+        submit(cb);
+        for (i = 0; i < 8; i++)
+            for (y = 0; y < H; y++)
+                for (x = 0; x < W; x++) {
+                    const uint16_t *h = (const uint16_t *)out[i].data + (y * W + x) * 4;
+                    float want = x < W / 2 ? 0.0f : (float)(i + 1) / 8.0f;
+                    if (fabsf(pvk_spv_half_to_float(h[0]) - want) > 0.01f ||
+                        fabsf(pvk_spv_half_to_float(h[1]) - want * 0.5f) > 0.01f ||
+                        fabsf(pvk_spv_half_to_float(h[3]) - want) > 0.01f) {
+                        if (bad++ < 4)
+                            fprintf(stderr, "tile overflow: pipeline %u attachment %u pixel (%u, %u) is (%g, %g, %g, %g)\n",
+                                    k, i, x, y, pvk_spv_half_to_float(h[0]), pvk_spv_half_to_float(h[1]),
+                                    pvk_spv_half_to_float(h[2]), pvk_spv_half_to_float(h[3]));
+                    }
                 }
-            }
+    }
     CHECK(bad == 0);
-    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyPipeline(device, pipelines[0], NULL);
+    vkDestroyPipeline(device, pipelines[1], NULL);
+    vkDestroyPipelineCache(device, p.cache, NULL);
     for (i = 0; i < 8; i++) {
         free_buf(&out[i]);
         free_img(&ms[i]);

@@ -137,8 +137,8 @@ static void test_driver_properties(void)
               drv.conformanceVersion.subminor == 0 && drv.conformanceVersion.patch == 0);
         CHECK(strstr(drv.driverInfo, "PLASMAVK_QUAD_MERGING, not conformant") != NULL);
         /* the default build's UUID (section 7) */
-        snprintf(name, sizeof(name), "%s %d.%d.%d", props.properties.deviceName, PLASMAVK_VERSION_MAJOR,
-                 PLASMAVK_VERSION_MINOR, PLASMAVK_VERSION_PATCH);
+        snprintf(name, sizeof(name), "%s %d.%d.%d format %d", props.properties.deviceName, PLASMAVK_VERSION_MAJOR,
+                 PLASMAVK_VERSION_MINOR, PLASMAVK_VERSION_PATCH, PVK_PIPELINE_CACHE_FORMAT);
         pvk_make_uuid(uuid, "PlasmaVK pipeline cache", name);
         CHECK(memcmp(uuid, props.properties.pipelineCacheUUID, VK_UUID_SIZE) != 0);
     }
