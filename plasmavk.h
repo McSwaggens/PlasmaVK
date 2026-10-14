@@ -52036,9 +52036,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
             in_type[loc] = k;
             vin[nin].location = loc;
             vin[nin].type = k;
-            for (i = 0; i < in.nleaves; i++)
-                if (in.leaves[i].location == loc)
-                    vin[nin].components |= ((1u << in.leaves[i].ncomp) - 1) << in.leaves[i].component;
+            vin[nin].components = in.used[0][loc];
             nin++;
         }
         res->vertex_table_buffer = o && o->vertex_table_buffer ? o->vertex_table_buffer : PVK_MSL_VERTEX_TABLE_BUFFER;
@@ -52080,9 +52078,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
             uint32_t interp = loc_interp[loc];
             if (in_type[loc] == PVK_SPV_SLOT_NONE)
                 continue;
-            for (i = 0; i < in.nleaves; i++)
-                if (in.leaves[i].location == loc)
-                    vin[nin].components |= ((1u << in.leaves[i].ncomp) - 1) << in.leaves[i].component;
+            vin[nin].components = in.used[0][loc];
             if ((entry->interp_locs | centroid_locs) & (1u << loc))
                 pvk_sb_printf(ctx, ins, "    %s pvk_l%u [[user(locn%u)]];\n", ctx->interp_type[loc], loc, loc);
             else
@@ -52227,10 +52223,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
             dest = pvk_spv_fmt(ctx, "pvk_out.%s", member);
             w = 4;
             if (vertex && o && o->exact_outputs) { /* the location's declared width (VARYINGS) */
-                uint32_t c = 0;
-                for (i = 0; i < out.nleaves; i++)
-                    if (out.leaves[i].location == loc)
-                        c |= ((1u << out.leaves[i].ncomp) - 1) << out.leaves[i].component;
+                uint32_t c = out.used[0][loc];
                 w = c & 8u ? 4 : c & 4u ? 3 : c & 2u ? 2 : 1;
             }
             if (vertex)
@@ -52247,11 +52240,11 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
             vout[nout].location = loc;
             vout[nout].index = idx;
             vout[nout].type = k;
+            vout[nout].components = out.used[idx][loc];
             for (i = 0; i < out.nleaves; i++) {
                 const struct pvk_spv_leaf *l = &out.leaves[i];
                 if (l->location != loc || l->index != idx)
                     continue;
-                vout[nout].components |= ((1u << l->ncomp) - 1) << l->component;
                 pvk_spv_line(ctx, "%s = %s;", pvk_spv_slot_swizzle(ctx, dest, k, w, l->component, l->ncomp),
                              pvk_spv_to_slot(ctx, l->lvalue, k, l));
             }
@@ -52786,9 +52779,9 @@ static bool pvk_spv_fast_math(struct pvk_spv *ctx)
     while (i < ctx->nw) {
         const uint32_t *w = ctx->w + i;
         uint32_t op = w[0] & 0xffffu, n = w[0] >> 16;
-        if (!n || n > ctx->nw - i || op == 54) /* (annotations come before the functions) */
+        if (!n || n > ctx->nw - i || op == PVK_SPV_OpFunction) /* (annotations come before the functions) */
             break;
-        if ((op == 16 || op == 331) && n >= 3 && w[1] == ctx->entry_fid) { /* OpExecutionMode(Id) */
+        if ((op == PVK_SPV_OpExecutionMode || op == PVK_SPV_OpExecutionModeId) && n >= 3 && w[1] == ctx->entry_fid) {
             if (w[2] >= 4459 && w[2] <= 4463) /* Denorm*, SignedZeroInfNanPreserve, RoundingMode* */
                 return false;
             if (w[2] == 6028 && n >= 5) { /* FPFastMathDefault */
@@ -52797,8 +52790,9 @@ static bool pvk_spv_fast_math(struct pvk_spv *ctx)
                     return false;
             }
         }
-        if ((op == 71 || op == 72) && n >= (op == 71 ? 3u : 4u)) { /* OpDecorate, OpMemberDecorate */
-            uint32_t dec = w[op == 71 ? 2 : 3], arg = n > (op == 71 ? 3u : 4u) ? w[op == 71 ? 3 : 4] : 0;
+        if ((op == PVK_SPV_OpDecorate || op == PVK_SPV_OpMemberDecorate) && n >= (op == PVK_SPV_OpDecorate ? 3u : 4u)) {
+            uint32_t at = op == PVK_SPV_OpDecorate ? 2 : 3; /* the decoration's word */
+            uint32_t dec = w[at], arg = n > at + 1 ? w[at + 1] : 0;
             if (dec == 42 || dec == 39) /* NoContraction, FPRoundingMode */
                 return false;
             if (dec == 40 && !(arg & 0x10u) && (arg & all) != all) /* FPFastMathMode */
@@ -52821,7 +52815,7 @@ static bool pvk_spv_storage_reads(const struct pvk_spv *ctx)
         uint32_t op = ctx->w[i] & 0xffffu, n = ctx->w[i] >> 16;
         if (!n || n > ctx->nw - i)
             break;
-        if (op == 98 || op == 320 || op == 60)
+        if (op == PVK_SPV_OpImageRead || op == PVK_SPV_OpImageSparseRead || op == PVK_SPV_OpImageTexelPointer)
             return true;
         i += n;
     }
