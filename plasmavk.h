@@ -31875,6 +31875,8 @@ static VkResult pvk_enumerate(const void *items, size_t item_size, uint32_t coun
 enum pvk_instance_extension {
     PVK_INSTANCE_EXT_KHR_surface,
     PVK_INSTANCE_EXT_EXT_metal_surface,
+    /* Surfaces without a window: presents show nothing (section 18) */
+    PVK_INSTANCE_EXT_EXT_headless_surface,
     PVK_INSTANCE_EXT_KHR_portability_enumeration, /* accepted so MoltenVK-era apps keep working */
     /* No commands: the surface color spaces CAMetalLayer can show (section 18). */
     PVK_INSTANCE_EXT_EXT_swapchain_colorspace,
@@ -31897,6 +31899,7 @@ enum pvk_instance_extension {
 static const VkExtensionProperties pvk_instance_extensions[PVK_INSTANCE_EXTENSION_COUNT] = {
     PVK_EXT(PVK_INSTANCE_EXT_, KHR_surface, KHR_SURFACE),
     PVK_EXT(PVK_INSTANCE_EXT_, EXT_metal_surface, EXT_METAL_SURFACE),
+    PVK_EXT(PVK_INSTANCE_EXT_, EXT_headless_surface, EXT_HEADLESS_SURFACE),
     PVK_EXT(PVK_INSTANCE_EXT_, KHR_portability_enumeration, KHR_PORTABILITY_ENUMERATION),
     PVK_EXT(PVK_INSTANCE_EXT_, EXT_swapchain_colorspace, EXT_SWAPCHAIN_COLOR_SPACE),
     PVK_EXT(PVK_INSTANCE_EXT_, EXT_debug_utils, EXT_DEBUG_UTILS),
@@ -66583,7 +66586,8 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
 /* ==========================================================================
  * 18. Window system integration
  *
- * VK_EXT_metal_surface surfaces (CAMetalLayer) and VK_KHR_swapchain.
+ * VK_EXT_metal_surface surfaces (CAMetalLayer), VK_EXT_headless_surface
+ * surfaces and VK_KHR_swapchain.
  *
  * SURFACES
  *   A VkSurfaceKHR is its CAMetalLayer, retained. The surface's size is the
@@ -66599,7 +66603,11 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
  *   and HDR ones). Present modes: FIFO, and IMMEDIATE where the layer has
  *   displaySyncEnabled (macOS). MAILBOX is not offered: Core Animation shows
  *   every drawable presented, it cannot replace a queued one. Every queue
- *   family can present.
+ *   family can present. A headless surface has no layer: its currentExtent
+ *   is always 0xFFFFFFFF, FIFO and IMMEDIATE are offered, and a present
+ *   shows nothing but otherwise behaves as one (it waits for its semaphores
+ *   and releases the image when the queue gets there), never out of date:
+ *   rendering and timing without a window.
  *
  * SWAPCHAIN IMAGES
  *   Ordinary VkImages, each bound to a VkDeviceMemory of its own, made with
@@ -66647,7 +66655,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
  * ========================================================================== */
 
 struct pvk_surface {
-    id layer; /* CAMetalLayer, retained */
+    id layer; /* CAMetalLayer, retained; NULL: headless */
 };
 
 #define PVK_SWAPCHAIN_MIN_IMAGES 2
@@ -66669,7 +66677,8 @@ struct pvk_swapchain_image {
 
 struct pvk_swapchain {
     struct pvk_device *device;
-    id layer;                   /* CAMetalLayer, retained */
+    id layer;                   /* CAMetalLayer, retained; NULL: headless */
+    const struct pvk_surface *surface;
     struct pvk_swapchain *next; /* in pvk_swapchains while not retired */
     bool retired;
     VkExtent2D extent;
@@ -66695,6 +66704,19 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateMetalSurfaceEXT(VkInstance instance, cons
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     surface->layer = pvk_retain((id)(uintptr_t)pCreateInfo->pLayer);
     *pSurface = (VkSurfaceKHR)surface;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateHeadlessSurfaceEXT(VkInstance instance,
+                                                          const VkHeadlessSurfaceCreateInfoEXT *pCreateInfo,
+                                                          const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface)
+{
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_instance_alloc((struct pvk_instance *)instance);
+    struct pvk_surface *surface = pvk_alloc(alloc, sizeof(*surface), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    (void)pCreateInfo;
+    if (!surface)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    *pSurface = (VkSurfaceKHR)surface; /* (layer NULL) */
     return VK_SUCCESS;
 }
 
@@ -66744,7 +66766,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceCapabilitiesKHR(VkPhysi
     memset(caps, 0, sizeof(*caps));
     caps->minImageCount = PVK_SWAPCHAIN_MIN_IMAGES;
     caps->maxImageCount = PVK_SWAPCHAIN_MAX_IMAGES;
-    if (!pvk_layer_extent(surface->layer, max, &caps->currentExtent))
+    if (!surface->layer || !pvk_layer_extent(surface->layer, max, &caps->currentExtent))
         caps->currentExtent.width = caps->currentExtent.height = 0xFFFFFFFFu;
     caps->minImageExtent.width = caps->minImageExtent.height = 1;
     caps->maxImageExtent.width = caps->maxImageExtent.height = max;
@@ -66846,7 +66868,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfacePresentModesKHR(VkPhysi
     uint32_t count = 0;
     (void)physicalDevice;
     modes[count++] = VK_PRESENT_MODE_FIFO_KHR;
-    if (pvk_layer_has_display_sync(surface->layer))
+    if (!surface->layer || pvk_layer_has_display_sync(surface->layer))
         modes[count++] = VK_PRESENT_MODE_IMMEDIATE_KHR;
     return pvk_enumerate(modes, sizeof(modes[0]), count, pPresentModeCount, pPresentModes);
 }
@@ -66862,7 +66884,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDevicePresentRectanglesKHR(VkPhysica
     VkRect2D rect;
 
     memset(&rect, 0, sizeof(rect));
-    if (!pvk_layer_extent(surface->layer, pd->properties.limits.maxImageDimension2D, &rect.extent))
+    if (!surface->layer || !pvk_layer_extent(surface->layer, pd->properties.limits.maxImageDimension2D, &rect.extent))
         rect.extent.width = rect.extent.height = 0xFFFFFFFFu;
     objc_autoreleasePoolPop(pool);
     return pvk_enumerate(&rect, sizeof(rect), 1, pRectCount, pRects);
@@ -67034,7 +67056,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice _device, const VkSw
         }
     }
     for (p = &pvk_swapchains; *p; p = &(*p)->next)
-        if ((*p)->layer == surface->layer)
+        if ((*p)->surface == surface || ((*p)->layer && (*p)->layer == surface->layer))
             result = VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
     if (result == VK_SUCCESS && sc) {
         sc->next = pvk_swapchains;
@@ -67048,6 +67070,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice _device, const VkSw
 
     sc->device = device;
     sc->layer = pvk_retain(surface->layer);
+    sc->surface = surface;
     sc->extent = pCreateInfo->imageExtent;
     sc->mtl_format = f ? f->mtl : PVK_MTLPixelFormatInvalid;
     sc->image_count = pCreateInfo->minImageCount < PVK_SWAPCHAIN_MIN_IMAGES ? PVK_SWAPCHAIN_MIN_IMAGES
@@ -67061,12 +67084,14 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice _device, const VkSw
     }
     /* An explicit transaction: the layer's new properties reach the display
      * even from a thread without a run loop (implicit transactions need one). */
-    pool = objc_autoreleasePoolPush();
-    pvk_CATransaction_begin();
-    pvk_CATransaction_setDisableActions(true);
-    pvk_swapchain_configure(sc, pCreateInfo);
-    pvk_CATransaction_commit();
-    objc_autoreleasePoolPop(pool);
+    if (sc->layer) {
+        pool = objc_autoreleasePoolPush();
+        pvk_CATransaction_begin();
+        pvk_CATransaction_setDisableActions(true);
+        pvk_swapchain_configure(sc, pCreateInfo);
+        pvk_CATransaction_commit();
+        objc_autoreleasePoolPop(pool);
+    }
     *pSwapchain = (VkSwapchainKHR)sc;
     return VK_SUCCESS;
 }
@@ -67106,8 +67131,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesKHR(VkDevice device, VkSwapch
 /* Whether the layer still takes the swapchain's images (see OUT OF DATE). */
 static VkResult pvk_swapchain_status(const struct pvk_swapchain *sc)
 {
-    pvk_CGSize size = pvk_CAMetalLayer_drawableSize(sc->layer);
+    pvk_CGSize size;
     VkExtent2D extent;
+    if (!sc->layer) /* headless */
+        return VK_SUCCESS;
+    size = pvk_CAMetalLayer_drawableSize(sc->layer);
     if (pvk_CAMetalLayer_pixelFormat(sc->layer) != sc->mtl_format || size.width != (pvk_CGFloat)sc->extent.width ||
         size.height != (pvk_CGFloat)sc->extent.height)
         return VK_ERROR_OUT_OF_DATE_KHR;
@@ -67309,7 +67337,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue _queue, const VkPresent
         batches[i].s = NULL;
         batches[i].drawable = NULL;
         status[i] = pvk_swapchain_status(sc);
-        if (status[i] == VK_ERROR_OUT_OF_DATE_KHR)
+        if (status[i] == VK_ERROR_OUT_OF_DATE_KHR || !sc->layer) /* (headless: nothing to show) */
             continue;
         /* Blocks while every drawable is queued for display; nil after a
          * second without one (e.g. the display is asleep): the frame is
@@ -67595,6 +67623,7 @@ static const struct pvk_entrypoint {
     { "vkCreateFence", (PFN_vkVoidFunction)vkCreateFence, PVK_SCOPE_DEVICE },
     { "vkCreateFramebuffer", (PFN_vkVoidFunction)vkCreateFramebuffer, PVK_SCOPE_DEVICE },
     { "vkCreateGraphicsPipelines", (PFN_vkVoidFunction)vkCreateGraphicsPipelines, PVK_SCOPE_DEVICE },
+    { "vkCreateHeadlessSurfaceEXT", (PFN_vkVoidFunction)vkCreateHeadlessSurfaceEXT, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_headless_surface) },
     { "vkCreateImage", (PFN_vkVoidFunction)vkCreateImage, PVK_SCOPE_DEVICE },
     { "vkCreateImageView", (PFN_vkVoidFunction)vkCreateImageView, PVK_SCOPE_DEVICE },
     { "vkCreateInstance", (PFN_vkVoidFunction)vkCreateInstance, PVK_SCOPE_GLOBAL },

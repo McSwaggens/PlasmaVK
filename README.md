@@ -15,7 +15,7 @@ linker flags: the header links Metal itself.
 
 **Status:** every Vulkan 1.4 command is implemented on Metal 4 (no stubs left),
 along with the extensions PlasmaVK advertises: surfaces and swapchains on
-CAMetalLayer, debug utils, and, as Vulkan 1.4 drivers list them, the
+CAMetalLayer and headless surfaces (rendering without a window), debug utils, and, as Vulkan 1.4 drivers list them, the
 extensions promoted to Vulkan 1.1-1.4 whose features it has (sampler min/max
 filtering only on Apple10 GPUs), with their KHR/EXT command names; and a
 built-in debug layer (below). Sparse resources (sparse binding; partially resident buffers and

@@ -73,7 +73,7 @@ static uint64_t now_ns(void)
 static void setup(void)
 {
     const char *instance_exts[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_METAL_SURFACE_EXTENSION_NAME,
-                                    VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME };
+                                    VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME };
     const char *device_exts[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
     VkPhysicalDeviceVulkan12Features v12;
     VkPhysicalDeviceMemoryProperties mem;
@@ -91,7 +91,7 @@ static void setup(void)
     memset(&instance_info, 0, sizeof(instance_info));
     instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instance_info.pApplicationInfo = &app;
-    instance_info.enabledExtensionCount = 3;
+    instance_info.enabledExtensionCount = 4;
     instance_info.ppEnabledExtensionNames = instance_exts;
     REQUIRE_VK(vkCreateInstance(&instance_info, NULL, &instance));
     REQUIRE_VK(vkEnumeratePhysicalDevices(instance, &count, &pd));
@@ -473,6 +473,68 @@ static void test_present_cycles(void)
     vkDestroyFence(device, done, NULL);
     vkDestroySurfaceKHR(instance, surface, NULL);
     pvk_release(layer);
+}
+
+/* VK_EXT_headless_surface: no layer, an extent the swapchain decides, FIFO
+ * and IMMEDIATE; one swapchain per surface; frames acquired, rendered and
+ * presented as with a window, never out of date. */
+static void test_headless(void)
+{
+    VkHeadlessSurfaceCreateInfoEXT hi;
+    VkSurfaceKHR surface = VK_NULL_HANDLE, other = VK_NULL_HANDLE;
+    VkSurfaceCapabilitiesKHR caps;
+    VkPresentModeKHR modes[4];
+    VkSwapchainCreateInfoKHR info;
+    VkSwapchainKHR swapchain, second;
+    VkImage images[4];
+    VkSemaphore acquired = make_semaphore(VK_SEMAPHORE_TYPE_BINARY), rendered = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
+    VkFence fence = make_fence(), done = make_fence();
+    uint32_t count = 4, frame, index;
+    VkBool32 supported = VK_FALSE;
+
+    memset(&hi, 0, sizeof(hi));
+    hi.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
+    REQUIRE_VK(vkCreateHeadlessSurfaceEXT(instance, &hi, NULL, &surface));
+    REQUIRE_VK(vkCreateHeadlessSurfaceEXT(instance, &hi, NULL, &other));
+    CHECK_VK(vkGetPhysicalDeviceSurfaceSupportKHR(pd, 0, surface, &supported), VK_SUCCESS);
+    CHECK(supported);
+    REQUIRE_VK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(pd, surface, &caps));
+    CHECK(caps.currentExtent.width == 0xFFFFFFFFu && caps.currentExtent.height == 0xFFFFFFFFu);
+    CHECK(caps.minImageCount >= 1 && caps.maxImageCount >= caps.minImageCount);
+    count = 4;
+    REQUIRE_VK(vkGetPhysicalDeviceSurfacePresentModesKHR(pd, surface, &count, modes));
+    CHECK(count == 2 && modes[0] == VK_PRESENT_MODE_FIFO_KHR && modes[1] == VK_PRESENT_MODE_IMMEDIATE_KHR);
+    info = swapchain_info(surface, VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 48, 24, 2);
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchain));
+    CHECK_VK(vkCreateSwapchainKHR(device, &info, NULL, &second), VK_ERROR_NATIVE_WINDOW_IN_USE_KHR);
+    info.surface = other; /* another headless surface takes one of its own */
+    CHECK_VK(vkCreateSwapchainKHR(device, &info, NULL, &second), VK_SUCCESS);
+    vkDestroySwapchainKHR(device, second, NULL);
+    count = 4;
+    REQUIRE_VK(vkGetSwapchainImagesKHR(device, swapchain, &count, images));
+    for (frame = 0; frame < 20; frame++) {
+        VkCommandBuffer cb;
+        index = UINT32_MAX;
+        REQUIRE_VK(vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired, fence, &index));
+        REQUIRE(index < count);
+        REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+        REQUIRE_VK(vkResetFences(device, 1, &fence));
+        cb = begin(0);
+        REQUIRE(cb);
+        record_clear(cb, images[index], 0.25f, 0.5f, (float)frame / 20.0f, 1.0f);
+        REQUIRE_VK(submit(0, cb, acquired, rendered, frame == 19 ? done : VK_NULL_HANDLE));
+        CHECK_VK(present(0, swapchain, index, rendered), VK_SUCCESS);
+    }
+    CHECK_VK(vkWaitForFences(device, 1, &done, VK_TRUE, 2000000000ull), VK_SUCCESS);
+    CHECK_VK(vkQueueWaitIdle(queues[0]), VK_SUCCESS);
+    vkResetCommandPool(device, pools[0], 0);
+    vkDestroySwapchainKHR(device, swapchain, NULL);
+    vkDestroySemaphore(device, acquired, NULL);
+    vkDestroySemaphore(device, rendered, NULL);
+    vkDestroyFence(device, fence, NULL);
+    vkDestroyFence(device, done, NULL);
+    vkDestroySurfaceKHR(instance, surface, NULL);
+    vkDestroySurfaceKHR(instance, other, NULL);
 }
 
 /* What reaches the drawable is the image: a buffer copied into the image,
@@ -862,6 +924,7 @@ int main(void)
     RUN(test_acquire_timeouts);
     RUN(test_deferred_present);
     RUN(test_layer_configuration);
+    RUN(test_headless);
     teardown();
     objc_autoreleasePoolPop(pool);
     return TEST_RESULT();
