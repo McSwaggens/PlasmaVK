@@ -557,6 +557,78 @@ static void test_barrier_order(void)
     free_buf(&a);
 }
 
+/* A render pass's dependencies on outside work are barriers before and
+ * after its instances (white box: pvk_queue_order); nothing else orders
+ * passes that sample what earlier ones rendered. */
+static void test_render_pass_external_dependencies(void)
+{
+    struct pvk_queue *q = (struct pvk_queue *)queues[0];
+    VkSubpassDescription subpass;
+    VkSubpassDependency deps[2];
+    VkRenderPassCreateInfo rp_info;
+    VkFramebufferCreateInfo fb_info;
+    VkRenderPassBeginInfo begin;
+    VkCommandBufferAllocateInfo alloc;
+    VkCommandBufferBeginInfo info;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    VkFramebuffer fb = VK_NULL_HANDLE;
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    VkFence f = make_fence(false);
+    const pvk_MTLStages fragment = PVK_MTLStageFragment | PVK_MTLStageTile;
+
+    memset(&subpass, 0, sizeof(subpass));
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    memset(deps, 0, sizeof(deps));
+    deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    deps[0].dstSubpass = 0;
+    deps[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[0].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[1].srcSubpass = 0;
+    deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    deps[1].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[1].dstStageMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    memset(&rp_info, 0, sizeof(rp_info));
+    rp_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rp_info.subpassCount = 1;
+    rp_info.pSubpasses = &subpass;
+    rp_info.dependencyCount = 2;
+    rp_info.pDependencies = deps;
+    REQUIRE_VK(vkCreateRenderPass(device, &rp_info, NULL, &rp));
+    memset(&fb_info, 0, sizeof(fb_info));
+    fb_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fb_info.renderPass = rp;
+    fb_info.width = fb_info.height = 16;
+    fb_info.layers = 1;
+    REQUIRE_VK(vkCreateFramebuffer(device, &fb_info, NULL, &fb));
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc.commandPool = pool;
+    alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc.commandBufferCount = 1;
+    REQUIRE_VK(vkAllocateCommandBuffers(device, &alloc, &cb));
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    vkBeginCommandBuffer(cb, &info);
+    memset(&begin, 0, sizeof(begin));
+    begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    begin.renderPass = rp;
+    begin.framebuffer = fb;
+    begin.renderArea.extent.width = begin.renderArea.extent.height = 16;
+    vkCmdBeginRenderPass(cb, &begin, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdEndRenderPass(cb);
+    vkEndCommandBuffer(cb);
+    REQUIRE_VK(vkQueueWaitIdle(queues[0]));
+    REQUIRE_VK(submit(queues[0], VK_NULL_HANDLE, 0, cb, VK_NULL_HANDLE, 0, f));
+    REQUIRE(q->order_count >= 1);
+    CHECK(q->order[q->order_count - 1].after == fragment);
+    CHECK(q->order[q->order_count - 1].before == (fragment | PVK_MTLStageDispatch));
+    CHECK_VK(vkWaitForFences(device, 1, &f, VK_TRUE, 10000000000ull), VK_SUCCESS);
+    vkFreeCommandBuffers(device, pool, 1, &cb);
+    vkDestroyFence(device, f, NULL);
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+}
+
 /* ---- Binary semaphores and queues ---- */
 
 /* Nothing waits on the queue's thread: every wait so far was resolved when
@@ -781,6 +853,7 @@ int main(void)
     RUN(test_timeline_gpu);
     RUN(test_timeline_long_wait);
     RUN(test_barrier_order);
+    RUN(test_render_pass_external_dependencies);
     RUN(test_binary_semaphores);
     RUN(test_semaphore_same_submit);
     RUN(test_submit2_chain);

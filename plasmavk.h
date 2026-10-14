@@ -55250,6 +55250,11 @@ struct pvk_render_pass {
     struct pvk_rp_attachment *attachments;
     struct pvk_subpass *subpasses;
     struct pvk_rp_pass *passes;
+    /* Its dependencies on work outside (VK_SUBPASS_EXTERNAL), together:
+     * barriers before the instance (in) and after it (out). The implicit
+     * ones (TOP_OF_PIPE first, BOTTOM_OF_PIPE second) order nothing. */
+    VkPipelineStageFlags2 in_src, in_dst, out_src, out_dst;
+    VkAccessFlags2 in_src_access, in_dst_access, out_src_access, out_dst_access;
 };
 
 struct pvk_framebuffer {
@@ -55995,6 +56000,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass2(VkCommandBuffer commandBuffer, 
     (void)pSubpassBeginInfo; /* secondaries or inline: the same packets */
     if (!(r = pvk_cb_render_get(cb, pass->attachment_count)))
         return;
+    if (pass->in_src) /* (subpass dependencies into the instance) */
+        pvk_cmd_barrier(cb, pass->in_src, pass->in_dst, pass->in_src_access, pass->in_dst_access);
     cb->render_group = pvk_cmd_group_begin(cb, "vkCmdBeginRenderPass", VK_OBJECT_TYPE_RENDER_PASS, pass,
                                            VK_OBJECT_TYPE_FRAMEBUFFER, fb);
     for (s = pRenderPassBegin->pNext; s; s = s->pNext)
@@ -56062,8 +56069,11 @@ VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass(VkCommandBuffer commandBuffer, VkSub
 VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass2(VkCommandBuffer commandBuffer, const VkSubpassEndInfo *pSubpassEndInfo)
 {
     struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    const struct pvk_render_pass *pass = cb->render ? cb->render->pass : NULL;
     (void)pSubpassEndInfo;
     pvk_cmd_end_pass(cb, 0);
+    if (pass && pass->out_src) /* (subpass dependencies out of the instance) */
+        pvk_cmd_barrier(cb, pass->out_src, pass->out_dst, pass->out_src_access, pass->out_dst_access);
     if (cb->render) {
         cb->render->pass = NULL;
         cb->render->active = false;
@@ -56925,7 +56935,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   (pvk_queue_order): the barriers of the queue's submissions, until the
  *   timeline shows one done (its work before them all finished), and the
  *   batch's semaphore waits (after all earlier work, before their stages).
- *   So a pass's vertex work overlaps the earlier passes' fragment work when
+ *   A render pass's dependencies on outside work are barriers before and
+ *   after its instances (struct pvk_render_pass). So a pass's vertex work overlaps the earlier passes' fragment work when
  *   only fragment work depends on them (render to texture, the frame
  *   loop's acquire, attachment reuse): serializing whole encoders cost a
  *   quarter of the frame rate where the GPU is busy (Sascha Willems'
@@ -65197,6 +65208,31 @@ static VkResult pvk_render_pass_create(struct pvk_device *device, const VkRender
     rp->attachments = (struct pvk_rp_attachment *)(rp + 1);
     rp->subpasses = (struct pvk_subpass *)(rp->attachments + na);
     rp->passes = (struct pvk_rp_pass *)(rp->subpasses + ns);
+    for (i = 0; i < info->dependencyCount; i++) {
+        const VkSubpassDependency2 *d = &info->pDependencies[i];
+        VkPipelineStageFlags2 src = d->srcStageMask, dst = d->dstStageMask;
+        VkAccessFlags2 src_access = d->srcAccessMask, dst_access = d->dstAccessMask;
+        const VkBaseInStructure *ext;
+        for (ext = d->pNext; ext; ext = ext->pNext)
+            if (ext->sType == VK_STRUCTURE_TYPE_MEMORY_BARRIER_2) { /* (it replaces the masks) */
+                const VkMemoryBarrier2 *b = (const VkMemoryBarrier2 *)ext;
+                src = b->srcStageMask;
+                dst = b->dstStageMask;
+                src_access = b->srcAccessMask;
+                dst_access = b->dstAccessMask;
+            }
+        if (d->srcSubpass == VK_SUBPASS_EXTERNAL && d->dstSubpass != VK_SUBPASS_EXTERNAL) {
+            rp->in_src |= src;
+            rp->in_dst |= dst;
+            rp->in_src_access |= src_access;
+            rp->in_dst_access |= dst_access;
+        } else if (d->dstSubpass == VK_SUBPASS_EXTERNAL && d->srcSubpass != VK_SUBPASS_EXTERNAL) {
+            rp->out_src |= src;
+            rp->out_dst |= dst;
+            rp->out_src_access |= src_access;
+            rp->out_dst_access |= dst_access;
+        }
+    }
     for (i = 0; i < na; i++) {
         const VkAttachmentDescription2 *a = &info->pAttachments[i];
         struct pvk_rp_attachment *ra = &rp->attachments[i];
