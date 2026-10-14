@@ -1843,7 +1843,7 @@ struct img {
     VkImageView view;
 };
 
-static struct img make_image(VkImageType type, uint32_t w, uint32_t h)
+static struct img make_image_format(VkImageType type, uint32_t w, uint32_t h, VkFormat format)
 {
     VkImageCreateInfo info;
     VkImageViewCreateInfo view;
@@ -1856,7 +1856,7 @@ static struct img make_image(VkImageType type, uint32_t w, uint32_t h)
     memset(&info, 0, sizeof(info));
     info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     info.imageType = type;
-    info.format = VK_FORMAT_R32_SFLOAT;
+    info.format = format;
     info.extent.width = w;
     info.extent.height = h;
     info.extent.depth = 1;
@@ -1864,8 +1864,8 @@ static struct img make_image(VkImageType type, uint32_t w, uint32_t h)
     info.arrayLayers = 1;
     info.samples = VK_SAMPLE_COUNT_1_BIT;
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                 VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                 (format == VK_FORMAT_A8_UNORM ? 0 : VK_IMAGE_USAGE_STORAGE_BIT);
     if (vkCreateImage(device, &info, NULL, &m.image) != VK_SUCCESS)
         return m;
     vkGetImageMemoryRequirements(device, m.image, &req);
@@ -1890,11 +1890,70 @@ static struct img make_image(VkImageType type, uint32_t w, uint32_t h)
     return m;
 }
 
+static struct img make_image(VkImageType type, uint32_t w, uint32_t h)
+{
+    return make_image_format(type, w, h, VK_FORMAT_R32_SFLOAT);
+}
+
 static void free_image(struct img *m)
 {
     vkDestroyImageView(device, m->view, NULL);
     vkDestroyImage(device, m->image, NULL);
     vkFreeMemory(device, m->memory, NULL);
+}
+
+/* A combined image sampler binding with an immutable border sampler: an
+ * A8_UNORM view takes the sampler's alpha state (its opaque black border
+ * reads alpha 1 there), another view the sampler's own, in any order. */
+static void test_immutable_sampler_a8(void)
+{
+    VkSamplerCreateInfo si;
+    VkSampler sampler;
+    VkDescriptorSetLayoutBinding b = lb(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1);
+    VkDescriptorSetLayout layout;
+    VkDescriptorPoolSize size = ps(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1);
+    VkDescriptorPool pool;
+    VkDescriptorSet set;
+    VkDescriptorImageInfo ii;
+    VkWriteDescriptorSet w;
+    struct img a8 = make_image_format(VK_IMAGE_TYPE_2D, 4, 4, VK_FORMAT_A8_UNORM);
+    struct img rgba = make_image_format(VK_IMAGE_TYPE_2D, 4, 4, VK_FORMAT_R8G8B8A8_UNORM);
+    const struct pvk_sampler *s;
+    const struct pvk_descriptor_set *ds;
+    pvk_MTLResourceID own, alpha, got;
+    int k;
+
+    REQUIRE(a8.view && rgba.view);
+    memset(&si, 0, sizeof(si));
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    si.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+    REQUIRE_VK(vkCreateSampler(device, &si, NULL, &sampler));
+    s = (const struct pvk_sampler *)sampler;
+    REQUIRE(s->mtl_alpha != s->mtl_sampler); /* (opaque black: alpha 1 for A8) */
+    own = pvk_MTLSamplerState_gpuResourceID(s->mtl_sampler);
+    alpha = pvk_MTLSamplerState_gpuResourceID(s->mtl_alpha);
+    b.pImmutableSamplers = &sampler;
+    layout = make_set_layout(&b, 1, 0, NULL);
+    pool = make_pool(1, &size, 1, 0, NULL);
+    set = alloc_set(pool, layout);
+    REQUIRE(set);
+    ds = (const struct pvk_descriptor_set *)set;
+    memset(&ii, 0, sizeof(ii));
+    ii.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    for (k = 0; k < 3; k++) {
+        ii.imageView = k == 1 ? a8.view : rgba.view;
+        w = buffer_write(set, 0, 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, NULL, 1);
+        w.pImageInfo = &ii;
+        vkUpdateDescriptorSets(device, 1, &w, 0, NULL);
+        memcpy(&got, ds->contents + ds->layout->bindings[0].offset + 8, 8);
+        CHECK(got._impl == (k == 1 ? alpha._impl : own._impl));
+    }
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyDescriptorSetLayout(device, layout, NULL);
+    vkDestroySampler(device, sampler, NULL);
+    free_image(&a8);
+    free_image(&rgba);
 }
 
 static VkBufferView make_buffer_view(const struct buf *b, VkFormat format)
@@ -2700,6 +2759,7 @@ int main(void)
     RUN(test_images);
     RUN(test_variable_constant_index);
     RUN(test_cube_atomics);
+    RUN(test_immutable_sampler_a8);
     teardown();
     return TEST_RESULT();
 }
