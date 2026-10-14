@@ -57363,6 +57363,28 @@ static uint32_t pvk_tile_add(uint32_t total, const struct pvk_format *f)
     return pvk_tile_add_bytes(total, f->bytes);
 }
 
+/* A depth/stencil state (pvk_ds_state). */
+struct pvk_ds_key {
+    uint32_t depth_compare; /* pvk_MTLCompareFunction */
+    uint32_t depth_write;
+    uint32_t stencil;       /* the stencil test is on */
+    uint32_t face[2][6];    /* front, back: compare, fail, depth fail, pass, read mask, write mask */
+};
+
+/* What the draw state flush set on the render encoder (pvk_render_flush),
+ * for the PVK_RD_* bits in `valid`: a pipeline bind sets everything dirty,
+ * and what it did not change is not sent again. */
+struct pvk_render_sent {
+    uint32_t valid;
+    uint32_t viewport_count, scissor_count, vertex_count;
+    pvk_MTLViewport viewports[PVK_MAX_VIEWPORTS];
+    pvk_MTLScissorRect scissors[PVK_MAX_VIEWPORTS];
+    float depth_bias[3], blend[4];
+    uint32_t stencil_ref[2], cull, winding, clip, fill;
+    struct pvk_ds_key ds;
+    struct pvk_msl_vertex_buffer vertex[PVK_MAX_VERTEX_BINDINGS];
+};
+
 struct pvk_render {
     id enc;                /* MTL4RenderCommandEncoder; NULL outside render passes */
     bool suspended;        /* ended by a suspending vkCmdEndRendering, still open */
@@ -57387,6 +57409,7 @@ struct pvk_render {
     struct pvk_vertex_binding vertex[PVK_MAX_VERTEX_BINDINGS];
     struct pvk_draw_track track; /* index buffer binding (topology and restart: dyn) */
     uint32_t dirty;        /* PVK_RD_* */
+    struct pvk_render_sent sent;
     bool skip_scissor;     /* the scissor is empty */
     bool skip_bounds;      /* the depth bounds are empty */
     id ds_state;           /* the MTLDepthStencilState set */
@@ -58770,13 +58793,6 @@ static id pvk_render_pipeline_compile(struct pvk_device *device, id desc, char *
 
 /* ---- Depth/stencil states ---- */
 
-struct pvk_ds_key {
-    uint32_t depth_compare; /* pvk_MTLCompareFunction */
-    uint32_t depth_write;
-    uint32_t stencil;       /* the stencil test is on */
-    uint32_t face[2][6];    /* front, back: compare, fail, depth fail, pass, read mask, write mask */
-};
-
 struct pvk_ds_state {
     struct pvk_ds_state *next;
     struct pvk_ds_key key;
@@ -59744,6 +59760,7 @@ static void pvk_render_internal_end(struct pvk_encoder *e)
     r->ds_state = NULL;
     r->pso_set = NULL;
     r->dirty = PVK_RD_ALL;
+    r->sent.valid = 0; /* (the internal draws set state) */
     pvk_render_counting(e, true);
 }
 
@@ -60772,6 +60789,7 @@ static void pvk_render_takeover(struct pvk_encoder *e, id enc)
                                                            PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
     r->enc = enc;
     r->dirty = PVK_RD_ALL;
+    r->sent.valid = 0;
     r->ds_state = NULL;
     r->pso_set = NULL;
     r->map_valid = false;
@@ -61359,6 +61377,7 @@ static void pvk_render_tex_inputs(struct pvk_encoder *e, const struct pvk_pipeli
 static bool pvk_render_flush(struct pvk_encoder *e)
 {
     struct pvk_render *r = &e->render;
+    struct pvk_render_sent *sent = &r->sent;
     struct pvk_dynamic_state *d = &r->dyn;
     struct pvk_pipeline *p = r->pipeline;
     const struct pvk_gfx_pipeline *g;
@@ -61478,7 +61497,12 @@ static bool pvk_render_flush(struct pvk_encoder *e)
             vp[i].znear = d->viewports[i].minDepth;
             vp[i].zfar = d->viewports[i].maxDepth;
         }
-        pvk_MTL4RenderCommandEncoder_setViewports_count(enc, vp, i);
+        if (!(sent->valid & PVK_RD_VIEWPORT) || sent->viewport_count != i ||
+            memcmp(sent->viewports, vp, sizeof(vp[0]) * i) != 0) {
+            pvk_MTL4RenderCommandEncoder_setViewports_count(enc, vp, i);
+            memcpy(sent->viewports, vp, sizeof(vp[0]) * i);
+            sent->viewport_count = i;
+        }
     }
     if (dirty & PVK_RD_SCISSOR) {
         pvk_MTLScissorRect sc[PVK_MAX_VIEWPORTS];
@@ -61503,18 +61527,31 @@ static bool pvk_render_flush(struct pvk_encoder *e)
             sc[i].width = (unsigned long)(x1 - x0);
             sc[i].height = (unsigned long)(y1 - y0);
         }
-        pvk_MTL4RenderCommandEncoder_setScissorRects_count(enc, sc, i);
+        if (!(sent->valid & PVK_RD_SCISSOR) || sent->scissor_count != i ||
+            memcmp(sent->scissors, sc, sizeof(sc[0]) * i) != 0) {
+            pvk_MTL4RenderCommandEncoder_setScissorRects_count(enc, sc, i);
+            memcpy(sent->scissors, sc, sizeof(sc[0]) * i);
+            sent->scissor_count = i;
+        }
     }
     if (dirty & PVK_RD_DEPTH_BIAS) {
-        if (d->depth_bias_enable)
-            pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(enc, d->depth_bias[0], d->depth_bias[2],
-                                                                        d->depth_bias[1]);
-        else
-            pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(enc, 0.0f, 0.0f, 0.0f);
+        float bias[3] = { 0.0f, 0.0f, 0.0f }; /* constant, slope, clamp */
+        if (d->depth_bias_enable) {
+            bias[0] = d->depth_bias[0];
+            bias[1] = d->depth_bias[2];
+            bias[2] = d->depth_bias[1];
+        }
+        if (!(sent->valid & PVK_RD_DEPTH_BIAS) || memcmp(sent->depth_bias, bias, sizeof(bias)) != 0) {
+            pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(enc, bias[0], bias[1], bias[2]);
+            memcpy(sent->depth_bias, bias, sizeof(bias));
+        }
     }
-    if (dirty & PVK_RD_BLEND)
+    if ((dirty & PVK_RD_BLEND) &&
+        (!(sent->valid & PVK_RD_BLEND) || memcmp(sent->blend, d->blend_constants, sizeof(sent->blend)) != 0)) {
         pvk_MTL4RenderCommandEncoder_setBlendColorRed_green_blue_alpha(enc, d->blend_constants[0], d->blend_constants[1],
                                                                        d->blend_constants[2], d->blend_constants[3]);
+        memcpy(sent->blend, d->blend_constants, sizeof(sent->blend));
+    }
     /* Depth bounds: the variant above (Metal 4's setDepthTestMinBound:maxBound:
      * traps on Apple9, macOS 27.2); empty bounds pass nothing */
     if (dirty & PVK_RD_DEPTH_BOUNDS)
@@ -61538,49 +61575,75 @@ static bool pvk_render_flush(struct pvk_encoder *e)
             k.face[f][4] = s->compare_mask & 0xff;
             k.face[f][5] = s->write_mask & 0xff;
         }
-        if (!(ds = pvk_ds_state(e->device, &k))) {
-            e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
-            return false;
-        }
-        if (ds != r->ds_state) {
-            pvk_MTL4RenderCommandEncoder_setDepthStencilState(enc, ds);
-            r->ds_state = ds;
+        if (!(sent->valid & PVK_RD_DS) || !r->ds_state || memcmp(&sent->ds, &k, sizeof(k)) != 0) {
+            if (!(ds = pvk_ds_state(e->device, &k))) {
+                e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+                return false;
+            }
+            if (ds != r->ds_state) {
+                pvk_MTL4RenderCommandEncoder_setDepthStencilState(enc, ds);
+                r->ds_state = ds;
+            }
+            sent->ds = k;
         }
     }
-    if (dirty & PVK_RD_STENCIL_REF)
-        pvk_MTL4RenderCommandEncoder_setStencilFrontReferenceValue_backReferenceValue(enc, d->stencil[0].reference & 0xff,
-                                                                                       d->stencil[1].reference & 0xff);
+    if (dirty & PVK_RD_STENCIL_REF) {
+        uint32_t ref[2];
+        ref[0] = d->stencil[0].reference & 0xff;
+        ref[1] = d->stencil[1].reference & 0xff;
+        if (!(sent->valid & PVK_RD_STENCIL_REF) || ref[0] != sent->stencil_ref[0] || ref[1] != sent->stencil_ref[1]) {
+            pvk_MTL4RenderCommandEncoder_setStencilFrontReferenceValue_backReferenceValue(enc, ref[0], ref[1]);
+            sent->stencil_ref[0] = ref[0];
+            sent->stencil_ref[1] = ref[1];
+        }
+    }
     if (dirty & PVK_RD_CULL) {
         uint32_t m = d->cull_mode & VK_CULL_MODE_FRONT_AND_BACK;
-        pvk_MTL4RenderCommandEncoder_setCullMode(enc, m == VK_CULL_MODE_FRONT_BIT  ? PVK_MTLCullModeFront
-                                                      : m == VK_CULL_MODE_BACK_BIT ? PVK_MTLCullModeBack
-                                                                                   : PVK_MTLCullModeNone);
+        uint32_t cull = m == VK_CULL_MODE_FRONT_BIT  ? PVK_MTLCullModeFront
+                        : m == VK_CULL_MODE_BACK_BIT ? PVK_MTLCullModeBack
+                                                     : PVK_MTLCullModeNone;
+        if (!(sent->valid & PVK_RD_CULL) || cull != sent->cull)
+            pvk_MTL4RenderCommandEncoder_setCullMode(enc, sent->cull = cull);
     }
-    if (dirty & PVK_RD_FRONT_FACE) /* y is flipped in the vertex shader: windings pass through (section 13) */
-        pvk_MTL4RenderCommandEncoder_setFrontFacingWinding(enc, d->front_face == VK_FRONT_FACE_CLOCKWISE
-                                                                    ? PVK_MTLWindingClockwise
-                                                                    : PVK_MTLWindingCounterClockwise);
-    if (dirty & PVK_RD_DEPTH_CLIP)
-        pvk_MTL4RenderCommandEncoder_setDepthClipMode(enc, g->depth_clamp ? PVK_MTLDepthClipModeClamp
-                                                                          : PVK_MTLDepthClipModeClip);
-    if (dirty & PVK_RD_FILL)
-        pvk_MTL4RenderCommandEncoder_setTriangleFillMode(enc, g->lines ? PVK_MTLTriangleFillModeLines
-                                                                       : PVK_MTLTriangleFillModeFill);
+    if (dirty & PVK_RD_FRONT_FACE) { /* y is flipped in the vertex shader: windings pass through (section 13) */
+        uint32_t winding = d->front_face == VK_FRONT_FACE_CLOCKWISE ? PVK_MTLWindingClockwise
+                                                                    : PVK_MTLWindingCounterClockwise;
+        if (!(sent->valid & PVK_RD_FRONT_FACE) || winding != sent->winding)
+            pvk_MTL4RenderCommandEncoder_setFrontFacingWinding(enc, sent->winding = winding);
+    }
+    if (dirty & PVK_RD_DEPTH_CLIP) {
+        uint32_t clip = g->depth_clamp ? PVK_MTLDepthClipModeClamp : PVK_MTLDepthClipModeClip;
+        if (!(sent->valid & PVK_RD_DEPTH_CLIP) || clip != sent->clip)
+            pvk_MTL4RenderCommandEncoder_setDepthClipMode(enc, sent->clip = clip);
+    }
+    if (dirty & PVK_RD_FILL) {
+        uint32_t fill = g->lines ? PVK_MTLTriangleFillModeLines : PVK_MTLTriangleFillModeFill;
+        if (!(sent->valid & PVK_RD_FILL) || fill != sent->fill)
+            pvk_MTL4RenderCommandEncoder_setTriangleFillMode(enc, sent->fill = fill);
+    }
     if ((dirty & PVK_RD_VERTEX) && g->vertex_bindings) {
-        struct pvk_msl_vertex_buffer *t;
+        struct pvk_msl_vertex_buffer t[PVK_MAX_VERTEX_BINDINGS], *up;
         pvk_MTLGPUAddress address;
         for (n = 0; g->vertex_bindings >> n; n++)
             ;
-        if (!(t = pvk_upload(e, sizeof(*t) * n, 16, NULL, NULL, &address)))
-            return false;
         for (i = 0; i < n; i++) {
             t[i].address = r->vertex[i].address;
             t[i].size = r->vertex[i].size;
             t[i].stride = d->strides[i]; /* (the pipeline's, unless dynamic: pvk_dynamic_copy) */
             t[i].reserved = 0;
         }
-        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_VERTEX_TABLE_BUFFER);
+        /* (a longer table sent before starts with this one) */
+        if (!(sent->valid & PVK_RD_VERTEX) || sent->vertex_count < n || memcmp(sent->vertex, t, sizeof(t[0]) * n) != 0) {
+            if (!(up = pvk_upload(e, sizeof(*t) * n, 16, NULL, NULL, &address)))
+                return false;
+            memcpy(up, t, sizeof(t[0]) * n);
+            pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_VERTEX_TABLE_BUFFER);
+            memcpy(sent->vertex, t, sizeof(t[0]) * n);
+            sent->vertex_count = n;
+            sent->valid |= PVK_RD_VERTEX;
+        }
     }
+    sent->valid |= dirty & ~(uint32_t)PVK_RD_VERTEX;
     r->dirty = 0;
     for (n = 0; n < PVK_MAX_BOUND_SETS; n++) {
         if ((p->set_mask & (1u << n)) && e->sets_bound[n] != e->sets[0][n]) {
