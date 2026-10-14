@@ -37645,8 +37645,7 @@ struct pvk_buffer_view {
     id mtl_texture; /* texture buffer over the bound memory's MTLBuffer (sparse buffers: of its own) */
     /* section 11: */
     VkFormat format;
-    VkDeviceSize offset, elements;
-    bool resident; /* mtl_texture is in the device residency set */
+    VkDeviceSize offset, elements; /* (mtl_texture is in the device residency set) */
     /* Views of sparse buffers (BUFFER VIEWS): mtl_texture is a placement
      * sparse texture buffer whose pages mirror the buffer's from page
      * first_page on, in the buffer's list (device->sparse_lock); buffer
@@ -37686,10 +37685,9 @@ struct pvk_sparse_layout {
     uint32_t levels;
     uint32_t tail_first;     /* imageMipTailFirstLod; levels: no tail */
     uint32_t metal_tail;     /* MTLTexture.firstMipmapInTail; levels: no Metal tail */
-    VkDeviceSize metal_tail_size; /* tailSizeInBytes, per slice */
-    uint32_t tail_tiles;          /* blocks the tail takes (more than metal_tail_size for 3D) */
+    uint32_t tail_tiles;     /* blocks the tail takes (more than tailSizeInBytes for 3D) */
     VkDeviceSize level_offset[PVK_SPARSE_MAX_LEVELS + 1]; /* in a layer, for levels up to metal_tail */
-    VkDeviceSize layer_size; /* bytes of a layer's blocks: level_offset[metal_tail] + metal_tail_size, aligned */
+    VkDeviceSize layer_size; /* bytes of a layer's blocks: level_offset[metal_tail] + the tail's, aligned */
     VkDeviceSize align;      /* of binds: a block, or without residency a whole tail's power of two */
     /* With residency and storage usage: the residency texture (SPARSE
      * IMAGES), its Metal tail, the blocks its part of the Vulkan tail takes
@@ -38084,7 +38082,6 @@ static bool pvk_sparse_layout_init(const struct pvk_physical_device *pd, const s
     l->metal_tail = (uint32_t)pvk_MTLTexture_firstMipmapInTail(texture);
     if (l->metal_tail > l->levels)
         l->metal_tail = l->levels;
-    l->metal_tail_size = l->metal_tail < l->levels ? pvk_MTLTexture_tailSizeInBytes(texture) : 0;
     l->tail_first = l->metal_tail;
     for (lv = 0; lv < l->metal_tail; lv++) {
         uint32_t w = image->extent.width >> lv, h = image->type == VK_IMAGE_TYPE_1D ? 1 : image->extent.height >> lv;
@@ -39150,7 +39147,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateBufferView(VkDevice _device, const VkBuff
         return buffer->sparse.mtl_buffer ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_ERROR_OUT_OF_HOST_MEMORY;
     }
     pvk_device_make_resident(device, view->mtl_texture); /* as for image views */
-    view->resident = true;
     *pView = (VkBufferView)view;
     return VK_SUCCESS;
 }
@@ -39172,8 +39168,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyBufferView(VkDevice device, VkBufferView buf
         }
         pthread_mutex_unlock(&d->sparse_lock);
     }
-    if (view->resident)
-        pvk_device_evict((struct pvk_device *)device, view->mtl_texture);
+    pvk_device_evict((struct pvk_device *)device, view->mtl_texture);
     pvk_release(view->mtl_texture);
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), view);
 }
@@ -39892,8 +39887,6 @@ struct pvk_set_binding {
     uint32_t offset; /* of the first descriptor in the table, 16-aligned */
     uint32_t stride; /* pvk_descriptor_stride */
     VkDescriptorBindingFlags flags;
-    VkShaderStageFlags stages;
-    uint32_t dynamic_index;             /* of its first descriptor among the set's dynamic offsets */
     const pvk_MTLResourceID *immutable; /* count pairs of sampler IDs (its own, its A8_UNORM views'), or NULL */
     const struct pvk_ycbcr *ycbcr;      /* the immutable samplers' Y'CbCr conversions (count), or NULL */
 };
@@ -39901,12 +39894,10 @@ struct pvk_set_binding {
 struct pvk_descriptor_set_layout {
     long refs; /* atomic: the application's, one per set and pipeline layout using it */
     struct pvk_device *device;
-    VkDescriptorSetLayoutCreateFlags flags;
     uint32_t binding_count;
     struct pvk_set_binding *bindings; /* by binding number */
     uint64_t size;           /* table bytes but the variable-count binding's descriptors, 16-aligned */
     uint32_t dynamic_count;  /* dynamic offsets that binding a set takes */
-    uint32_t descriptor_count; /* in all bindings but inline uniform blocks */
     bool variable;           /* the last binding has a variable count */
 };
 
@@ -39992,7 +39983,6 @@ static uint64_t pvk_layout_bindings(const VkDescriptorSetLayoutCreateInfo *info,
         out[i].offset = offset > PVK_MAX_SET_SIZE ? PVK_MAX_SET_SIZE : (uint32_t)offset;
         out[i].stride = stride;
         out[i].flags = sorted[i].flags;
-        out[i].stages = b->stageFlags;
     }
     return pvk_align16(cur);
 }
@@ -40031,7 +40021,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
     }
     layout->refs = 1;
     layout->device = device;
-    layout->flags = pCreateInfo->flags;
     layout->binding_count = n;
     layout->bindings = (struct pvk_set_binding *)(layout + 1);
     ids = (pvk_MTLResourceID *)(layout->bindings + n);
@@ -40040,11 +40029,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
     for (i = 0; i < n; i++) {
         const VkDescriptorSetLayoutBinding *b = sorted[i].b;
         struct pvk_set_binding *lb = &layout->bindings[i];
-        lb->dynamic_index = dynamic;
         if (pvk_descriptor_is_dynamic(lb->type))
             dynamic += lb->count;
-        if (lb->type != VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
-            layout->descriptor_count += lb->count;
         if (b->pImmutableSamplers && pvk_descriptor_has_sampler(lb->type) && lb->count) {
             bool converts = false;
             lb->immutable = ids;
@@ -40154,7 +40140,6 @@ struct pvk_descriptor_pool {
     struct pvk_device *device;
     VkAllocationCallbacks alloc;
     bool has_alloc;
-    VkDescriptorPoolCreateFlags flags;
     uint32_t max_sets, set_count;
     id mtl_buffer; /* MTLBuffer: shared, cached, untracked, resident */
     char *contents;
@@ -40208,7 +40193,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorPool(VkDevice _device, const Vk
         pool->alloc = *alloc;
         pool->has_alloc = true;
     }
-    pool->flags = pCreateInfo->flags;
     pool->max_sets = pCreateInfo->maxSets;
     pool->size = bytes;
     pool->mtl_buffer = pvk_MTLDevice_newBufferWithLength_options(
@@ -40597,7 +40581,6 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSets(VkDevice device, uint32_t desc
 /* ---- Update templates ---- */
 
 struct pvk_descriptor_update_template {
-    VkDescriptorUpdateTemplateType type;
     VkPipelineBindPoint bind_point; /* push descriptor templates */
     uint32_t entry_count;
     VkDescriptorUpdateTemplateEntry entries[];
@@ -40614,7 +40597,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorUpdateTemplate(VkDevice device,
         pvk_alloc(alloc, sizeof(*t) + sizeof(t->entries[0]) * n, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (!t)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
-    t->type = pCreateInfo->templateType;
     t->bind_point = pCreateInfo->pipelineBindPoint;
     t->entry_count = n;
     if (n)
@@ -54566,7 +54548,7 @@ struct pvk_cmd_copy_image {
     uint32_t src_3d, dst_3d; /* step z instead of the layer */
     uint32_t sx, sy, sz, dx, dy, dz, w, h, d;
     uint32_t staged;
-    uint32_t src_options, dst_options; /* pvk_MTLBlitOption: the aspect of a depth/stencil format */
+    uint32_t options; /* pvk_MTLBlitOption: the aspect of a depth/stencil format (both ends) */
     uint32_t bytes;                    /* staged: bytes per texel block of the aspect (times samples) */
     uint32_t sbw, sbh, dbw, dbh;       /* staged: block sizes */
     uint32_t dst_w, dst_h;             /* staged: destination level extent */
@@ -54788,7 +54770,7 @@ static void pvk_cmd_image_copy(struct pvk_command_buffer *cb, const struct pvk_i
         (r->srcSubresource.aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) !=
             (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
         c->staged = 1;
-        c->src_options = c->dst_options = r->srcSubresource.aspectMask == VK_IMAGE_ASPECT_STENCIL_BIT
+        c->options = r->srcSubresource.aspectMask == VK_IMAGE_ASPECT_STENCIL_BIT
                                               ? PVK_MTLBlitOptionStencilFromDepthStencil
                                               : PVK_MTLBlitOptionDepthFromDepthStencil;
     }
@@ -55370,7 +55352,6 @@ enum pvk_dyn {
     PVK_DYN_VIEWPORT_COUNT,
     PVK_DYN_SCISSOR,
     PVK_DYN_SCISSOR_COUNT,
-    PVK_DYN_LINE_WIDTH,
     PVK_DYN_DEPTH_BIAS,
     PVK_DYN_BLEND_CONSTANTS,
     PVK_DYN_DEPTH_BOUNDS,
@@ -55390,7 +55371,6 @@ enum pvk_dyn {
     PVK_DYN_RASTERIZER_DISCARD_ENABLE,
     PVK_DYN_DEPTH_BIAS_ENABLE,
     PVK_DYN_PRIMITIVE_RESTART_ENABLE,
-    PVK_DYN_LINE_STIPPLE,
     PVK_DYN_COUNT
 };
 
@@ -55405,7 +55385,6 @@ struct pvk_dynamic_state {
     uint32_t viewport_count, scissor_count;
     VkViewport viewports[PVK_MAX_VIEWPORTS];
     VkRect2D scissors[PVK_MAX_VIEWPORTS];
-    float line_width;
     float depth_bias[3]; /* constant factor, clamp, slope factor */
     float blend_constants[4];
     float depth_bounds[2];
@@ -55414,7 +55393,6 @@ struct pvk_dynamic_state {
     uint32_t strides[PVK_MAX_VERTEX_BINDINGS]; /* VERTEX_INPUT_BINDING_STRIDE */
     uint8_t depth_test, depth_write, depth_bounds_test, stencil_test;
     uint8_t rasterizer_discard, depth_bias_enable, primitive_restart, pad;
-    uint32_t line_stipple[2];
 };
 
 /* Copies the members of `bits` from s to d. */
@@ -55429,8 +55407,6 @@ static void pvk_dynamic_copy(struct pvk_dynamic_state *d, const struct pvk_dynam
         d->scissor_count = s->scissor_count;
     if (bits & PVK_DYN_BIT(SCISSOR))
         memcpy(d->scissors, s->scissors, sizeof(d->scissors));
-    if (bits & PVK_DYN_BIT(LINE_WIDTH))
-        d->line_width = s->line_width;
     if (bits & PVK_DYN_BIT(DEPTH_BIAS))
         memcpy(d->depth_bias, s->depth_bias, sizeof(d->depth_bias));
     if (bits & PVK_DYN_BIT(BLEND_CONSTANTS))
@@ -55475,8 +55451,6 @@ static void pvk_dynamic_copy(struct pvk_dynamic_state *d, const struct pvk_dynam
         d->depth_bias_enable = s->depth_bias_enable;
     if (bits & PVK_DYN_BIT(PRIMITIVE_RESTART_ENABLE))
         d->primitive_restart = s->primitive_restart;
-    if (bits & PVK_DYN_BIT(LINE_STIPPLE))
-        memcpy(d->line_stipple, s->line_stipple, sizeof(d->line_stipple));
 }
 
 /* Variants of a pipeline in a pass with a depth copy (DEPTH/STENCIL INPUT
@@ -55490,7 +55464,7 @@ struct pvk_gfx_pipeline {
     uint32_t dynamic;               /* PVK_DYN_BIT()s the pipeline leaves dynamic */
     struct pvk_dynamic_state state; /* the static values of the others */
     uint32_t vertex_bindings;       /* bit b: the vertex shader reads binding b */
-    uint32_t strides[PVK_MAX_VERTEX_BINDINGS]; /* static binding strides */
+
     uint32_t samples;               /* rasterization samples */
     uint32_t view_mask;
     bool depth_clamp;
@@ -55654,7 +55628,7 @@ struct pvk_cb_render {
     uint32_t subpass;
     VkRect2D area;
     uint32_t width, height, layers;
-    uint32_t count, capacity;           /* attachments */
+    uint32_t capacity;                  /* attachments there is room for */
     struct pvk_image_view **views;      /* capacity of them */
     VkClearValue *clears;               /* capacity */
     bool active;                        /* inside a render pass instance */
@@ -55707,7 +55681,6 @@ static struct pvk_cb_render *pvk_cb_render_get(struct pvk_command_buffer *cb, ui
         r->clears = clears;
         r->capacity = count;
     }
-    r->count = count;
     return r;
 }
 
@@ -56180,8 +56153,6 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
     pvk_cmd_zero(c, sizeof(*c));
     r->pass = NULL;
     r->active = true;
-    r->area = info->renderArea;
-    r->layers = info->layerCount;
     r->flags = info->flags;
     r->view_mask = info->viewMask;
     r->color_count = info->colorAttachmentCount < PVK_MAX_COLOR_ATTACHMENTS ? info->colorAttachmentCount
@@ -56359,15 +56330,14 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetScissorWithCount(VkCommandBuffer commandBuffe
         memcpy(p, pScissors, sizeof(VkRect2D) * scissorCount);
 }
 
-/* wideLines is not supported: lines are 1 pixel wide whatever the width. */
+/* wideLines is not supported: lines are 1 pixel wide whatever the width,
+ * which is not kept. */
 VKAPI_ATTR void VKAPI_CALL vkCmdSetLineWidth(VkCommandBuffer commandBuffer, float lineWidth)
 {
     const struct pvk_command_buffer *cb = (const struct pvk_command_buffer *)commandBuffer;
-    if (pvk_cb_debug(cb) && lineWidth != 1.0f && !cb->pool->device->features.core.wideLines &&
+    if (pvk_cb_debug(cb) && lineWidth != 1.0f && !cb->pool->device->features.core.wideLines)
         pvk_cb_vuid(cb, "VUID-vkCmdSetLineWidth-lineWidth-00788",
-                    "vkCmdSetLineWidth: lineWidth is %g, but the wideLines feature is not enabled", (double)lineWidth))
-        return;
-    pvk_cmd_dynamic_floats(commandBuffer, PVK_DYN_LINE_WIDTH, &lineWidth, 1);
+                    "vkCmdSetLineWidth: lineWidth is %g, but the wideLines feature is not enabled", (double)lineWidth);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthBias(VkCommandBuffer commandBuffer, float depthBiasConstantFactor,
@@ -56502,16 +56472,14 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetPatchControlPointsEXT(VkCommandBuffer command
     (void)patchControlPoints;
 }
 
-/* Stippled lines are not supported (their features are not reported), so
- * the stipple is kept but changes nothing. */
+/* Stippled lines are not supported (their features are not reported): the
+ * stipple changes nothing. */
 VKAPI_ATTR void VKAPI_CALL vkCmdSetLineStipple(VkCommandBuffer commandBuffer, uint32_t lineStippleFactor,
                                                uint16_t lineStipplePattern)
 {
-    uint32_t *p = pvk_cmd_dynamic(commandBuffer, PVK_DYN_LINE_STIPPLE, 0, 2, sizeof(uint32_t) * 2);
-    if (p) {
-        p[0] = lineStippleFactor;
-        p[1] = lineStipplePattern;
-    }
+    (void)commandBuffer;
+    (void)lineStippleFactor;
+    (void)lineStipplePattern;
 }
 
 /* ---- Vertex and index buffers ---- */
@@ -56855,8 +56823,6 @@ VKAPI_ATTR void VKAPI_CALL vkCmdCopyQueryPoolResults(VkCommandBuffer commandBuff
     c->dst = buffer->gpu_address + dstOffset;
     c->stride = stride;
 }
-
-static uint32_t pvk_cb_query_views(const struct pvk_command_buffer *cb);
 
 /* Occlusion queries (encoded in section 16's "Graphics"). In a multiview
  * render pass a query uses one index per view: the first gets the total,
@@ -57428,9 +57394,7 @@ struct pvk_render {
     uint32_t group;        /* tile memory overflow (struct pvk_replay): the color slots bound, 0: all */
     uint32_t tex_slots;    /* ... or the slots left out, read from textures (pvk_encode_begin_pass) */
     uint32_t color_count;
-    pvk_MTLPixelFormat formats[PVK_MAX_COLOR_ATTACHMENTS]; /* Invalid: no attachment */
-    uint8_t kinds[PVK_MAX_COLOR_ATTACHMENTS];  /* enum pvk_format_kind */
-    const struct pvk_format *fmts[PVK_MAX_COLOR_ATTACHMENTS];
+    const struct pvk_format *fmts[PVK_MAX_COLOR_ATTACHMENTS]; /* NULL: no attachment */
     const struct pvk_format *depth_fmt, *stencil_fmt;
     /* The subpass */
     uint8_t map[PVK_MAX_COLOR_ATTACHMENTS];
@@ -57477,7 +57441,6 @@ struct pvk_render {
     uint32_t int_capable; /* color slots that have SINT views */
     bool split;         /* the pass may become several Metal passes: each stores everything */
     bool split_resolve; /* ... and a last one resolves the colors */
-    bool no_rebind;     /* SINT views are unavailable: pipelines' SNORM variants draw */
 };
 
 /* Position in a batch's primary command buffers. */
@@ -57511,7 +57474,6 @@ struct pvk_query_range {
  * (pvk_render_tex_slots). */
 struct pvk_replay {
     uint32_t count, next; /* groups, and the next one to encode (count 0: no replay) */
-    uint32_t groups[PVK_MAX_COLOR_ATTACHMENTS]; /* their color slots */
     const struct pvk_cmd_begin_pass *begin;
     const struct pvk_cmd_block *block; /* the packet after BEGIN_PASS */
     size_t at;
@@ -58408,11 +58370,11 @@ static void pvk_encode_copy_staged(struct pvk_encoder *e, id enc, const struct p
         if (!pvk_upload(e, (size_t)row_bytes * n, 16, &buffer, &offset, &address))
             return;
         pvk_MTL4ComputeCommandEncoder_copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
-            enc, c->src, ss, c->src_level, o1, s1, buffer, offset, row_bytes, 0, c->src_options);
+            enc, c->src, ss, c->src_level, o1, s1, buffer, offset, row_bytes, 0, c->options);
         pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
             enc, PVK_MTLStageBlit, PVK_MTLStageBlit, e->queue->device->visibility);
         pvk_MTL4ComputeCommandEncoder_copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin_options(
-            enc, buffer, offset, row_bytes, 0, s2, c->dst, ds, c->dst_level, o2, c->dst_options);
+            enc, buffer, offset, row_bytes, 0, s2, c->dst, ds, c->dst_level, o2, c->options);
     }
 }
 
@@ -59671,20 +59633,20 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
     memset(&key, 0, sizeof(key));
     for (s = 0; s < PVK_MAX_COLOR_ATTACHMENTS; s++) {
         map[s] = PVK_NO_SLOT;
-        if (!(colors & (1u << s)) || s >= r->color_count || !r->formats[s])
+        if (!(colors & (1u << s)) || s >= r->color_count || !r->fmts[s])
             continue;
-        key.formats[s] = r->formats[s];
-        key.kinds[s] = r->kinds[s];
+        key.formats[s] = r->fmts[s]->mtl;
+        key.kinds[s] = r->fmts[s]->kind;
         map[s] = (uint8_t)s;
         memcpy(vals[s], values[s], sizeof(vals[s]));
         if (r->int_slots & (1u << s)) { /* bound through its SINT view (pvk_render_rebind) */
-            key.formats[s] = pvk_snorm_as_sint(r->formats[s]);
+            key.formats[s] = pvk_snorm_as_sint(r->fmts[s]->mtl);
             key.kinds[s] = PVK_FK_SINT;
             for (i = 0; i < 4; i++) {
                 float f;
                 int32_t bits;
                 memcpy(&f, &values[s][i], 4);
-                bits = pvk_snorm_bits(r->formats[s], f);
+                bits = pvk_snorm_bits(r->fmts[s]->mtl, f);
                 memcpy(&vals[s][i], &bits, 4);
             }
         }
@@ -60059,9 +60021,8 @@ static id pvk_ds_copy_pipeline(struct pvk_device *device, uint32_t kind, uint32_
 }
 
 /* Internal draws into color slot `slot` (their logical color 0) over the
- * render area, reading `texture` (texture index 0 of the queue's render
- * table; NULL: none); pvk_render_internal_end restores the state. */
-static void pvk_render_internal_begin(struct pvk_encoder *e, id pso, uint32_t slot, id texture)
+ * render area; pvk_render_internal_end restores the state. */
+static void pvk_render_internal_begin(struct pvk_encoder *e, id pso, uint32_t slot)
 {
     struct pvk_render *r = &e->render;
     id enc = r->enc;
@@ -60104,14 +60065,12 @@ static void pvk_render_internal_begin(struct pvk_encoder *e, id pso, uint32_t sl
     pvk_MTL4RenderCommandEncoder_setScissorRects_count(enc, &sc, 1);
     pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->render_table,
                                                            PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
-    if (texture)
-        pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->render_table, pvk_MTLTexture_gpuResourceID(texture), 0);
 }
 
 /* One internal draw: a triangle covering the viewport in each layer of a
  * layered pass, with depth/stencil state ds, stencil reference ref and
  * pvk_dsc_args.bit. */
-static void pvk_render_internal_draw(struct pvk_encoder *e, id ds, uint32_t ref, uint32_t bit, bool layered)
+static void pvk_render_internal_draw(struct pvk_encoder *e, id ds, uint32_t ref, uint32_t bit)
 {
     struct pvk_render *r = &e->render;
     struct pvk_dsc_args *args;
@@ -60124,7 +60083,7 @@ static void pvk_render_internal_draw(struct pvk_encoder *e, id ds, uint32_t ref,
     pvk_MTL4RenderCommandEncoder_setDepthStencilState(r->enc, ds);
     pvk_MTL4RenderCommandEncoder_setStencilFrontReferenceValue_backReferenceValue(r->enc, ref, ref);
     pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
-        r->enc, PVK_MTLPrimitiveTypeTriangle, 0, 3, layered && r->layers ? r->layers : 1, 0);
+        r->enc, PVK_MTLPrimitiveTypeTriangle, 0, 3, r->layers ? r->layers : 1, 0);
 }
 
 static void pvk_render_internal_end(struct pvk_encoder *e)
@@ -60142,9 +60101,8 @@ static void pvk_render_internal_end(struct pvk_encoder *e)
 static void pvk_render_rebuild_stencil(struct pvk_encoder *e)
 {
     struct pvk_render *r = &e->render;
-    bool layered = r->layers != 0;
     id pso = pvk_ds_copy_pipeline(e->device, r->samples_pass > 1 ? PVK_DSC_STENCIL_MS : PVK_DSC_STENCIL, r->samples_pass,
-                                  layered);
+                                  r->layers != 0);
     id ds[9];
     uint32_t b, f;
     for (b = 0; b < 9; b++) {
@@ -60167,10 +60125,10 @@ static void pvk_render_rebuild_stencil(struct pvk_encoder *e)
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
         return;
     }
-    pvk_render_internal_begin(e, pso, r->hidden_slot[1], NULL);
-    pvk_render_internal_draw(e, ds[8], 0, 8, layered); /* bit 8: cleared */
+    pvk_render_internal_begin(e, pso, r->hidden_slot[1]);
+    pvk_render_internal_draw(e, ds[8], 0, 8); /* bit 8: cleared */
     for (b = 0; b < 8; b++)
-        pvk_render_internal_draw(e, ds[b], 1u << b, b, layered);
+        pvk_render_internal_draw(e, ds[b], 1u << b, b);
     pvk_render_internal_end(e);
 }
 
@@ -60198,7 +60156,7 @@ static void pvk_render_end(struct pvk_encoder *e)
         pvk_render_resolve_clear(e);
     }
     r->begin = NULL;
-    r->split = r->split_resolve = r->no_rebind = false;
+    r->split = r->split_resolve = false;
     r->int_slots = 0;
     r->suspended = false;
     r->counting = false;
@@ -60889,16 +60847,12 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
     }
     depth = c->depth;
     stencil = c->stencil;
-    memset(r->formats, 0, sizeof(r->formats));
-    memset(r->kinds, 0, sizeof(r->kinds));
     memset((void *)r->fmts, 0, sizeof(r->fmts));
     r->int_capable = 0;
     for (s = 0; s < c->color_count; s++) {
         const struct pvk_pass_attachment *pa = &c->colors[s];
         if (!pa->texture)
             continue;
-        r->formats[s] = pa->fmt->mtl;
-        r->kinds[s] = pa->fmt->kind;
         r->fmts[s] = pa->fmt;
         memoryless |= pa->memoryless != 0;
         resolves |= pa->resolve != NULL;
@@ -60919,7 +60873,6 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
      * the pipelines' SNORM variants draw. */
     r->split = t->int_colors && !memoryless;
     r->split_resolve = r->split && resolves;
-    r->no_rebind = t->int_colors && memoryless;
     /* the first draw's binding from the start: a pass of such pipelines (and
      * clears) is never split, never loading or storing SNORM views */
     r->int_slots = r->split && !(t->first_slots & ~r->int_capable) ? t->first_slots : 0;
@@ -61042,7 +60995,7 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
         !e->occ_pool && !track.int_colors && (!track.fetches || !track.fetch_bad) &&
         !((c->hidden | track.hidden) &
           ((c->depth.texture ? PVK_HIDDEN_DEPTH : 0u) | (c->stencil.texture ? PVK_HIDDEN_STENCIL : 0u))))
-        n = pvk_render_groups(c, p->groups);
+        n = track.nsplit; /* (pvk_render_groups) */
     if (n < 2)
         return;
     e->result = VK_SUCCESS;
@@ -61055,7 +61008,7 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     p->at = e->depth ? e->sub_at : e->cursor.at;
     p->depth = e->depth;
     p->track = track;
-    pvk_render_begin_group(e, c, &track, p->groups[0], true, false);
+    pvk_render_begin_group(e, c, &track, track.split[0], true, false);
     p->render = *r;
     memcpy(p->sets, e->sets[0], sizeof(p->sets));
     memcpy(p->push, e->push, sizeof(p->push));
@@ -61096,7 +61049,7 @@ static bool pvk_replay_next(struct pvk_encoder *e)
     e->push_dirty = true;
     e->pp_count = pp_count;
     e->pp_next = p->pp_next;
-    pvk_render_begin_group(e, p->begin, &p->track, p->groups[p->next], false, p->next + 1 == p->count);
+    pvk_render_begin_group(e, p->begin, &p->track, p->track.split[p->next], false, p->next + 1 == p->count);
     p->next++;
     return true;
 }
@@ -61168,9 +61121,6 @@ static void pvk_encode_set_dynamic(struct pvk_encoder *e, const struct pvk_cmd_d
     case PVK_DYN_SCISSOR:
         memcpy(d->scissors + c->first, c + 1, sizeof(VkRect2D) * c->count);
         r->dirty |= PVK_RD_SCISSOR;
-        break;
-    case PVK_DYN_LINE_WIDTH:
-        d->line_width = f[0];
         break;
     case PVK_DYN_DEPTH_BIAS:
         memcpy(d->depth_bias, f, sizeof(d->depth_bias));
@@ -61247,10 +61197,6 @@ static void pvk_encode_set_dynamic(struct pvk_encoder *e, const struct pvk_cmd_d
         break;
     case PVK_DYN_PRIMITIVE_RESTART_ENABLE:
         d->primitive_restart = (uint8_t)u[0];
-        break;
-    case PVK_DYN_LINE_STIPPLE:
-        d->line_stipple[0] = u[0];
-        d->line_stipple[1] = u[1];
         break;
     default:
         break;
@@ -61546,7 +61492,7 @@ static bool pvk_render_flush(struct pvk_encoder *e)
         for (i = 0; i < n; i++) {
             t[i].address = r->vertex[i].address;
             t[i].size = r->vertex[i].size;
-            t[i].stride = (g->dynamic & PVK_DYN_BIT(VERTEX_STRIDE)) ? d->strides[i] : g->strides[i];
+            t[i].stride = d->strides[i]; /* (the pipeline's, unless dynamic: pvk_dynamic_copy) */
             t[i].reserved = 0;
         }
         pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_VERTEX_TABLE_BUFFER);
@@ -61815,7 +61761,7 @@ static void pvk_encode_clear_attachments(struct pvk_encoder *e, const struct pvk
             uint32_t slot = a[i].attachment;
             if (!r->dynamic) /* a subpass color attachment: its location */
                 slot = slot < PVK_MAX_COLOR_ATTACHMENTS ? r->map[slot] : PVK_NO_SLOT;
-            if (slot >= r->color_count || !r->formats[slot])
+            if (slot >= r->color_count || !r->fmts[slot])
                 continue;
             colors |= 1u << slot;
             pvk_clear_value_bits(r->fmts[slot], &a[i].value.color, values[slot]);
@@ -65182,7 +65128,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRende
 {
     const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
     const VkRenderPassMultiviewCreateInfo *mv = NULL;
-    const VkRenderPassInputAttachmentAspectCreateInfo *ia_aspects = NULL;
     const VkBaseInStructure *ext;
     VkRenderPassCreateInfo2 info;
     VkAttachmentDescription2 *atts;
@@ -65194,10 +65139,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRende
     VkResult result;
 
     for (ext = pCreateInfo->pNext; ext; ext = ext->pNext) {
-        if (ext->sType == VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO)
-            mv = (const VkRenderPassMultiviewCreateInfo *)ext;
-        else if (ext->sType == VK_STRUCTURE_TYPE_RENDER_PASS_INPUT_ATTACHMENT_ASPECT_CREATE_INFO)
-            ia_aspects = (const VkRenderPassInputAttachmentAspectCreateInfo *)ext;
+        if (ext->sType == VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO) /* (input attachment aspects: */
+            mv = (const VkRenderPassMultiviewCreateInfo *)ext; /* every aspect is read, pvk_render_pass_create) */
     }
     for (i = 0; i < pCreateInfo->subpassCount; i++) {
         const VkSubpassDescription *s = &pCreateInfo->pSubpasses[i];
@@ -65252,12 +65195,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRende
         }
         d->preserveAttachmentCount = s->preserveAttachmentCount;
         d->pPreserveAttachments = s->pPreserveAttachments;
-    }
-    for (i = 0; ia_aspects && i < ia_aspects->aspectReferenceCount; i++) { /* the aspects input attachments read */
-        const VkInputAttachmentAspectReference *a = &ia_aspects->pAspectReferences[i];
-        if (a->subpass < pCreateInfo->subpassCount && a->inputAttachmentIndex < subs[a->subpass].inputAttachmentCount)
-            ((VkAttachmentReference2 *)subs[a->subpass].pInputAttachments)[a->inputAttachmentIndex].aspectMask =
-                a->aspectMask;
     }
     for (i = 0; i < pCreateInfo->dependencyCount; i++) {
         const VkSubpassDependency *s = &pCreateInfo->pDependencies[i];
@@ -65477,7 +65414,6 @@ static uint32_t pvk_dynamic_bits(VkDynamicState s)
     switch (s) {
     case VK_DYNAMIC_STATE_VIEWPORT: return PVK_DYN_BIT(VIEWPORT);
     case VK_DYNAMIC_STATE_SCISSOR: return PVK_DYN_BIT(SCISSOR);
-    case VK_DYNAMIC_STATE_LINE_WIDTH: return PVK_DYN_BIT(LINE_WIDTH);
     case VK_DYNAMIC_STATE_DEPTH_BIAS: return PVK_DYN_BIT(DEPTH_BIAS);
     case VK_DYNAMIC_STATE_BLEND_CONSTANTS: return PVK_DYN_BIT(BLEND_CONSTANTS);
     case VK_DYNAMIC_STATE_DEPTH_BOUNDS: return PVK_DYN_BIT(DEPTH_BOUNDS);
@@ -65499,7 +65435,6 @@ static uint32_t pvk_dynamic_bits(VkDynamicState s)
     case VK_DYNAMIC_STATE_RASTERIZER_DISCARD_ENABLE: return PVK_DYN_BIT(RASTERIZER_DISCARD_ENABLE);
     case VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE: return PVK_DYN_BIT(DEPTH_BIAS_ENABLE);
     case VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE: return PVK_DYN_BIT(PRIMITIVE_RESTART_ENABLE);
-    case VK_DYNAMIC_STATE_LINE_STIPPLE: return PVK_DYN_BIT(LINE_STIPPLE);
     default: return 0; /* extension states PlasmaVK does not offer */
     }
 }
@@ -66167,7 +66102,6 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         gfx.state.depth_bias[0] = rs->depthBiasConstantFactor;
         gfx.state.depth_bias[1] = rs->depthBiasClamp;
         gfx.state.depth_bias[2] = rs->depthBiasSlopeFactor;
-        gfx.state.line_width = rs->lineWidth;
     }
     gfx.bresenham = pvk_bresenham_lines(rs);
     if (ds && !discard) {
@@ -66186,7 +66120,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     if (vi) {
         for (i = 0; i < vi->vertexBindingDescriptionCount; i++)
             if (vi->pVertexBindingDescriptions[i].binding < PVK_MAX_VERTEX_BINDINGS)
-                gfx.strides[vi->pVertexBindingDescriptions[i].binding] = vi->pVertexBindingDescriptions[i].stride;
+                gfx.state.strides[vi->pVertexBindingDescriptions[i].binding] = vi->pVertexBindingDescriptions[i].stride;
         for (ext = vi->pNext; ext; ext = ext->pNext)
             if (ext->sType == VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO)
                 divisors = (const VkPipelineVertexInputDivisorStateCreateInfo *)ext;
