@@ -54477,7 +54477,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdPushDescriptorSetWithTemplate2(
  *                                      uncompressed alike, checked on M4 Max);
  *   clears                             a render pass whose load action clears;
  *   blits, resolves                    a draw into the destination that reads
- *                                      the source (internal shaders, section 16).
+ *                                      the source (internal shaders, section 16);
+ *                                      an unscaled, unflipped blit within one
+ *                                      format is a copy.
  * Image layouts change nothing. */
 
 /* One region of a buffer <-> image copy. */
@@ -54815,6 +54817,31 @@ static void pvk_cmd_blit(struct pvk_command_buffer *cb, const struct pvk_image *
 
     if (!src->mtl_texture || !dst->mtl_texture || !pvk_format_is_color(f) || !pvk_format_is_color(dst->fmt))
         return; /* depth/stencil formats have no BLIT_DST (section 7) */
+    /* Unscaled and unflipped between images of one format: every
+     * destination texel samples its source texel at the center, whatever
+     * the filter, so a copy writes the same (without a render pass that
+     * loads and stores the destination: half the memory traffic). */
+    if (src->fmt == dst->fmt && !(f->flags & PVK_FF_SWIZZLE) && src->type == dst->type) {
+        bool same = true;
+        for (i = 0; i < 3; i++) {
+            int32_t s = (&r->srcOffsets[1].x)[i] - (&r->srcOffsets[0].x)[i];
+            same &= s > 0 && s == (&r->dstOffsets[1].x)[i] - (&r->dstOffsets[0].x)[i];
+        }
+        if (same) {
+            VkImageCopy2 copy;
+            memset(&copy, 0, sizeof(copy));
+            copy.sType = VK_STRUCTURE_TYPE_IMAGE_COPY_2;
+            copy.srcSubresource = r->srcSubresource;
+            copy.dstSubresource = r->dstSubresource;
+            copy.srcOffset = r->srcOffsets[0];
+            copy.dstOffset = r->dstOffsets[0];
+            copy.extent.width = (uint32_t)(r->srcOffsets[1].x - r->srcOffsets[0].x);
+            copy.extent.height = (uint32_t)(r->srcOffsets[1].y - r->srcOffsets[0].y);
+            copy.extent.depth = (uint32_t)(r->srcOffsets[1].z - r->srcOffsets[0].z);
+            pvk_cmd_image_copy(cb, src, dst, &copy);
+            return;
+        }
+    }
     c = pvk_cmd_append(cb, PVK_CMD_BLIT_IMAGE, sizeof(*c));
     if (!c)
         return;

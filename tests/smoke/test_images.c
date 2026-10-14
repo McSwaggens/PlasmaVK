@@ -1396,6 +1396,33 @@ static void test_blit(void)
         free_image(&b);
     }
 
+    /* unscaled within one format (a copy): exact texels whatever the filter,
+     * sRGB too, at offsets, in array layers; the rest stays */
+    {
+        uint8_t px[4 * 4 * 2 * 4], fill[4 * 4 * 2 * 4];
+        uint32_t l;
+        for (x = 0; x < sizeof(px); x++)
+            px[x] = (uint8_t)(x * 7 + 3);
+        memset(fill, 0xee, sizeof(fill));
+        a = image_with(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_SRGB, 4, 4, 1, 1, 2, px, sizeof(px));
+        b = image_with(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_SRGB, 4, 4, 1, 1, 2, fill, sizeof(fill));
+        r = blit_region(0, 0, 1, 0, 0, 3, 2, 1, 0, 0, 0, 2, 0, 2, 4, 1, 2); /* (1, 0)-(3, 2) to (0, 2)-(2, 4) */
+        blit(&a, &b, &r, VK_FILTER_LINEAR);
+        dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 2, 0, 0, 0, 4, 4, 1);
+        download(b.image, &dl, &out);
+        for (l = 0; l < 2; l++)
+            for (y = 0; y < 4; y++)
+                for (x = 0; x < 4; x++) {
+                    const uint8_t *got = o + ((l * 4 + y) * 4 + x) * 4;
+                    if (x < 2 && y >= 2)
+                        CHECK(memcmp(got, px + ((l * 4 + y - 2) * 4 + x + 1) * 4, 4) == 0);
+                    else
+                        CHECK(memcmp(got, fill, 4) == 0);
+                }
+        free_image(&a);
+        free_image(&b);
+    }
+
     /* a mip chain, level by level, and array layers */
     {
         uint8_t px[8 * 8 * 2 * 4];
