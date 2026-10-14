@@ -275,6 +275,18 @@ static VkFence make_fence(void)
     return f;
 }
 
+/* Nothing waits on the queue's thread: every wait so far was resolved
+ * when submitted (white box: section 16). */
+static bool no_backlog(uint32_t family)
+{
+    struct pvk_queue *q = (struct pvk_queue *)queues[family];
+    bool none;
+    pthread_mutex_lock(&q->lock);
+    none = q->deferred == NULL;
+    pthread_mutex_unlock(&q->lock);
+    return none;
+}
+
 /* ---- Tests ---- */
 
 static void test_surface_queries(void)
@@ -523,7 +535,9 @@ static void test_headless(void)
         REQUIRE(cb);
         record_clear(cb, images[index], 0.25f, 0.5f, (float)frame / 20.0f, 1.0f);
         REQUIRE_VK(submit(0, cb, acquired, rendered, frame == 19 ? done : VK_NULL_HANDLE));
+        CHECK(no_backlog(0)); /* the acquire's signal is a present's on this queue */
         CHECK_VK(present(0, swapchain, index, rendered), VK_SUCCESS);
+        CHECK(no_backlog(0)); /* rendered: a submission's on this queue */
     }
     CHECK_VK(vkWaitForFences(device, 1, &done, VK_TRUE, 2000000000ull), VK_SUCCESS);
     CHECK_VK(vkQueueWaitIdle(queues[0]), VK_SUCCESS);
@@ -843,6 +857,68 @@ static void test_deferred_present(void)
     pvk_release(layer);
 }
 
+/* A frame loop that never waits on the host: acquire, clear, present, two
+ * images. First on one queue, where every wait is covered by its order
+ * (nothing reaches the queue's thread), then rendering and presenting on
+ * alternating queues (acquires released on the other queue). The last
+ * drawable shows the last frame. */
+static void test_frame_loop(void)
+{
+    enum { FRAMES = 16, W = 256, H = 256 };
+    id layer = make_layer(W, H, 1.0);
+    VkSurfaceKHR surface = make_surface(layer);
+    VkSwapchainCreateInfoKHR info = swapchain_info(surface, VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+                                                   W, H, 2);
+    VkSemaphore acquired[FRAMES], rendered[FRAMES];
+    VkSwapchainKHR swapchain;
+    VkImage images[2];
+    unsigned char texel[4] = { 0, 0, 0, 0 };
+    uint32_t count = 2, frame, index;
+    pvk_MTLRegion r;
+
+    REQUIRE(surface);
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchain));
+    REQUIRE_VK(vkGetSwapchainImagesKHR(device, swapchain, &count, images));
+    for (frame = 0; frame < FRAMES; frame++) {
+        bool one_queue = frame < FRAMES / 2;
+        uint32_t render = one_queue ? 0 : frame & 1, show = one_queue ? 0 : (frame >> 1) & 1;
+        float t = (float)frame / (FRAMES - 1);
+        VkCommandBuffer cb;
+        acquired[frame] = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
+        rendered[frame] = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
+        REQUIRE_VK(vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired[frame], VK_NULL_HANDLE, &index));
+        cb = begin(render);
+        REQUIRE(cb);
+        record_clear(cb, images[index], 0.0f, t, 1.0f - t, 1.0f);
+        REQUIRE_VK(submit(render, cb, acquired[frame], rendered[frame], VK_NULL_HANDLE));
+        if (one_queue)
+            CHECK(no_backlog(0));
+        CHECK_VK(present(show, swapchain, index, rendered[frame]), VK_SUCCESS);
+        if (one_queue)
+            CHECK(no_backlog(0));
+    }
+    CHECK_VK(vkDeviceWaitIdle(device), VK_SUCCESS);
+    REQUIRE(last_drawable != NULL);
+    memset(&r, 0, sizeof(r));
+    r.origin.x = W / 2;
+    r.origin.y = H / 2;
+    r.size.width = r.size.height = r.size.depth = 1;
+    pvk_MTLTexture_getBytes_bytesPerRow_bytesPerImage_fromRegion_mipmapLevel_slice(
+        pvk_CAMetalDrawable_texture(last_drawable), texel, 4, 4, r, 0, 0);
+    CHECK(texel[0] == 0 && texel[1] == 255 && texel[2] == 0 && texel[3] == 255); /* BGRA */
+    pvk_release(last_drawable);
+    last_drawable = NULL;
+    vkResetCommandPool(device, pools[0], 0);
+    vkResetCommandPool(device, pools[1], 0);
+    vkDestroySwapchainKHR(device, swapchain, NULL);
+    for (frame = 0; frame < FRAMES; frame++) {
+        vkDestroySemaphore(device, acquired[frame], NULL);
+        vkDestroySemaphore(device, rendered[frame], NULL);
+    }
+    vkDestroySurfaceKHR(instance, surface, NULL);
+    pvk_release(layer);
+}
+
 /* Present modes, color spaces, composite alpha and two swapchains in one
  * present (vkAcquireNextImage2KHR for one of them). */
 static void test_layer_configuration(void)
@@ -923,6 +999,7 @@ int main(void)
     RUN(test_resize);
     RUN(test_acquire_timeouts);
     RUN(test_deferred_present);
+    RUN(test_frame_loop);
     RUN(test_layer_configuration);
     RUN(test_headless);
     teardown();

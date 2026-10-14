@@ -31250,7 +31250,6 @@ typedef struct pvk_MTLIndirectAccelerationStructureMotionInstanceDescriptor {
     float motionEndTime;
 } pvk_MTLIndirectAccelerationStructureMotionInstanceDescriptor;
 PVK_ASSERT_SIZE(pvk_MTLIndirectAccelerationStructureMotionInstanceDescriptor, 48);
-typedef void * pvk_MTLSharedEventNotificationBlock;
 typedef void * pvk_MTL4CommitFeedbackHandler;
 typedef struct pvk_MTL4UpdateSparseTextureMappingOperation {
     pvk_MTLSparseTextureMappingMode mode;
@@ -31653,8 +31652,6 @@ static inline unsigned long pvk_MTLTexture_height(id self) { PVK_SEL_CACHE("heig
 static inline void pvk_MTL4CommandQueue_signalDrawable(id self, id drawable) { PVK_SEL_CACHE("signalDrawable:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, drawable); }
 static inline void pvk_MTL4CommandQueue_waitForDrawable(id self, id drawable) { PVK_SEL_CACHE("waitForDrawable:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, drawable); }
 static inline void pvk_MTL4CommandBuffer_useResidencySet(id self, id residencySet) { PVK_SEL_CACHE("useResidencySet:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, residencySet); }
-static inline id pvk_MTLSharedEventListener_sharedListener(void) { PVK_CLASS_CACHE("MTLSharedEventListener"); PVK_SEL_CACHE("sharedListener"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
-static inline void pvk_MTLSharedEvent_notifyListener_atValue_block(id self, id listener, uint64_t value, pvk_MTLSharedEventNotificationBlock block) { PVK_SEL_CACHE("notifyListener:atValue:block:"); PVK_MSG(void, (id, SEL, id, uint64_t, pvk_MTLSharedEventNotificationBlock))(self, pvk_sel_, listener, value, block); }
 static inline void pvk_CATransaction_begin(void) { PVK_CLASS_CACHE("CATransaction"); PVK_SEL_CACHE("begin"); PVK_MSG(void, (id, SEL))((id)pvk_cls_, pvk_sel_); }
 static inline void pvk_CATransaction_commit(void) { PVK_CLASS_CACHE("CATransaction"); PVK_SEL_CACHE("commit"); PVK_MSG(void, (id, SEL))((id)pvk_cls_, pvk_sel_); }
 static inline void pvk_CATransaction_setDisableActions(bool flag) { PVK_CLASS_CACHE("CATransaction"); PVK_SEL_CACHE("setDisableActions:"); PVK_MSG(void, (id, SEL, bool))((id)pvk_cls_, pvk_sel_, flag); }
@@ -62231,6 +62228,14 @@ struct pvk_semaphore {
     id event;      /* MTLSharedEvent */
     bool timeline;
     uint64_t value; /* binary: signal operations submitted so far */
+    /* Binary: the latest signal (value) comes in this queue's order (a
+     * batch on it, or the release of an image it presented); NULL: from the
+     * host or vkQueueBindSparse. It is done when source.event reaches
+     * source.value: event at value, or for an image not released at
+     * acquire, the presenting queue's timeline at the release (event then
+     * never gets that value). */
+    struct pvk_queue *queue;
+    struct pvk_event_value source;
 };
 
 static bool pvk_device_lost(struct pvk_device *device)
@@ -62272,11 +62277,13 @@ static void pvk_present_commit(struct pvk_queue *queue, id cb, id drawable);
  * macOS 27: the work behind it then runs, the feedback reports no error), so
  * it cannot wait for a host signal or for long work on another queue. So a
  * wait is resolved when submitted, if possible: its value is reached
- * already, or an earlier batch of the same vkQueueSubmit on this queue
- * signals it (the waiting batch's encoder then starts with a barrier against
- * all earlier work on the queue). Otherwise that batch and everything after
- * it on the queue goes to the queue's thread, which waits on the CPU and
- * commits in order. */
+ * already, or the queue's order covers it: an earlier batch of the same
+ * vkQueueSubmit signals it, or it is a binary semaphore's and the signal was
+ * submitted to this queue (as the frame loop's: acquire, submit, present).
+ * The encoders of a batch with waits start with a barrier against all
+ * earlier work on the queue. Otherwise that batch and everything after it on
+ * the queue goes to the queue's thread, which waits on the CPU and commits
+ * in order. */
 
 /* The value of a binary semaphore after the signals of this submission
  * before batch `batch`, signal `upto` (its count of signal operations). */
@@ -62292,12 +62299,6 @@ static uint64_t pvk_binary_value(const VkSubmitInfo2 *submits, uint32_t batch, u
                 value++;
     }
     return value;
-}
-
-static uint64_t pvk_wait_value(const VkSubmitInfo2 *submits, uint32_t batch, const VkSemaphoreSubmitInfo *w)
-{
-    const struct pvk_semaphore *sem = (const struct pvk_semaphore *)w->semaphore;
-    return sem->timeline ? w->value : pvk_binary_value(submits, batch, 0, sem);
 }
 
 static uint64_t pvk_signal_value(const VkSubmitInfo2 *submits, uint32_t batch, uint32_t k)
@@ -62318,6 +62319,25 @@ static bool pvk_wait_covered(const VkSubmitInfo2 *submits, uint32_t batch, const
                 (!sem->timeline || submits[b].pSignalSemaphoreInfos[k].value >= w->value))
                 return true;
     return false;
+}
+
+/* What w on `queue` waits for, in *ev; false when the queue's order covers
+ * it. (A binary semaphore's wait that no earlier batch covers is for its
+ * latest signal submitted so far.) Mapping updates (sparse) wait for signals
+ * from earlier calls: they are not in the barriers' order. */
+static bool pvk_wait_source(const struct pvk_queue *queue, const VkSubmitInfo2 *submits, uint32_t batch,
+                            const VkSemaphoreSubmitInfo *w, bool sparse, struct pvk_event_value *ev)
+{
+    const struct pvk_semaphore *sem = (const struct pvk_semaphore *)w->semaphore;
+    if (pvk_wait_covered(submits, batch, w))
+        return false;
+    if (sem->timeline) {
+        ev->event = sem->event;
+        ev->value = w->value;
+        return true;
+    }
+    *ev = sem->source;
+    return sparse || sem->queue != queue;
 }
 
 /* Before the queue updates the mappings of `texture` (a texture, or a
@@ -62478,11 +62498,10 @@ static struct pvk_deferred *pvk_deferred_make(struct pvk_queue *queue, uint32_t 
         db->first = n;
         for (k = 0; k < submits[i].waitSemaphoreInfoCount; k++) {
             const VkSemaphoreSubmitInfo *w = &submits[i].pWaitSemaphoreInfos[k];
-            if (pvk_wait_covered(submits, i, w))
-                continue;
-            d->ops[n].event = ((struct pvk_semaphore *)w->semaphore)->event;
-            d->ops[n++].value = pvk_wait_value(submits, i, w);
-            db->nwaits++;
+            if (pvk_wait_source(queue, submits, i, w, binds != NULL, &d->ops[n])) {
+                n++;
+                db->nwaits++;
+            }
         }
         for (k = 0; k < submits[i].signalSemaphoreInfoCount; k++) {
             d->ops[n].event = ((struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[k].semaphore)->event;
@@ -62544,10 +62563,9 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
      * the deferred part (needs the queue's thread). */
     for (i = 0; i < first && result == VK_SUCCESS; i++) {
         for (j = 0; j < submits[i].waitSemaphoreInfoCount; j++) {
-            const VkSemaphoreSubmitInfo *w = &submits[i].pWaitSemaphoreInfos[j];
-            if (!pvk_wait_covered(submits, i, w) &&
-                pvk_MTLSharedEvent_signaledValue(((struct pvk_semaphore *)w->semaphore)->event) <
-                    pvk_wait_value(submits, i, w))
+            struct pvk_event_value ev;
+            if (pvk_wait_source(queue, submits, i, &submits[i].pWaitSemaphoreInfos[j], binds != NULL, &ev) &&
+                pvk_MTLSharedEvent_signaledValue(ev.event) < ev.value)
                 break;
         }
         if (j < submits[i].waitSemaphoreInfoCount)
@@ -62587,10 +62605,16 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
                 queue->mtl_queue, ((struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[j].semaphore)->event,
                 pvk_signal_value(submits, i, j));
     }
-    for (i = 0; i < count; i++) /* binary semaphores count their signals */
-        for (j = 0; j < submits[i].signalSemaphoreInfoCount; j++)
-            if (!((struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[j].semaphore)->timeline)
-                ((struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[j].semaphore)->value++;
+    for (i = 0; i < count; i++) { /* binary semaphores count their signals */
+        for (j = 0; j < submits[i].signalSemaphoreInfoCount; j++) {
+            struct pvk_semaphore *sem = (struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[j].semaphore;
+            if (!sem->timeline) {
+                sem->queue = binds ? NULL : queue; /* (mapping updates: not in the barriers' order) */
+                sem->source.event = sem->event;
+                sem->source.value = ++sem->value;
+            }
+        }
+    }
     if (deferred) {
         deferred->binds = binds; /* (batches before `first` are done with them) */
         pthread_mutex_lock(&queue->lock);
@@ -63130,8 +63154,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueBindSparse(VkQueue _queue, uint32_t bindIn
  * -present the drawable. Like a submission it takes the queue's next serial;
  * the timeline reaches it when the copies are done, which is when the images
  * are the application's again (section 18). The waits are resolved as a
- * submission's: at once when their values are reached and the queue has no
- * backlog, otherwise by the queue's thread, in order with the submissions. */
+ * submission's: at once when their values are reached or the queue's order
+ * covers them, and the queue has no backlog; otherwise by the queue's
+ * thread, in order with the submissions. */
 
 struct pvk_present_batch {
     struct pvk_submission *s; /* the copy; NULL: nothing to present to that swapchain */
@@ -63155,7 +63180,7 @@ static VkResult pvk_queue_present(struct pvk_queue *queue, uint32_t nwaits, cons
     struct pvk_deferred *done, *d = NULL;
     VkResult result = VK_SUCCESS;
     bool backlog, ready = true;
-    uint32_t i;
+    uint32_t i, n = 0;
 
     pthread_mutex_lock(&queue->lock);
     done = queue->done;
@@ -63164,10 +63189,12 @@ static VkResult pvk_queue_present(struct pvk_queue *queue, uint32_t nwaits, cons
     pthread_mutex_unlock(&queue->lock);
     pvk_deferred_free(device, done);
     *serial = queue->serial + 1;
-    /* Binary semaphores: a wait is for the signals submitted so far. */
-    for (i = 0; i < nwaits && ready; i++) {
+    /* Binary semaphores: a wait is for the latest signal submitted; covered
+     * by the queue's order when it was submitted to this queue. */
+    for (i = 0; i < nwaits; i++) {
         const struct pvk_semaphore *sem = (const struct pvk_semaphore *)waits[i];
-        ready = pvk_MTLSharedEvent_signaledValue(sem->event) >= sem->value;
+        if (sem->queue != queue && pvk_MTLSharedEvent_signaledValue(sem->source.event) < sem->source.value)
+            ready = false;
     }
     if (pvk_device_lost(device))
         result = VK_ERROR_DEVICE_LOST;
@@ -63183,11 +63210,10 @@ static VkResult pvk_queue_present(struct pvk_queue *queue, uint32_t nwaits, cons
         d->nbatches = count;
         d->batches = (struct pvk_deferred_batch *)(d + 1);
         d->ops = (struct pvk_event_value *)(d->batches + count);
-        for (i = 0; i < nwaits; i++) {
-            d->ops[i].event = ((const struct pvk_semaphore *)waits[i])->event;
-            d->ops[i].value = ((const struct pvk_semaphore *)waits[i])->value;
-        }
-        d->batches[0].nwaits = nwaits; /* the first batch waits, the others follow it */
+        for (i = 0; i < nwaits; i++)
+            if (((const struct pvk_semaphore *)waits[i])->queue != queue)
+                d->ops[n++] = ((const struct pvk_semaphore *)waits[i])->source;
+        d->batches[0].nwaits = n; /* the first batch waits, the others follow it */
         for (i = 0; i < count; i++)
             d->batches[i].cb = batches[i].s ? batches[i].s->cb : NULL;
         if (!queue->thread_running) {
@@ -66579,11 +66605,11 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
  *   application does not hold, released ones first, then the one presented
  *   longest ago. The fence becomes (timeline, serial) as after a submission;
  *   the binary semaphore is signalled at once when the image is released,
- *   otherwise by a block of MTLSharedEventListener's shared listener when the
- *   timeline gets there. Nothing can be returned only while the application
- *   holds every image: VK_NOT_READY with timeout 0, otherwise VK_TIMEOUT when
- *   it expires (no present can come meanwhile: the swapchain is externally
- *   synchronized).
+ *   otherwise its signal is the release: waits on the presenting queue are
+ *   in its order, others wait for its timeline (section 16). Nothing can be
+ *   returned only while the application holds every image: VK_NOT_READY with
+ *   timeout 0, otherwise VK_TIMEOUT when it expires (no present can come
+ *   meanwhile: the swapchain is externally synchronized).
  *
  * OUT OF DATE
  *   VK_ERROR_OUT_OF_DATE_KHR when the layer no longer makes drawables for the
@@ -66613,7 +66639,7 @@ struct pvk_swapchain_image {
     VkImage image;
     VkDeviceMemory memory;
     bool acquired;          /* by the application */
-    id release_event;       /* a queue's timeline: presented, released once it reaches release_value; NULL: free */
+    struct pvk_queue *release_queue; /* presented, released once its timeline reaches release_value; NULL: free */
     uint64_t release_value;
     uint64_t presented;     /* sequence number of its last present (0: never presented) */
 };
@@ -66923,8 +66949,8 @@ static void pvk_swapchain_free(struct pvk_swapchain *sc, const VkAllocationCallb
     pthread_mutex_unlock(&pvk_swapchain_lock);
     for (i = 0; i < sc->image_count; i++) {
         struct pvk_swapchain_image *img = &sc->images[i];
-        while (img->release_event &&
-               !pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(img->release_event, img->release_value, 100)) {
+        while (img->release_queue && !pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(img->release_queue->timeline,
+                                                                                         img->release_value, 100)) {
             if (pvk_device_lost(device) || pvk_now_ns() - start > 5000000000ull) {
                 pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-vkDestroySwapchainKHR-busy", VK_OBJECT_TYPE_SWAPCHAIN_KHR,
                          (uint64_t)(uintptr_t)sc, "vkDestroySwapchainKHR: a present of image %u is not done", i);
@@ -67090,30 +67116,6 @@ static VkResult pvk_swapchain_status(const struct pvk_swapchain *sc)
 
 /* ---- Acquire ---- */
 
-/* A block (section 3's Block ABI) for -notifyListener:atValue:block:,
- * whose blocks take (id<MTLSharedEvent>, uint64_t): it signals a binary
- * semaphore's event. */
-struct pvk_signal_block {
-    void *isa;
-    int flags;
-    int reserved;
-    void (*invoke)(struct pvk_signal_block *self, id event, uint64_t value);
-    const struct pvk_block_descriptor *descriptor;
-    /* captures */
-    id semaphore;   /* MTLSharedEvent, retained until invoked */
-    uint64_t value; /* to signal */
-};
-
-static void pvk_signal_block_invoke(struct pvk_signal_block *self, id event, uint64_t value)
-{
-    (void)event;
-    (void)value;
-    pvk_MTLSharedEvent_setSignaledValue(self->semaphore, self->value);
-    pvk_release(self->semaphore);
-}
-
-static const struct pvk_block_descriptor pvk_signal_block_descriptor = { 0, sizeof(struct pvk_signal_block) };
-
 static void pvk_sleep_ns(uint64_t ns)
 {
     struct timespec ts;
@@ -67145,7 +67147,8 @@ static VkResult pvk_acquire(struct pvk_device *device, struct pvk_swapchain *sc,
         img = &sc->images[i];
         if (img->acquired)
             continue;
-        released = !img->release_event || pvk_MTLSharedEvent_signaledValue(img->release_event) >= img->release_value;
+        released = !img->release_queue ||
+                   pvk_MTLSharedEvent_signaledValue(img->release_queue->timeline) >= img->release_value;
         if (best == UINT32_MAX || (released && !best_released) ||
             (released == best_released && img->presented < sc->images[best].presented)) {
             best = i;
@@ -67169,17 +67172,13 @@ static VkResult pvk_acquire(struct pvk_device *device, struct pvk_swapchain *sc,
         sem->value++; /* a signal operation: section 16's binary semaphores */
         if (best_released) {
             pvk_MTLSharedEvent_setSignaledValue(sem->event, sem->value);
-        } else {
-            struct pvk_signal_block block;
-            block.isa = _NSConcreteStackBlock;
-            block.flags = 0;
-            block.reserved = 0;
-            block.invoke = pvk_signal_block_invoke;
-            block.descriptor = &pvk_signal_block_descriptor;
-            block.semaphore = pvk_retain(sem->event);
-            block.value = sem->value;
-            pvk_MTLSharedEvent_notifyListener_atValue_block(img->release_event, pvk_MTLSharedEventListener_sharedListener(),
-                                                            img->release_value, &block);
+            sem->queue = NULL;
+            sem->source.event = sem->event;
+            sem->source.value = sem->value;
+        } else { /* the release: in the presenting queue's order */
+            sem->queue = img->release_queue;
+            sem->source.event = img->release_queue->timeline;
+            sem->source.value = img->release_value;
         }
     }
     if (fence) {
@@ -67188,7 +67187,7 @@ static VkResult pvk_acquire(struct pvk_device *device, struct pvk_swapchain *sc,
         } else {
             __atomic_store_n(&fence->signaled, 0, __ATOMIC_RELAXED);
             __atomic_store_n(&fence->value, img->release_value, __ATOMIC_RELAXED);
-            __atomic_store_n(&fence->event, (void *)img->release_event, __ATOMIC_RELEASE);
+            __atomic_store_n(&fence->event, (void *)img->release_queue->timeline, __ATOMIC_RELEASE);
         }
     }
     objc_autoreleasePoolPop(pool);
@@ -67313,7 +67312,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue _queue, const VkPresent
             struct pvk_swapchain *sc = (struct pvk_swapchain *)pPresentInfo->pSwapchains[i];
             struct pvk_swapchain_image *img = &sc->images[pPresentInfo->pImageIndices[i]];
             img->acquired = false;
-            img->release_event = queue->timeline;
+            img->release_queue = queue;
             img->release_value = serial;
             img->presented = ++sc->presents;
             if (pPresentInfo->pResults)
