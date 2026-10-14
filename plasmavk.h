@@ -42303,6 +42303,7 @@ struct pvk_spv {
 
     /* output */
     struct pvk_sb head, types, consts, text, body; /* text: functions; body: the one being emitted */
+    struct pvk_sb stage_outs, stage_ins, points_call; /* pvk_spv_emit_stage's, pvk_spv_emit_points_entry's */
     struct pvk_sb *out; /* where pvk_spv_line writes */
     uint32_t indent;
     bool keep_pad;              /* pvk_spv_copy: stores to memory others see leave padding alone */
@@ -48230,7 +48231,7 @@ static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn 
     e = pvk_spv_fmt(ctx, "%s)", e);
     if (sparse) {
         pvk_spv_sparse_result(ctx, rid, &e, 1,
-                              dref || strncmp(tex, "depth", 5) == 0 || strncmp(it->msl, "depth", 5) == 0 ? 1 : 4, it, NULL);
+                              dref || strncmp(it->msl, "depth", 5) == 0 ? 1 : 4, it, NULL);
         return;
     }
     if (dref) {
@@ -48239,7 +48240,7 @@ static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn 
         pvk_spv_set(ctx, rid, e);
         return;
     }
-    pvk_spv_texel_result(ctx, rid, e, strncmp(tex, "depth", 5) == 0 || strncmp(it->msl, "depth", 5) == 0 ? 1 : 4, it);
+    pvk_spv_texel_result(ctx, rid, e, strncmp(it->msl, "depth", 5) == 0 ? 1 : 4, it);
 }
 
 /* OpImageGather / OpImageDrefGather, and OpImageSparse(Dref)Gather
@@ -49415,8 +49416,14 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         } else if (op == PVK_SPV_OpISubBorrow) {
             pvk_spv_line(ctx, "%s = %s - %s;", lo, a, b);
             pvk_spv_line(ctx, "%s = select(%s(0), %s(1), %s < %s);", hi, t, t, a, b);
-        } else {
-            pvk_spv_line(ctx, "%s = %s * %s;", lo, a, b);
+        } else { /* the low half unsigned (signed overflow is undefined; narrow scalars promote to int) */
+            struct pvk_spv_type *ot = pvk_spv_vtype(ctx, in->w[3]), *os = pvk_spv_scalar_of(ctx, ot);
+            const char *ua = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 3), false);
+            const char *ub = pvk_spv_ival(ctx, pvk_spv_arg(ctx, in, 4), false);
+            const char *ut = pvk_spv_int_msl(ctx, ot, false), *p;
+            p = ot->op != PVK_SPV_OpTypeVector && os->width < 32 ? pvk_spv_fmt(ctx, "%s(uint(%s) * uint(%s))", ut, ua, ub)
+                                                                 : pvk_spv_fmt(ctx, "%s * %s", ua, ub);
+            pvk_spv_line(ctx, "%s = %s;", lo, sg ? pvk_spv_fmt(ctx, "as_type<%s>(%s)", t, p) : p);
             pvk_spv_line(ctx, "%s = mulhi(%s, %s);", hi, a, b);
         }
         return;
@@ -49555,10 +49562,12 @@ static void pvk_spv_phi_copies(struct pvk_spv *ctx, uint32_t from, uint32_t to)
     for (i = 0; i < n; i++)
         if (pvk_spv_get(ctx, vals[i])->ycbcr)
             pvk_spv_fail(ctx, "a phi of combined image samplers with Y'CbCr conversions is not supported");
-    for (i = 0; i < n && !conflict; i++)
+    for (i = 0; i < n && !conflict; i++) {
+        conflict = pvk_spv_get(ctx, vals[i])->kind == PVK_SPV_K_PTR; /* an expression that may read a phi */
         for (j = 0; j < n; j++)
             if (vals[i] == phis[j] && i != j)
                 conflict = true;
+    }
     if (!conflict) {
         for (i = 0; i < n; i++)
             if (vals[i] != phis[i])
@@ -51730,11 +51739,11 @@ static void pvk_spv_emit_points_entry(struct pvk_spv *ctx, const char *name, con
                                       uint32_t nparams)
 {
     struct pvk_msl_result *res = ctx->result;
-    struct pvk_sb *text = &ctx->text, call;
+    struct pvk_sb *text = &ctx->text, *call = &ctx->points_call;
     bool has_vid = false;
     uint32_t i;
 
-    memset(&call, 0, sizeof(call));
+    memset(call, 0, sizeof(*call));
     pvk_sb_append(ctx, text, pvk_msl_points_text, sizeof(pvk_msl_points_text) - 1);
     pvk_sb_printf(ctx, text, "static %s_out %s_corner(", name, name);
     for (i = 0; i < nparams; i++) {
@@ -51746,7 +51755,7 @@ static void pvk_spv_emit_points_entry(struct pvk_spv *ctx, const char *name, con
             arg = "pvk_v[pvk_k]";
         else if (!strcmp(arg, "pvk_base_vertex"))
             arg = "pvk_bv";
-        pvk_sb_printf(ctx, &call, "%s%s", i ? ", " : "", arg);
+        pvk_sb_printf(ctx, call, "%s%s", i ? ", " : "", arg);
     }
     pvk_sb_append(ctx, text, ")\n{\n", 4);
     pvk_sb_append(ctx, text, ctx->body.data, ctx->body.len);
@@ -51795,7 +51804,7 @@ static void pvk_spv_emit_points_entry(struct pvk_spv *ctx, const char *name, con
                   "    }\n"
                   "    for (uint pvk_k = 0u; pvk_k < 3u; pvk_k++)\n"
                   "        pvk_o[pvk_k] = %s_corner(%.*s);\n",
-                  name, name, name, (int)call.len, call.data ? call.data : "");
+                  name, name, name, (int)call->len, call->data ? call->data : "");
     /* Vulkan's framebuffer area: a = -(width * height / 8) * the cross
      * product in Vulkan's NDC (y down: the shader's y negated back). */
     pvk_sb_printf(ctx, text,
@@ -51837,7 +51846,8 @@ static void pvk_spv_emit_points_entry(struct pvk_spv *ctx, const char *name, con
                   "        pvk_r.pvk_position = float4(0.0f, 0.0f, 0.0f, -1.0f);\n"
                   "    return pvk_r;\n}\n",
                   name, (res->builtins & PVK_MSL_BUILTIN_VIEWPORT_INDEX) ? "pvk_r.pvk_viewport" : "0u");
-    free(call.data);
+    free(call->data);
+    call->data = NULL;
 }
 
 static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
@@ -51848,7 +51858,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     bool vertex = ctx->model == PVK_SPV_ExecutionModelVertex, per_sample = false, early = false, early_attr = true;
     bool depth_copy = false;
     struct pvk_spv_iface in, out;
-    struct pvk_sb outs, ins;
+    struct pvk_sb *outs = &ctx->stage_outs, *ins = &ctx->stage_ins; /* (in ctx: freed if translation fails) */
     const char **params = NULL, **args = NULL, *depth_mode = "any", *call_guard = NULL, *mask_discard = NULL;
     uint32_t nparams = 0, cap = 0, nargs = 0, cap_args = 0, g, i, loc, idx, set, need = 0;
     uint32_t fetch_colors = 0, sample_inputs = 0, nin = 0, nout = 0, colors = 0;
@@ -51862,8 +51872,8 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
 
     memset(&in, 0, sizeof(in));
     memset(&out, 0, sizeof(out));
-    memset(&outs, 0, sizeof(outs));
-    memset(&ins, 0, sizeof(ins));
+    memset(outs, 0, sizeof(*outs));
+    memset(ins, 0, sizeof(*ins));
     memset(vin, 0, sizeof(vin));
     memset(vout, 0, sizeof(vout));
 
@@ -52055,7 +52065,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         if (!pvk_spv_bit(entry->globals, g) || x->p->storage != PVK_SPV_StorageInput)
             continue;
         if (x->flags & PVK_SPV_F_BUILTIN)
-            pvk_spv_stage_builtin(ctx, x->builtin, x->p->type, x->msl, false, &outs, &need, per_sample);
+            pvk_spv_stage_builtin(ctx, x->builtin, x->p->type, x->msl, false, outs, &need, per_sample);
         else if (pvk_spv_type(ctx, x->p->type)->op == PVK_SPV_OpTypeStruct &&
                  pvk_spv_type(ctx, x->p->type)->nmembers &&
                  (pvk_spv_type(ctx, x->p->type)->members[0].flags & PVK_SPV_M_BUILTIN))
@@ -52120,9 +52130,9 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
                 if (in.leaves[i].location == loc)
                     vin[nin].components |= ((1u << in.leaves[i].ncomp) - 1) << in.leaves[i].component;
             if ((entry->interp_locs | centroid_locs) & (1u << loc))
-                pvk_sb_printf(ctx, &ins, "    %s pvk_l%u [[user(locn%u)]];\n", ctx->interp_type[loc], loc, loc);
+                pvk_sb_printf(ctx, ins, "    %s pvk_l%u [[user(locn%u)]];\n", ctx->interp_type[loc], loc, loc);
             else
-                pvk_sb_printf(ctx, &ins, "    %s pvk_l%u [[user(locn%u)]] [[%s]];\n",
+                pvk_sb_printf(ctx, ins, "    %s pvk_l%u [[user(locn%u)]] [[%s]];\n",
                               pvk_spv_kind_msl(ctx, in_type[loc], ctx->slot_width[loc]), loc, loc,
                               pvk_spv_interp_attr(interp, in_type[loc] != PVK_MSL_SCALAR_FLOAT));
             vin[nin].location = loc;
@@ -52198,7 +52208,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
                     t->members[i].builtin == PVK_SPV_BuiltInPosition)
                     res->invariant = true;
         }
-        pvk_sb_printf(ctx, &outs, "    float4 pvk_position [[position]]%s;\n", res->invariant ? " [[invariant]]" : "");
+        pvk_sb_printf(ctx, outs, "    float4 pvk_position [[position]]%s;\n", res->invariant ? " [[invariant]]" : "");
     }
     for (g = 0; g < ctx->nglobals; g++) {
         struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
@@ -52208,7 +52218,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         t = pvk_spv_type(ctx, x->p->type);
         if (x->flags & PVK_SPV_F_BUILTIN) { /* written, or initialized (its initializer then) */
             if (pvk_spv_bit(entry->globals, g) || (x->msl && pvk_spv_insn_at(ctx, x->insn).wc > 4))
-                pvk_spv_stage_builtin(ctx, x->builtin, x->p->type, x->msl, true, &outs, &need, per_sample);
+                pvk_spv_stage_builtin(ctx, x->builtin, x->p->type, x->msl, true, outs, &need, per_sample);
         } else if (t->op == PVK_SPV_OpTypeStruct && t->nmembers && (t->members[0].flags & PVK_SPV_M_BUILTIN)) {
             for (i = 0; i < t->nmembers; i++) { /* gl_PerVertex: the members the shader writes */
                 const struct pvk_spv_member *m = &t->members[i];
@@ -52216,16 +52226,16 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
                     pvk_spv_fail(ctx, "a block mixes built-in and user-defined members");
                 if (pvk_spv_bit(entry->globals, g) && pvk_spv_member_used(ctx, ctx->globals[g], i))
                     pvk_spv_stage_builtin(ctx, m->builtin, m->type, pvk_spv_fmt(ctx, "%s.%s", x->msl, m->msl), true,
-                                          &outs, &need, per_sample);
+                                          outs, &need, per_sample);
             }
         }
     }
     if (vertex && o && o->point_size && !(res->builtins & PVK_MSL_BUILTIN_POINT_SIZE)) {
-        pvk_sb_printf(ctx, &outs, "    float pvk_point_size [[point_size]];\n");
+        pvk_sb_printf(ctx, outs, "    float pvk_point_size [[point_size]];\n");
         pvk_spv_line(ctx, "pvk_out.pvk_point_size = 1.0f;"); /* maintenance5: points are 1 pixel wide */
     }
     if (res->builtins & PVK_MSL_BUILTIN_FRAG_DEPTH)
-        pvk_sb_printf(ctx, &outs, "    float pvk_frag_depth [[depth(%s)]];\n", depth_mode);
+        pvk_sb_printf(ctx, outs, "    float pvk_frag_depth [[depth(%s)]];\n", depth_mode);
     for (idx = 0; idx < 2; idx++) {
         for (loc = 0; loc < PVK_MSL_MAX_LOCATIONS; loc++) {
             enum pvk_msl_scalar_type k = out_type[idx][loc];
@@ -52270,11 +52280,11 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
                 w = c & 8u ? 4 : c & 4u ? 3 : c & 2u ? 2 : 1;
             }
             if (vertex)
-                pvk_sb_printf(ctx, &outs, "    %s %s [[user(locn%u)]];\n", pvk_spv_kind_msl(ctx, k, w), member, loc);
+                pvk_sb_printf(ctx, outs, "    %s %s [[user(locn%u)]];\n", pvk_spv_kind_msl(ctx, k, w), member, loc);
             else if (idx)
-                pvk_sb_printf(ctx, &outs, "    %s %s [[color(%u), index(1)]];\n", pvk_spv_kind_msl(ctx, k, 4), member, loc);
+                pvk_sb_printf(ctx, outs, "    %s %s [[color(%u), index(1)]];\n", pvk_spv_kind_msl(ctx, k, 4), member, loc);
             else
-                pvk_sb_printf(ctx, &outs, "    %s %s [[color(%u)]];\n",
+                pvk_sb_printf(ctx, outs, "    %s %s [[color(%u)]];\n",
                               pvk_spv_kind_msl(ctx, raw ? PVK_MSL_SCALAR_INT : k, 4), member, loc);
             if (raw) { /* the float color, for pvk_spv_fragment_ops */
                 dest = pvk_spv_fmt(ctx, "pvk_lsrc%u", loc);
@@ -52298,7 +52308,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     }
     if (!vertex && o) { /* the pipeline's fragment operations */
         const char *extra[8];
-        uint32_t nextra = pvk_spv_fragment_ops(ctx, colors, out_type[0], fetch_colors, a2c_src, &outs, extra), e;
+        uint32_t nextra = pvk_spv_fragment_ops(ctx, colors, out_type[0], fetch_colors, a2c_src, outs, extra), e;
         for (e = 0; e < nextra; e++)
             PVK_SPV_PUSH(ctx, params, nparams, cap, extra[e]);
     }
@@ -52317,7 +52327,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
                 need |= PVK_SPV_NEED_SAMPLE_ID;
         }
         /* (float4 as the copy's fetches: a color's input and output types must agree) */
-        pvk_sb_printf(ctx, &outs, "    float4 pvk_hidden_depth [[color(%u)]];\n", h);
+        pvk_sb_printf(ctx, outs, "    float4 pvk_hidden_depth [[color(%u)]];\n", h);
         if (o->depth_bounds) { /* the stored depth: the copy, fetched */
             if (!(fetch_colors & (1u << h)))
                 PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_fmt(ctx, "float4 pvk_color%u [[color(%u)]]", h, h));
@@ -52340,12 +52350,12 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
      * triangles (M4 Max; the Khronos CTS's projected mipmaps). Kept by a use
      * no interpolation takes (NaN bits). PLASMAVK_QUAD_MERGING builds let
      * the GPU pack quads as it likes (faster, not conformant). */
-    if (!PVK_QUAD_MERGING && !vertex && ctx->derivatives && outs.len) {
+    if (!PVK_QUAD_MERGING && !vertex && ctx->derivatives && outs->len) {
         need |= PVK_SPV_NEED_BARYCENTRIC;
         pvk_spv_line(ctx, "if (as_type<uint>(pvk_barycentric.x) == 0xffffffffu)");
         pvk_spv_line(ctx, "    pvk_out = {};");
     }
-    if (outs.len)
+    if (outs->len)
         pvk_spv_line(ctx, "return pvk_out;");
 
     /* Parameters */
@@ -52435,17 +52445,17 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         pvk_sb_append(ctx, text, pvk_msl_d16_text, sizeof(pvk_msl_d16_text) - 1);
     if (depth_copy && o->depth_bounds)
         pvk_sb_append(ctx, text, pvk_msl_depth_bounds_text, sizeof(pvk_msl_depth_bounds_text) - 1);
-    if (ins.len) {
+    if (ins->len) {
         pvk_sb_printf(ctx, text, "struct %s_in\n{\n", name);
-        pvk_sb_append(ctx, text, ins.data, ins.len);
+        pvk_sb_append(ctx, text, ins->data, ins->len);
         pvk_sb_append(ctx, text, "};\n\n", 4);
         PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_fmt(ctx, "%s_in pvk_in [[stage_in]]", name));
         memmove(params + 1, params, (nparams - 1) * sizeof(*params)); /* first, for readability */
         params[0] = pvk_spv_fmt(ctx, "%s_in pvk_in [[stage_in]]", name);
     }
-    if (outs.len) {
+    if (outs->len) {
         pvk_sb_printf(ctx, text, "struct %s_out\n{\n", name);
-        pvk_sb_append(ctx, text, outs.data, outs.len);
+        pvk_sb_append(ctx, text, outs->data, outs->len);
         pvk_sb_append(ctx, text, "};\n\n", 4);
     } else {
         /* nothing to return: drop the pvk_out declaration (the first line) */
@@ -52454,9 +52464,11 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         memmove(ctx->body.data, ctx->body.data + cut, ctx->body.len - cut + 1);
         ctx->body.len -= cut;
     }
-    free(outs.data);
-    free(ins.data);
-    if (vertex && o && o->polygon_points && outs.len && (res->builtins & PVK_MSL_BUILTIN_POSITION)) {
+    free(outs->data);
+    outs->data = NULL;
+    free(ins->data);
+    ins->data = NULL;
+    if (vertex && o && o->polygon_points && outs->len && (res->builtins & PVK_MSL_BUILTIN_POSITION)) {
         pvk_spv_emit_points_entry(ctx, name, params, nparams);
         return;
     }
@@ -52469,8 +52481,8 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
             plain += !strstr(params[i], "[[color(");
         if (early && early_attr)
             pvk_sb_append(ctx, text, "[[early_fragment_tests]]\n", 25);
-        pvk_sb_printf(ctx, text, "%s %s%s %s(", vertex ? "vertex" : "fragment", outs.len ? name : "void",
-                      outs.len ? "_out" : "", name);
+        pvk_sb_printf(ctx, text, "%s %s%s %s(", vertex ? "vertex" : "fragment", outs->len ? name : "void",
+                      outs->len ? "_out" : "", name);
         if (!plain && nparams)
             pvk_sb_printf(ctx, text, "\n    float4 pvk_guard_position [[position]]");
         for (i = 0, k = 0; i < nparams; i++)
@@ -53071,6 +53083,9 @@ static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const
     free(ctx->consts.data);
     free(ctx->text.data);
     free(ctx->body.data);
+    free(ctx->stage_outs.data);
+    free(ctx->stage_ins.data);
+    free(ctx->points_call.data);
     free(ctx->ycbcr_text.data);
     free(ctx);
     if (code != VK_SUCCESS) {
@@ -53492,7 +53507,8 @@ struct pvk_command_pool {
     struct pvk_cmd_block *free_blocks;  /* PVK_CMD_BLOCK_SIZE blocks to reuse */
 };
 
-enum pvk_command_buffer_state { PVK_CB_INITIAL, PVK_CB_RECORDING, PVK_CB_EXECUTABLE };
+/* (INVALID: its recording failed, vkEndCommandBuffer returned the error) */
+enum pvk_command_buffer_state { PVK_CB_INITIAL, PVK_CB_RECORDING, PVK_CB_EXECUTABLE, PVK_CB_INVALID };
 
 /* Largest push descriptor set table: maxPushDescriptors descriptors of at
  * most 16 bytes, padding included (section 12). */
@@ -53788,7 +53804,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEndCommandBuffer(VkCommandBuffer commandBuffer)
         if (skip)
             return VK_ERROR_VALIDATION_FAILED_EXT;
     }
-    cb->state = PVK_CB_EXECUTABLE;
+    cb->state = cb->result == VK_SUCCESS ? PVK_CB_EXECUTABLE : PVK_CB_INVALID;
     return cb->result;
 }
 
@@ -56044,8 +56060,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass2(VkCommandBuffer commandBuffer, 
         else
             memset(&r->clears[a], 0, sizeof(r->clears[a]));
         /* memoryless contents a Metal pass leaves to the next */
-        if (r->views[a] && r->views[a]->image->memoryless && pass->attachments[a].kept)
-            pvk_image_committed(cb->pool->device, r->views[a]->image, true);
+        if (r->views[a] && r->views[a]->image->memoryless && pass->attachments[a].kept &&
+            !pvk_image_committed(cb->pool->device, r->views[a]->image, true))
+            cb->result = VK_ERROR_OUT_OF_DEVICE_MEMORY; /* (else they would be lost) */
     }
     if (!pass->subpass_count)
         return;
@@ -56119,12 +56136,18 @@ static id pvk_dr_committed(struct pvk_command_buffer *cb, const VkRenderingInfo 
 {
     bool kept = (info->flags & (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT)) != 0;
     uint32_t k;
+    id committed;
     if (!view || !view->image->memoryless)
         return NULL;
     for (k = 0; k < n; k++)
         if (atts[k] && atts[k]->imageView)
             kept |= atts[k]->loadOp == VK_ATTACHMENT_LOAD_OP_LOAD || atts[k]->storeOp == VK_ATTACHMENT_STORE_OP_STORE;
-    return kept ? pvk_image_committed(cb->pool->device, view->image, true) : NULL;
+    if (!kept)
+        return NULL;
+    committed = pvk_image_committed(cb->pool->device, view->image, true);
+    if (!committed)
+        cb->result = VK_ERROR_OUT_OF_DEVICE_MEMORY; /* (else they would be lost) */
+    return committed;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, const VkRenderingInfo *pRenderingInfo)
@@ -58768,6 +58791,8 @@ static const struct pvk_fan_buffer *pvk_fan_buffer(struct pvk_device *device, ui
     f = device->fan_buffers;
     if (!f || f->vertices < vertices) {
         uint32_t n = vertices > PVK_FAN_MIN_VERTICES ? vertices : PVK_FAN_MIN_VERTICES, t;
+        if (f && n < 2 * (uint64_t)f->vertices && 2 * (uint64_t)f->vertices <= UINT32_MAX / 2)
+            n = 2 * f->vertices; /* (geometric: earlier buffers stay until the device goes, as draws may use them) */
         f = pvk_alloc(pvk_device_alloc(device), sizeof(*f), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
         if (f)
             f->buffer = pvk_MTLDevice_newBufferWithLength_options(
@@ -59516,7 +59541,7 @@ static id pvk_clear_pipeline(struct pvk_device *device, const struct pvk_clear_k
     pthread_mutex_unlock(&pvk_graphics_lock);
     if (!c) {
         void *pool = objc_autoreleasePoolPush();
-        char *msl = pvk_clear_msl(device, k), error[256];
+        char *msl = pvk_clear_msl(device, k), error[256] = "out of memory";
         id library = msl ? pvk_msl_library(device, msl, false, error, sizeof(error)) : NULL;
         bool colors = false;
         uint32_t s;
@@ -62276,7 +62301,7 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
 struct pvk_fence {
     void *event;    /* MTLSharedEvent; NULL: unsignaled; else signaled once it reaches value */
     uint64_t value; /* stored before event */
-    int signaled;   /* signaled on the host (created signaled) */
+    int signaled;   /* signaled on the host (created signaled), atomic too */
 };
 
 struct pvk_semaphore {
@@ -62659,7 +62684,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
         queue->pending_tail = s;
     }
     if (fence) {
-        fence->signaled = 0;
+        __atomic_store_n(&fence->signaled, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&fence->value, serial, __ATOMIC_RELAXED);
         __atomic_store_n(&fence->event, (void *)queue->timeline, __ATOMIC_RELEASE);
     }
@@ -62713,6 +62738,7 @@ static bool pvk_debug_check_submit(const struct pvk_queue *queue, uint32_t count
                                what, cb->state == PVK_CB_INITIAL     ? "in the initial state (not recorded)"
                                      : cb->state == PVK_CB_RECORDING ? "in the recording state (vkEndCommandBuffer "
                                                                        "not called)"
+                                     : cb->state == PVK_CB_INVALID   ? "invalid (its recording failed)"
                                                                      : "invalid (recorded with "
                                                                        "VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT and "
                                                                        "submitted already)");
@@ -62732,7 +62758,8 @@ static bool pvk_debug_check_submit(const struct pvk_queue *queue, uint32_t count
                             two ? "VUID-vkQueueSubmit2-fence-parameter" : "VUID-vkQueueSubmit-fence-parameter", command))
             return false;
         event = (id)__atomic_load_n(&fence->event, __ATOMIC_ACQUIRE);
-        if (fence->signaled || (event && pvk_MTLSharedEvent_signaledValue(event) >= fence->value))
+        if (__atomic_load_n(&fence->signaled, __ATOMIC_ACQUIRE) ||
+            (event && pvk_MTLSharedEvent_signaledValue(event) >= __atomic_load_n(&fence->value, __ATOMIC_RELAXED)))
             skip |= pvk_queue_vuid(queue, two ? "VUID-vkQueueSubmit2-fence-04894" : "VUID-vkQueueSubmit-fence-00063",
                                    VK_OBJECT_TYPE_FENCE, (uint64_t)(uintptr_t)fence,
                                    "%s: the fence is signaled (reset it with vkResetFences first)", command);
@@ -63422,7 +63449,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateFence(VkDevice device, const VkFenceCreat
     struct pvk_fence *fence = pvk_alloc(alloc, sizeof(*fence), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (!fence)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
-    fence->signaled = (pCreateInfo->flags & VK_FENCE_CREATE_SIGNALED_BIT) != 0;
+    fence->signaled = (pCreateInfo->flags & VK_FENCE_CREATE_SIGNALED_BIT) != 0; /* (not yet shared) */
     pvk_live_add((struct pvk_device *)device, VK_OBJECT_TYPE_FENCE, fence, NULL, pAllocator != NULL);
     *pFence = (VkFence)fence;
     return VK_SUCCESS;
@@ -63441,7 +63468,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkResetFences(VkDevice device, uint32_t fenceCoun
     (void)device;
     for (i = 0; i < fenceCount; i++) {
         struct pvk_fence *fence = (struct pvk_fence *)pFences[i];
-        fence->signaled = 0;
+        __atomic_store_n(&fence->signaled, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&fence->event, NULL, __ATOMIC_RELEASE);
     }
     return VK_SUCCESS;
@@ -63451,7 +63478,7 @@ static int pvk_fence_state(const void *objects, const uint64_t *values, uint32_t
 {
     struct pvk_fence *fence = (struct pvk_fence *)((const VkFence *)objects)[i];
     (void)values;
-    if (fence->signaled)
+    if (__atomic_load_n(&fence->signaled, __ATOMIC_ACQUIRE))
         return 1;
     *event = (id)__atomic_load_n(&fence->event, __ATOMIC_ACQUIRE);
     if (!*event)
@@ -65581,7 +65608,7 @@ static char *pvk_hidden_fragment_msl(const VkAllocationCallbacks *alloc, uint32_
  * colors its draws only read by framebuffer fetch: pipelines reading them
  * then draw through tex_msl, which reads them from textures at their input
  * attachment indices (pvk_render_tex_inputs). */
-#define PVK_GFX_GROUP_VARIANTS 8
+#define PVK_GFX_GROUP_VARIANTS 32
 struct pvk_gfx_groups {
     pthread_mutex_t lock;
     struct pvk_gfx_desc desc; /* the pipeline's */
@@ -65666,6 +65693,14 @@ static id pvk_gfx_group_variant(struct pvk_device *device, struct pvk_pipeline *
         g->masks[k] = mask;
         g->pso[k] = pso;
         g->count++;
+    } else {
+        static int warned;
+        if (!warned) {
+            warned = 1;
+            pvk_logd(device, PVK_LOG_WARN, "PlasmaVK-unsupported-tile-groups", VK_OBJECT_TYPE_PIPELINE,
+                     (uint64_t)(uintptr_t)p, "a graphics pipeline needs more than %u tile memory group variants: "
+                     "passes split for tile memory draw it whole", PVK_GFX_GROUP_VARIANTS);
+        }
     }
     pthread_mutex_unlock(&g->lock);
     return pso;
@@ -67229,9 +67264,9 @@ static VkResult pvk_acquire(struct pvk_device *device, struct pvk_swapchain *sc,
     }
     if (fence) {
         if (best_released) {
-            fence->signaled = 1;
+            __atomic_store_n(&fence->signaled, 1, __ATOMIC_RELEASE);
         } else {
-            fence->signaled = 0;
+            __atomic_store_n(&fence->signaled, 0, __ATOMIC_RELAXED);
             __atomic_store_n(&fence->value, img->release_value, __ATOMIC_RELAXED);
             __atomic_store_n(&fence->event, (void *)img->release_event, __ATOMIC_RELEASE);
         }
