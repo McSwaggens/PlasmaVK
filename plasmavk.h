@@ -42030,6 +42030,8 @@ enum pvk_spv_kind {
 #define PVK_SPV_F_UNSUPPORTED 0x10000u /* Patch, PerPrimitive, PerVertexKHR, XfbBuffer */
 #define PVK_SPV_F_COHERENT 0x20000u    /* Coherent or Volatile (memory model: device-coherent buffers) */
 #define PVK_SPV_F_INVARIANT 0x40000u
+#define PVK_SPV_F_IMAGE_VIEW 0x80000u /* a storage image loaded from a variable of narrower access (img_access):
+                                       * the variable's name, never declared */
 /* member flags */
 #define PVK_SPV_M_OFFSET 0x1u
 #define PVK_SPV_M_ROW_MAJOR 0x2u
@@ -42180,6 +42182,8 @@ struct pvk_spv_id {
     const struct pvk_ycbcr *ycbcr; /* a loaded combined image sampler with this Y'CbCr conversion */
     const char *residency;         /* a loaded storage image: its descriptor's residency texture */
     uint32_t ia_texture;           /* a loaded input attachment read from a texture (pvk_spv_ptr) */
+    uint32_t img_access; /* a storage image variable (or its F_IMAGE_VIEW loads) only read or only written:
+                          * PVK_SPV_ACCESS_*, narrower than its type's (pvk_spv_image_access); 0: the type's */
 };
 
 struct pvk_spv_block {
@@ -44613,26 +44617,102 @@ static const char *pvk_spv_residency_msl(struct pvk_spv *ctx, const struct pvk_s
 }
 
 /* Storage images get the access their variables allow (NonReadable /
- * NonWritable); types no variable restricts are read_write. */
+ * NonWritable) and use: a variable (not an array) whose loads only feed
+ * reads, or only writes, gets that access even when its type is shared or
+ * undecorated, as SPIR-V from HLSL and Slang often is (read_write textures
+ * read slower, and their writes need fences, pvk_spv_image_write): its loads
+ * name it (PVK_SPV_F_IMAGE_VIEW) instead of copying it into a value of its
+ * type. A type gets what its variables allow together; types no variable
+ * restricts are read_write. */
 static void pvk_spv_image_access(struct pvk_spv *ctx)
 {
-    uint32_t g, i;
+    uint32_t *from = pvk_spv_alloc(ctx, sizeof(uint32_t) * ctx->bound); /* id: global index + 1 */
+    uint32_t *uses = pvk_spv_alloc(ctx, sizeof(uint32_t) * (ctx->nglobals + 1)); /* access bits, 4: escapes */
+    uint32_t g, i = 5, k;
+    bool body = false;
     for (g = 0; g < ctx->nglobals; g++) {
         struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
-        uint32_t tid = x->p->type;
+        struct pvk_spv_type *t = pvk_spv_type(ctx, x->p->type);
+        if (x->p->storage == PVK_SPV_StorageUniformConstant && t->op == PVK_SPV_OpTypeImage && t->img.sampled == 2)
+            from[ctx->globals[g]] = g + 1;
+    }
+    while (i < ctx->nw) {
+        const uint32_t *w = ctx->w + i;
+        uint32_t op = w[0] & 0xffffu, n = w[0] >> 16, img = 0, bits = 0;
+        if (!n || n > ctx->nw - i)
+            break;
+        i += n;
+        body |= op == PVK_SPV_OpFunction;
+        if (!body) /* (names, decorations, the entry point's interface) */
+            continue;
+        if (op == PVK_SPV_OpLoad && n >= 4 && w[2] < ctx->bound && w[3] < ctx->bound && from[w[3]]) {
+            from[w[2]] = from[w[3]];
+            continue;
+        }
+        if ((op == PVK_SPV_OpImageRead || op == PVK_SPV_OpImageSparseRead) && n >= 5) {
+            img = w[3];
+            bits = PVK_SPV_ACCESS_READ;
+        } else if (op == PVK_SPV_OpImageWrite && n >= 4) {
+            img = w[1];
+            bits = PVK_SPV_ACCESS_WRITE;
+        } else if (op == PVK_SPV_OpImageTexelPointer && n >= 4) { /* (atomics) */
+            img = w[3];
+            bits = PVK_SPV_ACCESS_READ | PVK_SPV_ACCESS_WRITE;
+        } else if (op == PVK_SPV_OpImageQuerySize || op == PVK_SPV_OpImageQuerySizeLod ||
+                   op == PVK_SPV_OpImageQueryLevels || op == PVK_SPV_OpImageQuerySamples) {
+            continue;
+        }
+        if (img) {
+            if (img < ctx->bound && from[img])
+                uses[from[img] - 1] |= bits;
+            continue;
+        }
+        for (k = 1; k < n; k++) /* anything else (copies, phis, calls): uses it every way */
+            if (w[k] < ctx->bound && from[w[k]])
+                uses[from[w[k]] - 1] |= 4u;
+    }
+    for (g = 0; g < ctx->nglobals; g++) {
+        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+        uint32_t tid = x->p->type, allow, a;
         struct pvk_spv_type *t;
         if (x->p->storage != PVK_SPV_StorageUniformConstant)
             continue;
         t = pvk_spv_strip_arrays(ctx, &tid);
-        if (t->op == PVK_SPV_OpTypeImage && t->img.sampled == 2)
-            t->img.access |= ((x->flags & PVK_SPV_F_NON_READABLE) ? 0 : PVK_SPV_ACCESS_READ) |
-                             ((x->flags & PVK_SPV_F_NON_WRITABLE) ? 0 : PVK_SPV_ACCESS_WRITE);
+        if (t->op != PVK_SPV_OpTypeImage || t->img.sampled != 2)
+            continue;
+        allow = ((x->flags & PVK_SPV_F_NON_READABLE) ? 0 : PVK_SPV_ACCESS_READ) |
+                ((x->flags & PVK_SPV_F_NON_WRITABLE) ? 0 : PVK_SPV_ACCESS_WRITE);
+        a = allow;
+        if (from[ctx->globals[g]] && !(uses[g] & 4u)) {
+            a = uses[g] & allow;
+            if (!a) /* (only queried) */
+                a = allow & PVK_SPV_ACCESS_READ ? PVK_SPV_ACCESS_READ : allow ? allow : PVK_SPV_ACCESS_READ;
+            x->img_access = a;
+        }
+        t->img.access |= a;
     }
     for (i = 0; i < ctx->ntypes; i++) {
         struct pvk_spv_type *t = ctx->ids[ctx->type_order[i]].t;
         if (t->op == PVK_SPV_OpTypeImage && t->img.sampled == 2 && !t->img.access)
             t->img.access = PVK_SPV_ACCESS_READ | PVK_SPV_ACCESS_WRITE;
     }
+    for (g = 0; g < ctx->nglobals; g++) { /* (as their type's: nothing to narrow) */
+        struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+        if (x->img_access && x->img_access == pvk_spv_type(ctx, x->p->type)->img.access)
+            x->img_access = 0;
+    }
+}
+
+/* The MSL type of image variable x's object (type obj): its own access
+ * when narrower than the type's. */
+static const char *pvk_spv_var_object_msl(struct pvk_spv *ctx, const struct pvk_spv_id *x, uint32_t obj)
+{
+    struct pvk_spv_type *t = pvk_spv_type(ctx, obj), v;
+    if (!x->img_access || t->op != PVK_SPV_OpTypeImage)
+        return t->msl;
+    v = *t;
+    v.img.access = x->img_access;
+    return pvk_spv_image_msl(ctx, &v, false);
 }
 
 /* MSL value types for every type, in definition order (components first). */
@@ -45658,12 +45738,12 @@ static void pvk_spv_binding_members(struct pvk_spv *ctx)
             }
             break;
         case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: /* { image, residency texture } */
-            b->wrap = pvk_spv_fmt(ctx, "pvk_storage<%s, %s>", pvk_spv_type(ctx, obj0)->msl,
+            b->wrap = pvk_spv_fmt(ctx, "pvk_storage<%s, %s>", pvk_spv_var_object_msl(ctx, pvk_spv_get(ctx, b->var), obj0),
                                   pvk_spv_residency_msl(ctx, pvk_spv_type(ctx, obj0)));
             ctx->use_storage = true;
             break;
         default: /* images, samplers, inline uniform blocks: the object itself */
-            b->wrap = pvk_spv_type(ctx, obj0)->msl;
+            b->wrap = pvk_spv_var_object_msl(ctx, pvk_spv_get(ctx, b->var), obj0);
             break;
         }
         b->elem = b->wrap;
@@ -45900,12 +45980,12 @@ static void pvk_spv_resource_view(struct pvk_spv *ctx, uint32_t var)
         wrap = pvk_spv_fmt(ctx, "pvk_sampled<%s>", pvk_spv_type(ctx, obj)->msl);
         part = ".t";
     } else if (b->layout.type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) {
-        wrap = pvk_spv_fmt(ctx, "pvk_storage<%s, %s>", pvk_spv_type(ctx, obj)->msl,
+        wrap = pvk_spv_fmt(ctx, "pvk_storage<%s, %s>", pvk_spv_var_object_msl(ctx, x, obj),
                            pvk_spv_residency_msl(ctx, pvk_spv_type(ctx, obj)));
         part = ".t";
         rsfx = b->pad ? ".v.r" : ".r";
     } else {
-        wrap = pvk_spv_type(ctx, obj)->msl;
+        wrap = pvk_spv_var_object_msl(ctx, x, obj);
     }
     elem = b->pad ? pvk_spv_fmt(ctx, "pvk_padded<%s, %u>", wrap, b->pad) : wrap;
     cast = strcmp(elem, b->elem) != 0;
@@ -45936,7 +46016,7 @@ static void pvk_spv_resource_view(struct pvk_spv *ctx, uint32_t var)
         p->decl = pvk_spv_fmt(ctx, "%s %s& %s = *%s.p;", pvk_spv_is_storage_block(ctx, var) ? ctx->dev : "constant",
                               bt->msl, x->msl, member);
     } else {
-        p->decl = pvk_spv_fmt(ctx, "constant %s& %s = %s;", p->ycbcr_desc ? wrap : pvk_spv_type(ctx, obj)->msl,
+        p->decl = pvk_spv_fmt(ctx, "constant %s& %s = %s;", p->ycbcr_desc ? wrap : pvk_spv_var_object_msl(ctx, x, obj),
                               x->msl, member);
     }
 }
@@ -46436,6 +46516,13 @@ static void pvk_spv_load(struct pvk_spv *ctx, uint32_t rid, const struct pvk_spv
         pvk_spv_fail(ctx, "cannot load a whole descriptor array");
     if (p->storage == PVK_SPV_StorageImage)
         pvk_spv_fail(ctx, "image texel pointers are only supported in atomics");
+    if (p->var && !ok && ctx->ids[p->var].img_access && p == ctx->ids[p->var].p) { /* (pvk_spv_image_access) */
+        x->msl = p->expr;
+        x->flags |= PVK_SPV_F_IMAGE_VIEW;
+        x->img_access = ctx->ids[p->var].img_access;
+        x->residency = p->residency;
+        return;
+    }
     if (p->rm_col) {
         struct pvk_spv_type *t = pvk_spv_type(ctx, p->type);
         const char *e = pvk_spv_fmt(ctx, "%s(", t->msl);
@@ -48410,7 +48497,9 @@ static void pvk_spv_image_write(struct pvk_spv *ctx, const struct pvk_spv_insn *
     pvk_spv_if_open(ctx, ok); /* robust access: discarded outside the image */
     pvk_spv_line(ctx, "%s.write(%s, %s);", tex, v, pvk_spv_texel_args(ctx, it, coord, 0));
     pvk_spv_if_close(ctx, ok);
-    if (it->img.access == (PVK_SPV_ACCESS_READ | PVK_SPV_ACCESS_WRITE) && ctx->storage_reads)
+    if (((pvk_spv_get(ctx, img)->flags & PVK_SPV_F_IMAGE_VIEW) ? pvk_spv_get(ctx, img)->img_access : it->img.access) ==
+            (PVK_SPV_ACCESS_READ | PVK_SPV_ACCESS_WRITE) &&
+        ctx->storage_reads)
         pvk_spv_line(ctx, "%s.fence();", tex); /* this invocation's later reads see the write */
 }
 
@@ -50262,7 +50351,7 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             if (pvk_spv_shape(in.op) != 2)
                 continue;
             x = &ctx->ids[in.w[2]];
-            if (x->kind == PVK_SPV_K_VALUE && !pvk_spv_local(x) &&
+            if (x->kind == PVK_SPV_K_VALUE && !pvk_spv_local(x) && !(x->flags & PVK_SPV_F_IMAGE_VIEW) &&
                 pvk_spv_type(ctx, x->type)->op != PVK_SPV_OpTypeVoid)
                 pvk_spv_line(ctx, "%s %s;", pvk_spv_data_type(ctx, x->type)->msl, x->msl);
         }
