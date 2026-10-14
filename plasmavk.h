@@ -31780,6 +31780,12 @@ static void pvk_logi(const struct pvk_instance *instance, enum pvk_log_level lev
 #define PVK_QUAD_MERGING 0
 #endif
 
+/* The version as "major.minor.patch". */
+#define PVK_STR_(x) #x
+#define PVK_STR(x) PVK_STR_(x)
+#define PVK_VERSION_STRING                                                                                         \
+    PVK_STR(PLASMAVK_VERSION_MAJOR) "." PVK_STR(PLASMAVK_VERSION_MINOR) "." PVK_STR(PLASMAVK_VERSION_PATCH)
+
 /* ---- Allocation ---- */
 
 /* Zeroed allocation through the application's callbacks, if any. */
@@ -32902,10 +32908,8 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
     VkPhysicalDeviceVulkan13Properties *p13 = &pd->properties_1x.v13;
     VkPhysicalDeviceVulkan14Properties *p14 = &pd->properties_1x.v14;
     const VkPhysicalDeviceLimits *l = &pd->properties.limits;
-    char version[32], name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE + 32];
-
-    snprintf(version, sizeof(version), "%d.%d.%d", PLASMAVK_VERSION_MAJOR, PLASMAVK_VERSION_MINOR,
-             PLASMAVK_VERSION_PATCH);
+    const char *version = PVK_VERSION_STRING;
+    char name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE + 32];
 
     /* ---- Vulkan 1.1 ---- */
     /* deviceUUID must stay the same across processes, driver versions and
@@ -33322,8 +33326,7 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
          * version's translator and configuration, compiled for this GPU,
          * and its structs: PVK_PIPELINE_CACHE_FORMAT counts the changes. */
         char name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE + 64];
-        snprintf(name, sizeof(name), "%s %d.%d.%d format %d%s", p->deviceName, PLASMAVK_VERSION_MAJOR,
-                 PLASMAVK_VERSION_MINOR, PLASMAVK_VERSION_PATCH, PVK_PIPELINE_CACHE_FORMAT,
+        snprintf(name, sizeof(name), "%s %s format %d%s", p->deviceName, PVK_VERSION_STRING, PVK_PIPELINE_CACHE_FORMAT,
                  PVK_QUAD_MERGING ? " quad merging" : "");
         pvk_make_uuid(p->pipelineCacheUUID, "PlasmaVK pipeline cache", name);
     }
@@ -34354,7 +34357,7 @@ static VkSampleCountFlags pvk_image_sample_counts(const struct pvk_physical_devi
         !(optimal & (VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT)) ||
         !(f->caps & PVK_FC_MSAA))
         return VK_SAMPLE_COUNT_1_BIT;
-    counts = pvk_sample_counts(pd->mtl_device);
+    counts = l->framebufferColorSampleCounts; /* (pvk_sample_counts, section 7's limits) */
     if (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
         counts &= integer ? pd->properties_1x.v12.framebufferIntegerColorSampleCounts : l->framebufferColorSampleCounts;
     if ((usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) && pvk_format_has_depth(f))
@@ -34599,7 +34602,7 @@ static void pvk_sparse_standard_shapes(const struct pvk_physical_device *pd, con
     if ((f->caps & PVK_FC_MSAA) &&
         (features & (VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT)))
         for (s = 2; s <= 4; s *= 2)
-            if (pvk_MTLDevice_supportsTextureSampleCount(pd->mtl_device, s) &&
+            if ((pd->properties.limits.framebufferColorSampleCounts & s) &&
                 pvk_sparse_block(pd, f, VK_IMAGE_TYPE_2D, s, &b) && !pvk_sparse_standard_block(f, VK_IMAGE_TYPE_2D, s, b))
                 *std2dms = VK_FALSE;
     if (pvk_format_is_color(f) && !(f->flags & PVK_FF_NO_3D) && pvk_sparse_block(pd, f, VK_IMAGE_TYPE_3D, 1, &b) &&
@@ -34713,7 +34716,7 @@ static VkResult pvk_image_format_properties(const struct pvk_physical_device *pd
         props->maxMipLevels = 1;
         props->maxArrayLayers = 1;
         props->sampleCounts = VK_SAMPLE_COUNT_1_BIT;
-        max_size = pvk_MTLDevice_maxBufferLength(pd->mtl_device);
+        max_size = pd->properties_1x.v13.maxBufferSize;
         props->maxResourceSize = max_size < (1ul << 31) ? (1ul << 31) : max_size;
         return VK_SUCCESS;
     }
@@ -34766,7 +34769,7 @@ static VkResult pvk_image_format_properties(const struct pvk_physical_device *pd
                 props->sampleCounts |= s;
     }
     /* A texture is placed in one MTLHeap, at most maxBufferLength long. */
-    max_size = pvk_MTLDevice_maxBufferLength(pd->mtl_device);
+    max_size = pd->properties_1x.v13.maxBufferSize;
     props->maxResourceSize = max_size < (1ul << 31) ? (1ul << 31) : max_size;
     return VK_SUCCESS;
 }
@@ -34945,8 +34948,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceToolProperties(VkPhysicalDevic
     *pToolCount = count;
     if (count) {
         snprintf(t->name, sizeof(t->name), "PlasmaVK debug layer");
-        snprintf(t->version, sizeof(t->version), "%u.%u.%u", PLASMAVK_VERSION_MAJOR, PLASMAVK_VERSION_MINOR,
-                 PLASMAVK_VERSION_PATCH);
+        snprintf(t->version, sizeof(t->version), "%s", PVK_VERSION_STRING);
         t->purposes = VK_TOOL_PURPOSE_VALIDATION_BIT | VK_TOOL_PURPOSE_DEBUG_REPORTING_BIT_EXT |
                       VK_TOOL_PURPOSE_DEBUG_MARKERS_BIT_EXT;
         snprintf(t->description, sizeof(t->description), "%s", pvk_layers[0].description);
@@ -35232,9 +35234,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCre
     if (pCreateInfo->pApplicationInfo && pCreateInfo->pApplicationInfo->apiVersion)
         instance->api_version = pCreateInfo->pApplicationInfo->apiVersion;
     if (instance->debug)
-        pvk_logi(instance, PVK_LOG_INFO, "PlasmaVK-debug-layer", "%s is enabled%s (PlasmaVK %u.%u.%u)",
-                 PVK_DEBUG_LAYER_NAME, pvk_debug_env ? " by PLASMAVK_DEBUG" : "", PLASMAVK_VERSION_MAJOR,
-                 PLASMAVK_VERSION_MINOR, PLASMAVK_VERSION_PATCH);
+        pvk_logi(instance, PVK_LOG_INFO, "PlasmaVK-debug-layer", "%s is enabled%s (PlasmaVK %s)",
+                 PVK_DEBUG_LAYER_NAME, pvk_debug_env ? " by PLASMAVK_DEBUG" : "", PVK_VERSION_STRING);
 
     result = pvk_physical_device_create(instance);
     if (result != VK_SUCCESS) {
@@ -37036,7 +37037,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemory
     /* The pNext structs PlasmaVK accepts (dedicated allocation, allocate
      * flags, capture address) need nothing: every allocation has a GPU
      * address. */
-    if (type >= types->memoryTypeCount || size == 0 || size > pvk_MTLDevice_maxBufferLength(mtl))
+    if (type >= types->memoryTypeCount || size == 0 || size > device->physical_device->properties_1x.v13.maxBufferSize)
         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     memory = pvk_alloc(alloc, sizeof(*memory), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (!memory)
@@ -37339,7 +37340,7 @@ static void pvk_buffer_memory_requirements(const struct pvk_device *device, VkDe
         align = limits->minTexelBufferOffsetAlignment;
     if (flags & PVK_BUFFER_CREATE_SPARSE)
         align = PVK_SPARSE_BLOCK;
-    req->size = (size + align - 1) & ~(align - 1);
+    req->size = pvk_round_up(size, align);
     req->alignment = align;
     req->memoryTypeBits = pvk_buffer_memory_type_bits(pd);
 
@@ -37803,7 +37804,7 @@ static void pvk_image_init(const struct pvk_physical_device *pd, struct pvk_imag
     if (image->tiling == VK_IMAGE_TILING_LINEAR && f) {
         VkDeviceSize align = pvk_MTLDevice_minimumLinearTextureAlignmentForPixelFormat(pd->mtl_device, f->mtl);
         VkDeviceSize row = (VkDeviceSize)(image->extent.width + f->block_w - 1) / f->block_w * f->bytes;
-        image->row_pitch = (row + align - 1) / align * align;
+        image->row_pitch = pvk_round_up(row, align);
     }
     image->ycbcr = pvk_ycbcr_format(f);
     if (image->ycbcr && image->ycbcr->planes > 1)
@@ -37887,7 +37888,7 @@ static void pvk_texture_requirements(const struct pvk_physical_device *pd, const
         }
         objc_autoreleasePoolPop(pool);
     }
-    *size_out = (size + align - 1) / align * align;
+    *size_out = pvk_round_up(size, align);
     *align_out = align;
 }
 
@@ -37907,7 +37908,7 @@ static void pvk_image_init_planes(const struct pvk_physical_device *pd, struct p
         pl->height = p ? image->extent.height >> y->y_shift : image->extent.height;
         if (image->tiling == VK_IMAGE_TILING_LINEAR) {
             VkDeviceSize a = pvk_MTLDevice_minimumLinearTextureAlignmentForPixelFormat(pd->mtl_device, pl->fmt->mtl);
-            pl->row_pitch = ((VkDeviceSize)pl->width * pl->fmt->bytes + a - 1) / a * a;
+            pl->row_pitch = pvk_round_up((VkDeviceSize)pl->width * pl->fmt->bytes, a);
         }
         pvk_texture_requirements(pd, image, pl->fmt->mtl, pl->width, pl->height, pl->row_pitch, &pl->size, &pl->align);
         if (!(image->flags & VK_IMAGE_CREATE_DISJOINT_BIT)) {
@@ -38263,7 +38264,7 @@ static void pvk_image_memory_requirements(const struct pvk_device *device, const
                                  image->row_pitch, &size, &align);
     }
     req->alignment = align;
-    req->size = (size + align - 1) / align * align;
+    req->size = pvk_round_up(size, align);
     for (ext = pMemoryRequirements->pNext; ext; ext = ext->pNext) {
         if (ext->sType == VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS) {
             VkMemoryDedicatedRequirements *dedicated = (VkMemoryDedicatedRequirements *)ext;
@@ -40178,7 +40179,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorPool(VkDevice _device, const Vk
 
     if (bytes < 16) /* sets of empty layouts only: a valid address all the same */
         bytes = 16;
-    if (bytes > pvk_MTLDevice_maxBufferLength(mtl))
+    if (bytes > device->physical_device->properties_1x.v13.maxBufferSize)
         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     pool = pvk_alloc(alloc, sizeof(*pool), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (!pool)
@@ -58133,6 +58134,8 @@ struct pvk_blit_pipeline {
 static pthread_mutex_t pvk_blit_lock = PTHREAD_MUTEX_INITIALIZER; /* queues of a device encode concurrently */
 
 /* The render pipeline of an internal function drawing into a format. */
+static id pvk_msl_library(struct pvk_device *device, const char *msl, bool invariant, char *error, size_t error_size);
+
 static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MTLPixelFormat format)
 {
     id mtl = device->physical_device->mtl_device, pso = NULL;
@@ -58150,26 +58153,20 @@ static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MT
     }
     pool = objc_autoreleasePoolPush();
     if (!device->blit_library) {
-        id options = pvk_MTLCompileOptions_new(), err = NULL;
         size_t i, n = 1;
-        char *msl;
+        char *msl, error[256] = "out of memory";
         for (i = 0; i < PVK_ARRAY_SIZE(pvk_blit_msl); i++)
             n += strlen(pvk_blit_msl[i]);
         msl = pvk_alloc(pvk_device_alloc(device), n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-        if (options && msl) {
+        if (msl) {
             for (i = 0; i < PVK_ARRAY_SIZE(pvk_blit_msl); i++)
                 strcat(msl, pvk_blit_msl[i]);
-            pvk_MTLCompileOptions_setMathMode(options, PVK_MTLMathModeSafe);
-            pvk_MTLCompileOptions_setLanguageVersion(options, PVK_MTLLanguageVersion3_2);
-            device->blit_library = pvk_MTLDevice_newLibraryWithSource_options_error(
-                mtl, pvk_NSString_stringWithUTF8String(msl), options, &err);
+            device->blit_library = pvk_msl_library(device, msl, false, error, sizeof(error)); /* (safe math) */
         }
-        pvk_release(options);
         pvk_free(pvk_device_alloc(device), msl);
         if (!device->blit_library)
             pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
-                     "internal blit shaders: %s",
-                     err ? pvk_ns_utf8(pvk_NSError_localizedDescription(err)) : "Metal could not compile them");
+                     "internal blit shaders: %s", error);
     }
     if (device->blit_library) {
         id desc = pvk_MTLRenderPipelineDescriptor_new(), err = NULL;
@@ -63767,18 +63764,14 @@ struct pvk_shader_module {
 static id pvk_compile_compute_labeled(struct pvk_device *device, const char *msl, const char *entry,
                                       unsigned long max_threads, const char *label, char *error, size_t error_size)
 {
-    id mtl = device->physical_device->mtl_device;
-    void *pool = objc_autoreleasePoolPush(); /* strings, NSErrors */
-    id options = pvk_MTLCompileOptions_new(), library = NULL, function = NULL, desc = NULL, pso = NULL, err = NULL;
+    id mtl = device->physical_device->mtl_device, library = pvk_msl_library(device, msl, false, error, error_size);
+    id function = NULL, desc = NULL, pso = NULL, err = NULL;
+    void *pool;
 
-    if (options) {
-        pvk_msl_math_options(options, msl);
-        pvk_MTLCompileOptions_setLanguageVersion(options, PVK_MTLLanguageVersion3_2);
-        library = pvk_MTLDevice_newLibraryWithSource_options_error(mtl, pvk_NSString_stringWithUTF8String(msl), options,
-                                                                 &err);
-    }
-    if (library)
-        function = pvk_MTLLibrary_newFunctionWithName(library, pvk_NSString_stringWithUTF8String(entry));
+    if (!library)
+        return NULL;
+    pool = objc_autoreleasePoolPush(); /* strings, NSErrors */
+    function = pvk_MTLLibrary_newFunctionWithName(library, pvk_NSString_stringWithUTF8String(entry));
     if (function)
         desc = pvk_MTLComputePipelineDescriptor_new();
     if (desc) {
@@ -63800,7 +63793,6 @@ static id pvk_compile_compute_labeled(struct pvk_device *device, const char *msl
     pvk_release(desc);
     pvk_release(function);
     pvk_release(library);
-    pvk_release(options);
     objc_autoreleasePoolPop(pool);
     return pso;
 }
