@@ -32301,6 +32301,9 @@ struct pvk_device {
     struct pvk_hidden_texture *hidden_textures; /* memoryless depth/stencil copies, by format and size */
     id ds_copy_library;                       /* internal shaders of the depth/stencil copies */
     struct pvk_ds_copy_pipeline *ds_copy_pipelines;
+    pthread_t warm_thread; /* pvk_device_warm: the internal shaders, compiled ahead */
+    bool warm_running;
+    int warm_stop;         /* atomic */
     /* Queries (sections 14-16) */
     id query_copy_pipeline; /* internal kernel of vkCmdCopyQueryPoolResults, made on first use */
     /* Private data (section 9): slots reserved by VkDevicePrivateDataCreateInfo */
@@ -36569,6 +36572,9 @@ static VkResult pvk_device_init_sparse(struct pvk_device *device)
     return VK_SUCCESS;
 }
 
+/* Section 17: compiles the internal shaders ahead, on a thread of the device. */
+static void *pvk_device_warm(void *arg);
+
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
                                               const VkDeviceCreateInfo *pCreateInfo,
                                               const VkAllocationCallbacks *pAllocator,
@@ -36677,6 +36683,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
         }
     }
 
+    if (pthread_create(&device->warm_thread, NULL, pvk_device_warm, device) == 0) /* (else made on first use) */
+        device->warm_running = true;
     __atomic_add_fetch(&pd->instance->devices, 1, __ATOMIC_ACQ_REL);
     *pDevice = (VkDevice)device;
     return VK_SUCCESS;
@@ -36694,6 +36702,10 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyDevice(VkDevice _device, const VkAllocationC
                      "vkDestroyDevice: the device was created %s allocation callbacks, but pAllocator is %s",
                      device->app_alloc ? "with" : "without", pAllocator ? "not NULL" : "NULL");
         pvk_live_leaks(device);
+    }
+    if (device->warm_running) {
+        __atomic_store_n(&device->warm_stop, 1, __ATOMIC_RELEASE);
+        pthread_join(device->warm_thread, NULL);
     }
     __atomic_sub_fetch(&pvk_device_instance(device)->devices, 1, __ATOMIC_ACQ_REL);
     pvk_device_free(device);
@@ -58110,22 +58122,10 @@ static pthread_mutex_t pvk_blit_lock = PTHREAD_MUTEX_INITIALIZER; /* queues of a
 /* The render pipeline of an internal function drawing into a format. */
 static id pvk_msl_library(struct pvk_device *device, const char *msl, bool invariant, char *error, size_t error_size);
 
-static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MTLPixelFormat format)
+/* The internal blit/resolve shaders (made on first use, or by
+ * pvk_device_warm; NULL on failure). The caller holds pvk_blit_lock. */
+static id pvk_blit_library(struct pvk_device *device)
 {
-    id mtl = device->physical_device->mtl_device, pso = NULL;
-    struct pvk_blit_pipeline *p;
-    void *pool;
-
-    pthread_mutex_lock(&pvk_blit_lock);
-    for (p = device->blit_pipelines; p; p = p->next)
-        if (p->function == function && p->format == format)
-            break;
-    if (p) {
-        pso = p->pso;
-        pthread_mutex_unlock(&pvk_blit_lock);
-        return pso;
-    }
-    pool = objc_autoreleasePoolPush();
     if (!device->blit_library) {
         size_t i, n = 1;
         char *msl, error[256] = "out of memory";
@@ -58142,10 +58142,29 @@ static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MT
             pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
                      "internal blit shaders: %s", error);
     }
-    if (device->blit_library) {
+    return device->blit_library;
+}
+
+static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MTLPixelFormat format)
+{
+    id mtl = device->physical_device->mtl_device, pso = NULL, library;
+    struct pvk_blit_pipeline *p;
+    void *pool;
+
+    pthread_mutex_lock(&pvk_blit_lock);
+    for (p = device->blit_pipelines; p; p = p->next)
+        if (p->function == function && p->format == format)
+            break;
+    if (p) {
+        pso = p->pso;
+        pthread_mutex_unlock(&pvk_blit_lock);
+        return pso;
+    }
+    pool = objc_autoreleasePoolPush();
+    if ((library = pvk_blit_library(device))) {
         id desc = pvk_MTLRenderPipelineDescriptor_new(), err = NULL;
-        id vs = pvk_MTLLibrary_newFunctionWithName(device->blit_library, pvk_NSString_stringWithUTF8String("pvk_blit_vs"));
-        id fs = pvk_MTLLibrary_newFunctionWithName(device->blit_library,
+        id vs = pvk_MTLLibrary_newFunctionWithName(library, pvk_NSString_stringWithUTF8String("pvk_blit_vs"));
+        id fs = pvk_MTLLibrary_newFunctionWithName(library,
                                                    pvk_NSString_stringWithUTF8String(pvk_blit_function_names[function]));
         if (desc && vs && fs) {
             pvk_MTLRenderPipelineDescriptor_setVertexFunction(desc, vs);
@@ -58959,8 +58978,9 @@ static id pvk_prepass_pipeline(struct pvk_device *device, unsigned kernel)
 {
     static const char *const names[PVK_PP_KERNEL_COUNT] = { "pvk_pp_widen", "pvk_pp_fan", "pvk_pp_records",
                                                             "pvk_pp_points" };
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER; /* (pvk_device_warm may hold it while compiling) */
     id pso;
-    pthread_mutex_lock(&pvk_graphics_lock);
+    pthread_mutex_lock(&lock);
     if (!device->prepass_pipelines[kernel]) {
         char error[256];
         device->prepass_pipelines[kernel] =
@@ -58970,7 +58990,7 @@ static id pvk_prepass_pipeline(struct pvk_device *device, unsigned kernel)
                      "internal draw preprocessing kernel %s: %s", names[kernel], error);
     }
     pso = device->prepass_pipelines[kernel];
-    pthread_mutex_unlock(&pvk_graphics_lock);
+    pthread_mutex_unlock(&lock);
     return pso;
 }
 
@@ -59893,6 +59913,21 @@ struct pvk_ds_copy_pipeline {
     id pso;
 };
 
+static pthread_mutex_t pvk_ds_copy_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* The internal shaders of the copies (made on first use, or by
+ * pvk_device_warm; NULL with a message in error[] on failure). */
+static id pvk_ds_copy_library(struct pvk_device *device, char *error, size_t error_size)
+{
+    id library;
+    pthread_mutex_lock(&pvk_ds_copy_lock); /* (a first use meanwhile waits for the compile) */
+    if (!device->ds_copy_library)
+        device->ds_copy_library = pvk_msl_library(device, pvk_ds_copy_msl, false, error, error_size);
+    library = device->ds_copy_library;
+    pthread_mutex_unlock(&pvk_ds_copy_lock);
+    return library;
+}
+
 /* The pipeline of internal draws of a kind (made on first use; NULL on
  * failure): a layered one writes each instance's layer. */
 static id pvk_ds_copy_pipeline(struct pvk_device *device, uint32_t kind, uint32_t samples, bool layered)
@@ -59909,24 +59944,12 @@ static id pvk_ds_copy_pipeline(struct pvk_device *device, uint32_t kind, uint32_
         if (c->kind == kind && c->samples == samples && c->layered == (uint32_t)layered)
             break;
     pso = c ? c->pso : NULL;
-    library = device->ds_copy_library;
     pthread_mutex_unlock(&pvk_graphics_lock);
     if (c)
         return pso;
     pool = objc_autoreleasePoolPush();
     error[0] = 0;
-    if (!library) { /* (the compiler takes pvk_graphics_lock: made outside it) */
-        library = pvk_msl_library(device, pvk_ds_copy_msl, false, error, sizeof(error));
-        pthread_mutex_lock(&pvk_graphics_lock);
-        if (device->ds_copy_library) {
-            pvk_release(library);
-            library = device->ds_copy_library;
-        } else {
-            device->ds_copy_library = library;
-        }
-        pthread_mutex_unlock(&pvk_graphics_lock);
-    }
-    if (library) {
+    if ((library = pvk_ds_copy_library(device, error, sizeof(error)))) { /* (the compiler takes pvk_graphics_lock) */
         id desc = pvk_MTL4RenderPipelineDescriptor_new();
         id vs = pvk_function_descriptor(library, layered ? "pvk_dsc_vs_layered" : "pvk_dsc_vs");
         id fs = pvk_function_descriptor(library, functions[kind]);
@@ -63840,6 +63863,39 @@ static id pvk_device_fill_pipeline(struct pvk_device *device)
     pso = device->fill_pipeline;
     pthread_mutex_unlock(&pvk_internal_lock);
     return pso;
+}
+
+/* Compiles the internal shaders whose source is fixed on a thread of the
+ * device's own, from vkCreateDevice: their first use is inside a
+ * submission (the blit library at the vkQueueSubmit of the first
+ * vkCmdBlitImage), and a compile Metal's shader cache does not have takes up
+ * to a third of a second (M4 Max: a new PlasmaVK, or another driver's
+ * compiles in the app's cache since). A first use meanwhile waits for the
+ * compile in progress under the getter's lock. vkDestroyDevice stops it
+ * between compiles. */
+static void *pvk_device_warm(void *arg)
+{
+    struct pvk_device *device = arg;
+    char error[256];
+    unsigned step;
+    for (step = 0; step < 4 + PVK_PP_KERNEL_COUNT && !__atomic_load_n(&device->warm_stop, __ATOMIC_ACQUIRE); step++) {
+        void *pool = objc_autoreleasePoolPush();
+        if (step == 0) {
+            pthread_mutex_lock(&pvk_blit_lock);
+            pvk_blit_library(device);
+            pthread_mutex_unlock(&pvk_blit_lock);
+        } else if (step == 1) {
+            pvk_device_fill_pipeline(device);
+        } else if (step == 2) {
+            pvk_device_query_copy_pipeline(device);
+        } else if (step == 3) {
+            pvk_ds_copy_library(device, error, sizeof(error));
+        } else {
+            pvk_prepass_pipeline(device, step - 4);
+        }
+        objc_autoreleasePoolPop(pool);
+    }
+    return NULL;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateShaderModule(VkDevice device, const VkShaderModuleCreateInfo *pCreateInfo,

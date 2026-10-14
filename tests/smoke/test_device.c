@@ -231,6 +231,30 @@ static int listed(const VkExtensionProperties *props, uint32_t count, const char
     return 0;
 }
 
+/* The internal shaders are compiled on the device's own thread, without any
+ * use (white box: pvk_device_warm); a device destroyed at once stops it. */
+static void test_internal_shaders_ahead(void)
+{
+    VkResult result;
+    VkDevice device = create_device(NULL, 0, NULL, &result), quick;
+    struct pvk_device *d = (struct pvk_device *)device;
+    unsigned i;
+
+    REQUIRE(device);
+    CHECK(d->warm_running);
+    pthread_join(d->warm_thread, NULL); /* (it ends once all are made) */
+    d->warm_running = false;
+    CHECK(d->blit_library && d->fill_pipeline && d->query_copy_pipeline && d->ds_copy_library);
+    for (i = 0; i < PVK_PP_KERNEL_COUNT; i++)
+        CHECK(d->prepass_pipelines[i] != NULL);
+    vkDestroyDevice(device, NULL);
+    for (i = 0; i < 4; i++) {
+        quick = create_device(NULL, 0, NULL, &result);
+        REQUIRE(quick);
+        vkDestroyDevice(quick, NULL);
+    }
+}
+
 /* Every extension promoted to Vulkan 1.1-1.4 is listed, unless it needs a
  * feature the device lacks, and all of them can be enabled at once. */
 static void test_promoted_extensions(void)
@@ -493,6 +517,7 @@ int main(void)
     RUN(test_memory_properties);
     RUN(test_driver_properties);
     RUN(test_device_and_queues);
+    RUN(test_internal_shaders_ahead);
     RUN(test_promoted_extensions);
     RUN(test_promoted_extension_features);
     RUN(test_promoted_extension_commands);
