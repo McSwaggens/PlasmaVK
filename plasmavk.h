@@ -32248,6 +32248,7 @@ struct pvk_queue {
     /* Image transfers (section 16): */
     id render_table;   /* MTL4ArgumentTable of internal blit/resolve draws */
     bool ordered;      /* a barrier was recorded: each new encoder waits for earlier work */
+    const void *sparse_issued; /* the texture whose mappings the queue updated last (pvk_sparse_drain) */
     /* VK_EXT_debug_utils (section 16, DEBUG LABELS), externally synchronized
      * like vkQueueSubmit: the queue's label regions, and the command buffer
      * label regions open on the queue (they may span submissions) */
@@ -45153,11 +45154,13 @@ static void pvk_spv_emit_types(struct pvk_spv *ctx)
             pvk_sb_printf(ctx, &ctx->types, "    char pvk_pad%u[%u];\n", t->size - t->tail_pad, t->tail_pad);
         pvk_sb_append(ctx, &ctx->types, "};\n\n", 4);
         if (t->overlays) { /* its aggregate (pvk_spv_struct_init): no braces reach a union's second member */
+            /* (a runtime array, last, takes no value: no constant holds one) */
+            uint32_t count = t->nmembers - (t->nmembers && t->members[t->order[t->nmembers - 1]].runtime);
             pvk_sb_printf(ctx, &ctx->types, "static inline %s pvk_make_%s(", t->msl, t->msl);
-            for (j = 0; j < t->nmembers; j++)
+            for (j = 0; j < count; j++)
                 pvk_sb_printf(ctx, &ctx->types, "%s%s a%u", j ? ", " : "", t->members[t->order[j]].decl, j);
             pvk_sb_printf(ctx, &ctx->types, ")\n{\n    %s r = {};\n", t->msl);
-            for (j = 0; j < t->nmembers; j++)
+            for (j = 0; j < count; j++)
                 pvk_sb_printf(ctx, &ctx->types, "    r.%s = a%u;\n", t->members[t->order[j]].msl, j);
             pvk_sb_append(ctx, &ctx->types, "    return r;\n}\n\n", 17);
         }
@@ -46382,9 +46385,8 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
              * scalar pointer: Metal stores v.y as the whole vector (a read,
              * modify and write that undoes other invocations' components) */
             uint32_t c = cidx < 0 ? 0 : cidx < t->count ? (uint32_t)cidx : t->count - 1;
-            const char *as = p->storage == PVK_SPV_StorageWorkgroup ? "threadgroup" : "device";
-            p->expr = pvk_spv_fmt(ctx, "((%s %s*)&%s)[%s]", as, pvk_spv_type(ctx, t->elem)->msl, p->expr,
-                                  cidx < 0 ? idx : pvk_spv_fmt(ctx, "%u", c));
+            p->expr = pvk_spv_fmt(ctx, "((%s %s*)&%s)[%s]", pvk_spv_space(ctx, p), pvk_spv_type(ctx, t->elem)->msl,
+                                  p->expr, cidx < 0 ? idx : pvk_spv_fmt(ctx, "%u", c));
         } else if (cidx >= 0) { /* (past the end: undefined, but it must compile) */
             p->expr = pvk_spv_fmt(ctx, "%s.%c", p->expr, "xyzw"[cidx < t->count ? cidx : t->count - 1]);
         } else {
@@ -55783,15 +55785,15 @@ static void pvk_pass_att_view(struct pvk_pass_attachment *pa, const struct pvk_i
     pa->array = view->view_type == VK_IMAGE_VIEW_TYPE_1D_ARRAY || view->view_type == VK_IMAGE_VIEW_TYPE_2D_ARRAY ||
                 view->view_type == VK_IMAGE_VIEW_TYPE_CUBE || view->view_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
     pa->int_texture = view->mtl_int_attachment;
-    pa->input = view->mtl_texture;
+    pa->input = committed ? committed : view->mtl_texture; /* (a kept memoryless image: its committed memory) */
     pa->memoryless = view->image->memoryless && !committed;
 }
 
-static void pvk_pass_att_resolve(struct pvk_pass_attachment *pa, const struct pvk_image_view *view)
+static void pvk_pass_att_resolve(struct pvk_pass_attachment *pa, const struct pvk_image_view *view, id committed)
 {
     if (!view || !pa->texture)
         return;
-    pa->resolve = view->mtl_attachment;
+    pa->resolve = committed ? committed : view->mtl_attachment;
     if (view->image->memoryless) {
         pa->resolve_level = view->base_level;
         pa->resolve_slice = view->base_layer;
@@ -55942,7 +55944,7 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
         struct pvk_pass_attachment *pa = &c->colors[s];
         pvk_pass_att_view(pa, r->views[a], pvk_rp_committed(cb, r, a));
         if (mp->resolves[s] != VK_ATTACHMENT_UNUSED)
-            pvk_pass_att_resolve(pa, r->views[mp->resolves[s]]);
+            pvk_pass_att_resolve(pa, r->views[mp->resolves[s]], pvk_rp_committed(cb, r, mp->resolves[s]));
         pvk_pass_att_actions(pa, att->load_op, att->store_op, att->first_use >= mp->first, att->last_use <= mp->last,
                              &r->area, mp->view_mask, pvk_rp_fresh_views(pass, a, mp), pa->memoryless != 0);
         pa->clear = r->clears[a];
@@ -55957,7 +55959,8 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
         if (pvk_format_has_depth(att->fmt)) {
             pvk_pass_att_view(&c->depth, view, committed);
             if (mp->depth_resolve != VK_ATTACHMENT_UNUSED && mp->depth_resolve_mode != VK_RESOLVE_MODE_NONE) {
-                pvk_pass_att_resolve(&c->depth, r->views[mp->depth_resolve]);
+                pvk_pass_att_resolve(&c->depth, r->views[mp->depth_resolve],
+                                     pvk_rp_committed(cb, r, mp->depth_resolve));
                 c->depth.resolve_filter = pvk_depth_resolve_filter(mp->depth_resolve_mode);
             }
             pvk_pass_att_actions(&c->depth, att->load_op, att->store_op, first, last, &r->area, mp->view_mask, fresh,
@@ -55967,7 +55970,8 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
         if (pvk_format_has_stencil(att->fmt)) {
             pvk_pass_att_view(&c->stencil, view, committed);
             if (mp->depth_resolve != VK_ATTACHMENT_UNUSED && mp->stencil_resolve_mode != VK_RESOLVE_MODE_NONE)
-                pvk_pass_att_resolve(&c->stencil, r->views[mp->depth_resolve]);
+                pvk_pass_att_resolve(&c->stencil, r->views[mp->depth_resolve],
+                                     pvk_rp_committed(cb, r, mp->depth_resolve));
             pvk_pass_att_actions(&c->stencil, att->stencil_load_op, att->stencil_store_op, first, last, &r->area,
                                  mp->view_mask, fresh, memoryless);
             c->stencil.clear = r->clears[mp->depth];
@@ -55993,7 +55997,8 @@ static void pvk_cmd_subpass_rp(struct pvk_command_buffer *cb, const struct pvk_c
     for (i = 0; i < sp->input_count; i++)
         if ((sp->texture_inputs & (1u << i)) && r->views[sp->inputs[i]]) {
             const struct pvk_image_view *v = r->views[sp->inputs[i]];
-            c->inputs[i] = v->mtl_texture;
+            id m = pvk_rp_committed(cb, r, sp->inputs[i]); /* (a kept memoryless image's memory) */
+            c->inputs[i] = m ? m : v->mtl_texture;
             if (pvk_format(v->format) && pvk_format(v->format)->kind == PVK_FK_DEPTH_STENCIL)
                 c->inputs[PVK_MSL_IA_STENCIL_TEXTURES + i] = v->mtl_stencil ? v->mtl_stencil : v->mtl_texture;
         }
@@ -56196,7 +56201,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
         struct pvk_pass_attachment *pa = &c->colors[i];
         pvk_pass_att_view(pa, view, pvk_dr_committed(cb, info, view, &a, 1));
         if (a->resolveMode != VK_RESOLVE_MODE_NONE)
-            pvk_pass_att_resolve(pa, (const struct pvk_image_view *)a->resolveImageView);
+            pvk_pass_att_resolve(pa, (const struct pvk_image_view *)a->resolveImageView, NULL);
         pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, info->viewMask, 0,
                              pa->memoryless != 0);
         pa->clear = a->clearValue;
@@ -56213,7 +56218,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
             continue;
         pvk_pass_att_view(pa, view, pvk_dr_committed(cb, info, view, ds, 2));
         if (a->resolveMode != VK_RESOLVE_MODE_NONE) {
-            pvk_pass_att_resolve(pa, (const struct pvk_image_view *)a->resolveImageView);
+            pvk_pass_att_resolve(pa, (const struct pvk_image_view *)a->resolveImageView, NULL);
             if (!k)
                 pa->resolve_filter = pvk_depth_resolve_filter(a->resolveMode);
         }
@@ -59804,24 +59809,44 @@ struct pvk_hidden_texture {
     struct pvk_hidden_texture *next;
     pvk_MTLPixelFormat format;
     uint32_t width, height, samples, layers;
-    bool stored;
+    struct pvk_queue *queue; /* a private one's: its contents are that queue's (NULL: memoryless) */
+    uint64_t serial;         /* a private one's last submission */
     id texture;
 };
 
-/* A memoryless render target, or with `stored` a private one (not
- * retained: the device keeps it); NULL when Metal cannot make it. layers:
- * renderTargetArrayLength (0: 2D). */
+/* A memoryless render target, or with `queue` a private one for that
+ * queue's submission `serial` (queues run side by side, and a private
+ * texture holds what one put in it); not retained: the device keeps it.
+ * NULL when Metal cannot make it. layers: renderTargetArrayLength (0: 2D).
+ * Making a private one frees the queue's others that are done, so sizes
+ * that change (dynamic resolution) don't pile up. */
 static id pvk_hidden_texture(struct pvk_device *device, pvk_MTLPixelFormat format, uint32_t width, uint32_t height,
-                             uint32_t samples, uint32_t layers, bool stored)
+                             uint32_t samples, uint32_t layers, struct pvk_queue *queue, uint64_t serial)
 {
-    struct pvk_hidden_texture *t;
+    struct pvk_hidden_texture *t, **at, *done_list = NULL;
     id texture;
     bool made = false;
     pthread_mutex_lock(&pvk_graphics_lock);
     for (t = device->hidden_textures; t; t = t->next)
         if (t->format == format && t->width == width && t->height == height && t->samples == samples &&
-            t->layers == layers && t->stored == stored)
+            t->layers == layers && t->queue == queue)
             break;
+    if (t)
+        t->serial = serial;
+    if (!t && queue) { /* the queue's private ones it no longer uses */
+        uint64_t done = pvk_MTLSharedEvent_signaledValue(queue->timeline);
+        for (at = &device->hidden_textures; *at;) {
+            if ((*at)->queue == queue && (*at)->serial <= done) {
+                t = *at;
+                *at = t->next;
+                t->next = done_list;
+                done_list = t;
+            } else {
+                at = &(*at)->next;
+            }
+        }
+        t = NULL;
+    }
     if (!t && (t = pvk_alloc(pvk_device_alloc(device), sizeof(*t), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE))) {
         void *pool = objc_autoreleasePoolPush();
         id desc = pvk_MTLTextureDescriptor_new();
@@ -59835,8 +59860,8 @@ static id pvk_hidden_texture(struct pvk_device *device, pvk_MTLPixelFormat forma
             pvk_MTLTextureDescriptor_setHeight(desc, height);
             pvk_MTLTextureDescriptor_setSampleCount(desc, samples);
             pvk_MTLTextureDescriptor_setArrayLength(desc, layers ? layers : 1);
-            pvk_MTLTextureDescriptor_setResourceOptions(desc, (stored ? PVK_MTLResourceStorageModePrivate
-                                                                      : PVK_MTLResourceStorageModeMemoryless) |
+            pvk_MTLTextureDescriptor_setResourceOptions(desc, (queue ? PVK_MTLResourceStorageModePrivate
+                                                                     : PVK_MTLResourceStorageModeMemoryless) |
                                                                   PVK_MTLResourceHazardTrackingModeUntracked);
             pvk_MTLTextureDescriptor_setUsage(desc, PVK_MTLTextureUsageRenderTarget);
             t->texture = pvk_MTLDevice_newTextureWithDescriptor(device->physical_device->mtl_device, desc);
@@ -59849,7 +59874,8 @@ static id pvk_hidden_texture(struct pvk_device *device, pvk_MTLPixelFormat forma
             t->height = height;
             t->samples = samples;
             t->layers = layers;
-            t->stored = stored;
+            t->queue = queue;
+            t->serial = serial;
             t->next = device->hidden_textures;
             device->hidden_textures = t;
             made = true;
@@ -59860,7 +59886,14 @@ static id pvk_hidden_texture(struct pvk_device *device, pvk_MTLPixelFormat forma
     }
     texture = t ? t->texture : NULL;
     pthread_mutex_unlock(&pvk_graphics_lock);
-    if (made && stored) { /* (the GPU reads it in this batch) */
+    while (done_list) {
+        t = done_list;
+        done_list = t->next;
+        pvk_device_evict_commit(device, t->texture);
+        pvk_release(t->texture);
+        pvk_free(pvk_device_alloc(device), t);
+    }
+    if (made && queue) { /* (the GPU reads it in this batch) */
         pvk_device_make_resident(device, texture);
         pvk_device_commit_residency(device);
     }
@@ -60421,7 +60454,9 @@ static void pvk_render_resolve_int(struct pvk_encoder *e)
         c.src = pa->texture;
         c.dst = pa->resolve;
         c.dst_format = pa->fmt->mtl;
-        c.function = (pa->fmt->kind == PVK_FK_UINT ? PVK_RESOLVE_U_MS : PVK_RESOLVE_I_MS) + (pa->array ? 1u : 0u);
+        c.function = (pa->fmt->kind == PVK_FK_UINT   ? PVK_RESOLVE_U_MS
+                      : pa->fmt->kind == PVK_FK_SINT ? PVK_RESOLVE_I_MS
+                                                     : PVK_RESOLVE_F_MS) + (pa->array ? 1u : 0u);
         c.dst_level = pa->resolve_level;
         c.layers = 1;
         c.src0[0] = c.dst0[0] = r->area.offset.x;
@@ -60477,7 +60512,8 @@ static id pvk_render_seed_depth(struct pvk_encoder *e, const struct pvk_pass_att
     uint32_t kind = samples > 1 ? (pa->array ? PVK_DSC_DEPTH_MS_ARRAY : PVK_DSC_DEPTH_MS)
                                 : (pa->array ? PVK_DSC_DEPTH_ARRAY : PVK_DSC_DEPTH);
     id pso = pvk_ds_copy_pipeline(e->device, kind, samples, layered);
-    id tex = pvk_hidden_texture(e->device, PVK_MTLPixelFormatR32Float, width, height, samples, layers, true);
+    id tex =
+        pvk_hidden_texture(e->device, PVK_MTLPixelFormatR32Float, width, height, samples, layers, e->queue, e->serial);
     id pass, att, enc, map;
     struct pvk_dsc_args *args;
     pvk_MTLGPUAddress address;
@@ -60546,8 +60582,12 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
             pa.store = PVK_MTLStoreActionStore;
             pa.resolve = NULL;
         }
-        if (pa.resolve && !pa.memoryless && (pa.fmt->kind == PVK_FK_UINT || pa.fmt->kind == PVK_FK_SINT) &&
-            r->resolve_int_count < PVK_MAX_COLOR_ATTACHMENTS) { /* sample 0 when the pass ends */
+        /* integer colors: sample 0 when the pass ends; so are 32-bit floats resolved (averaged) on GPUs
+         * that do not filter them, where Metal cannot resolve them (filter_32bit) */
+        if (pa.resolve && !pa.memoryless &&
+            (pa.fmt->kind == PVK_FK_UINT || pa.fmt->kind == PVK_FK_SINT ||
+             ((pa.fmt->caps & PVK_FC_FILTER32) && !e->device->physical_device->filter_32bit)) &&
+            r->resolve_int_count < PVK_MAX_COLOR_ATTACHMENTS) {
             r->resolve_int[r->resolve_int_count++] = pa;
             pa.store = PVK_MTLStoreActionStore;
             pa.resolve = NULL;
@@ -60642,7 +60682,7 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
         tex = s >= PVK_MAX_COLOR_ATTACHMENTS ? NULL
               : seed ? pvk_render_seed_depth(e, depth, width, height, samples, c->layers)
                      : pvk_hidden_texture(e->device, k ? PVK_MTLPixelFormatR8Uint : PVK_MTLPixelFormatR32Float, width,
-                                          height, samples, c->layers, false);
+                                          height, samples, c->layers, NULL, 0);
         if (!tex) {
             static int warned;
             if (!warned) {
@@ -62418,6 +62458,22 @@ static bool pvk_wait_covered(const VkSubmitInfo2 *submits, uint32_t batch, const
     return false;
 }
 
+/* Before the queue updates the mappings of `texture` (a texture, or a
+ * group of them): drains the queue if it last updated another one, in this
+ * call or an earlier one (pvk_sparse_execute). */
+static void pvk_sparse_drain(struct pvk_queue *queue, const void *texture)
+{
+    struct pvk_device *device = queue->device;
+    if (queue->sparse_issued && queue->sparse_issued != texture) {
+        pthread_mutex_lock(&device->sparse_lock);
+        pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, device->sparse_event, ++device->sparse_serial);
+        while (!pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(device->sparse_event, device->sparse_serial, 1000))
+            ;
+        pthread_mutex_unlock(&device->sparse_lock);
+    }
+    queue->sparse_issued = texture;
+}
+
 /* Issues a vkQueueBindSparse batch's mapping updates (SPARSE BINDING):
  * runs of operations on the same resource and heap go in one call. Metal
  * stalls for seconds, and can drop updates, when updates for two textures
@@ -62430,21 +62486,12 @@ static void pvk_sparse_execute(struct pvk_queue *queue, const struct pvk_sparse_
     pvk_MTL4UpdateSparseBufferMappingOperation bops[64];
     pvk_MTL4UpdateSparseTextureMappingOperation tops[64];
     uint32_t i = batch->first, end = batch->first + batch->count, n;
-    id issued = NULL; /* the texture updated since the queue last drained */
 
     pvk_device_commit_residency(device);
     while (i < end) {
         const struct pvk_sparse_op *op = &binds->ops[i];
-        if (op->texture && issued && issued != op->resource) {
-            pthread_mutex_lock(&device->sparse_lock);
-            pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, device->sparse_event, ++device->sparse_serial);
-            while (!pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(device->sparse_event, device->sparse_serial,
-                                                                        1000))
-                ;
-            pthread_mutex_unlock(&device->sparse_lock);
-        }
         if (op->texture)
-            issued = op->resource;
+            pvk_sparse_drain(queue, op->resource);
         for (n = 0; i < end && n < 64 && binds->ops[i].resource == op->resource && binds->ops[i].heap == op->heap;
              i++, n++) {
             if (op->texture)
@@ -62460,6 +62507,7 @@ static void pvk_sparse_execute(struct pvk_queue *queue, const struct pvk_sparse_
                                                                            bops, n);
         if (op->mirror) { /* the buffer's texel buffer views follow (section 11, BUFFER VIEWS) */
             uint32_t k;
+            pvk_sparse_drain(queue, op->mirror); /* (their textures) */
             pthread_mutex_lock(&device->sparse_lock);
             for (k = 0; k < n; k++)
                 pvk_sparse_mirror(queue->mtl_queue, op->mirror, op->heap, &bops[k]);
@@ -62478,6 +62526,7 @@ static void pvk_sparse_execute(struct pvk_queue *queue, const struct pvk_sparse_
         memset(&t, 0, sizeof(t));
         t.mode = PVK_MTLSparseTextureMappingModeMap;
         t.textureRegion.size.width = t.textureRegion.size.height = t.textureRegion.size.depth = 1;
+        pvk_sparse_drain(queue, device->sparse_flush_texture);
         pvk_MTL4CommandQueue_updateTextureMappings_heap_operations_count(queue->mtl_queue, device->sparse_flush_texture,
                                                                         device->sparse_heap, &t, 1);
     }
