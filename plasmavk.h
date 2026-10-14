@@ -57397,10 +57397,15 @@ struct pvk_render_query {
  * than `total`: its size, aligned to it, formats of fewer than 4 bytes
  * counting as 8 (Metal takes more for them: 6 bytes a sample for B5G6R5,
  * M4 Max). */
+static uint32_t pvk_tile_add_bytes(uint32_t total, uint32_t bytes)
+{
+    uint32_t b = bytes < 4 ? 8u : bytes;
+    return (total + b - 1) / b * b + b;
+}
+
 static uint32_t pvk_tile_add(uint32_t total, const struct pvk_format *f)
 {
-    uint32_t b = f->bytes < 4 ? 8u : f->bytes;
-    return (total + b - 1) / b * b + b;
+    return pvk_tile_add_bytes(total, f->bytes);
 }
 
 struct pvk_render {
@@ -60811,6 +60816,10 @@ static bool pvk_render_tex_slots(const struct pvk_cmd_begin_pass *c, uint32_t te
 /* The Metal pass of BEGIN_PASS packet `packet` (for the draws of track t):
  * its color attachments in `group` (struct pvk_replay; 0: all), the
  * depth/stencil ones stored unless another group comes last. */
+/* A group mask bit no color slot has, so that a group of no colors is not 0
+ * (which means all of them). */
+#define PVK_GROUP_EMPTY 0x80000000u
+
 static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_begin_pass *packet,
                                    const struct pvk_draw_track *t, uint32_t group, bool first, bool last)
 {
@@ -60980,7 +60989,8 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
         /* without the colors its draws only fetch, read from textures instead */
         e->result = VK_SUCCESS;
         r->resolve_int_count = 0;
-        pvk_render_begin_group(e, c, &track, ((1u << c->color_count) - 1u) & ~track.tex, true, true);
+        pvk_render_begin_group(e, c, &track, (((1u << c->color_count) - 1u) & ~track.tex) | PVK_GROUP_EMPTY, true,
+                               true);
         r->tex_slots = r->enc ? track.tex : 0u;
         return;
     }
@@ -61015,14 +61025,19 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
 static bool pvk_replay_next(struct pvk_encoder *e)
 {
     struct pvk_replay *p = &e->replay;
-    uint32_t pp_count = e->pp_count;
+    struct pvk_pass_attachment ints[PVK_MAX_COLOR_ATTACHMENTS];
+    uint32_t pp_count = e->pp_count, nints;
     if (!p->count)
         return false;
     if (p->next >= p->count || e->result != VK_SUCCESS) {
         p->count = 0;
         return false;
     }
-    e->render.begin = NULL; /* (the deferred work after the pass: once, by the last group) */
+    /* (the deferred work after the pass: once, by the last group, which
+     * also resolves the integer colors of all the groups) */
+    nints = e->render.resolve_int_count;
+    memcpy(ints, e->render.resolve_int, sizeof(ints[0]) * nints);
+    e->render.begin = NULL;
     pvk_render_end(e);
     if (e->result != VK_SUCCESS) {
         p->count = 0;
@@ -61030,6 +61045,8 @@ static bool pvk_replay_next(struct pvk_encoder *e)
     }
     e->render = p->render;
     e->render.enc = NULL;
+    memcpy(e->render.resolve_int, ints, sizeof(ints[0]) * nints);
+    e->render.resolve_int_count = nints;
     memcpy(e->sets[0], p->sets, sizeof(p->sets));
     memcpy(e->push, p->push, sizeof(p->push));
     e->push_dirty = true;
@@ -64761,17 +64778,13 @@ static uint32_t pvk_subpass_texture_inputs(const struct pvk_render_pass *rp, con
         if (need > free) {
             bits |= others;
         } else if (others) { /* or more than tile memory holds beside them (PVK_TILE_BYTES) */
-            uint32_t total = 0, b;
+            uint32_t total = 0;
             for (k = 0; k < sp->color_count; k++)
-                if (sp->colors[k] < rp->attachment_count && rp->attachments[sp->colors[k]].fmt) {
-                    b = rp->attachments[sp->colors[k]].fmt->bytes;
-                    total = (total + b - 1) / b * b + b;
-                }
+                if (sp->colors[k] < rp->attachment_count && rp->attachments[sp->colors[k]].fmt)
+                    total = pvk_tile_add(total, rp->attachments[sp->colors[k]].fmt);
             for (j = 0; j < sp->input_count; j++)
-                if (others & (1u << j)) {
-                    b = rp->attachments[sp->inputs[j]].fmt->bytes;
-                    total = (total + b - 1) / b * b + b;
-                }
+                if (others & (1u << j))
+                    total = pvk_tile_add(total, rp->attachments[sp->inputs[j]].fmt);
             if (total > PVK_TILE_BYTES || total * (samples ? samples : 1u) > PVK_TILE_PIXEL_BYTES)
                 bits |= others;
         }
@@ -64812,7 +64825,7 @@ static uint32_t pvk_rp_storage(const struct pvk_render_pass *rp, const struct pv
         else /* the copies: R32Float, R8Uint */
             b = (mp->hidden & (1u << (s - mp->color_count))) ? (s == mp->color_count ? 4u : 1u) : 0u;
         if (b)
-            total = (total + b - 1) / b * b + b;
+            total = pvk_tile_add_bytes(total, b);
     }
     return total;
 }
@@ -65567,29 +65580,34 @@ struct pvk_gfx_variants {
 
 /* The fragment function of a variant of a pipeline without a fragment
  * shader (pvk_alloc'd; NULL when out of memory): it writes the depth to
- * color attachment h, or with bounds tests them first. */
+ * color attachment h, or with bounds tests them first; with a sample mask
+ * (pSampleMask; 0: none) it applies it, as the pipeline's own function
+ * does (pvk_gfx_compile). */
 static char *pvk_hidden_fragment_msl(const VkAllocationCallbacks *alloc, uint32_t h, uint32_t bits, uint32_t samples,
-                                     bool bounds)
+                                     bool bounds, uint32_t mask)
 {
     const char *z = pvk_msl_depth_expr(bits, samples);
     size_t size = 2048;
-    char *msl = pvk_alloc(alloc, size, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT), stored[128];
+    char *msl = pvk_alloc(alloc, size, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT), stored[128], masking[160];
     if (!msl)
         return NULL;
     snprintf(stored, sizeof(stored), ", float4 pvk_stored [[color(%u)]], constant pvk_depth_bounds& pvk_bounds [[buffer(%u)]]",
              h, PVK_MSL_DEPTH_BOUNDS_BUFFER);
+    snprintf(masking, sizeof(masking),
+             "    if ((0x%xu & (1u << pvk_sample_id)) == 0u)\n        discard_fragment();\n    o.mask = 0x%xu;\n", mask, mask);
     snprintf(msl, size,
              "#include <metal_stdlib>\nusing namespace metal;\n%s%s"
-             "struct pvk_depth_out { float4 d [[color(%u)]]; };\n"
+             "struct pvk_depth_out { float4 d [[color(%u)]];%s };\n"
              "fragment pvk_depth_out pvk_depth_fs(float4 pvk_frag_coord [[position]]%s%s)\n"
              "{\n"
              "    pvk_depth_out o;\n"
-             "%s"
+             "%s%s"
              "    o.d = float4(%s%s%s);\n"
              "    return o;\n"
              "}\n",
              bits == 16 ? pvk_msl_d16_text : "", bounds ? pvk_msl_depth_bounds_text : "", h,
-             samples > 1 ? ", uint pvk_sample_id [[sample_id]]" : "", bounds ? stored : "",
+             mask ? " uint mask [[sample_mask]];" : "", samples > 1 || mask ? ", uint pvk_sample_id [[sample_id]]" : "",
+             bounds ? stored : "", mask ? masking : "",
              bounds ? "    if (pvk_stored.x < pvk_bounds.min || pvk_stored.x > pvk_bounds.max)\n"
                       "        discard_fragment();\n"
                     : "",
@@ -66435,7 +66453,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
             variant_msl[k] = pvk_strdup_alloc(alloc, fvr.msl);
             snprintf(variant_entry[k], sizeof(variant_entry[k]), "%s", fvr.entry_point);
         } else if (ok) { /* no fragment shader: one that writes the copy */
-            variant_msl[k] = pvk_hidden_fragment_msl(alloc, hidden_logical[0], bits, d.samples, k == PVK_VARIANT_BOUNDS);
+            variant_msl[k] = pvk_hidden_fragment_msl(alloc, hidden_logical[0], bits, d.samples, k == PVK_VARIANT_BOUNDS,
+                                                     d.sample_mask_enable ? d.sample_mask : 0);
             snprintf(variant_entry[k], sizeof(variant_entry[k]), "pvk_depth_fs");
         } else {
             pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-translation", VK_OBJECT_TYPE_SHADER_MODULE,

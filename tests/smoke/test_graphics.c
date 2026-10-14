@@ -7481,6 +7481,129 @@ static void test_tile_overflow(void)
 }
 
 
+
+/*
+ * #version 450
+ * layout(location = 0) out uvec4 o0;
+ * layout(location = 1) out uvec4 o1;
+ * layout(location = 2) out uvec4 o2;
+ * layout(location = 3) out uvec4 o3;
+ * layout(location = 4) out uvec4 o4;
+ * layout(location = 5) out uvec4 o5;
+ * void main()
+ * {
+ *     o0 = uvec4(10u, 11u, 12u, 13u);
+ *     o1 = uvec4(20u, 21u, 22u, 23u);
+ *     o2 = uvec4(30u, 31u, 32u, 33u);
+ *     o3 = uvec4(40u, 41u, 42u, 43u);
+ *     o4 = uvec4(50u, 51u, 52u, 53u);
+ *     o5 = uvec4(60u, 61u, 62u, 63u);
+ * }
+ */
+static const uint32_t spv_mrt6u_fs[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x0000002d, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x000b000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000f, 0x00000015,
+    0x0000001b, 0x00000021, 0x00000027, 0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002,
+    0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000009, 0x0000306f,
+    0x00030005, 0x0000000f, 0x0000316f, 0x00030005, 0x00000015, 0x0000326f, 0x00030005, 0x0000001b,
+    0x0000336f, 0x00030005, 0x00000021, 0x0000346f, 0x00030005, 0x00000027, 0x0000356f, 0x00040047,
+    0x00000009, 0x0000001e, 0x00000000, 0x00040047, 0x0000000f, 0x0000001e, 0x00000001, 0x00040047,
+    0x00000015, 0x0000001e, 0x00000002, 0x00040047, 0x0000001b, 0x0000001e, 0x00000003, 0x00040047,
+    0x00000021, 0x0000001e, 0x00000004, 0x00040047, 0x00000027, 0x0000001e, 0x00000005, 0x00020013,
+    0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000000,
+    0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007,
+    0x0004003b, 0x00000008, 0x00000009, 0x00000003, 0x0004002b, 0x00000006, 0x0000000a, 0x0000000a,
+    0x0004002b, 0x00000006, 0x0000000b, 0x0000000b, 0x0004002b, 0x00000006, 0x0000000c, 0x0000000c,
+    0x0004002b, 0x00000006, 0x0000000d, 0x0000000d, 0x0007002c, 0x00000007, 0x0000000e, 0x0000000a,
+    0x0000000b, 0x0000000c, 0x0000000d, 0x0004003b, 0x00000008, 0x0000000f, 0x00000003, 0x0004002b,
+    0x00000006, 0x00000010, 0x00000014, 0x0004002b, 0x00000006, 0x00000011, 0x00000015, 0x0004002b,
+    0x00000006, 0x00000012, 0x00000016, 0x0004002b, 0x00000006, 0x00000013, 0x00000017, 0x0007002c,
+    0x00000007, 0x00000014, 0x00000010, 0x00000011, 0x00000012, 0x00000013, 0x0004003b, 0x00000008,
+    0x00000015, 0x00000003, 0x0004002b, 0x00000006, 0x00000016, 0x0000001e, 0x0004002b, 0x00000006,
+    0x00000017, 0x0000001f, 0x0004002b, 0x00000006, 0x00000018, 0x00000020, 0x0004002b, 0x00000006,
+    0x00000019, 0x00000021, 0x0007002c, 0x00000007, 0x0000001a, 0x00000016, 0x00000017, 0x00000018,
+    0x00000019, 0x0004003b, 0x00000008, 0x0000001b, 0x00000003, 0x0004002b, 0x00000006, 0x0000001c,
+    0x00000028, 0x0004002b, 0x00000006, 0x0000001d, 0x00000029, 0x0004002b, 0x00000006, 0x0000001e,
+    0x0000002a, 0x0004002b, 0x00000006, 0x0000001f, 0x0000002b, 0x0007002c, 0x00000007, 0x00000020,
+    0x0000001c, 0x0000001d, 0x0000001e, 0x0000001f, 0x0004003b, 0x00000008, 0x00000021, 0x00000003,
+    0x0004002b, 0x00000006, 0x00000022, 0x00000032, 0x0004002b, 0x00000006, 0x00000023, 0x00000033,
+    0x0004002b, 0x00000006, 0x00000024, 0x00000034, 0x0004002b, 0x00000006, 0x00000025, 0x00000035,
+    0x0007002c, 0x00000007, 0x00000026, 0x00000022, 0x00000023, 0x00000024, 0x00000025, 0x0004003b,
+    0x00000008, 0x00000027, 0x00000003, 0x0004002b, 0x00000006, 0x00000028, 0x0000003c, 0x0004002b,
+    0x00000006, 0x00000029, 0x0000003d, 0x0004002b, 0x00000006, 0x0000002a, 0x0000003e, 0x0004002b,
+    0x00000006, 0x0000002b, 0x0000003f, 0x0007002c, 0x00000007, 0x0000002c, 0x00000028, 0x00000029,
+    0x0000002a, 0x0000002b, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8,
+    0x00000005, 0x0003003e, 0x00000009, 0x0000000e, 0x0003003e, 0x0000000f, 0x00000014, 0x0003003e,
+    0x00000015, 0x0000001a, 0x0003003e, 0x0000001b, 0x00000020, 0x0003003e, 0x00000021, 0x00000026,
+    0x0003003e, 0x00000027, 0x0000002c, 0x000100fd, 0x00010038,};
+
+/* Six RGBA32UI attachments with 4 samples, resolved (sample 0): 384 bytes
+ * a pixel, rendered in three groups; each group's integer resolves happen
+ * once the pass ends, the middle group's too. */
+static void test_tile_overflow_int_resolve(void)
+{
+    struct img ms[6], resolved[6];
+    struct buf out[6];
+    VkRenderingAttachmentInfo att[6];
+    VkRenderingInfo info;
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t i, k, x;
+    int bad = 0;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_mrt6u_fs, sizeof(spv_mrt6u_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.colors = 6;
+    memset(att, 0, sizeof(att));
+    for (i = 0; i < 6; i++) {
+        p.color_formats[i] = VK_FORMAT_R32G32B32A32_UINT;
+        ms[i] = make_img(VK_FORMAT_R32G32B32A32_UINT, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+        resolved[i] = make_img(VK_FORMAT_R32G32B32A32_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+        out[i] = make_buf(W * H * 16);
+        att[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att[i].imageView = ms[i].view;
+        att[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att[i].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att[i].resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+        att[i].resolveImageView = resolved[i].view;
+        att[i].resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 6;
+    info.pColorAttachments = att;
+    cb = begin_cmd();
+    vkCmdBeginRendering(cb, &info);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -1, -1, 1, 1, 1.0f, 1.0f, 1.0f, 1.0f, 0);
+    vkCmdEndRendering(cb);
+    for (i = 0; i < 6; i++)
+        download(cb, &resolved[i], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out[i]);
+    submit(cb);
+    for (i = 0; i < 6; i++)
+        for (x = 0; x < W * H; x++)
+            for (k = 0; k < 4; k++) {
+                uint32_t got = ((const uint32_t *)out[i].data)[x * 4 + k], want = 10 * (i + 1) + k;
+                if (got != want && bad++ < 4)
+                    fprintf(stderr, "int resolve: attachment %u texel %u component %u is %u, want %u\n", i, x, k, got,
+                            want);
+            }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    for (i = 0; i < 6; i++) {
+        free_buf(&out[i]);
+        free_img(&ms[i]);
+        free_img(&resolved[i]);
+    }
+}
 /* 100 timestamps in one render pass, in an order no two of them are
  * adjacent in: each is its own range of queries the pass makes available
  * when it ends, past the 64 there was room for. */
@@ -9631,6 +9754,7 @@ int main(void)
     RUN(test_bresenham_msaa);
     RUN(test_tile_overflow);
     RUN(test_pass_query_ranges);
+    RUN(test_tile_overflow_int_resolve);
     RUN(test_tile_overflow_locations);
     RUN(test_tile_overflow_secondary);
     RUN(test_local_read_tile_textures);
