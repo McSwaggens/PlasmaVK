@@ -499,8 +499,22 @@ static void test_timeline_long_wait(void)
 
 /* ---- Binary semaphores and queues ---- */
 
+/* Nothing waits on the queue's thread: every wait so far was resolved when
+ * submitted (white box: section 16). */
+static bool no_backlog(VkQueue queue)
+{
+    struct pvk_queue *q = (struct pvk_queue *)queue;
+    bool none;
+    pthread_mutex_lock(&q->lock);
+    none = q->deferred == NULL;
+    pthread_mutex_unlock(&q->lock);
+    return none;
+}
+
 /* Submissions ordered only by a semaphore (no barriers, no host waits),
- * on one queue and across two, reusing the semaphore each round. */
+ * on one queue and across two, reusing the semaphore each round: the queue's
+ * order covers the wait, or the other queue waits on the GPU for the signal
+ * the first one issued, never on its thread. */
 static void test_binary_semaphores(void)
 {
     enum { SIZE = 16u << 20 };
@@ -516,6 +530,7 @@ static void test_binary_semaphores(void)
         VkQueue second = queues[round & 1]; /* same queue, then the other one */
         REQUIRE_VK(submit(queues[0], VK_NULL_HANDLE, 0, fill, sem, 0, VK_NULL_HANDLE));
         REQUIRE_VK(submit(second, sem, 0, copy, VK_NULL_HANDLE, 0, f));
+        CHECK(no_backlog(second));
         REQUIRE_VK(vkWaitForFences(device, 1, &f, VK_TRUE, 10000000000ull));
         CHECK(all_words(&out, SIZE, value));
         vkResetFences(device, 1, &f);

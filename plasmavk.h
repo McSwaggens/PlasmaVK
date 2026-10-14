@@ -31438,6 +31438,7 @@ static inline id pvk_MTLDevice_newCommandBuffer(id self) { PVK_SEL_CACHE("newCom
 static inline id pvk_MTLDevice_newCommandAllocator(id self) { PVK_SEL_CACHE("newCommandAllocator"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline id pvk_MTLDevice_newArgumentTableWithDescriptor_error(id self, id descriptor, id * error) { PVK_SEL_CACHE("newArgumentTableWithDescriptor:error:"); return PVK_MSG(id, (id, SEL, id, id *))(self, pvk_sel_, descriptor, error); }
 static inline id pvk_MTLDevice_newSharedEvent(id self) { PVK_SEL_CACHE("newSharedEvent"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_MTLDevice_newEvent(id self) { PVK_SEL_CACHE("newEvent"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline id pvk_MTLDevice_newBufferWithLength_options(id self, unsigned long length, pvk_MTLResourceOptions options) { PVK_SEL_CACHE("newBufferWithLength:options:"); return PVK_MSG(id, (id, SEL, unsigned long, pvk_MTLResourceOptions))(self, pvk_sel_, length, options); }
 static inline id pvk_MTLDevice_newLibraryWithSource_options_error(id self, id source, id options, id * error) { PVK_SEL_CACHE("newLibraryWithSource:options:error:"); return PVK_MSG(id, (id, SEL, id, id, id *))(self, pvk_sel_, source, options, error); }
 static inline id pvk_MTLDevice_newComputePipelineStateWithDescriptor_options_reflection_error(id self, id descriptor, pvk_MTLPipelineOption options, id * reflection, id * error) { PVK_SEL_CACHE("newComputePipelineStateWithDescriptor:options:reflection:error:"); return PVK_MSG(id, (id, SEL, id, pvk_MTLPipelineOption, id *, id *))(self, pvk_sel_, descriptor, options, reflection, error); }
@@ -56871,8 +56872,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   leaves no trace. Then, per batch: commit, signalEvent: for its signal
  *   semaphores; finally the queue's timeline event is signalled with the
  *   submission's serial. A fence is (timeline, serial). Semaphore waits are
- *   resolved when submitting or by the queue's thread, not by the queue's
- *   -waitForEvent:value: (see "Semaphore waits" below for why). The batches
+ *   resolved when submitting (the queue's -waitForEvent:value: only for a
+ *   signal another queue already has) or by the queue's thread (see
+ *   "Semaphore waits" below for why). The batches
  *   of vkQueueBindSparse take the same path, their work being mapping
  *   updates instead of a command buffer (SPARSE BINDING).
  *
@@ -62249,6 +62251,7 @@ struct pvk_fence {
 
 struct pvk_semaphore {
     id event;      /* MTLSharedEvent */
+    id gpu_event;  /* MTLEvent that queues signal too, for queues' waits (pvk_queue_wait_issued) */
     bool timeline;
     uint64_t value; /* binary: signal operations submitted so far */
     /* Binary: the latest signal (value) comes in this queue's order (a
@@ -62259,6 +62262,7 @@ struct pvk_semaphore {
      * never gets that value). */
     struct pvk_queue *queue;
     struct pvk_event_value source;
+    uint64_t issued; /* atomic: the highest value a queue issued signalEvent: for, both events (pvk_semaphore_issue) */
 };
 
 static bool pvk_device_lost(struct pvk_device *device)
@@ -62304,9 +62308,13 @@ static void pvk_present_commit(struct pvk_queue *queue, id cb, id drawable);
  * vkQueueSubmit signals it, or it is a binary semaphore's and the signal was
  * submitted to this queue (as the frame loop's: acquire, submit, present).
  * The encoders of a batch with waits start with a barrier against all
- * earlier work on the queue. Otherwise that batch and everything after it on
- * the queue goes to the queue's thread, which waits on the CPU and commits
- * in order. */
+ * earlier work on the queue. Or another queue has the signal (it issued the
+ * signalEvent: behind work it committed, not held back by its thread): the
+ * queue's -waitForEvent:value: then waits for GPU work already committed
+ * (cut short only by more than 4 s of it), as compute on a queue of its own
+ * and graphics do each frame. Otherwise that batch and everything after it
+ * on the queue goes to the queue's thread, which waits on the CPU and
+ * commits in order. Mapping updates (sparse) take neither shortcut. */
 
 /* The value of a binary semaphore after the signals of this submission
  * before batch `batch`, signal `upto` (its count of signal operations). */
@@ -62361,6 +62369,42 @@ static bool pvk_wait_source(const struct pvk_queue *queue, const VkSubmitInfo2 *
     }
     *ev = sem->source;
     return sparse || sem->queue != queue;
+}
+
+/* A queue issued signalEvent: of sem's event for value. */
+static void pvk_semaphore_issue(struct pvk_semaphore *sem, uint64_t value)
+{
+    uint64_t old = __atomic_load_n(&sem->issued, __ATOMIC_RELAXED);
+    while (old < value && !__atomic_compare_exchange_n(&sem->issued, &old, value, true, __ATOMIC_RELEASE,
+                                                       __ATOMIC_RELAXED))
+        ;
+}
+
+/* Whether a queue's -waitForEvent:value: can wait for ev, what a wait on
+ * sem waits for (pvk_wait_source): a queue issued its signal. */
+static bool pvk_wait_issued(const struct pvk_semaphore *sem, const struct pvk_event_value *ev)
+{
+    return ev->event == sem->event && __atomic_load_n(&sem->issued, __ATOMIC_ACQUIRE) >= ev->value;
+}
+
+/* A wait for ev on the queue, reached or issued (pvk_wait_issued): for its
+ * MTLEvent twin. A queue's wait for an MTLSharedEvent idles the GPU about
+ * 70 us even when the signal came before it on the same queue, for an
+ * MTLEvent about 3 us (M4 Max, macOS 27.2: compute and graphics queues
+ * handing frames over). */
+static void pvk_queue_wait_issued(struct pvk_queue *queue, const struct pvk_semaphore *sem,
+                                  const struct pvk_event_value *ev)
+{
+    if (pvk_MTLSharedEvent_signaledValue(ev->event) < ev->value)
+        pvk_MTL4CommandQueue_waitForEvent_value(queue->mtl_queue, sem->gpu_event, ev->value);
+}
+
+/* A queue's signal of sem to value (pvk_signal_value): both events. */
+static void pvk_queue_signal(struct pvk_queue *queue, struct pvk_semaphore *sem, uint64_t value)
+{
+    pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, sem->event, value);
+    pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, sem->gpu_event, value);
+    pvk_semaphore_issue(sem, value);
 }
 
 /* Before the queue updates the mappings of `texture` (a texture, or a
@@ -62586,9 +62630,11 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
      * the deferred part (needs the queue's thread). */
     for (i = 0; i < first && result == VK_SUCCESS; i++) {
         for (j = 0; j < submits[i].waitSemaphoreInfoCount; j++) {
+            const VkSemaphoreSubmitInfo *w = &submits[i].pWaitSemaphoreInfos[j];
             struct pvk_event_value ev;
-            if (pvk_wait_source(queue, submits, i, &submits[i].pWaitSemaphoreInfos[j], binds != NULL, &ev) &&
-                pvk_MTLSharedEvent_signaledValue(ev.event) < ev.value)
+            if (pvk_wait_source(queue, submits, i, w, binds != NULL, &ev) &&
+                pvk_MTLSharedEvent_signaledValue(ev.event) < ev.value &&
+                (binds || !pvk_wait_issued((const struct pvk_semaphore *)w->semaphore, &ev)))
                 break;
         }
         if (j < submits[i].waitSemaphoreInfoCount)
@@ -62615,8 +62661,15 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
         return result;
     }
 
-    /* Batches before `first`: their waits are resolved. */
+    /* Batches before `first`: their waits are resolved, by the queue's
+     * order, or reached, or another queue issued their signals. */
     for (s = list, i = 0; i < first; i++) {
+        for (j = 0; j < submits[i].waitSemaphoreInfoCount; j++) {
+            const VkSemaphoreSubmitInfo *w = &submits[i].pWaitSemaphoreInfos[j];
+            struct pvk_event_value ev;
+            if (pvk_wait_source(queue, submits, i, w, binds != NULL, &ev))
+                pvk_queue_wait_issued(queue, (const struct pvk_semaphore *)w->semaphore, &ev);
+        }
         if (binds)
             pvk_sparse_execute(queue, binds, &binds->batches[i]);
         if (s && s->batch == i) {
@@ -62624,9 +62677,8 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
             s = s->next;
         }
         for (j = 0; j < submits[i].signalSemaphoreInfoCount; j++)
-            pvk_MTL4CommandQueue_signalEvent_value(
-                queue->mtl_queue, ((struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[j].semaphore)->event,
-                pvk_signal_value(submits, i, j));
+            pvk_queue_signal(queue, (struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[j].semaphore,
+                             pvk_signal_value(submits, i, j));
     }
     for (i = 0; i < count; i++) { /* binary semaphores count their signals */
         for (j = 0; j < submits[i].signalSemaphoreInfoCount; j++) {
@@ -63213,10 +63265,12 @@ static VkResult pvk_queue_present(struct pvk_queue *queue, uint32_t nwaits, cons
     pvk_deferred_free(device, done);
     *serial = queue->serial + 1;
     /* Binary semaphores: a wait is for the latest signal submitted; covered
-     * by the queue's order when it was submitted to this queue. */
+     * by the queue's order when it was submitted to this queue, else the
+     * queue's -waitForEvent:value: when another queue issued it. */
     for (i = 0; i < nwaits; i++) {
         const struct pvk_semaphore *sem = (const struct pvk_semaphore *)waits[i];
-        if (sem->queue != queue && pvk_MTLSharedEvent_signaledValue(sem->source.event) < sem->source.value)
+        if (sem->queue != queue && pvk_MTLSharedEvent_signaledValue(sem->source.event) < sem->source.value &&
+            !pvk_wait_issued(sem, &sem->source))
             ready = false;
     }
     if (pvk_device_lost(device))
@@ -63268,6 +63322,10 @@ static VkResult pvk_queue_present(struct pvk_queue *queue, uint32_t nwaits, cons
         pthread_cond_broadcast(&queue->cond);
         pthread_mutex_unlock(&queue->lock);
     } else {
+        for (i = 0; i < nwaits; i++)
+            if (((const struct pvk_semaphore *)waits[i])->queue != queue)
+                pvk_queue_wait_issued(queue, (const struct pvk_semaphore *)waits[i],
+                                      &((const struct pvk_semaphore *)waits[i])->source);
         for (i = 0; i < count; i++) {
             if (batches[i].drawable) {
                 pvk_present_commit(queue, batches[i].s->cb, batches[i].drawable);
@@ -63506,7 +63564,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSemaphore(VkDevice _device, const VkSemap
         }
     }
     sem->event = pvk_MTLDevice_newSharedEvent(device->physical_device->mtl_device);
-    if (!sem->event) {
+    sem->gpu_event = pvk_MTLDevice_newEvent(device->physical_device->mtl_device);
+    if (!sem->event || !sem->gpu_event) {
+        pvk_release(sem->event);
+        pvk_release(sem->gpu_event);
         pvk_free(alloc, sem);
         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     }
@@ -63524,6 +63585,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroySemaphore(VkDevice device, VkSemaphore semap
     if (!sem || !pvk_live_destroy((struct pvk_device *)device, VK_OBJECT_TYPE_SEMAPHORE, sem, pAllocator))
         return;
     pvk_release(sem->event);
+    pvk_release(sem->gpu_event);
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), sem);
 }
 
