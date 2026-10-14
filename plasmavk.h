@@ -59554,6 +59554,71 @@ static double pvk_stored_depth(const struct pvk_format *f, double depth)
     return (double)(float)depth;
 }
 
+/* ---- Internal draws ----
+ *
+ * Clears, depth seeds and stencil rebuilds draw in the application's
+ * render encoder with internal pipelines: pvk_render_internal_state sets
+ * what they need, pvk_render_internal_end has the next draw set the
+ * application's state again. */
+
+static void pvk_render_internal_state(struct pvk_encoder *e, id pso, const uint8_t *map)
+{
+    struct pvk_render *r = &e->render;
+    id enc = r->enc;
+    pvk_render_counting(e, false); /* not counted by occlusion queries */
+    pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
+    pvk_render_set_map(e, map);
+    pvk_MTL4RenderCommandEncoder_setCullMode(enc, PVK_MTLCullModeNone);
+    pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(enc, 0.0f, 0.0f, 0.0f);
+    pvk_MTL4RenderCommandEncoder_setDepthClipMode(enc, PVK_MTLDepthClipModeClip);
+    pvk_MTL4RenderCommandEncoder_setTriangleFillMode(enc, PVK_MTLTriangleFillModeFill);
+    if (r->views_set) {
+        pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, 1, NULL);
+        r->views_set = 0;
+    }
+    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->render_table,
+                                                           PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
+}
+
+static void pvk_render_internal_end(struct pvk_encoder *e)
+{
+    struct pvk_render *r = &e->render;
+    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(r->enc, e->queue->argument_table,
+                                                           PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
+    r->ds_state = NULL;
+    r->pso_set = NULL;
+    r->dirty = PVK_RD_ALL;
+    pvk_render_counting(e, true);
+}
+
+/* The viewport and scissor of rectangle [x0, x1) x [y0, y1) clamped to the
+ * render target; false (nothing set) when none of it is in. */
+static bool pvk_render_internal_rect(struct pvk_encoder *e, int64_t x0, int64_t y0, int64_t x1, int64_t y1)
+{
+    const struct pvk_render *r = &e->render;
+    pvk_MTLViewport vp;
+    pvk_MTLScissorRect sc;
+    x0 = x0 < 0 ? 0 : x0;
+    y0 = y0 < 0 ? 0 : y0;
+    x1 = x1 > r->width ? r->width : x1;
+    y1 = y1 > r->height ? r->height : y1;
+    if (x1 <= x0 || y1 <= y0)
+        return false;
+    vp.originX = (double)x0;
+    vp.originY = (double)y0;
+    vp.width = (double)(x1 - x0);
+    vp.height = (double)(y1 - y0);
+    vp.znear = 0.0;
+    vp.zfar = 1.0;
+    sc.x = (unsigned long)x0;
+    sc.y = (unsigned long)y0;
+    sc.width = (unsigned long)(x1 - x0);
+    sc.height = (unsigned long)(y1 - y0);
+    pvk_MTL4RenderCommandEncoder_setViewports_count(r->enc, &vp, 1);
+    pvk_MTL4RenderCommandEncoder_setScissorRects_count(r->enc, &sc, 1);
+    return true;
+}
+
 /* Clears color slots `colors` (values[slot]), depth and/or stencil in the
  * rectangles by drawing; restores what it changes on the next draw. */
 static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint32_t (*values)[4], bool depth,
@@ -59623,40 +59688,17 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
     for (s = 0; r->view_mask >> s; s++)
         if (r->view_mask & (1u << s))
             view_layers[views++] = s;
-    pvk_render_counting(e, false); /* clears are not counted by occlusion queries */
-    pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
-    pvk_render_set_map(e, map);
+    pvk_render_internal_state(e, pso, map);
     pvk_MTL4RenderCommandEncoder_setDepthStencilState(enc, ds);
     pvk_MTL4RenderCommandEncoder_setStencilFrontReferenceValue_backReferenceValue(enc, stencil_value & 0xff,
                                                                                    stencil_value & 0xff);
-    pvk_MTL4RenderCommandEncoder_setCullMode(enc, PVK_MTLCullModeNone);
-    pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(enc, 0.0f, 0.0f, 0.0f);
-    pvk_MTL4RenderCommandEncoder_setDepthClipMode(enc, PVK_MTLDepthClipModeClip);
-    pvk_MTL4RenderCommandEncoder_setTriangleFillMode(enc, PVK_MTLTriangleFillModeFill);
-    if (r->views_set) {
-        pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, 1, NULL);
-        r->views_set = 0;
-    }
-    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->render_table,
-                                                           PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
     for (i = 0; i < rect_count; i++) {
         const VkClearRect *rc = &rects[i];
         int64_t x0 = rc->rect.offset.x, y0 = rc->rect.offset.y;
-        int64_t x1 = x0 + rc->rect.extent.width, y1 = y0 + rc->rect.extent.height;
         uint32_t instances = views ? views : rc->layerCount;
         struct pvk_clear_args *args;
         pvk_MTLGPUAddress address;
-        pvk_MTLViewport vp;
-        pvk_MTLScissorRect sc;
-        if (x0 < 0)
-            x0 = 0;
-        if (y0 < 0)
-            y0 = 0;
-        if (x1 > r->width)
-            x1 = r->width;
-        if (y1 > r->height)
-            y1 = r->height;
-        if (x1 <= x0 || y1 <= y0 || !instances)
+        if (!instances || !pvk_render_internal_rect(e, x0, y0, x0 + rc->rect.extent.width, y0 + rc->rect.extent.height))
             continue;
         if (!key.layered)
             instances = 1;
@@ -59672,28 +59714,11 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
                 args->colors[s][0] = copy_bits;
             else if (key.formats[s])
                 memcpy(args->colors[s], vals[s], sizeof(args->colors[s]));
-        vp.originX = (double)x0;
-        vp.originY = (double)y0;
-        vp.width = (double)(x1 - x0);
-        vp.height = (double)(y1 - y0);
-        vp.znear = 0.0;
-        vp.zfar = 1.0;
-        sc.x = (unsigned long)x0;
-        sc.y = (unsigned long)y0;
-        sc.width = (unsigned long)(x1 - x0);
-        sc.height = (unsigned long)(y1 - y0);
-        pvk_MTL4RenderCommandEncoder_setViewports_count(enc, &vp, 1);
-        pvk_MTL4RenderCommandEncoder_setScissorRects_count(enc, &sc, 1);
         pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->render_table, address, 0);
         pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
             enc, PVK_MTLPrimitiveTypeTriangle, 0, 3, instances, 0);
     }
-    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->argument_table,
-                                                           PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
-    r->ds_state = NULL;
-    r->pso_set = NULL;
-    r->dirty = PVK_RD_ALL;
-    pvk_render_counting(e, true);
+    pvk_render_internal_end(e);
 }
 
 /* ---- Depth/stencil copies ----
@@ -59962,47 +59987,15 @@ static id pvk_ds_copy_pipeline(struct pvk_device *device, uint32_t kind, uint32_
  * render area; pvk_render_internal_end restores the state. */
 static void pvk_render_internal_begin(struct pvk_encoder *e, id pso, uint32_t slot)
 {
-    struct pvk_render *r = &e->render;
-    id enc = r->enc;
+    const struct pvk_render *r = &e->render;
     uint8_t map[PVK_MAX_COLOR_ATTACHMENTS];
     int64_t x0 = r->area.offset.x, y0 = r->area.offset.y;
-    int64_t x1 = x0 + r->area.extent.width, y1 = y0 + r->area.extent.height;
-    pvk_MTLViewport vp;
-    pvk_MTLScissorRect sc;
 
     memset(map, PVK_NO_SLOT, sizeof(map));
     map[0] = (uint8_t)slot;
-    x0 = x0 < 0 ? 0 : x0;
-    y0 = y0 < 0 ? 0 : y0;
-    x1 = x1 > r->width ? r->width : x1;
-    y1 = y1 > r->height ? r->height : y1;
-    if (x1 <= x0 || y1 <= y0) /* (nothing to cover: one pixel all the same) */
-        x1 = x0 + 1, y1 = y0 + 1;
-    pvk_render_counting(e, false); /* not counted by occlusion queries */
-    pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
-    pvk_render_set_map(e, map);
-    pvk_MTL4RenderCommandEncoder_setCullMode(enc, PVK_MTLCullModeNone);
-    pvk_MTL4RenderCommandEncoder_setDepthBias_slopeScale_clamp(enc, 0.0f, 0.0f, 0.0f);
-    pvk_MTL4RenderCommandEncoder_setDepthClipMode(enc, PVK_MTLDepthClipModeClip);
-    pvk_MTL4RenderCommandEncoder_setTriangleFillMode(enc, PVK_MTLTriangleFillModeFill);
-    if (r->views_set) {
-        pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, 1, NULL);
-        r->views_set = 0;
-    }
-    vp.originX = (double)x0;
-    vp.originY = (double)y0;
-    vp.width = (double)(x1 - x0);
-    vp.height = (double)(y1 - y0);
-    vp.znear = 0.0;
-    vp.zfar = 1.0;
-    sc.x = (unsigned long)x0;
-    sc.y = (unsigned long)y0;
-    sc.width = (unsigned long)(x1 - x0);
-    sc.height = (unsigned long)(y1 - y0);
-    pvk_MTL4RenderCommandEncoder_setViewports_count(enc, &vp, 1);
-    pvk_MTL4RenderCommandEncoder_setScissorRects_count(enc, &sc, 1);
-    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->render_table,
-                                                           PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
+    pvk_render_internal_state(e, pso, map);
+    if (!pvk_render_internal_rect(e, x0, y0, x0 + r->area.extent.width, y0 + r->area.extent.height))
+        pvk_render_internal_rect(e, 0, 0, 1, 1); /* (nothing to cover: one pixel all the same) */
 }
 
 /* One internal draw: a triangle covering the viewport in each layer of a
@@ -60022,17 +60015,6 @@ static void pvk_render_internal_draw(struct pvk_encoder *e, id ds, uint32_t ref,
     pvk_MTL4RenderCommandEncoder_setStencilFrontReferenceValue_backReferenceValue(r->enc, ref, ref);
     pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
         r->enc, PVK_MTLPrimitiveTypeTriangle, 0, 3, r->layers ? r->layers : 1, 0);
-}
-
-static void pvk_render_internal_end(struct pvk_encoder *e)
-{
-    struct pvk_render *r = &e->render;
-    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(r->enc, e->queue->argument_table,
-                                                           PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
-    r->ds_state = NULL;
-    r->pso_set = NULL;
-    r->dirty = PVK_RD_ALL;
-    pvk_render_counting(e, true);
 }
 
 /* Rebuilds the stencil copy from the stencil attachment, bit by bit. */
