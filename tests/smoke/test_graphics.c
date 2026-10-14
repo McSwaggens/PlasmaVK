@@ -7480,6 +7480,41 @@ static void test_tile_overflow(void)
     }
 }
 
+
+/* 100 timestamps in one render pass, in an order no two of them are
+ * adjacent in: each is its own range of queries the pass makes available
+ * when it ends, past the 64 there was room for. */
+static void test_pass_query_ranges(void)
+{
+    static const float clear[4] = { 0, 0, 0, 0 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    VkQueryPoolCreateInfo info;
+    VkQueryPool pool;
+    VkCommandBuffer cb;
+    uint64_t r[200 * 2];
+    uint32_t i, missing = 0;
+
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    info.queryCount = 200;
+    REQUIRE_VK(vkCreateQueryPool(device, &info, NULL, &pool));
+    cb = begin_cmd();
+    vkCmdResetQueryPool(cb, pool, 0, 200);
+    begin_rendering(cb, &target, 1, clear, NULL);
+    for (i = 0; i < 100; i++) /* 199, 197, ... 1 */
+        vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, pool, 199 - 2 * i);
+    vkCmdEndRendering(cb);
+    submit(cb);
+    CHECK_VK(vkGetQueryPoolResults(device, pool, 0, 200, sizeof(r), r, 16,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
+             VK_NOT_READY); /* (the even ones were never written) */
+    for (i = 1; i < 200; i += 2)
+        missing += r[2 * i + 1] == 0;
+    CHECK(missing == 0);
+    vkDestroyQueryPool(device, pool, NULL);
+    free_img(&target);
+}
 /* A pipeline whose locations and input attachment indices leave out four of
  * a dynamic rendering pass's five R32G32B32A32_SFLOAT attachments (80
  * bytes of tile memory a sample: the pass is rendered in groups) draws into
@@ -9595,6 +9630,7 @@ int main(void)
     RUN(test_stencil_view_attachment);
     RUN(test_bresenham_msaa);
     RUN(test_tile_overflow);
+    RUN(test_pass_query_ranges);
     RUN(test_tile_overflow_locations);
     RUN(test_tile_overflow_secondary);
     RUN(test_local_read_tile_textures);

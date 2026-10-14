@@ -57416,8 +57416,7 @@ struct pvk_render {
     /* Occlusion queries: the pass's visibility result buffer is vis_pool's */
     struct pvk_query_pool *vis_pool;
     bool counting;          /* visibility counting is on */
-    struct pvk_render_query pending[64];
-    uint32_t pending_count;
+    uint32_t pending_count; /* queries in pvk_encoder.pending */
     /* Stored depth/stencil attachments to resolve when the pass ends
      * (texture NULL: none); see pvk_render_resolve_ds */
     struct pvk_pass_attachment resolve_depth, resolve_stencil;
@@ -57507,6 +57506,11 @@ struct pvk_encoder {
     size_t sub_at;
     struct pvk_pp_result *pp;   /* draw preprocessing results of the render pass, in draw order */
     uint32_t pp_count, pp_next, pp_capacity;
+    /* Queries the render encoder makes available when it ends
+     * (render.pending_count of them; out of struct pvk_render, which tile
+     * memory replays copy) */
+    struct pvk_render_query *pending;
+    uint32_t pending_capacity;
     bool prepassed;             /* compute work the next render encoder must wait for */
     struct pvk_replay replay;   /* tile memory overflow */
     struct pvk_pipeline *pipeline;
@@ -60134,7 +60138,7 @@ static void pvk_render_end(struct pvk_encoder *e)
     r->vis_pool = NULL;
     e->pp_count = e->pp_next = 0;
     for (i = 0; i < r->pending_count; i++) { /* now that the pass's counts are written */
-        const struct pvk_render_query *q = &r->pending[i];
+        const struct pvk_render_query *q = &e->pending[i];
         uint32_t k;
         if (q->pool->heap && !q->zero) { /* its timestamps, after it (pvk_render_timestamp) */
             pvk_encoder_end(e);
@@ -60147,25 +60151,33 @@ static void pvk_render_end(struct pvk_encoder *e)
 }
 
 /* Queries the render encoder makes available when it ends. */
-static void pvk_render_pending(struct pvk_render *r, struct pvk_query_pool *pool, uint32_t first, uint32_t count,
+static void pvk_render_pending(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t first, uint32_t count,
                                bool zero)
 {
-    struct pvk_render_query *q = r->pending_count ? &r->pending[r->pending_count - 1] : NULL;
+    struct pvk_render *r = &e->render;
+    struct pvk_render_query *q = r->pending_count ? &e->pending[r->pending_count - 1] : NULL;
     if (q && q->pool == pool && q->first + q->count == first && q->zero == zero) {
         q->count += count;
-    } else if (r->pending_count < PVK_ARRAY_SIZE(r->pending)) {
-        q = &r->pending[r->pending_count++];
-        q->pool = pool;
-        q->first = first;
-        q->count = count;
-        q->zero = zero;
-    } else {
-        static int warned;
-        if (!warned++)
-            pvk_logi(NULL, PVK_LOG_WARN, "PlasmaVK-unsupported-query-ranges",
-                     "more than %u query ranges in a render pass: some never become available",
-                     (unsigned)PVK_ARRAY_SIZE(r->pending));
+        return;
     }
+    if (r->pending_count == e->pending_capacity) {
+        uint32_t n = e->pending_capacity ? e->pending_capacity * 2 : 16;
+        q = pvk_alloc(pvk_device_alloc(e->device), sizeof(*q) * n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+        if (!q) {
+            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+            return;
+        }
+        if (r->pending_count)
+            memcpy(q, e->pending, sizeof(*q) * r->pending_count);
+        pvk_free(pvk_device_alloc(e->device), e->pending);
+        e->pending = q;
+        e->pending_capacity = n;
+    }
+    q = &e->pending[r->pending_count++];
+    q->pool = pool;
+    q->first = first;
+    q->count = count;
+    q->zero = zero;
 }
 
 static void pvk_render_counting(struct pvk_encoder *e, bool on)
@@ -60189,10 +60201,12 @@ static void pvk_encode_occlusion(struct pvk_encoder *e, const struct pvk_cmd_que
         e->occ_query = c->first;
         if (r->enc && r->vis_pool != c->pool) {
             static int warned;
-            if (!warned++)
+            if (!warned) {
+                warned = 1;
                 pvk_logd(e->device, PVK_LOG_WARN, "PlasmaVK-unsupported-occlusion-pools", VK_OBJECT_TYPE_QUERY_POOL,
                          (uint64_t)(uintptr_t)c->pool, "occlusion queries of two pools in one render pass: the second "
                          "pool's are not counted");
+            }
         }
         pvk_render_counting(e, true);
         return;
@@ -60200,7 +60214,7 @@ static void pvk_encode_occlusion(struct pvk_encoder *e, const struct pvk_cmd_que
     pvk_render_counting(e, false);
     e->occ_pool = NULL;
     if (r->enc)
-        pvk_render_pending(r, c->pool, c->first, c->count, false);
+        pvk_render_pending(e, c->pool, c->first, c->count, false);
     else
         pvk_encoder_query_available(e, c->pool, c->first, c->count, false);
 }
@@ -60212,9 +60226,9 @@ static void pvk_encode_occlusion(struct pvk_encoder *e, const struct pvk_cmd_que
  * one query per view, the others 0 (Queries > Timestamp Queries). */
 static void pvk_render_timestamp(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t query, uint32_t views)
 {
-    pvk_render_pending(&e->render, pool, query, 1, false);
+    pvk_render_pending(e, pool, query, 1, false);
     if (views > 1)
-        pvk_render_pending(&e->render, pool, query + 1, views - 1, true);
+        pvk_render_pending(e, pool, query + 1, views - 1, true);
 }
 
 /* The encoder's view of a draw's preprocessing state. */
@@ -60597,10 +60611,12 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
                                           height, samples, c->layers, false);
         if (!tex) {
             static int warned;
-            if (!warned++)
+            if (!warned) {
+                warned = 1;
                 pvk_logd(e->device, PVK_LOG_WARN, "PlasmaVK-unsupported-depth-copy", VK_OBJECT_TYPE_DEVICE, 0,
                          "a render pass with 8 color attachments cannot keep a copy of its depth or stencil: "
                          "depth/stencil input attachments and depth bounds read nothing there");
+            }
             r->hidden &= ~(1u << k);
             continue;
         }
@@ -61267,10 +61283,12 @@ static bool pvk_render_flush(struct pvk_encoder *e)
             variant = PVK_VARIANT_DEPTH;
         if (variant >= 0 && !(pso = pvk_gfx_variant(e->device, p, (unsigned)variant))) {
             static int warned;
-            if (!warned++)
+            if (!warned) {
+                warned = 1;
                 pvk_logd(e->device, PVK_LOG_WARN, "PlasmaVK-unsupported-depth-copy", VK_OBJECT_TYPE_PIPELINE,
                          (uint64_t)(uintptr_t)p, "a pipeline has no depth copy variant: depth input attachments and "
                          "depth bounds of its pass miss its depth writes");
+            }
             pso = p->mtl_pipeline;
             variant = -1;
         }
@@ -62247,6 +62265,7 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
     pvk_labels_batch_end(&e);
     pvk_MTL4CommandBuffer_endCommandBuffer(s->cb);
     pvk_free(pvk_device_alloc(e.device), e.pp);
+    pvk_free(pvk_device_alloc(e.device), e.pending);
     return e.result;
 }
 
