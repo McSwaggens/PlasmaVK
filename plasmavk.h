@@ -29773,15 +29773,18 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetMemoryMetalHandlePropertiesEXT(
 #error "Compile the PlasmaVK implementation without ARC (-fno-objc-arc) or as plain C."
 #endif
 
+#include <mach/mach_time.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
 #include <pthread.h>
+#include <setjmp.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* ==========================================================================
  * 3. Objective-C runtime bridge
@@ -32149,7 +32152,6 @@ struct pvk_instance {
     bool debug;                         /* the debug layer is enabled */
     struct pvk_instance *next_instance; /* every instance, under pvk_instances_lock */
     pthread_mutex_t debug_lock;         /* the messenger lists */
-    bool debug_lock_ready;
     struct pvk_messenger *messengers;   /* made by vkCreateDebugUtilsMessengerEXT */
     struct pvk_messenger *chained;      /* VkInstanceCreateInfo's chain, an array */
     uint32_t chained_count;
@@ -32366,7 +32368,6 @@ static struct pvk_instance *pvk_device_instance(const struct pvk_device *device)
 
 struct pvk_messenger {
     struct pvk_messenger *next;
-    struct pvk_instance *instance;
     VkDebugUtilsMessageSeverityFlagsEXT severities;
     VkDebugUtilsMessageTypeFlagsEXT types;
     PFN_vkDebugUtilsMessengerCallbackEXT callback;
@@ -32448,8 +32449,6 @@ static bool pvk_messengers_call(struct pvk_instance *instance, VkDebugUtilsMessa
     struct pvk_messenger *m;
     bool taken = false;
     uint32_t i;
-    if (!instance->debug_lock_ready)
-        return false;
     pthread_mutex_lock(&instance->debug_lock);
     for (m = instance->messengers; m; m = m->next) {
         if (!pvk_messenger_takes(m, severity, types))
@@ -35143,10 +35142,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceLayerProperties(uint32_t *pPro
                          pProperties);
 }
 
-static void pvk_messenger_init(struct pvk_messenger *m, struct pvk_instance *instance,
-                               const VkDebugUtilsMessengerCreateInfoEXT *info)
+static void pvk_messenger_init(struct pvk_messenger *m, const VkDebugUtilsMessengerCreateInfoEXT *info)
 {
-    m->instance = instance;
     m->severities = info->messageSeverity;
     m->types = info->messageType;
     m->callback = info->pfnUserCallback;
@@ -35161,8 +35158,7 @@ static void pvk_instance_free(struct pvk_instance *instance)
         next = m->next;
         pvk_free(m->has_alloc ? &m->alloc : alloc, m);
     }
-    if (instance->debug_lock_ready)
-        pthread_mutex_destroy(&instance->debug_lock);
+    pthread_mutex_destroy(&instance->debug_lock);
     pvk_free(alloc, instance->chained);
     pvk_free(alloc, instance);
 }
@@ -35185,10 +35181,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCre
         instance->has_alloc = true;
     }
     if (pthread_mutex_init(&instance->debug_lock, NULL) != 0) {
-        pvk_instance_free(instance);
+        pvk_free(pAllocator, instance);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
-    instance->debug_lock_ready = true;
 
     /* Messengers in the chain report what happens in vkCreateInstance and
      * vkDestroyInstance, and only then. */
@@ -35203,7 +35198,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCre
         }
         for (s = pCreateInfo->pNext; s; s = s->pNext)
             if (s->sType == VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT)
-                pvk_messenger_init(&instance->chained[instance->chained_count++], instance,
+                pvk_messenger_init(&instance->chained[instance->chained_count++],
                                    (const VkDebugUtilsMessengerCreateInfoEXT *)s);
         instance->chained_active = true;
     }
@@ -35313,7 +35308,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDebugUtilsMessengerEXT(VkInstance _instan
 
     if (!m)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
-    pvk_messenger_init(m, instance, pCreateInfo);
+    pvk_messenger_init(m, pCreateInfo);
     if (pAllocator) {
         m->alloc = *pAllocator;
         m->has_alloc = true;
@@ -41149,8 +41144,6 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   freed at the end.
  * ========================================================================== */
 
-#include <setjmp.h>
-
 #define PVK_MSL_PUSH_CONSTANT_BUFFER 30u
 #define PVK_MSL_VERTEX_TABLE_BUFFER 29u
 #define PVK_MSL_DRAW_INDEX_BUFFER 28u
@@ -41511,13 +41504,12 @@ static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const
 static void pvk_msl_result_free(struct pvk_msl_result *result);
 
 /* A vertex and a fragment shader (fragment word count 0: none) translated
- * together, the fragment stage linked to the vertex stage's outputs.
- * (Unused until graphics pipelines land in section 17.) */
+ * together, the fragment stage linked to the vertex stage's outputs. */
 static VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_t vs_word_count, const char *vs_entry,
                                           const struct pvk_msl_options *vs_options, const uint32_t *fs_words,
                                           size_t fs_word_count, const char *fs_entry,
                                           const struct pvk_msl_options *fs_options, struct pvk_msl_result *vs,
-                                          struct pvk_msl_result *fs) __attribute__((unused));
+                                          struct pvk_msl_result *fs);
 
 /* ---- SPIR-V constants (from the SPIR-V specification; only what we use) ---- */
 
@@ -41874,8 +41866,7 @@ enum {
     PVK_SPV_ImgVolatileTexel = 0x800,
     PVK_SPV_ImgSignExtend = 0x1000,
     PVK_SPV_ImgZeroExtend = 0x2000,
-    PVK_SPV_ImgNontemporal = 0x4000,
-    PVK_SPV_ImgOffsets = 0x10000
+    PVK_SPV_ImgNontemporal = 0x4000
 };
 
 enum {
@@ -41944,12 +41935,9 @@ enum {
 #define PVK_SPV_SemanticsMakeAvailable 0x2000u
 #define PVK_SPV_SemanticsMakeVisible 0x4000u
 /* Memory Operands (OpLoad, OpStore, OpCopyMemory) */
-#define PVK_SPV_MemVolatile 0x1u
 #define PVK_SPV_MemAligned 0x2u
-#define PVK_SPV_MemNontemporal 0x4u
 #define PVK_SPV_MemMakePointerAvailable 0x8u
 #define PVK_SPV_MemMakePointerVisible 0x10u
-#define PVK_SPV_MemNonPrivatePointer 0x20u
 /* GroupOperation */
 #define PVK_SPV_GroupReduce 0u
 #define PVK_SPV_GroupInclusiveScan 1u
@@ -44553,8 +44541,9 @@ static bool pvk_spv_cube_as_array(const struct pvk_spv_type *t)
     return t->img.dim == PVK_SPV_DimCube && t->img.sampled == 2;
 }
 
-/* depth2d... for depth images that are sampled (Depth 1); Depth 2
- * (unknown) is a color texture, reinterpreted where a Dref needs a depth one. */
+/* The texture type of image type t: depth2d... with `depth` for a sampled
+ * image (a Dref reinterprets the color texture every image is, as Vulkan
+ * ignores Depth: pvk_spv_as_depth). */
 static const char *pvk_spv_image_msl(struct pvk_spv *ctx, const struct pvk_spv_type *t, bool depth)
 {
     const char *base, *access = "", *elem = pvk_spv_type(ctx, t->elem)->msl;
@@ -44732,7 +44721,7 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
                 t->size = t->align = 16;
                 break;
             }
-            t->msl = pvk_spv_image_msl(ctx, t, t->img.depth == 1);
+            t->msl = pvk_spv_image_msl(ctx, t, false); /* (Depth 1 is 0 or 2 by now: Vulkan ignores it) */
             t->size = t->align = 8; /* an MTLResourceID in a set */
             break;
         case PVK_SPV_OpTypeSampler:
@@ -44825,22 +44814,8 @@ static const char *pvk_spv_fix_decimal(struct pvk_spv *ctx, const char *s)
 
 static float pvk_spv_half_to_float(uint32_t h)
 {
-    uint32_t sign = (h >> 15) & 1u, exp = (h >> 10) & 0x1fu, mant = h & 0x3ffu, bits;
+    uint32_t bits = pvk_spv_f16_to_f32(h);
     float f;
-    if (exp == 0 && mant == 0) {
-        bits = sign << 31;
-    } else if (exp == 0) {
-        exp = 113;
-        while (!(mant & 0x400u)) {
-            mant <<= 1;
-            exp--;
-        }
-        bits = (sign << 31) | (exp << 23) | ((mant & 0x3ffu) << 13);
-    } else if (exp == 31) {
-        bits = (sign << 31) | 0x7f800000u | (mant << 13);
-    } else {
-        bits = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
-    }
     memcpy(&f, &bits, sizeof(f));
     return f;
 }
@@ -46970,12 +46945,9 @@ static void pvk_spv_barrier(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
             pvk_spv_fail(ctx, "OpControlBarrier with execution scope %u is not supported", exec);
         if (wide)
             pvk_spv_fence(ctx, scope, dev | PVK_SPV_SemanticsAcquire, PVK_SPV_SEM_ACQUIRE, 0);
-    } else {
-        uint32_t scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 1));
-        uint32_t sem = pvk_spv_fence_sem(scope, pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2)));
-        const char *flags = pvk_spv_mem_flags(ctx, sem);
-        if (flags && scope != PVK_SPV_ScopeInvocation)
-            pvk_spv_line(ctx, "atomic_thread_fence(%s, memory_order_seq_cst, %s);", flags, pvk_spv_fence_scope(scope));
+    } else { /* OpMemoryBarrier: a fence */
+        pvk_spv_fence(ctx, pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 1)), pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2)),
+                      ~0u, 0);
     }
 }
 
@@ -47836,10 +47808,7 @@ static void pvk_spv_sparse_result(struct pvk_spv *ctx, uint32_t rid, const char 
  * declared Depth 1). */
 static const char *pvk_spv_as_depth(struct pvk_spv *ctx, const struct pvk_spv_type *it, const char *tex)
 {
-    const char *d;
-    if (it->img.depth == 1)
-        return tex;
-    d = pvk_spv_image_msl(ctx, it, true);
+    const char *d = pvk_spv_image_msl(ctx, it, true);
     if (strncmp(d, "depth", 5) != 0)
         pvk_spv_fail(ctx, "depth comparison on an image Metal has no depth type for (1D: use image_1d_as_2d)");
     ctx->use_cast = true;
@@ -48140,6 +48109,7 @@ static void pvk_spv_image_sample(struct pvk_spv *ctx, const struct pvk_spv_insn 
 
     if (implicit && ctx->model != PVK_SPV_ExecutionModelFragment)
         pvk_spv_fail(ctx, "implicit-LOD sampling needs derivatives, which only fragment shaders have");
+    ctx->derivatives |= implicit;
     pvk_spv_image_operands(ctx, in, dref ? 6 : 5, &o);
     if (implicit ? (o.mask & (PVK_SPV_ImgLod | PVK_SPV_ImgGrad)) != 0 : !(o.mask & (PVK_SPV_ImgLod | PVK_SPV_ImgGrad)))
         pvk_spv_fail(ctx, implicit ? "implicit-LOD sampling with Lod or Grad" : "explicit-LOD sampling without Lod or Grad");
@@ -48242,7 +48212,7 @@ static void pvk_spv_image_gather(struct pvk_spv *ctx, const struct pvk_spv_insn 
     struct pvk_spv_imgops o;
     const char *tex = pvk_spv_fmt(ctx, "%s.t", pvk_spv_val(ctx, si)), *smp = pvk_spv_fmt(ctx, "%s.s", pvk_spv_val(ctx, si));
     const char *c, *layer, *q, *d = NULL, *comp = NULL, *g[4], *offs[4];
-    bool depth = it->img.depth == 1 || dref, cube = it->img.dim == PVK_SPV_DimCube;
+    bool depth = dref, cube = it->img.dim == PVK_SPV_DimCube;
     uint32_t noffs = 1;
 
     pvk_spv_image_operands(ctx, in, 6, &o);
@@ -48542,12 +48512,7 @@ static void pvk_spv_image_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     case PVK_SPV_OpImageSampleProjImplicitLod: case PVK_SPV_OpImageSampleProjDrefImplicitLod:
     case PVK_SPV_OpImageSparseSampleImplicitLod: case PVK_SPV_OpImageSparseSampleExplicitLod:
     case PVK_SPV_OpImageSparseSampleDrefImplicitLod: case PVK_SPV_OpImageSparseSampleDrefExplicitLod:
-        ctx->derivatives |= in->op == PVK_SPV_OpImageSampleImplicitLod || in->op == PVK_SPV_OpImageSampleDrefImplicitLod ||
-                            in->op == PVK_SPV_OpImageSampleProjImplicitLod ||
-                            in->op == PVK_SPV_OpImageSampleProjDrefImplicitLod ||
-                            in->op == PVK_SPV_OpImageSparseSampleImplicitLod ||
-                            in->op == PVK_SPV_OpImageSparseSampleDrefImplicitLod;
-        pvk_spv_image_sample(ctx, in);
+        pvk_spv_image_sample(ctx, in); /* (it notes derivatives: ctx->derivatives) */
         return;
     case PVK_SPV_OpImageSparseTexelsResident: /* the code of pvk_spv_sparse_result */
         if (pvk_spv_vtype(ctx, rid)->op != PVK_SPV_OpTypeBool)
@@ -53173,9 +53138,6 @@ static VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_t vs_wo
  * is not reported, section 7).
  * ========================================================================== */
 
-#include <mach/mach_time.h>
-#include <time.h>
-
 struct pvk_query_pool {
     VkQueryType type;
     uint32_t count;
@@ -57041,8 +57003,6 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   a pipeline's name goes in the debug layer's groups of its draws and
  *   dispatches.
  * ========================================================================== */
-
-#include <time.h>
 
 #define PVK_UPLOAD_CHUNK_SIZE (256u * 1024u)
 
