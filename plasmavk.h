@@ -41030,8 +41030,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   cube storage images take (x, y, face) and cube arrays face + 6 * cube.
  *   The sampler does the rest (filters, addressing, depth comparison). A
  *   storage image's access (read, write, read_write) is what the variables
- *   of its type allow; read_write writes are followed by fence(), so the
- *   invocation's own later reads see them.
+ *   of its type allow; in modules that read storage images, read_write
+ *   writes are followed by fence(), so the invocation's own later reads
+ *   see them.
  *   SPARSE RESIDENCY: OpImageSparseSample(Dref)Implicit/ExplicitLod,
  *   OpImageSparseFetch, OpImageSparseRead and OpImageSparse(Dref)Gather are
  *   the same calls as their non-sparse instructions with MSL's sparse_
@@ -42300,6 +42301,7 @@ struct pvk_spv {
     bool use_math;              /* emit pvk_atan2, pvk_tanh */
     bool use_ia;                /* emit pvk_ia_tex, pvk_ia_tex_ms */
     bool derivatives;           /* a fragment shader uses derivatives or quad operations (pvk_spv_emit_stage) */
+    bool storage_reads;         /* the module reads storage images (pvk_spv_storage_reads) */
     bool at_centroid;           /* interpolateAtCentroid is used: centroid inputs are read as it reads them */
     bool use_ycbcr;             /* emit pvk_ycbcr_d (Y'CBCR SAMPLING) */
     const struct pvk_ycbcr *ycbcr_fns[PVK_SPV_MAX_YCBCR]; /* conversions with a pvk_ycbcr_<k> function */
@@ -48415,7 +48417,7 @@ static void pvk_spv_image_write(struct pvk_spv *ctx, const struct pvk_spv_insn *
     pvk_spv_if_open(ctx, ok); /* robust access: discarded outside the image */
     pvk_spv_line(ctx, "%s.write(%s, %s);", tex, v, pvk_spv_texel_args(ctx, it, coord, 0));
     pvk_spv_if_close(ctx, ok);
-    if (it->img.access == (PVK_SPV_ACCESS_READ | PVK_SPV_ACCESS_WRITE))
+    if (it->img.access == (PVK_SPV_ACCESS_READ | PVK_SPV_ACCESS_WRITE) && ctx->storage_reads)
         pvk_spv_line(ctx, "%s.fence();", tex); /* this invocation's later reads see the write */
 }
 
@@ -52830,6 +52832,25 @@ static bool pvk_spv_fast_math(struct pvk_spv *ctx)
     return true;
 }
 
+/* Whether the module reads storage images or texels of them
+ * (OpImageRead, OpImageSparseRead, OpImageTexelPointer; subpass inputs
+ * count too): only then must a storage image write be fenced for the
+ * invocation's own later reads, through any variable (pvk_spv_image_write).
+ * The fence costs a third of a write-heavy kernel on an M4 Max. */
+static bool pvk_spv_storage_reads(const struct pvk_spv *ctx)
+{
+    uint32_t i = 5;
+    while (i < ctx->nw) {
+        uint32_t op = ctx->w[i] & 0xffffu, n = ctx->w[i] >> 16;
+        if (!n || n > ctx->nw - i)
+            break;
+        if (op == 98 || op == 320 || op == 60)
+            return true;
+        i += n;
+    }
+    return false;
+}
+
 static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t word_count)
 {
     struct pvk_msl_result *res = ctx->result;
@@ -52898,6 +52919,7 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
     }
     pvk_spv_assign_resources(ctx);
     res->fast_math = pvk_spv_fast_math(ctx);
+    ctx->storage_reads = pvk_spv_storage_reads(ctx);
     if (ctx->options && ctx->options->dispatch_base) {
         uint32_t end = res->has_push_constants ? pvk_spv_round(res->push_constant_offset + res->push_constant_size, 16) : 0;
         if (ctx->options->dispatch_base_offset > 65536)

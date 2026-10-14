@@ -10176,6 +10176,113 @@ static void test_image_storage_opt(void)
     run_image_storage(spv_storage_opt, PVK_ARRAY_SIZE(spv_storage_opt), false);
 }
 
+/*
+ * #version 450
+ * layout(local_size_x = 4, local_size_y = 4) in;
+ * layout(binding = 0, rgba32f) uniform image2D dst;
+ * layout(binding = 1) uniform sampler2D src;
+ * void main()
+ * {
+ *     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+ *     imageStore(dst, p, textureLod(src, (vec2(p) + 0.5) / 4.0, 0.0) + vec4(1.0));
+ *     imageStore(dst, p + ivec2(0, 4), vec4(p, 0.0, 1.0));
+ * }
+ */
+static const uint32_t spv_store_only[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x0000003a, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0006000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000d, 0x00060010, 0x00000004,
+    0x00000011, 0x00000004, 0x00000004, 0x00000001, 0x00030003, 0x00000002, 0x000001c2, 0x00040005,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000009, 0x00000070, 0x00080005, 0x0000000d,
+    0x475f6c67, 0x61626f6c, 0x766e496c, 0x7461636f, 0x496e6f69, 0x00000044, 0x00030005, 0x00000015,
+    0x00747364, 0x00030005, 0x0000001b, 0x00637273, 0x00040047, 0x0000000d, 0x0000000b, 0x0000001c,
+    0x00040047, 0x00000015, 0x00000021, 0x00000000, 0x00040047, 0x00000015, 0x00000022, 0x00000000,
+    0x00040047, 0x0000001b, 0x00000021, 0x00000001, 0x00040047, 0x0000001b, 0x00000022, 0x00000000,
+    0x00040047, 0x00000039, 0x0000000b, 0x00000019, 0x00020013, 0x00000002, 0x00030021, 0x00000003,
+    0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000001, 0x00040017, 0x00000007, 0x00000006,
+    0x00000002, 0x00040020, 0x00000008, 0x00000007, 0x00000007, 0x00040015, 0x0000000a, 0x00000020,
+    0x00000000, 0x00040017, 0x0000000b, 0x0000000a, 0x00000003, 0x00040020, 0x0000000c, 0x00000001,
+    0x0000000b, 0x0004003b, 0x0000000c, 0x0000000d, 0x00000001, 0x00040017, 0x0000000e, 0x0000000a,
+    0x00000002, 0x00030016, 0x00000012, 0x00000020, 0x00090019, 0x00000013, 0x00000012, 0x00000001,
+    0x00000000, 0x00000000, 0x00000000, 0x00000002, 0x00000001, 0x00040020, 0x00000014, 0x00000000,
+    0x00000013, 0x0004003b, 0x00000014, 0x00000015, 0x00000000, 0x00090019, 0x00000018, 0x00000012,
+    0x00000001, 0x00000000, 0x00000000, 0x00000000, 0x00000001, 0x00000000, 0x0003001b, 0x00000019,
+    0x00000018, 0x00040020, 0x0000001a, 0x00000000, 0x00000019, 0x0004003b, 0x0000001a, 0x0000001b,
+    0x00000000, 0x00040017, 0x0000001e, 0x00000012, 0x00000002, 0x0004002b, 0x00000012, 0x00000020,
+    0x3f000000, 0x0004002b, 0x00000012, 0x00000023, 0x40800000, 0x0004002b, 0x00000012, 0x00000026,
+    0x00000000, 0x00040017, 0x00000027, 0x00000012, 0x00000004, 0x0004002b, 0x00000012, 0x00000029,
+    0x3f800000, 0x0007002c, 0x00000027, 0x0000002a, 0x00000029, 0x00000029, 0x00000029, 0x00000029,
+    0x0004002b, 0x00000006, 0x0000002e, 0x00000000, 0x0004002b, 0x00000006, 0x0000002f, 0x00000004,
+    0x0005002c, 0x00000007, 0x00000030, 0x0000002e, 0x0000002f, 0x0004002b, 0x0000000a, 0x00000037,
+    0x00000004, 0x0004002b, 0x0000000a, 0x00000038, 0x00000001, 0x0006002c, 0x0000000b, 0x00000039,
+    0x00000037, 0x00000037, 0x00000038, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
+    0x000200f8, 0x00000005, 0x0004003b, 0x00000008, 0x00000009, 0x00000007, 0x0004003d, 0x0000000b,
+    0x0000000f, 0x0000000d, 0x0007004f, 0x0000000e, 0x00000010, 0x0000000f, 0x0000000f, 0x00000000,
+    0x00000001, 0x0004007c, 0x00000007, 0x00000011, 0x00000010, 0x0003003e, 0x00000009, 0x00000011,
+    0x0004003d, 0x00000013, 0x00000016, 0x00000015, 0x0004003d, 0x00000007, 0x00000017, 0x00000009,
+    0x0004003d, 0x00000019, 0x0000001c, 0x0000001b, 0x0004003d, 0x00000007, 0x0000001d, 0x00000009,
+    0x0004006f, 0x0000001e, 0x0000001f, 0x0000001d, 0x00050050, 0x0000001e, 0x00000021, 0x00000020,
+    0x00000020, 0x00050081, 0x0000001e, 0x00000022, 0x0000001f, 0x00000021, 0x00050050, 0x0000001e,
+    0x00000024, 0x00000023, 0x00000023, 0x00050088, 0x0000001e, 0x00000025, 0x00000022, 0x00000024,
+    0x00070058, 0x00000027, 0x00000028, 0x0000001c, 0x00000025, 0x00000002, 0x00000026, 0x00050081,
+    0x00000027, 0x0000002b, 0x00000028, 0x0000002a, 0x00040063, 0x00000016, 0x00000017, 0x0000002b,
+    0x0004003d, 0x00000013, 0x0000002c, 0x00000015, 0x0004003d, 0x00000007, 0x0000002d, 0x00000009,
+    0x00050080, 0x00000007, 0x00000031, 0x0000002d, 0x00000030, 0x0004003d, 0x00000007, 0x00000032,
+    0x00000009, 0x0004006f, 0x0000001e, 0x00000033, 0x00000032, 0x00050051, 0x00000012, 0x00000034,
+    0x00000033, 0x00000000, 0x00050051, 0x00000012, 0x00000035, 0x00000033, 0x00000001, 0x00070050,
+    0x00000027, 0x00000036, 0x00000034, 0x00000035, 0x00000026, 0x00000029, 0x00040063, 0x0000002c,
+    0x00000031, 0x00000036, 0x000100fd, 0x00010038,};
+
+/* A storage image write is fenced (for the invocation's own later reads)
+ * only in modules that read storage images: a kernel that samples and
+ * writes runs without fences, and writes right. */
+static void test_image_store_fence(void)
+{
+    static const struct mt_sampler_desc smp_nearest = { PVK_MTLSamplerMinMagFilterNearest, 0,
+                                                        PVK_MTLSamplerAddressModeClampToEdge, false, 0 };
+    struct pvk_msl_result res;
+    struct mt_binding b[2];
+    float src[16 * 4], got[32 * 4];
+    id pso, t_src, t_dst, smp;
+    int i, k;
+
+    REQUIRE(mt_translate(spv_storage, PVK_ARRAY_SIZE(spv_storage), NULL, &res));
+    CHECK(strstr(res.msl, ".fence();") != NULL);
+    pvk_msl_result_free(&res);
+    REQUIRE(mt_translate(spv_store_only, PVK_ARRAY_SIZE(spv_store_only), NULL, &res));
+    CHECK(strstr(res.msl, ".fence();") == NULL);
+    CHECK(strstr(res.msl, "access::read_write") != NULL); /* (not NonReadable) */
+    pso = mt_pipeline(&res);
+    if (!pso)
+        pvk_msl_result_free(&res);
+    REQUIRE(pso);
+    for (i = 0; i < 64; i++)
+        src[i] = (float)i;
+    t_src = mt_texture(PVK_MTLTextureType2D, PVK_MTLPixelFormatRGBA32Float, 4, 4, 1, 1, 1, 1);
+    t_dst = mt_texture(PVK_MTLTextureType2D, PVK_MTLPixelFormatRGBA32Float, 4, 8, 1, 1, 1, 1);
+    smp = mt_sampler(&smp_nearest);
+    mt_upload(t_src, 0, 0, 4, 4, 1, 16, src);
+    b[0] = bind_tex(0, 0, 0, t_dst, NULL);
+    b[1] = bind_tex(0, 1, 0, t_src, smp);
+    CHECK(mt_dispatch(pso, &res, b, 2, NULL, 0, 1, 1, 1));
+    mt_download(t_dst, 0, 0, 4, 8, 1, 16, got);
+    bad = 0;
+    for (i = 0; i < 16; i++)
+        for (k = 0; k < 4; k++) {
+            float want_top = src[i * 4 + k] + 1.0f;
+            float want_bottom = k == 0 ? (float)(i % 4) : k == 1 ? (float)(i / 4) : k == 2 ? 0.0f : 1.0f;
+            EXPECT(got[i * 4 + k] == want_top, "texel %d.%d = %g, want %g", i, k, got[i * 4 + k], want_top);
+            EXPECT(got[(16 + i) * 4 + k] == want_bottom, "texel %d.%d = %g, want %g", 16 + i, k, got[(16 + i) * 4 + k],
+                   want_bottom);
+        }
+    CHECK(bad == 0);
+    pvk_release(t_src);
+    pvk_release(t_dst);
+    pvk_release(smp);
+    pvk_release(pso);
+    pvk_msl_result_free(&res);
+}
+
 /* ---- Image atomics ---- */
 
 static void test_image_atomics(void)
@@ -12811,6 +12918,7 @@ int main(void)
     RUN(test_image_gather_opt);
     RUN(test_image_storage);
     RUN(test_image_storage_opt);
+    RUN(test_image_store_fence);
     RUN(test_image_atomics);
     RUN(test_texel_buffers);
     RUN(test_descriptor_arrays);
