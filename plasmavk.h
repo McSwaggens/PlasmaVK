@@ -31537,6 +31537,8 @@ static inline void pvk_MTLRenderPassAttachmentDescriptor_setLevel(id self, unsig
 static inline void pvk_MTLRenderPassAttachmentDescriptor_setSlice(id self, unsigned long slice) { PVK_SEL_CACHE("setSlice:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, slice); }
 static inline void pvk_MTLRenderPassAttachmentDescriptor_setDepthPlane(id self, unsigned long depthPlane) { PVK_SEL_CACHE("setDepthPlane:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, depthPlane); }
 static inline void pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(id self, pvk_MTLLoadAction loadAction) { PVK_SEL_CACHE("setLoadAction:"); PVK_MSG(void, (id, SEL, pvk_MTLLoadAction))(self, pvk_sel_, loadAction); }
+static inline id pvk_MTLRenderPassAttachmentDescriptor_texture(id self) { PVK_SEL_CACHE("texture"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline pvk_MTLStoreAction pvk_MTLRenderPassAttachmentDescriptor_storeAction(id self) { PVK_SEL_CACHE("storeAction"); return PVK_MSG(pvk_MTLStoreAction, (id, SEL))(self, pvk_sel_); }
 static inline void pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(id self, pvk_MTLStoreAction storeAction) { PVK_SEL_CACHE("setStoreAction:"); PVK_MSG(void, (id, SEL, pvk_MTLStoreAction))(self, pvk_sel_, storeAction); }
 static inline void pvk_MTLRenderPassColorAttachmentDescriptor_setClearColor(id self, pvk_MTLClearColor clearColor) { PVK_SEL_CACHE("setClearColor:"); PVK_MSG(void, (id, SEL, pvk_MTLClearColor))(self, pvk_sel_, clearColor); }
 static inline void pvk_MTLRenderPassDepthAttachmentDescriptor_setClearDepth(id self, double clearDepth) { PVK_SEL_CACHE("setClearDepth:"); PVK_MSG(void, (id, SEL, double))(self, pvk_sel_, clearDepth); }
@@ -31649,6 +31651,7 @@ static inline id pvk_CAMetalLayer_residencySet(id self) { PVK_SEL_CACHE("residen
 static inline id pvk_CAMetalDrawable_texture(id self) { PVK_SEL_CACHE("texture"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline void pvk_MTLDrawable_present(id self) { PVK_SEL_CACHE("present"); PVK_MSG(void, (id, SEL))(self, pvk_sel_); }
 static inline unsigned long pvk_MTLTexture_width(id self) { PVK_SEL_CACHE("width"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
+static inline unsigned long pvk_MTLTexture_sampleCount(id self) { PVK_SEL_CACHE("sampleCount"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
 static inline unsigned long pvk_MTLTexture_height(id self) { PVK_SEL_CACHE("height"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
 static inline void pvk_MTL4CommandQueue_signalDrawable(id self, id drawable) { PVK_SEL_CACHE("signalDrawable:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, drawable); }
 static inline void pvk_MTL4CommandQueue_waitForDrawable(id self, id drawable) { PVK_SEL_CACHE("waitForDrawable:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, drawable); }
@@ -32223,6 +32226,8 @@ struct pvk_upload_chunk;
 struct pvk_deferred;
 struct pvk_cmd_event;
 
+#define PVK_ORDER_MAX 8 /* struct pvk_queue.order */
+
 struct pvk_queue {
     struct pvk_device *device;
     id mtl_queue; /* MTL4CommandQueue */
@@ -32253,7 +32258,14 @@ struct pvk_queue {
     struct pvk_deferred *done;                     /* done, freed by vkQueueSubmit */
     /* Image transfers (section 16): */
     id render_table;   /* MTL4ArgumentTable of internal blit/resolve draws */
-    bool ordered;      /* a barrier was recorded: each new encoder waits for earlier work */
+    /* Barriers of submissions that may still run (BARRIERS): an encoder
+     * started later waits for earlier work at `after` stages before its
+     * `before` stages. One entry per submission, oldest first. */
+    struct pvk_order {
+        uint64_t serial;
+        pvk_MTLStages after, before;
+    } order[PVK_ORDER_MAX];
+    uint32_t order_count;
     const void *sparse_issued; /* the texture whose mappings the queue updated last (pvk_sparse_drain) */
     /* VK_EXT_debug_utils (section 16, DEBUG LABELS), externally synchronized
      * like vkQueueSubmit: the queue's label regions, and the command buffer
@@ -53125,8 +53137,8 @@ static VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_t vs_wo
  * OCCLUSION (for the render pass code)
  *   `buffer` is the visibility result buffer: MTL4RenderPassDescriptor's
  *   visibilityResultBuffer, with MTLVisibilityResultTypeAccumulate (a query
- *   may span render passes; vkCmdResetQueryPool zeroed its result, and set
- *   queue->ordered so that render encoders start after the reset). The
+ *   may span render passes; vkCmdResetQueryPool zeroed its result, and
+ *   ordered render encoders after the reset, pvk_queue_order). The
  *   query's counting is -[MTL4RenderCommandEncoder setVisibilityResultMode:
  *   MTLVisibilityResultModeCounting offset:8 q] from vkCmdBeginQuery to
  *   vkCmdEndQuery (Disabled); exact counts serve precise and non-precise
@@ -56902,22 +56914,30 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   Metal 4 does not track resources: commands in an encoder and across
  *   encoders run concurrently unless barriers say otherwise. A batch is a
  *   compute encoder, interrupted by a render encoder for each clear, blit or
- *   resolve (they draw). A Vulkan barrier orders everything before it in
- *   submission order against everything after, so it becomes
- *   (pvk_encode_barrier) an encoder barrier for the commands around it and a
- *   consumer barrier against all earlier encoders on the queue (once per
- *   encoder); and once a queue has seen a barrier, every encoder it starts
- *   later begins with such a consumer barrier, as the barrier's second scope
- *   reaches every later command (queue->ordered). So does each Metal pass
- *   of a render pass instance after its first, and a resumed one: it loads
- *   what those before it stored. Waiting for all earlier
- *   encoders also covers what a barrier ordered before them, which a
+ *   resolve (they draw). A Vulkan barrier orders the work before it in
+ *   submission order at the Metal stages of its first scope
+ *   (pvk_barrier_stages: vertex, fragment and tile, dispatch; transfers and
+ *   anything else all) against the work after it at those of its second, so
+ *   it becomes (pvk_encode_barrier) an encoder barrier for the commands
+ *   around it and a consumer barrier against all earlier encoders on the
+ *   queue; and as its second scope reaches every later command, every
+ *   encoder started later begins with such a consumer barrier
+ *   (pvk_queue_order): the barriers of the queue's submissions, until the
+ *   timeline shows one done (its work before them all finished), and the
+ *   batch's semaphore waits (after all earlier work, before their stages).
+ *   So a pass's vertex work overlaps the earlier passes' fragment work when
+ *   only fragment work depends on them (render to texture, the frame
+ *   loop's acquire, attachment reuse): serializing whole encoders cost a
+ *   quarter of the frame rate where the GPU is busy (Sascha Willems'
+ *   instancing, M4 Max). Each Metal pass of a render pass instance after its
+ *   first, a resumed one and one after draw preprocessing waits for all
+ *   earlier work: it loads what those before it stored. Waiting for all
+ *   earlier encoders also covers what a barrier ordered before them, which a
  *   producer barrier at the end of an encoder would not when no command of
- *   that encoder follows the barrier. Stages are conservative
- *   (pvk_barrier_stages): any device stage is all the work an encoder runs.
- *   Barriers flush to the device coherence point, and with sparseBinding
- *   also for aliased virtual addresses (device->visibility, section 7's
- *   SPARSE RESOURCES). Render encoders also end with a producer barrier
+ *   that encoder follows the barrier. Barriers flush to the device coherence
+ *   point, and with sparseBinding also for aliased virtual addresses
+ *   (device->visibility, section 7's SPARSE RESOURCES). Render encoders that
+ *   store multisampled attachments also end with a producer barrier
  *   (pvk_render_close): without one, a copy into a multisampled texture
  *   after a render pass that stored it was sometimes undone by the pass's
  *   stores, despite the copy's consumer barrier (M4 Max, macOS 27.2: about
@@ -57441,8 +57461,12 @@ struct pvk_encoder {
     id cb;            /* MTL4CommandBuffer */
     id enc;           /* MTL4ComputeCommandEncoder, made by the first command that needs it */
     VkResult result;
-    bool waits;            /* the batch waits for semaphores */
-    bool consumer_barrier; /* against earlier encoders: issued */
+    uint64_t completed;    /* the queue's timeline when the batch began encoding */
+    pvk_MTLStages wait_before; /* stages the batch's semaphore waits block (0: no waits) */
+    /* The compute encoder's consumer barriers against earlier encoders,
+     * together: after and before which stages */
+    pvk_MTLStages consumer_after, consumer_before;
+    bool ms_store;         /* the render encoder made last stores multisampled attachments */
     struct pvk_render render;   /* graphics */
     struct pvk_query_pool *occ_pool; /* the active occlusion query, NULL: none */
     uint32_t occ_query;
@@ -57637,12 +57661,41 @@ static void pvk_encoder_close(struct pvk_encoder *e, id enc)
     pvk_MTL4CommandEncoder_endEncoding(enc);
 }
 
-/* Ends a render encoder: later encoders wait for its work (BARRIERS). */
+/* Ends a render encoder: later encoders wait for its work when it stored
+ * multisampled attachments (BARRIERS). */
 static void pvk_render_close(struct pvk_encoder *e, id enc)
 {
-    pvk_MTL4CommandEncoder_barrierAfterStages_beforeQueueStages_visibilityOptions(
-        enc, PVK_STAGES_RENDER, PVK_STAGES_ALL, e->queue->device->visibility);
+    if (e->ms_store)
+        pvk_MTL4CommandEncoder_barrierAfterStages_beforeQueueStages_visibilityOptions(
+            enc, PVK_STAGES_RENDER, PVK_STAGES_ALL, e->queue->device->visibility);
     pvk_encoder_close(e, enc);
+}
+
+/* Whether a pass stores a multisampled attachment. */
+static bool pvk_pass_stores_ms(id pass)
+{
+    id att[PVK_MAX_COLOR_ATTACHMENTS + 2];
+    uint32_t i;
+    for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
+        att[i] = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
+            pvk_MTL4RenderPassDescriptor_colorAttachments(pass), i);
+    att[i++] = pvk_MTL4RenderPassDescriptor_depthAttachment(pass);
+    att[i++] = pvk_MTL4RenderPassDescriptor_stencilAttachment(pass);
+    while (i-- > 0) {
+        id tex = pvk_MTLRenderPassAttachmentDescriptor_texture(att[i]);
+        pvk_MTLStoreAction store = tex ? pvk_MTLRenderPassAttachmentDescriptor_storeAction(att[i]) : 0;
+        if (tex && store != PVK_MTLStoreActionDontCare && store != PVK_MTLStoreActionMultisampleResolve &&
+            pvk_MTLTexture_sampleCount(tex) > 1)
+            return true;
+    }
+    return false;
+}
+
+/* A render encoder for a pass (NULL on failure). */
+static id pvk_render_encoder_new(struct pvk_encoder *e, id pass)
+{
+    e->ms_store = pvk_pass_stores_ms(pass);
+    return pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass);
 }
 
 /* A label region begins (text in a packet: owned at the end of the batch
@@ -57779,9 +57832,12 @@ static void pvk_labels_batch_end(struct pvk_encoder *e)
 }
 
 static void pvk_render_end(struct pvk_encoder *e);
+static pvk_MTLStages pvk_queue_ordered(const struct pvk_encoder *e, pvk_MTLStages stages, pvk_MTLStages *after);
+static void pvk_encoder_consume(struct pvk_encoder *e, pvk_MTLStages after, pvk_MTLStages before);
 
 static id pvk_encoder_get(struct pvk_encoder *e)
 {
+    pvk_MTLStages after, before;
     if (e->render.enc) /* not inside a render pass: Vulkan allows no such command there */
         pvk_render_end(e);
     if (!e->enc && e->result == VK_SUCCESS) {
@@ -57792,16 +57848,12 @@ static id pvk_encoder_get(struct pvk_encoder *e)
         }
         pvk_labels_open(e, e->enc, "Compute and transfer commands");
         pvk_MTL4ComputeCommandEncoder_setArgumentTable(e->enc, e->queue->argument_table);
-        e->consumer_barrier = false;
+        e->consumer_after = e->consumer_before = 0;
         e->pipeline_dirty = true;
         e->push_bound = 0;
-        if (e->waits || e->queue->ordered) {
-            /* After a barrier, and for semaphores signalled earlier on this
-             * queue (pvk_queue_submit): wait for all earlier work. */
-            pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-                e->enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, e->queue->device->visibility);
-            e->consumer_barrier = true;
-        }
+        /* after earlier barriers, and for the batch's semaphore waits */
+        before = pvk_queue_ordered(e, PVK_STAGES_COMPUTE, &after);
+        pvk_encoder_consume(e, after, before);
     }
     return e->enc;
 }
@@ -57815,26 +57867,108 @@ static void pvk_encoder_end(struct pvk_encoder *e)
 }
 
 /* The Metal stages that run the work of Vulkan stages, in the first (src)
- * or second (dst) scope of a barrier; 0: no device work. Conservative: any
- * device stage is everything a compute encoder runs (vkCmdFillBuffer, a
- * transfer, may run as a dispatch). Host accesses need no GPU barrier: host
- * writes before vkQueueSubmit are visible to it, and the GPU's writes are
- * visible on the host once the fence or semaphore wait returns, or the
- * event signaled after them is seen set (section 16, EVENTS). */
+ * or second (dst) scope of a barrier; 0: no device work. Draws read
+ * indirect, index and vertex data at the vertex stage and in the compute
+ * encoder before their pass (draw preprocessing); shaders before
+ * rasterization run at the vertex stage (no geometry or tessellation
+ * shaders, and no vertex stage writes memory); fragment work, tests and
+ * attachment loads, stores and resolves at the fragment and tile stages;
+ * compute at the dispatch stage. Transfers and anything else may be any
+ * work (copies run as blits or dispatches, blits, clears and resolves draw).
+ * Host accesses need no GPU barrier: host writes before vkQueueSubmit are
+ * visible to it, and the GPU's writes are visible on the host once the fence
+ * or semaphore wait returns, or the event signaled after them is seen set
+ * (section 16, EVENTS). */
 static pvk_MTLStages pvk_barrier_stages(VkPipelineStageFlags2 stages, bool src)
 {
+    const VkPipelineStageFlags2 input = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT |
+                                        VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT |
+                                        VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT;
+    const VkPipelineStageFlags2 vertex = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                                         VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT;
+    const VkPipelineStageFlags2 fragment = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                           VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                           VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+                                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    pvk_MTLStages m = 0;
     stages &= ~(VkPipelineStageFlags2)VK_PIPELINE_STAGE_2_HOST_BIT;
     /* TOP_OF_PIPE: no work as a source, all work as a destination;
      * BOTTOM_OF_PIPE the other way around. */
     stages &= ~(VkPipelineStageFlags2)(src ? VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
-    return stages ? PVK_MTLStageDispatch | PVK_MTLStageBlit : 0;
+    if (stages & input)
+        m |= PVK_MTLStageVertex | PVK_MTLStageDispatch;
+    if (stages & vertex)
+        m |= PVK_MTLStageVertex;
+    if (stages & fragment)
+        m |= PVK_MTLStageFragment | PVK_MTLStageTile;
+    if (stages & VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+        m |= PVK_MTLStageDispatch;
+    if (stages & ~(input | vertex | fragment | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT))
+        m = PVK_STAGES_ALL;
+    return m;
+}
+
+/* A barrier (or a dependency like one) recorded in the submission being
+ * encoded: encoders started later wait for earlier work at `after` stages
+ * before their `before` stages. */
+static void pvk_queue_order(struct pvk_encoder *e, pvk_MTLStages after, pvk_MTLStages before)
+{
+    struct pvk_queue *q = e->queue;
+    struct pvk_order *o;
+    if (!after || !before)
+        return;
+    if (q->order_count && q->order[q->order_count - 1].serial == e->serial) {
+        o = &q->order[q->order_count - 1];
+    } else {
+        if (q->order_count == PVK_ORDER_MAX) { /* the oldest two become one, done with the later */
+            q->order[1].after |= q->order[0].after;
+            q->order[1].before |= q->order[0].before;
+            memmove(q->order, q->order + 1, sizeof(q->order[0]) * --q->order_count);
+        }
+        o = &q->order[q->order_count++];
+        o->serial = e->serial;
+        o->after = o->before = 0;
+    }
+    o->after |= after;
+    o->before |= before;
+}
+
+/* What an encoder of `stages` started now waits for: the barriers of
+ * submissions not done when the batch began (done, they left nothing for
+ * later work to wait for), and the batch's semaphore waits (after all
+ * earlier work on the queue). *after: the first scope's stages; returns the
+ * encoder's stages in the second (0: no barrier). */
+static pvk_MTLStages pvk_queue_ordered(const struct pvk_encoder *e, pvk_MTLStages stages, pvk_MTLStages *after)
+{
+    const struct pvk_queue *q = e->queue;
+    pvk_MTLStages a = e->wait_before ? PVK_STAGES_ALL : 0, b = e->wait_before;
+    uint32_t i;
+    for (i = 0; i < q->order_count; i++) {
+        a |= q->order[i].after;
+        b |= q->order[i].before;
+    }
+    *after = a;
+    return a ? b & stages : 0;
+}
+
+/* The compute encoder waits for earlier encoders at `after` stages before
+ * `before` (both: its consumer barriers so far, together). */
+static void pvk_encoder_consume(struct pvk_encoder *e, pvk_MTLStages after, pvk_MTLStages before)
+{
+    if (!after || !before || (!(after & ~e->consumer_after) && !(before & ~e->consumer_before)))
+        return;
+    e->consumer_after |= after;
+    e->consumer_before |= before;
+    pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
+        e->enc, e->consumer_after, e->consumer_before, e->queue->device->visibility);
 }
 
 static void pvk_encode_barrier(struct pvk_encoder *e, const struct pvk_cmd_barrier *c)
 {
-    if (!pvk_barrier_stages(c->src_stages, true) || !pvk_barrier_stages(c->dst_stages, false))
+    pvk_MTLStages src = pvk_barrier_stages(c->src_stages, true), dst = pvk_barrier_stages(c->dst_stages, false);
+    if (!src || !dst)
         return;
-    e->queue->ordered = true;
+    pvk_queue_order(e, src, dst);
     /* In a render pass (subpass self-dependencies, local read) nothing is
      * encoded: Metal render encoders take barriers after vertex work only
      * (validation layer, macOS 27.2), no vertex stage writes memory here
@@ -57844,15 +57978,12 @@ static void pvk_encode_barrier(struct pvk_encoder *e, const struct pvk_cmd_barri
      * VK_DEPENDENCY_BY_REGION_BIT asks within a render pass. */
     if (e->render.enc)
         return;
-    if (!e->enc) /* the next encoder waits for everything before it */
+    if (!e->enc || !(dst & PVK_STAGES_COMPUTE)) /* the next encoder waits for what it must */
         return;
-    if (!e->consumer_barrier) {
-        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-            e->enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, e->queue->device->visibility);
-        e->consumer_barrier = true;
-    }
-    pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
-        e->enc, PVK_STAGES_COMPUTE, PVK_STAGES_COMPUTE, e->queue->device->visibility);
+    pvk_encoder_consume(e, src, dst & PVK_STAGES_COMPUTE); /* earlier encoders */
+    if (src & PVK_STAGES_COMPUTE) /* the encoder's commands before it */
+        pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
+            e->enc, src & PVK_STAGES_COMPUTE, dst & PVK_STAGES_COMPUTE, e->queue->device->visibility);
 }
 
 static id pvk_device_fill_pipeline(struct pvk_device *device);
@@ -58225,21 +58356,22 @@ static void pvk_device_finish_images(struct pvk_device *device)
  * here; the next compute command starts a new one). The caller ends it. */
 static id pvk_encoder_render(struct pvk_encoder *e, id pass)
 {
+    pvk_MTLStages after, before;
     id enc;
     if (e->result != VK_SUCCESS)
         return NULL;
     if (e->render.enc) /* not inside a render pass: Vulkan allows no transfer there */
         pvk_render_end(e);
     pvk_encoder_end(e);
-    enc = pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass);
+    enc = pvk_render_encoder_new(e, pass);
     if (!enc) {
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
         return NULL;
     }
     pvk_labels_open(e, enc, NULL);
-    if (e->waits || e->queue->ordered)
+    if ((before = pvk_queue_ordered(e, PVK_STAGES_RENDER, &after)))
         pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-            enc, PVK_STAGES_ALL, PVK_STAGES_RENDER, e->queue->device->visibility);
+            enc, after, before, e->queue->device->visibility);
     return enc;
 }
 
@@ -60247,7 +60379,7 @@ static void pvk_render_resolve_ds(struct pvk_encoder *e)
         }
         if (r->layers)
             pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, r->layers);
-        enc = pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass);
+        enc = pvk_render_encoder_new(e, pass);
         pvk_release(pass);
     }
     if (enc) { /* after the pass's stores */
@@ -60287,11 +60419,8 @@ static void pvk_render_resolve_clear(struct pvk_encoder *e)
     s.height = h;
     s.depth = 1;
     enc = pvk_encoder_get(e);
-    if (enc && !e->consumer_barrier) { /* after the pass */
-        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-            enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, e->queue->device->visibility);
-        e->consumer_barrier = true;
-    }
+    if (enc) /* after the pass */
+        pvk_encoder_consume(e, PVK_STAGES_ALL, PVK_STAGES_COMPUTE);
     for (a = 0; a < 2 && enc; a++) {
         uint32_t aspect = a ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
         uint32_t bytes = a ? 1u : b->resolve_clear_depth_bytes, i;
@@ -60339,10 +60468,10 @@ static void pvk_render_resolve_int(struct pvk_encoder *e)
     struct pvk_render *r = &e->render;
     uint32_t n = r->resolve_int_count, mask = r->begin ? r->begin->view_mask : 0, i, l;
     uint32_t layers = mask ? 32 : r->begin && r->begin->layers ? r->begin->layers : 1;
-    bool ordered = e->queue->ordered;
+    pvk_MTLStages wait_before = e->wait_before;
 
     r->resolve_int_count = 0;
-    e->queue->ordered = true; /* after the pass's stores */
+    e->wait_before = PVK_STAGES_ALL; /* after the pass's stores */
     for (i = 0; i < n && r->begin; i++) {
         const struct pvk_pass_attachment *pa = &r->resolve_int[i];
         struct pvk_cmd_blit c;
@@ -60369,7 +60498,7 @@ static void pvk_render_resolve_int(struct pvk_encoder *e)
             pvk_encode_blit(e, &c);
         }
     }
-    e->queue->ordered = ordered;
+    e->wait_before = wait_before;
 }
 
 /* What pvk_render_resolve_ds resolves of a stored, resolved depth/stencil
@@ -60427,7 +60556,7 @@ static id pvk_render_seed_depth(struct pvk_encoder *e, const struct pvk_pass_att
     if (layers)
         pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, layers);
     pvk_MTL4RenderPassDescriptor_setSupportColorAttachmentMapping(pass, true);
-    enc = pvk_retain(pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass));
+    enc = pvk_retain(pvk_render_encoder_new(e, pass));
     pvk_release(pass);
     if (enc && (map = pvk_MTLLogicalToPhysicalColorAttachmentMap_new())) {
         pvk_MTLLogicalToPhysicalColorAttachmentMap_setPhysicalIndex_forLogicalIndex(map, 0, 0);
@@ -60609,7 +60738,7 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
     }
     pvk_MTL4RenderPassDescriptor_setSupportColorAttachmentMapping(pass, true);
     /* autoreleased: kept until it ends */
-    enc = pvk_retain(pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass));
+    enc = pvk_retain(pvk_render_encoder_new(e, pass));
     pvk_release(pass);
     objc_autoreleasePoolPop(pool);
     if (!enc) {
@@ -60769,6 +60898,7 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
     struct pvk_pass_attachment depth, stencil, resolve_depth, resolve_stencil;
     uint32_t s, clears = 0, ds_clears, values[PVK_MAX_COLOR_ATTACHMENTS][4];
     bool memoryless = false, resolves = false;
+    pvk_MTLStages after, before;
     id enc;
 
     if (group) {
@@ -60828,9 +60958,14 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
     if (!enc)
         return;
     /* (a later part of a render pass instance loads what the earlier stored) */
-    if (e->waits || e->queue->ordered || e->prepassed || c->after || (c->flags & VK_RENDERING_RESUMING_BIT))
+    before = pvk_queue_ordered(e, PVK_STAGES_RENDER, &after);
+    if (e->prepassed || c->after || (c->flags & VK_RENDERING_RESUMING_BIT)) {
+        after = PVK_STAGES_ALL;
+        before = PVK_STAGES_RENDER;
+    }
+    if (before)
         pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-            enc, PVK_STAGES_ALL, PVK_STAGES_RENDER, e->queue->device->visibility);
+            enc, after, before, e->queue->device->visibility);
     e->prepassed = false;
     r->suspended = false;
     r->resolve_depth = resolve_depth;
@@ -61888,7 +62023,7 @@ static void pvk_encode_query_reset(struct pvk_encoder *e, const struct pvk_cmd_q
      * it, so later encoders wait for earlier work. Timestamps, availability
      * writes and copies wait for earlier work anyway. */
     if (c->pool->type != VK_QUERY_TYPE_TIMESTAMP)
-        e->queue->ordered = true;
+        pvk_queue_order(e, PVK_STAGES_COMPUTE, PVK_STAGES_RENDER);
 }
 
 static void pvk_encode_query_copy(struct pvk_encoder *e, const struct pvk_cmd_query *c)
@@ -61905,11 +62040,7 @@ static void pvk_encode_query_copy(struct pvk_encoder *e, const struct pvk_cmd_qu
     }
     if (!(enc = pvk_encoder_get(e)))
         return;
-    if (!e->consumer_barrier) { /* earlier encoders wrote the results and availability */
-        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-            enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, e->queue->device->visibility);
-        e->consumer_barrier = true;
-    }
+    pvk_encoder_consume(e, PVK_STAGES_ALL, PVK_STAGES_COMPUTE); /* earlier encoders wrote the results and availability */
     if (!(args = pvk_upload(e, sizeof(*args), 16, NULL, NULL, &address)))
         return;
     args->results = c->pool->address + 8ull * c->first;
@@ -62220,7 +62351,16 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
     e.queue = queue;
     e.serial = serial;
     e.cb = s->cb;
-    e.waits = submit->waitSemaphoreInfoCount > 0;
+    for (i = 0; i < submit->waitSemaphoreInfoCount; i++)
+        e.wait_before |= pvk_barrier_stages(submit->pWaitSemaphoreInfos[i].stageMask, false);
+    /* barriers of submissions done since: nothing waits for them */
+    e.completed = pvk_MTLSharedEvent_signaledValue(queue->timeline);
+    for (i = 0; i < queue->order_count && queue->order[i].serial <= e.completed; i++)
+        ;
+    if (i) {
+        queue->order_count -= i;
+        memmove(queue->order, queue->order + i, sizeof(queue->order[0]) * queue->order_count);
+    }
     e.cursor.cbs = submit->pCommandBufferInfos;
     e.cursor.count = submit->commandBufferInfoCount;
     pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(s->cb, s->allocator);

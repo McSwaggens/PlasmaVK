@@ -497,6 +497,66 @@ static void test_timeline_long_wait(void)
     free_buf(&dst2);
 }
 
+/* Barrier stages (white box: pvk_barrier_stages), and a barrier's ordering
+ * of later encoders lasting until the timeline shows its submission done
+ * (pvk_queue_order). */
+static void test_barrier_order(void)
+{
+    struct pvk_queue *q = (struct pvk_queue *)queues[0];
+    struct buf a = make_buf(4096, shared_type);
+    VkCommandBufferAllocateInfo alloc;
+    VkCommandBufferBeginInfo info;
+    VkMemoryBarrier b;
+    VkCommandBuffer cb = VK_NULL_HANDLE, fill;
+    VkFence f = make_fence(false);
+
+    CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, true) ==
+          (PVK_MTLStageFragment | PVK_MTLStageTile));
+    CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT, false) == (PVK_MTLStageVertex | PVK_MTLStageDispatch));
+    CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, false) == PVK_MTLStageVertex);
+    CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, false) == PVK_MTLStageDispatch);
+    CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, true) == 0);
+    CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, false) == 0);
+    CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, false) == PVK_STAGES_ALL);
+    CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, true) == PVK_STAGES_ALL);
+    CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_TRANSFER_BIT, false) == PVK_STAGES_ALL);
+    CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_HOST_BIT, true) == 0);
+
+    REQUIRE(a.data);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc.commandPool = pool;
+    alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc.commandBufferCount = 1;
+    REQUIRE_VK(vkAllocateCommandBuffers(device, &alloc, &cb));
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    vkBeginCommandBuffer(cb, &info);
+    vkCmdFillBuffer(cb, a.buffer, 0, VK_WHOLE_SIZE, 1);
+    memset(&b, 0, sizeof(b));
+    b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &b, 0, NULL, 0,
+                         NULL);
+    vkEndCommandBuffer(cb);
+    REQUIRE_VK(vkQueueWaitIdle(queues[0]));
+    REQUIRE_VK(submit(queues[0], VK_NULL_HANDLE, 0, cb, VK_NULL_HANDLE, 0, f));
+    REQUIRE(q->order_count >= 1);
+    CHECK(q->order[q->order_count - 1].after == PVK_STAGES_ALL &&
+          q->order[q->order_count - 1].before == (PVK_MTLStageFragment | PVK_MTLStageTile));
+    REQUIRE_VK(vkWaitForFences(device, 1, &f, VK_TRUE, 10000000000ull));
+    fill = record_fill(&a, 2);
+    REQUIRE_VK(submit(queues[0], VK_NULL_HANDLE, 0, fill, VK_NULL_HANDLE, 0, VK_NULL_HANDLE)); /* (done: dropped) */
+    CHECK(q->order_count == 0);
+    CHECK_VK(vkQueueWaitIdle(queues[0]), VK_SUCCESS);
+    CHECK(((uint32_t *)a.data)[0] == 2);
+    vkFreeCommandBuffers(device, pool, 1, &cb);
+    vkFreeCommandBuffers(device, pool, 1, &fill);
+    vkDestroyFence(device, f, NULL);
+    free_buf(&a);
+}
+
 /* ---- Binary semaphores and queues ---- */
 
 /* Nothing waits on the queue's thread: every wait so far was resolved when
@@ -720,6 +780,7 @@ int main(void)
     RUN(test_timeline_host);
     RUN(test_timeline_gpu);
     RUN(test_timeline_long_wait);
+    RUN(test_barrier_order);
     RUN(test_binary_semaphores);
     RUN(test_semaphore_same_submit);
     RUN(test_submit2_chain);
