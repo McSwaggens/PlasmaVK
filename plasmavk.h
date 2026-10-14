@@ -55794,12 +55794,8 @@ static uint32_t pvk_depth_resolve_filter(VkResolveModeFlagBits mode)
 /* renderTargetArrayLength: multiview renders view n to layer n. */
 static uint32_t pvk_pass_layers(uint32_t view_mask, uint32_t layers)
 {
-    uint32_t n = 0;
-    if (view_mask) {
-        while (view_mask >> n)
-            n++;
-        return n;
-    }
+    if (view_mask) /* (up to the highest view) */
+        return 32u - (uint32_t)__builtin_clz(view_mask);
     return layers > 1 ? layers : 0;
 }
 
@@ -56018,11 +56014,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass2(VkCommandBuffer commandBuffer, 
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo *pRenderPassBegin,
                                                 VkSubpassContents contents)
 {
-    VkSubpassBeginInfo info;
-    memset(&info, 0, sizeof(info));
-    info.sType = VK_STRUCTURE_TYPE_SUBPASS_BEGIN_INFO;
-    info.contents = contents;
-    vkCmdBeginRenderPass2(commandBuffer, pRenderPassBegin, &info);
+    (void)contents; /* (secondaries or inline: the same packets) */
+    vkCmdBeginRenderPass2(commandBuffer, pRenderPassBegin, NULL);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass2(VkCommandBuffer commandBuffer, const VkSubpassBeginInfo *pSubpassBeginInfo,
@@ -56046,11 +56039,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass2(VkCommandBuffer commandBuffer, cons
 
 VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass(VkCommandBuffer commandBuffer, VkSubpassContents contents)
 {
-    VkSubpassBeginInfo info;
-    memset(&info, 0, sizeof(info));
-    info.sType = VK_STRUCTURE_TYPE_SUBPASS_BEGIN_INFO;
-    info.contents = contents;
-    vkCmdNextSubpass2(commandBuffer, &info, NULL);
+    (void)contents;
+    vkCmdNextSubpass2(commandBuffer, NULL, NULL);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass2(VkCommandBuffer commandBuffer, const VkSubpassEndInfo *pSubpassEndInfo)
@@ -56249,48 +56239,41 @@ static void pvk_cmd_dynamic_floats(VkCommandBuffer commandBuffer, enum pvk_dyn s
         memcpy(p, values, sizeof(float) * n);
 }
 
+/* Viewports or scissors first..first+count-1 (of size bytes each), when
+ * within the PVK_MAX_VIEWPORTS there are. */
+static void pvk_cmd_dynamic_array(VkCommandBuffer commandBuffer, enum pvk_dyn state, uint32_t first, uint32_t count,
+                                  const void *data, size_t size)
+{
+    void *p;
+    if (first >= PVK_MAX_VIEWPORTS || count > PVK_MAX_VIEWPORTS - first)
+        return;
+    p = pvk_cmd_dynamic(commandBuffer, state, first, count, size * count);
+    if (p)
+        memcpy(p, data, size * count);
+}
+
 VKAPI_ATTR void VKAPI_CALL vkCmdSetViewport(VkCommandBuffer commandBuffer, uint32_t firstViewport, uint32_t viewportCount,
                                             const VkViewport *pViewports)
 {
-    void *p;
-    if (firstViewport >= PVK_MAX_VIEWPORTS || viewportCount > PVK_MAX_VIEWPORTS - firstViewport)
-        return;
-    p = pvk_cmd_dynamic(commandBuffer, PVK_DYN_VIEWPORT, firstViewport, viewportCount, sizeof(VkViewport) * viewportCount);
-    if (p)
-        memcpy(p, pViewports, sizeof(VkViewport) * viewportCount);
+    pvk_cmd_dynamic_array(commandBuffer, PVK_DYN_VIEWPORT, firstViewport, viewportCount, pViewports, sizeof(VkViewport));
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdSetViewportWithCount(VkCommandBuffer commandBuffer, uint32_t viewportCount,
                                                      const VkViewport *pViewports)
 {
-    void *p;
-    if (viewportCount > PVK_MAX_VIEWPORTS)
-        return;
-    p = pvk_cmd_dynamic(commandBuffer, PVK_DYN_VIEWPORT_COUNT, 0, viewportCount, sizeof(VkViewport) * viewportCount);
-    if (p)
-        memcpy(p, pViewports, sizeof(VkViewport) * viewportCount);
+    pvk_cmd_dynamic_array(commandBuffer, PVK_DYN_VIEWPORT_COUNT, 0, viewportCount, pViewports, sizeof(VkViewport));
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdSetScissor(VkCommandBuffer commandBuffer, uint32_t firstScissor, uint32_t scissorCount,
                                            const VkRect2D *pScissors)
 {
-    void *p;
-    if (firstScissor >= PVK_MAX_VIEWPORTS || scissorCount > PVK_MAX_VIEWPORTS - firstScissor)
-        return;
-    p = pvk_cmd_dynamic(commandBuffer, PVK_DYN_SCISSOR, firstScissor, scissorCount, sizeof(VkRect2D) * scissorCount);
-    if (p)
-        memcpy(p, pScissors, sizeof(VkRect2D) * scissorCount);
+    pvk_cmd_dynamic_array(commandBuffer, PVK_DYN_SCISSOR, firstScissor, scissorCount, pScissors, sizeof(VkRect2D));
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdSetScissorWithCount(VkCommandBuffer commandBuffer, uint32_t scissorCount,
                                                     const VkRect2D *pScissors)
 {
-    void *p;
-    if (scissorCount > PVK_MAX_VIEWPORTS)
-        return;
-    p = pvk_cmd_dynamic(commandBuffer, PVK_DYN_SCISSOR_COUNT, 0, scissorCount, sizeof(VkRect2D) * scissorCount);
-    if (p)
-        memcpy(p, pScissors, sizeof(VkRect2D) * scissorCount);
+    pvk_cmd_dynamic_array(commandBuffer, PVK_DYN_SCISSOR_COUNT, 0, scissorCount, pScissors, sizeof(VkRect2D));
 }
 
 /* wideLines is not supported: lines are 1 pixel wide whatever the width,
@@ -59812,10 +59795,8 @@ static id pvk_hidden_texture(struct pvk_device *device, pvk_MTLPixelFormat forma
         pvk_release(t->texture);
         pvk_free(pvk_device_alloc(device), t);
     }
-    if (made && queue) { /* (the GPU reads it in this batch) */
+    if (made && queue) /* (the GPU reads it in this batch: its commit commits residency, pvk_queue_commit) */
         pvk_device_make_resident(device, texture);
-        pvk_device_commit_residency(device);
-    }
     return texture;
 }
 
@@ -60292,7 +60273,6 @@ static void pvk_render_resolve_clear(struct pvk_encoder *e)
 {
     const struct pvk_cmd_begin_pass *b = e->render.begin;
     uint32_t layers, w, h, a, l;
-    bool ordered = e->queue->ordered;
     pvk_MTLOrigin o;
     pvk_MTLSize s;
     id enc;
@@ -60308,9 +60288,12 @@ static void pvk_render_resolve_clear(struct pvk_encoder *e)
     s.width = w;
     s.height = h;
     s.depth = 1;
-    e->queue->ordered = true; /* after the pass */
     enc = pvk_encoder_get(e);
-    e->queue->ordered = ordered;
+    if (enc && !e->consumer_barrier) { /* after the pass */
+        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
+            enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE, e->queue->device->visibility);
+        e->consumer_barrier = true;
+    }
     for (a = 0; a < 2 && enc; a++) {
         uint32_t aspect = a ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
         uint32_t bytes = a ? 1u : b->resolve_clear_depth_bytes, i;
@@ -62767,6 +62750,24 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit2(VkQueue queue, uint32_t submitCoun
 }
 
 /* vkQueueSubmit: the batches as VkSubmitInfo2. */
+/* The VkSemaphoreSubmitInfos of n semaphores at out (zeroed), with their
+ * stages (NULL: all commands) and timeline values (nvalues of them, NULL:
+ * none) of a vkQueueSubmit or vkQueueBindSparse batch. Returns their end. */
+static VkSemaphoreSubmitInfo *pvk_semaphore_infos(VkSemaphoreSubmitInfo *out, uint32_t n, const VkSemaphore *semaphores,
+                                                  const VkPipelineStageFlags *stages, const uint64_t *values,
+                                                  uint32_t nvalues)
+{
+    uint32_t j;
+    for (j = 0; j < n; j++, out++) {
+        out->sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        out->semaphore = semaphores[j];
+        out->stageMask = stages ? stages[j] : VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        if (values && j < nvalues)
+            out->value = values[j];
+    }
+    return out;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue _queue, uint32_t submitCount, const VkSubmitInfo *pSubmits,
                                              VkFence fence)
 {
@@ -62803,13 +62804,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue _queue, uint32_t submitCoun
         out->sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
         out->waitSemaphoreInfoCount = in->waitSemaphoreCount;
         out->pWaitSemaphoreInfos = sems;
-        for (j = 0; j < in->waitSemaphoreCount; j++, sems++) {
-            sems->sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-            sems->semaphore = in->pWaitSemaphores[j];
-            sems->stageMask = in->pWaitDstStageMask[j];
-            if (values && values->pWaitSemaphoreValues && j < values->waitSemaphoreValueCount)
-                sems->value = values->pWaitSemaphoreValues[j];
-        }
+        sems = pvk_semaphore_infos(sems, in->waitSemaphoreCount, in->pWaitSemaphores, in->pWaitDstStageMask,
+                                   values ? values->pWaitSemaphoreValues : NULL,
+                                   values ? values->waitSemaphoreValueCount : 0);
         out->commandBufferInfoCount = in->commandBufferCount;
         out->pCommandBufferInfos = cbs;
         for (j = 0; j < in->commandBufferCount; j++, cbs++) {
@@ -62818,12 +62815,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue _queue, uint32_t submitCoun
         }
         out->signalSemaphoreInfoCount = in->signalSemaphoreCount;
         out->pSignalSemaphoreInfos = sems;
-        for (j = 0; j < in->signalSemaphoreCount; j++, sems++) {
-            sems->sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-            sems->semaphore = in->pSignalSemaphores[j];
-            if (values && values->pSignalSemaphoreValues && j < values->signalSemaphoreValueCount)
-                sems->value = values->pSignalSemaphoreValues[j];
-        }
+        sems = pvk_semaphore_infos(sems, in->signalSemaphoreCount, in->pSignalSemaphores, NULL,
+                                   values ? values->pSignalSemaphoreValues : NULL,
+                                   values ? values->signalSemaphoreValueCount : 0);
     }
     result = pvk_queue_submit_checked(queue, submitCount, submits, fence, false);
     pvk_free(alloc, submits);
@@ -63137,22 +63131,14 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueBindSparse(VkQueue _queue, uint32_t bindIn
         out->sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
         out->waitSemaphoreInfoCount = in->waitSemaphoreCount;
         out->pWaitSemaphoreInfos = sems;
-        for (j = 0; j < in->waitSemaphoreCount; j++, sems++) {
-            sems->sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-            sems->semaphore = in->pWaitSemaphores[j];
-            sems->stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            if (values && values->pWaitSemaphoreValues && j < values->waitSemaphoreValueCount)
-                sems->value = values->pWaitSemaphoreValues[j];
-        }
+        sems = pvk_semaphore_infos(sems, in->waitSemaphoreCount, in->pWaitSemaphores, NULL,
+                                   values ? values->pWaitSemaphoreValues : NULL,
+                                   values ? values->waitSemaphoreValueCount : 0);
         out->signalSemaphoreInfoCount = in->signalSemaphoreCount;
         out->pSignalSemaphoreInfos = sems;
-        for (j = 0; j < in->signalSemaphoreCount; j++, sems++) {
-            sems->sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-            sems->semaphore = in->pSignalSemaphores[j];
-            sems->stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            if (values && values->pSignalSemaphoreValues && j < values->signalSemaphoreValueCount)
-                sems->value = values->pSignalSemaphoreValues[j];
-        }
+        sems = pvk_semaphore_infos(sems, in->signalSemaphoreCount, in->pSignalSemaphores, NULL,
+                                   values ? values->pSignalSemaphoreValues : NULL,
+                                   values ? values->signalSemaphoreValueCount : 0);
     }
     result = pvk_queue_submit(queue, bindInfoCount, submits, fence, binds);
     pvk_free(alloc, submits);
