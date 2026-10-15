@@ -36143,7 +36143,8 @@ static const char *pvk_object_label(char *buf, size_t size, VkObjectType type, u
  *     initial (-00050); vkResetCommandBuffer without it (-00046);
  *     vkEndCommandBuffer not recording (-00059), in a render pass (-00060),
  *     with a secondary's label region open (-01815); submitting one that is
- *     not executable, a one-time-submit one again (vkQueueSubmit-00070,
+ *     not executable, a one-time-submit one again, one that executes a
+ *     secondary reset, recorded again or freed since (vkQueueSubmit-00070,
  *     vkQueueSubmit2-03874), a secondary (VkSubmitInfo-00075,
  *     VkCommandBufferSubmitInfo-03890), one of another queue family
  *     (-00074, -03878).
@@ -54654,12 +54655,21 @@ struct pvk_command_buffer {
     bool submitted;
     const void *debug_pipeline[2];
     bool render_group; /* a debug group of the render pass instance is open */
+    /* Debug layer: the number of this recording (pvk_recordings; 0: none
+     * since a reset), and whether it executes secondaries, whose numbers its
+     * EXECUTE_COMMANDS packets keep: one reset, recorded again or freed
+     * since makes it invalid (pvk_debug_secondaries_valid, section 16) */
+    uint64_t recording;
+    bool executes;
     /* PVK_SCAN_* of what it recorded; in a render pass instance, of what the
      * instance recorded so far (its BEGIN_PASS packet scan_pass gets them
      * when it ends), scan_outer of the rest */
     uint32_t scan, scan_outer;
     struct pvk_cmd_begin_pass *scan_pass;
 };
+
+/* Debug layer: recordings begun (struct pvk_command_buffer.recording). */
+static uint64_t pvk_recordings;
 
 static const VkAllocationCallbacks *pvk_pool_alloc(const struct pvk_command_pool *pool)
 {
@@ -54708,6 +54718,8 @@ static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release
     cb->submitted = false;
     cb->debug_pipeline[0] = cb->debug_pipeline[1] = NULL;
     cb->render_group = false;
+    cb->recording = 0;
+    cb->executes = false;
     cb->scan = cb->scan_outer = 0;
     cb->scan_pass = NULL;
     if (release) {
@@ -54902,6 +54914,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBeginCommandBuffer(VkCommandBuffer commandBuffe
         pvk_command_buffer_reset(cb, false);
     cb->state = PVK_CB_RECORDING;
     cb->usage = pBeginInfo->flags;
+    if (pvk_cb_debug(cb))
+        cb->recording = __atomic_add_fetch(&pvk_recordings, 1, __ATOMIC_RELAXED);
     /* A secondary continuing a render pass inherits what local-read
      * attachment mappings it may change (Graphics, below). */
     if (cb->level == VK_COMMAND_BUFFER_LEVEL_SECONDARY && (pBeginInfo->flags & VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT) &&
@@ -54955,7 +54969,7 @@ enum pvk_cmd_op {
     PVK_CMD_PUSH_CONSTANTS,    /* struct pvk_cmd_push, then the data */
     PVK_CMD_DISPATCH,          /* struct pvk_cmd_dispatch */
     PVK_CMD_DISPATCH_INDIRECT, /* struct pvk_cmd_dispatch_indirect */
-    PVK_CMD_EXECUTE_COMMANDS,  /* struct pvk_cmd_execute, then the command buffers */
+    PVK_CMD_EXECUTE_COMMANDS,  /* struct pvk_cmd_execute, then the command buffers and their recordings */
     PVK_CMD_BIND_SET,          /* struct pvk_cmd_bind_set, then its struct pvk_dynamic_offset list */
     PVK_CMD_PUSH_SET,          /* struct pvk_cmd_push_set, then the table */
     /* Image transfers (end of this section) */
@@ -55034,6 +55048,8 @@ struct pvk_cmd_dispatch_indirect {
     pvk_MTLGPUAddress address; /* VkDispatchIndirectCommand */
 };
 
+/* Then count VkCommandBuffers, and the numbers of their recordings
+ * (struct pvk_command_buffer.recording) as uint64_t. */
 struct pvk_cmd_execute {
     struct pvk_cmd hdr;
     uint32_t count;
@@ -55462,16 +55478,23 @@ VKAPI_ATTR void VKAPI_CALL vkCmdExecuteCommands(VkCommandBuffer commandBuffer, u
 {
     struct pvk_cmd_execute *c;
     struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    uint64_t *recordings;
     uint32_t i;
     if (!commandBufferCount)
         return;
-    c = pvk_cmd_append(cb, PVK_CMD_EXECUTE_COMMANDS, sizeof(*c) + sizeof(VkCommandBuffer) * (size_t)commandBufferCount);
+    c = pvk_cmd_append(cb, PVK_CMD_EXECUTE_COMMANDS,
+                       sizeof(*c) + (sizeof(VkCommandBuffer) + sizeof(uint64_t)) * (size_t)commandBufferCount);
     if (!c)
         return;
     c->count = commandBufferCount;
     memcpy(c + 1, pCommandBuffers, sizeof(VkCommandBuffer) * (size_t)commandBufferCount);
-    for (i = 0; i < commandBufferCount; i++)
-        cb->scan |= ((const struct pvk_command_buffer *)pCommandBuffers[i])->scan;
+    recordings = (uint64_t *)((VkCommandBuffer *)(c + 1) + commandBufferCount);
+    for (i = 0; i < commandBufferCount; i++) {
+        const struct pvk_command_buffer *secondary = (const struct pvk_command_buffer *)pCommandBuffers[i];
+        cb->scan |= secondary->scan;
+        recordings[i] = secondary->recording;
+    }
+    cb->executes = true;
 }
 
 /* ---- Descriptor sets ----
@@ -64640,6 +64663,45 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
     return VK_SUCCESS;
 }
 
+/* Debug layer: whether the secondaries cb executes (and theirs) are the
+ * recordings it executed, none reset, recorded again or freed since (which
+ * makes cb invalid; its scan bits, PVK_SCAN_*, would be stale too). False:
+ * the first that is not is named in what. */
+static bool pvk_debug_secondaries_valid(const struct pvk_command_buffer *cb, uint32_t depth, char *what, size_t size)
+{
+    const struct pvk_cmd_block *b;
+    const struct pvk_cmd_execute *x;
+    const VkCommandBuffer *list;
+    const uint64_t *recordings;
+    uint32_t i;
+    if (!cb->executes || depth >= 8)
+        return true;
+    for (b = cb->first; b; b = b->next) {
+        size_t at = 0;
+        while (at < b->used) {
+            const struct pvk_cmd *c = (const struct pvk_cmd *)((const char *)b->data + at);
+            at += c->size;
+            if (c->op != PVK_CMD_EXECUTE_COMMANDS)
+                continue;
+            x = (const struct pvk_cmd_execute *)c;
+            list = (const VkCommandBuffer *)(x + 1);
+            recordings = (const uint64_t *)(list + x->count);
+            for (i = 0; i < x->count; i++) {
+                const struct pvk_command_buffer *secondary = (const struct pvk_command_buffer *)list[i];
+                struct pvk_live e;
+                if (!pvk_live_get((uint64_t)(uintptr_t)secondary, &e) || e.type != VK_OBJECT_TYPE_COMMAND_BUFFER ||
+                    secondary->recording != recordings[i] ||
+                    !pvk_debug_secondaries_valid(secondary, depth + 1, what, size)) {
+                    if (!*what)
+                        pvk_object_label(what, size, VK_OBJECT_TYPE_COMMAND_BUFFER, (uint64_t)(uintptr_t)secondary);
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 /* With the debug layer: the checks of a submission (two: as vkQueueSubmit2).
  * False: skip it. Handles that are not alive, and command buffers that are
  * not executable (they may be being recorded), always skip it. */
@@ -64650,7 +64712,7 @@ static bool pvk_debug_check_submit(const struct pvk_queue *queue, uint32_t count
     const char *command = two ? "vkQueueSubmit2" : "vkQueueSubmit";
     const struct pvk_fence *fence = (const struct pvk_fence *)_fence;
     bool skip = false;
-    char what[256];
+    char what[256], secondary[256];
     uint32_t i, j;
 
     for (i = 0; i < count; i++) {
@@ -64690,6 +64752,15 @@ static bool pvk_debug_check_submit(const struct pvk_queue *queue, uint32_t count
                                                                      : "invalid (recorded with "
                                                                        "VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT and "
                                                                        "submitted already)");
+                return false;
+            }
+            secondary[0] = '\0';
+            if (!pvk_debug_secondaries_valid(cb, 0, secondary, sizeof(secondary))) {
+                pvk_queue_vuid(queue, two ? "VUID-vkQueueSubmit2-commandBuffer-03874" : "VUID-vkQueueSubmit-pCommandBuffers-00070",
+                               VK_OBJECT_TYPE_COMMAND_BUFFER, handle,
+                               "%s: %s is invalid: %s, which it executes, was reset, recorded again or freed since; "
+                               "the submission is skipped",
+                               command, what, secondary);
                 return false;
             }
             if (cb->pool->queue_family != queue->family_index)

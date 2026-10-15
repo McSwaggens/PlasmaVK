@@ -682,6 +682,7 @@ static void test_submit_checks(void)
     VkCommandPool compute_pool = make_pool(device, 1, 0);
     VkCommandBuffer cb = make_cb(device, pool, VK_COMMAND_BUFFER_LEVEL_PRIMARY);
     VkCommandBuffer sec = make_cb(device, pool, VK_COMMAND_BUFFER_LEVEL_SECONDARY);
+    VkCommandBuffer sec2 = make_cb(device, pool, VK_COMMAND_BUFFER_LEVEL_SECONDARY);
     VkCommandBuffer compute = make_cb(device, compute_pool, VK_COMMAND_BUFFER_LEVEL_PRIMARY);
     VkFence signaled = make_fence(device, true), fence = make_fence(device, false);
     VkSemaphore timeline = make_semaphore(device, true);
@@ -723,6 +724,35 @@ static void test_submit_checks(void)
     CHECK_VK(submit(queue, compute, VK_NULL_HANDLE), VK_SUCCESS);
     EXPECT("VUID-vkQueueSubmit-pCommandBuffers-00074");
     CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+
+    /* A primary is invalid once a secondary it executes is recorded again,
+     * reset or freed */
+    CHECK_VK(begin(sec, 0), VK_SUCCESS);
+    CHECK_VK(vkEndCommandBuffer(sec), VK_SUCCESS);
+    CHECK_VK(begin(cb, 0), VK_SUCCESS);
+    vkCmdExecuteCommands(cb, 1, &sec);
+    CHECK_VK(vkEndCommandBuffer(cb), VK_SUCCESS);
+    CHECK_VK(submit(queue, cb, VK_NULL_HANDLE), VK_SUCCESS);
+    CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+    EXPECT_NONE();
+    CHECK_VK(begin(sec, 0), VK_SUCCESS);
+    CHECK_VK(vkEndCommandBuffer(sec), VK_SUCCESS);
+    CHECK_VK(submit(queue, cb, VK_NULL_HANDLE), VK_ERROR_VALIDATION_FAILED_EXT);
+    EXPECT("VUID-vkQueueSubmit-pCommandBuffers-00070");
+    CHECK_VK(begin(cb, 0), VK_SUCCESS);
+    vkCmdExecuteCommands(cb, 1, &sec);
+    CHECK_VK(vkEndCommandBuffer(cb), VK_SUCCESS);
+    CHECK_VK(vkResetCommandBuffer(sec, 0), VK_SUCCESS);
+    CHECK_VK(vkQueueSubmit2(queue, 1, &s2, VK_NULL_HANDLE), VK_ERROR_VALIDATION_FAILED_EXT);
+    EXPECT("VUID-vkQueueSubmit2-commandBuffer-03874");
+    CHECK_VK(begin(sec2, 0), VK_SUCCESS);
+    CHECK_VK(vkEndCommandBuffer(sec2), VK_SUCCESS);
+    CHECK_VK(begin(cb, 0), VK_SUCCESS);
+    vkCmdExecuteCommands(cb, 1, &sec2);
+    CHECK_VK(vkEndCommandBuffer(cb), VK_SUCCESS);
+    vkFreeCommandBuffers(device, pool, 1, &sec2);
+    CHECK_VK(submit(queue, cb, VK_NULL_HANDLE), VK_ERROR_VALIDATION_FAILED_EXT);
+    EXPECT("VUID-vkQueueSubmit-pCommandBuffers-00070");
 
     CHECK_VK(submit(queue, VK_NULL_HANDLE, signaled), VK_SUCCESS);
     EXPECT("VUID-vkQueueSubmit-fence-00063");
