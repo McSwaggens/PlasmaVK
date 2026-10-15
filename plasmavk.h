@@ -55759,8 +55759,8 @@ struct pvk_cmd_blit {
     uint32_t swizzle[4];                        /* source format's component swizzle (pvk_MTLTextureSwizzle) */
 };
 
-/* One subresource range of a clear: one render pass per level and slice
- * plane (3D) or per level (layered). */
+/* One subresource range of a clear: one layered render pass per level (its
+ * layers, or a 3D level's slice planes). */
 struct pvk_cmd_clear {
     struct pvk_cmd hdr;
     id texture;
@@ -59613,11 +59613,13 @@ static id pvk_encode_compute_state(struct pvk_encoder *e, const uint32_t base[3]
  * the compute encoder. Clears, blits and resolves draw, each in a render
  * encoder of its own between compute encoders (pvk_encoder_render): a clear
  * is a render pass whose load action clears (all layers of a level at once,
- * with renderTargetArrayLength); blits and resolves draw a triangle covering
- * the destination rectangle (the viewport) with an internal fragment shader
- * that reads the source: nearest texels with read(), linear filtering with
- * a sampler, resolves average the samples (float) or take sample 0. Render
- * pipelines are made on first use per function and destination format. */
+ * or all slice planes of a 3D level, with renderTargetArrayLength: Metal
+ * clears a 3D attachment's planes from depthPlane as layers); blits and
+ * resolves draw a triangle covering the destination rectangle (the
+ * viewport) with an internal fragment shader that reads the source: nearest
+ * texels with read(), linear filtering with a sampler, resolves average the
+ * samples (float) or take sample 0. Render pipelines are made on first use
+ * per function and destination format. */
 
 /* Arguments of the internal draws, at buffer index 0 (pvk_blit_args in
  * pvk_blit_msl). */
@@ -60064,56 +60066,55 @@ static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
 
 static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *c)
 {
-    uint32_t l, p;
+    uint32_t l;
     for (l = c->level; l < c->level + c->levels && e->result == VK_SUCCESS; l++) {
-        uint32_t planes = c->depth ? pvk_mip_extent(c->depth, l) : 1;
-        for (p = 0; p < planes && e->result == VK_SUCCESS; p++) {
-            void *pool = objc_autoreleasePoolPush();
-            id pass = pvk_MTL4RenderPassDescriptor_new(), att, enc;
-            if (!pass) {
-                e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
-                objc_autoreleasePoolPop(pool);
-                return;
-            }
-            if (c->color) {
-                att = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
-                    pvk_MTL4RenderPassDescriptor_colorAttachments(pass), 0);
-                pvk_MTLRenderPassColorAttachmentDescriptor_setClearColor(att, c->value);
-                pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, c->texture);
-                pvk_MTLRenderPassAttachmentDescriptor_setLevel(att, l);
-                pvk_MTLRenderPassAttachmentDescriptor_setSlice(att, c->depth ? 0 : c->layer);
-                pvk_MTLRenderPassAttachmentDescriptor_setDepthPlane(att, c->depth ? p : 0);
-                pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, PVK_MTLLoadActionClear);
-                pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
-            }
-            if (!c->color && c->has_depth) {
-                att = pvk_MTL4RenderPassDescriptor_depthAttachment(pass);
-                pvk_MTLRenderPassDepthAttachmentDescriptor_setClearDepth(att, c->depth_value);
-                pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, c->texture);
-                pvk_MTLRenderPassAttachmentDescriptor_setLevel(att, l);
-                pvk_MTLRenderPassAttachmentDescriptor_setSlice(att, c->layer);
-                pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, c->clear_depth ? PVK_MTLLoadActionClear
-                                                                                        : PVK_MTLLoadActionLoad);
-                pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
-            }
-            if (!c->color && c->has_stencil) {
-                att = pvk_MTL4RenderPassDescriptor_stencilAttachment(pass);
-                pvk_MTLRenderPassStencilAttachmentDescriptor_setClearStencil(att, c->stencil);
-                pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, c->texture);
-                pvk_MTLRenderPassAttachmentDescriptor_setLevel(att, l);
-                pvk_MTLRenderPassAttachmentDescriptor_setSlice(att, c->layer);
-                pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, c->clear_stencil ? PVK_MTLLoadActionClear
-                                                                                          : PVK_MTLLoadActionLoad);
-                pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
-            }
-            if (!c->depth && c->layers > 1)
-                pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, c->layers);
-            enc = pvk_encoder_render(e, pass);
-            pvk_release(pass);
-            if (enc)
-                pvk_render_close(e, enc);
+        /* the layers, or a 3D level's slice planes (from depth plane 0), as
+         * the pass's layers */
+        uint32_t layers = c->depth ? pvk_mip_extent(c->depth, l) : c->layers;
+        void *pool = objc_autoreleasePoolPush();
+        id pass = pvk_MTL4RenderPassDescriptor_new(), att, enc;
+        if (!pass) {
+            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
             objc_autoreleasePoolPop(pool);
+            return;
         }
+        if (c->color) {
+            att = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
+                pvk_MTL4RenderPassDescriptor_colorAttachments(pass), 0);
+            pvk_MTLRenderPassColorAttachmentDescriptor_setClearColor(att, c->value);
+            pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, c->texture);
+            pvk_MTLRenderPassAttachmentDescriptor_setLevel(att, l);
+            pvk_MTLRenderPassAttachmentDescriptor_setSlice(att, c->depth ? 0 : c->layer);
+            pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, PVK_MTLLoadActionClear);
+            pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
+        }
+        if (!c->color && c->has_depth) {
+            att = pvk_MTL4RenderPassDescriptor_depthAttachment(pass);
+            pvk_MTLRenderPassDepthAttachmentDescriptor_setClearDepth(att, c->depth_value);
+            pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, c->texture);
+            pvk_MTLRenderPassAttachmentDescriptor_setLevel(att, l);
+            pvk_MTLRenderPassAttachmentDescriptor_setSlice(att, c->layer);
+            pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, c->clear_depth ? PVK_MTLLoadActionClear
+                                                                                    : PVK_MTLLoadActionLoad);
+            pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
+        }
+        if (!c->color && c->has_stencil) {
+            att = pvk_MTL4RenderPassDescriptor_stencilAttachment(pass);
+            pvk_MTLRenderPassStencilAttachmentDescriptor_setClearStencil(att, c->stencil);
+            pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, c->texture);
+            pvk_MTLRenderPassAttachmentDescriptor_setLevel(att, l);
+            pvk_MTLRenderPassAttachmentDescriptor_setSlice(att, c->layer);
+            pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, c->clear_stencil ? PVK_MTLLoadActionClear
+                                                                                      : PVK_MTLLoadActionLoad);
+            pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
+        }
+        if (layers > 1)
+            pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, layers);
+        enc = pvk_encoder_render(e, pass);
+        pvk_release(pass);
+        if (enc)
+            pvk_render_close(e, enc);
+        objc_autoreleasePoolPop(pool);
     }
 }
 

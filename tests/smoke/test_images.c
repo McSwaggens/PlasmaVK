@@ -1130,17 +1130,28 @@ static void test_clear_color(void)
     CHECK(dst.data[0] == 0xbc && dst.data[15] == 0xbc);
     free_image(&m);
 
-    /* 3D: every slice of level 1 */
-    info = image_info(VK_IMAGE_TYPE_3D, VK_FORMAT_R32_SFLOAT, 8, 8, 8, 2, 1, xfer);
+    /* 3D: every slice plane of each level (one layered pass per level) */
+    info = image_info(VK_IMAGE_TYPE_3D, VK_FORMAT_R32_SFLOAT, 8, 8, 8, 3, 1, xfer);
     m = make_image(&info);
-    color.float32[0] = 3.5f;
-    clear_range(&ranges[0], VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 0, 1);
+    color.float32[0] = -1.0f;
+    clear_range(&ranges[0], VK_IMAGE_ASPECT_COLOR_BIT, 0, 3, 0, 1);
+    clear_range(&ranges[1], VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 0, 1);
     cb = begin();
     vkCmdClearColorImage(cb, m.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &ranges[0]);
+    barrier(cb, m.image);
+    color.float32[0] = 3.5f;
+    vkCmdClearColorImage(cb, m.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &ranges[1]);
     CHECK_VK(finish(cb), VK_SUCCESS);
     r = region(VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1, 0, 0, 0, 4, 4, 4);
     download(m.image, &r, &dst);
     CHECK(all_texels(dst.data, 64, &color.float32[0], 4));
+    color.float32[0] = -1.0f;
+    r = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, 8, 8, 8);
+    download(m.image, &r, &dst);
+    CHECK(all_texels(dst.data, 512, &color.float32[0], 4));
+    r = region(VK_IMAGE_ASPECT_COLOR_BIT, 2, 0, 1, 0, 0, 0, 2, 2, 2);
+    download(m.image, &r, &dst);
+    CHECK(all_texels(dst.data, 8, &color.float32[0], 4));
     free_image(&m);
     free_buf(&dst);
 }
