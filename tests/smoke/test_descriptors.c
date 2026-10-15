@@ -1107,6 +1107,55 @@ static void test_pool_layout_refs(void)
         vkDestroyDescriptorSetLayout(device, layouts[i], NULL);
 }
 
+/* A freed set's struct serves the pool's next set, so its handle comes
+ * back: without the private data and name it had, after vkFreeDescriptorSets
+ * and after vkResetDescriptorPool. */
+static void test_pool_set_reuse(void)
+{
+    VkDescriptorSetLayoutBinding b = lb(0, SSBO, 1);
+    VkDescriptorPoolSize size = ps(SSBO, 2);
+    VkPrivateDataSlotCreateInfo slot_info;
+    VkDebugUtilsObjectNameInfoEXT name;
+    VkDescriptorSetLayout layout;
+    VkPrivateDataSlot slot;
+    VkDescriptorPool pool;
+    VkDescriptorSet set, again;
+    uint64_t data = 1;
+    char text[16];
+    int round;
+
+    layout = make_set_layout(&b, 1, 0, NULL);
+    pool = make_pool(2, &size, 1, VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT, NULL);
+    memset(&slot_info, 0, sizeof(slot_info));
+    slot_info.sType = VK_STRUCTURE_TYPE_PRIVATE_DATA_SLOT_CREATE_INFO;
+    REQUIRE(layout && pool);
+    REQUIRE_VK(vkCreatePrivateDataSlot(device, &slot_info, NULL, &slot));
+    memset(&name, 0, sizeof(name));
+    name.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+    name.objectType = VK_OBJECT_TYPE_DESCRIPTOR_SET;
+    name.pObjectName = "set";
+    set = alloc_set(pool, layout);
+    for (round = 0; round < 2; round++) {
+        name.objectHandle = (uint64_t)(uintptr_t)set;
+        CHECK_VK(vkSetPrivateData(device, VK_OBJECT_TYPE_DESCRIPTOR_SET, name.objectHandle, slot, 42), VK_SUCCESS);
+        CHECK_VK(vkSetDebugUtilsObjectNameEXT(device, &name), VK_SUCCESS);
+        CHECK(pvk_name_get(name.objectHandle, text, sizeof(text)));
+        if (round == 0)
+            CHECK_VK(vkFreeDescriptorSets(device, pool, 1, &set), VK_SUCCESS);
+        else
+            CHECK_VK(vkResetDescriptorPool(device, pool, 0), VK_SUCCESS);
+        again = alloc_set(pool, layout);
+        CHECK(again == set);
+        vkGetPrivateData(device, VK_OBJECT_TYPE_DESCRIPTOR_SET, (uint64_t)(uintptr_t)again, slot, &data);
+        CHECK(data == 0);
+        CHECK(!pvk_name_get((uint64_t)(uintptr_t)again, text, sizeof(text)));
+        set = again;
+    }
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyPrivateDataSlot(device, slot, NULL);
+    vkDestroyDescriptorSetLayout(device, layout, NULL);
+}
+
 /* ---- Dispatches ---- */
 
 /* A uniform buffer at an offset, storage buffers with a range and with
@@ -2862,6 +2911,7 @@ int main(void)
     RUN(test_layout_support);
     RUN(test_pools);
     RUN(test_pool_layout_refs);
+    RUN(test_pool_set_reuse);
     RUN(test_buffers);
     RUN(test_pipeline_robustness);
     RUN(test_array_length);

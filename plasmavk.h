@@ -31815,12 +31815,19 @@ static void pvk_private_data_forget(const void *object);
 static long pvk_named_objects; /* in all devices' tables (atomic) */
 static void pvk_names_forget(const void *object);
 
-static void pvk_free(const VkAllocationCallbacks *alloc, void *p)
+/* What freeing an object drops, for an object whose memory is kept to be
+ * the next of its kind (a descriptor set's). */
+static void pvk_forget(const void *p)
 {
     if (p && __atomic_load_n(&pvk_private_data_entries, __ATOMIC_ACQUIRE))
         pvk_private_data_forget(p);
     if (p && __atomic_load_n(&pvk_named_objects, __ATOMIC_ACQUIRE))
         pvk_names_forget(p);
+}
+
+static void pvk_free(const VkAllocationCallbacks *alloc, void *p)
+{
+    pvk_forget(p);
     pvk_free_raw(alloc, p);
 }
 
@@ -39876,7 +39883,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  *   reads it). The pool references the first PVK_POOL_LAYOUTS layouts of
  *   its sets once each, until it is reset or destroyed; sets of other
  *   layouts reference theirs themselves. Threads allocating from their own
- *   pools with one layout so share no counter.
+ *   pools with one layout so share no counter. A freed set's struct stays
+ *   with the pool for its next set, without the private data and name it
+ *   had (as pvk_free drops them), so the handle can come back; the pool
+ *   frees them when destroyed.
  *
  * UPDATES
  *   vkUpdateDescriptorSets and templates write straight into the table
@@ -40261,6 +40271,7 @@ struct pvk_descriptor_pool {
     pvk_MTLGPUAddress address;
     VkDeviceSize size, used;                 /* bytes of mtl_buffer; held by sets */
     struct pvk_descriptor_set *first, *last; /* by offset; empty sets (offset 0) first */
+    struct pvk_descriptor_set *spare;        /* freed sets' structs, for the next sets (by next) */
     struct pvk_descriptor_set_layout *layouts[PVK_POOL_LAYOUTS]; /* referenced until a reset; NULL: none */
     uint32_t layout_hit;                                         /* the one the last allocation used */
 };
@@ -40342,7 +40353,9 @@ static void pvk_descriptor_set_free(struct pvk_descriptor_set *set)
     pool->set_count--;
     if (set->layout_ref)
         pvk_set_layout_unref(set->layout);
-    pvk_free(pvk_descriptor_pool_alloc(pool), set);
+    pvk_forget(set);
+    set->next = pool->spare;
+    pool->spare = set;
 }
 
 /* Whether the pool references `layout` for its sets: it does for the first
@@ -40431,13 +40444,16 @@ static VkResult pvk_descriptor_set_create(struct pvk_descriptor_pool *pool, stru
     }
     if (pool->set_count >= pool->max_sets || size > pool->size)
         return VK_ERROR_OUT_OF_POOL_MEMORY;
-    set = pvk_alloc(pvk_descriptor_pool_alloc(pool), sizeof(*set), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-    if (!set)
+    set = pool->spare;
+    if (set)
+        pool->spare = set->next;
+    else if (!(set = pvk_alloc(pvk_descriptor_pool_alloc(pool), sizeof(*set), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT)))
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     set->size = size;
     result = pvk_descriptor_pool_place(pool, set);
     if (result != VK_SUCCESS) {
-        pvk_free(pvk_descriptor_pool_alloc(pool), set);
+        set->next = pool->spare;
+        pool->spare = set;
         return result;
     }
     pool->set_count++;
@@ -40455,11 +40471,23 @@ static VkResult pvk_descriptor_set_create(struct pvk_descriptor_pool *pool, stru
     return VK_SUCCESS;
 }
 
+/* Frees every set: one pass, then the list joins the spare structs. */
 static void pvk_descriptor_pool_reset(struct pvk_descriptor_pool *pool)
 {
+    struct pvk_descriptor_set *set;
     uint32_t i;
-    while (pool->first)
-        pvk_descriptor_set_free(pool->first);
+    for (set = pool->first; set; set = set->next) {
+        if (set->layout_ref)
+            pvk_set_layout_unref(set->layout);
+        pvk_forget(set);
+    }
+    if (pool->last) {
+        pool->last->next = pool->spare;
+        pool->spare = pool->first;
+    }
+    pool->first = pool->last = NULL;
+    pool->used = 0;
+    pool->set_count = 0;
     for (i = 0; i < PVK_POOL_LAYOUTS; i++) {
         pvk_set_layout_unref(pool->layouts[i]);
         pool->layouts[i] = NULL;
@@ -40471,11 +40499,16 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorPool(VkDevice device, VkDescriptor
                                                    const VkAllocationCallbacks *pAllocator)
 {
     struct pvk_descriptor_pool *pool = (struct pvk_descriptor_pool *)descriptorPool;
+    struct pvk_descriptor_set *set, *next;
     (void)device;
     (void)pAllocator; /* must match creation; the stored copy is authoritative */
     if (!pool)
         return;
     pvk_descriptor_pool_reset(pool);
+    for (set = pool->spare; set; set = next) { /* forgotten when freed */
+        next = set->next;
+        pvk_free_raw(pvk_descriptor_pool_alloc(pool), set);
+    }
     pvk_device_evict(pool->device, pool->mtl_buffer);
     pvk_release(pool->mtl_buffer);
     pvk_free(pvk_descriptor_pool_alloc(pool), pool);
