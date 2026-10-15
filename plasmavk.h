@@ -34622,9 +34622,10 @@ static uint32_t pvk_mip_levels(uint32_t w, uint32_t h, uint32_t d)
  *   shared and private heaps alike). A heap can back them only if made with
  *   a maxCompatiblePlacementSparsePageSize of 64 KB, which rounds its size up
  *   to a multiple of 64 KB (heap creation costs the same), so on a device with
- *   sparseBinding enabled every allocation of 64 KB or more is made that way
- *   (smaller ones cannot hold a block). Sparse resources join the device's
- *   residency set when created; the heaps they map onto are in it already.
+ *   sparseBinding enabled every allocation of 64 KB or more is in such a
+ *   heap, its own or a pool chunk's (section 10; smaller ones cannot hold a
+ *   block). Sparse resources join the device's residency set when created;
+ *   the heaps they map onto are in it already.
  *
  *   Measured on M4 Max (Apple9, macOS 27.2):
  *   - Unmapped buffer pages read 0 and drop writes (MTLBufferSparseTier1);
@@ -37024,9 +37025,13 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, u
  * in the heap too: Vulkan alignments are powers of two no larger than the
  * resource's size, which fits in the block. Blocks start at PVK_PAGE_SIZE:
  * mapped pointers keep minMemoryMapAlignment, and Metal places buffers in
- * heaps at 256 B. With sparseBinding, allocations of 64 KB or more keep
- * heaps of their own (below), so sparse binds always map onto a heap at the
- * memory's offset.
+ * heaps at 256 B. With sparseBinding, chunks are made for sparse resources
+ * too: blocks of 64 KB or more sit on whole 64 KB tiles, and sparse binds map
+ * the tiles at the block's heap offset plus the bind's memory offset
+ * (section 16). Giving those blocks heaps of their own instead made every
+ * allocation and free of 64-512 KB cost a heap's residency changes (section
+ * 9), on devices of applications and layers (DXVK, vkd3d-proton) that enable
+ * sparseBinding without binding much.
  *
  * HEAP CACHE
  *   Making a heap is cheap, but joining the residency set and leaving it
@@ -37057,7 +37062,7 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, u
  * Sparse buffers (section 7, SPARSE RESOURCES) are placement sparse
  * MTLBuffers made with the VkBuffer, posing as memory of their own (struct
  * pvk_buffer's sparse) so commands treat them like any bound buffer; with
- * sparseBinding enabled, allocations of 64 KB or more are heaps sparse
+ * sparseBinding enabled, allocations of 64 KB or more are in heaps sparse
  * resources can map onto.
  * ========================================================================== */
 
@@ -37200,6 +37205,8 @@ static struct pvk_memory_chunk *pvk_chunk_create(struct pvk_device *device, uint
         pvk_MTLHeapDescriptor_setType(desc, PVK_MTLHeapTypePlacement);
         pvk_MTLHeapDescriptor_setResourceOptions(desc, pvk_memory_type_options[type]);
         pvk_MTLHeapDescriptor_setSize(desc, PVK_POOL_CHUNK);
+        if (device->features.core.sparseBinding) /* blocks of 64 KB or more are sparse memory */
+            pvk_MTLHeapDescriptor_setMaxCompatiblePlacementSparsePageSize(desc, PVK_SPARSE_PAGE);
         c->heap = pvk_MTLDevice_newHeapWithDescriptor(device->physical_device->mtl_device, desc);
         pvk_release(desc);
     }
@@ -37561,7 +37568,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemory
     VkDeviceSize size = pAllocateInfo->allocationSize;
     uint32_t type = pAllocateInfo->memoryTypeIndex;
     struct pvk_device_memory *memory;
-    bool sparse;
 
     /* The pNext structs PlasmaVK accepts (dedicated allocation, allocate
      * flags, capture address) need nothing: every allocation has a GPU
@@ -37582,11 +37588,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemory
         return VK_SUCCESS;
     }
 
-    /* Memory sparse resources may map onto (SPARSE RESOURCES, section 7) is
-     * a heap of its own whose size becomes a multiple of 64 KB. */
-    sparse = device->features.core.sparseBinding && size >= PVK_SPARSE_BLOCK;
-    if (size > PVK_POOL_LARGEST || sparse || !pvk_memory_block_alloc(device, memory)) {
-        memory->sparse = sparse;
+    /* Memory sparse resources may map onto (SPARSE RESOURCES, section 7): of
+     * 64 KB or more, in a heap made for them. */
+    if (size > PVK_POOL_LARGEST || !pvk_memory_block_alloc(device, memory)) {
+        memory->sparse = device->features.core.sparseBinding && size >= PVK_SPARSE_BLOCK;
         memory->heap_size = pvk_MTLDevice_heapBufferSizeAndAlignWithLength_options(mtl, size,
                                                                                     pvk_memory_type_options[type]).size;
         if (!pvk_memory_heap_alloc(device, memory)) {
@@ -65835,7 +65840,8 @@ VKAPI_ATTR void VKAPI_CALL vkQueueInsertDebugUtilsLabelEXT(VkQueue _queue, const
  *   vkQueueBindSparse turns its binds into Metal mapping operations when it
  *   is called (struct pvk_sparse_binds): a buffer bind maps (or unmaps, with
  *   no memory) the buffer's pages resourceOffset / 64 KB ... onto the
- *   memory's heap tiles from memoryOffset / 64 KB; an image bind maps the
+ *   memory's heap tiles from memoryOffset / 64 KB (counted from the memory's
+ *   offset in the heap, section 10); an image bind maps the
  *   region's tiles of a level and layer, x, then y, then z, onto consecutive
  *   heap tiles; an opaque image bind maps the blocks of a range of the
  *   image's opaque layout (section 11, SPARSE IMAGES): runs of whole rows and
@@ -65895,6 +65901,13 @@ static id pvk_sparse_heap(VkDeviceMemory memory)
     return memory ? ((struct pvk_device_memory *)memory)->mtl_heap : NULL;
 }
 
+/* The heap tile at an offset of a bind's memory, which may be a block of a
+ * pool chunk at an offset of its heap (section 10). */
+static VkDeviceSize pvk_sparse_tile(VkDeviceMemory memory, VkDeviceSize offset)
+{
+    return memory ? (((const struct pvk_device_memory *)memory)->heap_offset + offset) / PVK_SPARSE_BLOCK : 0;
+}
+
 /* The operations that bind (map) or unbind a layer's Vulkan tail in the
  * residency texture: its levels from the Vulkan tail up to its Metal tail
  * and its Metal tail, onto the scratch heap (SPARSE IMAGES). */
@@ -65933,7 +65946,7 @@ static uint32_t pvk_sparse_opaque_ops(const struct pvk_image *image, const VkSpa
     per_layer = l->layer_size / PVK_SPARSE_BLOCK;
     blk = b->resourceOffset / PVK_SPARSE_BLOCK;
     left = (b->size + PVK_SPARSE_BLOCK - 1) / PVK_SPARSE_BLOCK;
-    tile = b->memoryOffset / PVK_SPARSE_BLOCK;
+    tile = pvk_sparse_tile(b->memory, b->memoryOffset);
     for (; left && blk < per_layer * l->layers; blk += run, tile += run, left -= run) {
         uint32_t layer = (uint32_t)(blk / per_layer), lv = 0, w, h, d;
         VkDeviceSize local = blk % per_layer, i, k, t;
@@ -66007,7 +66020,7 @@ static uint32_t pvk_sparse_image_op(const struct pvk_image *image, const VkSpars
                               ((uint32_t)b->offset.x + b->extent.width + l->block.width - 1) / l->block.width - x,
                               ((uint32_t)b->offset.y + b->extent.height + l->block.height - 1) / l->block.height - y,
                               ((uint32_t)b->offset.z + b->extent.depth + l->block.depth - 1) / l->block.depth - z,
-                              b->memoryOffset / PVK_SPARSE_BLOCK);
+                              pvk_sparse_tile(b->memory, b->memoryOffset));
         if (residency) {
             op[1] = op[0];
             op[1].resource = l->residency;
@@ -66030,7 +66043,7 @@ static uint32_t pvk_sparse_buffer_op(const struct pvk_buffer *buffer, const VkSp
         op->u.buffer.mode = op->heap ? PVK_MTLSparseTextureMappingModeMap : PVK_MTLSparseTextureMappingModeUnmap;
         op->u.buffer.bufferRange.location = b->resourceOffset / PVK_SPARSE_BLOCK;
         op->u.buffer.bufferRange.length = (b->size + PVK_SPARSE_BLOCK - 1) / PVK_SPARSE_BLOCK;
-        op->u.buffer.heapOffset = op->heap ? b->memoryOffset / PVK_SPARSE_BLOCK : 0;
+        op->u.buffer.heapOffset = (unsigned long)pvk_sparse_tile(b->memory, b->memoryOffset);
     }
     return 1;
 }

@@ -3143,6 +3143,234 @@ static void test_sparse_storage_reads(void)
     vkFreeMemory(device, memory, NULL);
 }
 
+/* With sparseBinding, allocations of 64 KB up to PVK_POOL_LARGEST are
+ * blocks of sparse-compatible heaps they share (section 10): buffer, opaque
+ * and region binds map the tiles at the block's offset in its heap, and
+ * leave its neighbours alone; so do texel buffer views of a bound buffer
+ * (their textures map the same tiles), made before the bind or after it. */
+static int all_bytes(const void *p, unsigned char value, size_t n)
+{
+    const unsigned char *b = p;
+    size_t i;
+    for (i = 0; i < n; i++)
+        if (b[i] != value)
+            return 0;
+    return 1;
+}
+
+/* spv_texel over a storage texel buffer view: its count texels to dst, each
+ * then increased by add. */
+static void texel_dispatch(VkBufferView view, VkDeviceAddress dst, uint32_t count, uint32_t add)
+{
+    struct {
+        VkDeviceAddress dst;
+        uint32_t count, add;
+    } push;
+    VkDescriptorSetLayoutBinding binding;
+    VkDescriptorSetLayoutCreateInfo set_layout_info;
+    VkDescriptorPoolSize pool_size;
+    VkDescriptorPoolCreateInfo pool_info;
+    VkDescriptorSetAllocateInfo set_info;
+    VkWriteDescriptorSet write;
+    VkPushConstantRange range;
+    VkPipelineLayoutCreateInfo layout_info;
+    VkDescriptorSetLayout set_layout;
+    VkDescriptorPool desc_pool;
+    VkDescriptorSet set;
+    VkPipelineLayout layout;
+    VkPipeline pipeline;
+    VkCommandBuffer cb;
+
+    memset(&binding, 0, sizeof(binding));
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    memset(&set_layout_info, 0, sizeof(set_layout_info));
+    set_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    set_layout_info.bindingCount = 1;
+    set_layout_info.pBindings = &binding;
+    REQUIRE_VK(vkCreateDescriptorSetLayout(device, &set_layout_info, NULL, &set_layout));
+    pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+    pool_size.descriptorCount = 1;
+    memset(&pool_info, 0, sizeof(pool_info));
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.maxSets = 1;
+    pool_info.poolSizeCount = 1;
+    pool_info.pPoolSizes = &pool_size;
+    REQUIRE_VK(vkCreateDescriptorPool(device, &pool_info, NULL, &desc_pool));
+    memset(&set_info, 0, sizeof(set_info));
+    set_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    set_info.descriptorPool = desc_pool;
+    set_info.descriptorSetCount = 1;
+    set_info.pSetLayouts = &set_layout;
+    REQUIRE_VK(vkAllocateDescriptorSets(device, &set_info, &set));
+    memset(&write, 0, sizeof(write));
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = set;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+    write.pTexelBufferView = &view;
+    vkUpdateDescriptorSets(device, 1, &write, 0, NULL);
+    memset(&range, 0, sizeof(range));
+    range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    range.size = sizeof(push);
+    memset(&layout_info, 0, sizeof(layout_info));
+    layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout_info.setLayoutCount = 1;
+    layout_info.pSetLayouts = &set_layout;
+    layout_info.pushConstantRangeCount = 1;
+    layout_info.pPushConstantRanges = &range;
+    REQUIRE_VK(vkCreatePipelineLayout(device, &layout_info, NULL, &layout));
+    pipeline = compute_pipeline(spv_texel, sizeof(spv_texel), layout);
+    REQUIRE(pipeline);
+
+    cb = begin();
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, NULL);
+    push.dst = dst;
+    push.count = count;
+    push.add = add;
+    vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(cb, (count + 63) / 64, 1, 1);
+    barrier(cb);
+    submit(cb);
+
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyPipelineLayout(device, layout, NULL);
+    vkDestroyDescriptorPool(device, desc_pool, NULL);
+    vkDestroyDescriptorSetLayout(device, set_layout, NULL);
+}
+
+static void test_sparse_pooled_memory(void)
+{
+    VkImageCreateInfo info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 256, 256, 1, 1, 1,
+                                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                        VK_IMAGE_CREATE_SPARSE_BINDING_BIT);
+    const VkDeviceSize size = 4 * BLOCK, back = 256 * 256 * 4;
+    const struct pvk_device_memory *m[3];
+    VkDeviceMemory mems[3];
+    VkMemoryRequirements req;
+    VkBufferCreateInfo buffer_info;
+    VkBufferViewCreateInfo view_info;
+    VkBufferView views[2];
+    VkCommandBuffer cb;
+    VkBufferCopy copy;
+    VkBuffer buffer;
+    VkImage image;
+    struct buf host;
+    unsigned char *w[3];
+    uint32_t *words, *texels, i, t, v, x, y, bad;
+
+    if (!has_sparse())
+        return;
+    /* neighbours in a heap: the second or third at an offset in it */
+    for (i = 0; i < 3; i++) {
+        mems[i] = allocate(shared_type, size);
+        REQUIRE(mems[i]);
+        m[i] = (const struct pvk_device_memory *)mems[i];
+        w[i] = map(mems[i]);
+        REQUIRE(w[i]);
+        CHECK(m[i]->chunk && m[i]->mtl_heap == m[i]->chunk->heap && m[i]->heap_offset % size == 0);
+    }
+    t = m[1]->heap_offset ? 1 : 2;
+    REQUIRE(m[t]->heap_offset);
+    host = host_buf(2 * back);
+    REQUIRE(host.data);
+    words = (uint32_t *)host.data;
+    for (i = 0; i < size / 4; i++)
+        words[i] = pattern(i, 80);
+
+    /* a buffer bind */
+    for (i = 0; i < 3; i++)
+        memset(w[i], 0xEE, (size_t)size);
+    buffer = sparse_buffer(size, 0, &req);
+    REQUIRE(buffer);
+    bind_buffer(buffer, 0, size, mems[t], 0);
+    cb = begin();
+    memset(&copy, 0, sizeof(copy));
+    copy.size = size;
+    vkCmdCopyBuffer(cb, host.buffer, buffer, 1, &copy);
+    barrier(cb);
+    submit(cb);
+    CHECK(memcmp(w[t], words, (size_t)size) == 0);
+    CHECK(all_bytes(w[(t + 1) % 3], 0xEE, (size_t)size) && all_bytes(w[(t + 2) % 3], 0xEE, (size_t)size));
+    vkDestroyBuffer(device, buffer, NULL);
+
+    /* an opaque image bind of all of an image, then a region bind */
+    for (i = 0; i < 3; i++)
+        memset(w[i], 0xEE, (size_t)size);
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &image));
+    vkGetImageMemoryRequirements(device, image, &req);
+    REQUIRE(req.size <= size && (req.memoryTypeBits & (1u << shared_type)));
+    bind_opaque(image, 0, req.size, mems[t], 0);
+    for (i = 0; i < 256 * 256; i++)
+        words[i] = pattern(i, 81);
+    upload_download(image, &host, back, 0, 0, 256, 256, 1);
+    CHECK(memcmp(words, words + back / 4, (size_t)back) == 0);
+    CHECK(!all_bytes(w[t], 0xEE, (size_t)req.size));
+    CHECK(all_bytes(w[(t + 1) % 3], 0xEE, (size_t)size) && all_bytes(w[(t + 2) % 3], 0xEE, (size_t)size));
+    vkDestroyImage(device, image, NULL);
+
+    info.flags |= VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT;
+    for (i = 0; i < 3; i++)
+        memset(w[i], 0xEE, (size_t)size);
+    REQUIRE_VK(vkCreateImage(device, &info, NULL, &image));
+    bind_region(image, VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 128, 128, 0, 128, 128, 1, mems[t], 3 * BLOCK);
+    for (i = 0; i < 256 * 256; i++)
+        words[i] = pattern(i, 82);
+    upload_download(image, &host, back, 0, 0, 256, 256, 1);
+    for (i = 0, bad = 0; i < 256 * 256; i++) {
+        x = i % 256;
+        y = i / 256;
+        if (words[back / 4 + i] != (x >= 128 && y >= 128 ? pattern(i, 82) : 0u) && !bad++)
+            PVK_TEST_FAIL("(%u, %u): %08x", x, y, words[back / 4 + i]);
+    }
+    CHECK(all_bytes(w[t], 0xEE, 3 * BLOCK) && !all_bytes(w[t] + 3 * BLOCK, 0xEE, BLOCK));
+    CHECK(all_bytes(w[(t + 1) % 3], 0xEE, (size_t)size) && all_bytes(w[(t + 2) % 3], 0xEE, (size_t)size));
+    vkDestroyImage(device, image, NULL);
+
+    /* storage texel buffer views of a buffer bound at BLOCK in the memory,
+     * one made before the bind and one after: each reads the texels there
+     * and adds 7 to them */
+    for (i = 0; i < 3; i++)
+        memset(w[i], 0xEE, (size_t)size);
+    texels = (uint32_t *)(w[t] + BLOCK);
+    for (i = 0; i < 2 * BLOCK / 4; i++)
+        texels[i] = pattern(i, 83);
+    memset(&buffer_info, 0, sizeof(buffer_info));
+    buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_info.flags = VK_BUFFER_CREATE_SPARSE_BINDING_BIT;
+    buffer_info.size = 2 * BLOCK;
+    buffer_info.usage = VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
+    REQUIRE_VK(vkCreateBuffer(device, &buffer_info, NULL, &buffer));
+    vkGetBufferMemoryRequirements(device, buffer, &req);
+    REQUIRE(req.memoryTypeBits & (1u << shared_type));
+    memset(&view_info, 0, sizeof(view_info));
+    view_info.sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
+    view_info.buffer = buffer;
+    view_info.format = VK_FORMAT_R32_UINT;
+    view_info.range = VK_WHOLE_SIZE;
+    REQUIRE_VK(vkCreateBufferView(device, &view_info, NULL, &views[0]));
+    bind_buffer(buffer, 0, 2 * BLOCK, mems[t], BLOCK);
+    REQUIRE_VK(vkCreateBufferView(device, &view_info, NULL, &views[1]));
+    for (v = 0; v < 2; v++) {
+        memset(host.data, 0xCD, 2 * BLOCK);
+        texel_dispatch(views[v], host.address, 2 * BLOCK / 4, 7);
+        for (i = 0, bad = 0; i < 2 * BLOCK / 4; i++)
+            if ((words[i] != pattern(i, 83) + 7 * v || texels[i] != pattern(i, 83) + 7 * (v + 1)) && !bad++)
+                PVK_TEST_FAIL("view %u, texel %u: read %08x, then %08x", v, i, words[i], texels[i]);
+    }
+    CHECK(all_bytes(w[t], 0xEE, BLOCK) && all_bytes(w[t] + 3 * BLOCK, 0xEE, BLOCK));
+    CHECK(all_bytes(w[(t + 1) % 3], 0xEE, (size_t)size) && all_bytes(w[(t + 2) % 3], 0xEE, (size_t)size));
+    vkDestroyBufferView(device, views[0], NULL);
+    vkDestroyBufferView(device, views[1], NULL);
+    vkDestroyBuffer(device, buffer, NULL);
+
+    for (i = 0; i < 3; i++)
+        vkFreeMemory(device, mems[i], NULL);
+    free_buf(&host);
+}
+
 int main(void)
 {
     setup();
@@ -3168,6 +3396,7 @@ int main(void)
     RUN(test_sparse_storage_reads);
     RUN(test_sparse_depth_stencil);
     RUN(test_sparse_compressed_tail);
+    RUN(test_sparse_pooled_memory);
     teardown();
     return TEST_RESULT();
 }
