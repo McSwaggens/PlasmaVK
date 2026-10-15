@@ -2494,6 +2494,57 @@ static void test_cull(void)
     free_img(&target);
 }
 
+static uint32_t expect_rebind(uint32_t x, uint32_t y)
+{
+    (void)y;
+    return x < W / 4 ? RED : x < W / 2 ? GREEN : x < 3 * W / 4 ? BLUE : WHITE;
+}
+
+/* Binding the bound pipeline again: the static state that commands set
+ * since comes back (a scissor, a cull mode), the dynamic state stays as set
+ * (the viewport). A quarter of the target per draw. */
+static void test_rebind_pipeline(void)
+{
+    static const VkDynamicState states[] = { VK_DYNAMIC_STATE_VIEWPORT };
+    static const float black[4] = { 0, 0, 0, 1 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkViewport vp = { 0, 0, W, H, 0, 1 };
+    VkRect2D top = { { 0, 0 }, { W, H / 2 } };
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.dynamic = states;
+    p.dynamic_count = 1;
+    pipeline = make_pipe(&p); /* static: the whole target's scissor, no culling */
+    REQUIRE(pipeline);
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    rect(cb, -1, -1, -0.5f, 1, 1, 0, 0, 1, 0);
+    vkCmdSetScissor(cb, 0, 1, &top);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -0.5f, -1, 0, 1, 0, 1, 0, 1, 0);
+    vkCmdSetCullMode(cb, VK_CULL_MODE_FRONT_AND_BACK);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, 0, -1, 0.5f, 1, 0, 0, 1, 1, 0);
+    vp.x = 3 * W / 4;
+    vp.width = W / 4;
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -1, -1, 1, 1, 1, 1, 1, 1, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    CHECK(count_bad(&out, expect_rebind, "pipeline bound again") == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&target);
+}
+
 static uint32_t expect_bias_clamp(uint32_t x, uint32_t y)
 {
     if (y < H / 2) /* depth clamp: drawn with clamping, clipped without */
@@ -9819,6 +9870,7 @@ int main(void)
     RUN(test_depth_stencil);
     RUN(test_blend);
     RUN(test_cull);
+    RUN(test_rebind_pipeline);
     RUN(test_depth_bias_clamp);
     RUN(test_viewports_layers);
     RUN(test_multiview);

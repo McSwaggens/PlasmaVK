@@ -57434,23 +57434,23 @@ static void pvk_queue_put_submissions(struct pvk_queue *queue, struct pvk_submis
 
 /* Graphics encoding state (section 15's "Graphics"; "Graphics" below). */
 
-/* Encoder state a draw must (re)apply: struct pvk_render.dirty. */
-#define PVK_RD_PIPELINE (1u << 0)
-#define PVK_RD_MAP (1u << 1)
-#define PVK_RD_VIEWPORT (1u << 2)
-#define PVK_RD_SCISSOR (1u << 3)
-#define PVK_RD_DEPTH_BIAS (1u << 4)
-#define PVK_RD_BLEND (1u << 5)
-#define PVK_RD_DEPTH_BOUNDS (1u << 6)
-#define PVK_RD_DS (1u << 7)
-#define PVK_RD_STENCIL_REF (1u << 8)
-#define PVK_RD_CULL (1u << 9)
-#define PVK_RD_FRONT_FACE (1u << 10)
-#define PVK_RD_DEPTH_CLIP (1u << 11)
-#define PVK_RD_FILL (1u << 12)
-#define PVK_RD_VERTEX (1u << 13)
-#define PVK_RD_AMPLIFICATION (1u << 14)
-#define PVK_RD_ALL 0x7fffu
+/* Encoder state a draw must (re)apply: struct pvk_render.dirty. (The
+ * pipeline state is compared with the one set at every draw.) */
+#define PVK_RD_MAP (1u << 0)
+#define PVK_RD_VIEWPORT (1u << 1)
+#define PVK_RD_SCISSOR (1u << 2)
+#define PVK_RD_DEPTH_BIAS (1u << 3)
+#define PVK_RD_BLEND (1u << 4)
+#define PVK_RD_DEPTH_BOUNDS (1u << 5)
+#define PVK_RD_DS (1u << 6)
+#define PVK_RD_STENCIL_REF (1u << 7)
+#define PVK_RD_CULL (1u << 8)
+#define PVK_RD_FRONT_FACE (1u << 9)
+#define PVK_RD_DEPTH_CLIP (1u << 10)
+#define PVK_RD_FILL (1u << 11)
+#define PVK_RD_VERTEX (1u << 12)
+#define PVK_RD_AMPLIFICATION (1u << 13)
+#define PVK_RD_ALL 0x3fffu
 
 /* What draw preprocessing produced for one draw (pvk_prepass_draw). */
 struct pvk_pp_result {
@@ -57535,8 +57535,8 @@ struct pvk_ds_key {
 };
 
 /* What the draw state flush set on the render encoder (pvk_render_flush),
- * for the PVK_RD_* bits in `valid`: a pipeline bind sets everything dirty,
- * and what it did not change is not sent again. */
+ * for the PVK_RD_* bits in `valid`: binding another pipeline sets
+ * everything dirty, and what it did not change is not sent again. */
 struct pvk_render_sent {
     uint32_t valid;
     uint32_t viewport_count, scissor_count, vertex_count;
@@ -57572,6 +57572,7 @@ struct pvk_render {
     struct pvk_vertex_binding vertex[PVK_MAX_VERTEX_BINDINGS];
     struct pvk_draw_track track; /* index buffer binding (topology and restart: dyn) */
     uint32_t dirty;        /* PVK_RD_* */
+    uint32_t dyn_touched;  /* PVK_DYN_BIT()s of dyn set by commands since the last pipeline bind */
     struct pvk_render_sent sent;
     bool skip_scissor;     /* the scissor is empty */
     bool skip_bounds;      /* the depth bounds are empty */
@@ -61372,6 +61373,9 @@ static void pvk_encode_set_dynamic(struct pvk_encoder *e, const struct pvk_cmd_d
     const uint32_t *u = (const uint32_t *)(c + 1);
     const float *f = (const float *)(c + 1);
     unsigned face;
+    if (c->state < PVK_DYN_COUNT) /* (with a count, the viewports or scissors too) */
+        r->dyn_touched |= (1u << c->state) | (c->state == PVK_DYN_VIEWPORT_COUNT ? PVK_DYN_BIT(VIEWPORT) : 0u) |
+                          (c->state == PVK_DYN_SCISSOR_COUNT ? PVK_DYN_BIT(SCISSOR) : 0u);
     switch ((enum pvk_dyn)c->state) {
     case PVK_DYN_VIEWPORT_COUNT:
         d->viewport_count = c->count;
@@ -61468,14 +61472,26 @@ static void pvk_encode_set_dynamic(struct pvk_encoder *e, const struct pvk_cmd_d
     }
 }
 
+/* A pipeline bind sets the pipeline's static state. Binding the bound
+ * pipeline again (per-object secondaries, engines that bind every draw's
+ * whole state) sets only the static state that commands changed since:
+ * the rest, and what the encoder was sent, are as the last bind left them. */
 static void pvk_encode_bind_graphics(struct pvk_encoder *e, struct pvk_pipeline *p)
 {
     struct pvk_render *r = &e->render;
+    bool same = p == r->pipeline;
+    uint32_t statics;
     r->pipeline = p;
     if (!p || !p->gfx)
         return;
-    pvk_dynamic_copy(&r->dyn, &p->gfx->state, ~p->gfx->dynamic & ((1u << PVK_DYN_COUNT) - 1));
-    r->dirty = PVK_RD_ALL;
+    statics = ~p->gfx->dynamic & ((1u << PVK_DYN_COUNT) - 1);
+    if (same)
+        statics &= r->dyn_touched;
+    r->dyn_touched = 0;
+    if (statics)
+        pvk_dynamic_copy(&r->dyn, &p->gfx->state, statics);
+    if (!same || statics)
+        r->dirty = PVK_RD_ALL;
 }
 
 static void pvk_encode_bind_vertex(struct pvk_encoder *e, const struct pvk_cmd_bind_vertex *c)
@@ -61485,8 +61501,10 @@ static void pvk_encode_bind_vertex(struct pvk_encoder *e, const struct pvk_cmd_b
     uint32_t i;
     for (i = 0; i < c->count; i++) {
         r->vertex[c->first + i] = v[i];
-        if (v[i].has_stride)
+        if (v[i].has_stride) {
             r->dyn.strides[c->first + i] = v[i].stride;
+            r->dyn_touched |= PVK_DYN_BIT(VERTEX_STRIDE);
+        }
     }
     r->dirty |= PVK_RD_VERTEX;
 }
@@ -61599,9 +61617,7 @@ static bool pvk_render_flush(struct pvk_encoder *e)
         if (gp && tex)
             pvk_render_tex_inputs(e, p);
     }
-    if (dirty & PVK_RD_PIPELINE)
-        r->pso_set = NULL;
-    if (pso != r->pso_set) {
+    if (pso != r->pso_set) { /* (pipelines may share a state, section 17) */
         pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
         r->pso_set = pso;
     }
