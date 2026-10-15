@@ -3465,13 +3465,18 @@ static void test_indices(void)
  * COUNTER_CLOCKWISE), by every kind of draw: a list, an indexed strip with
  * primitive restart (the second strip's triangles alternate winding), an
  * indirect fan with a count buffer, an indexed indirect strip with
- * restart. Lit: (x, y, color) below. */
+ * restart; then three triangles, the third drawn with the first's draw
+ * parameters (vertex buffer bound further on) after the second's indirect
+ * draw. Lit: (x, y, color) below. */
 static const uint32_t points_lit[][3] = {
     { 1, 1, RED },   { 1, 4, RED },   { 4, 1, RED },  /* list: (6,1) (9,1) (6,4) culled */
     { 1, 6, GREEN }, { 1, 9, GREEN }, { 4, 6, GREEN }, { 6, 6, GREEN }, { 6, 9, GREEN }, { 9, 6, GREEN },
     { 9, 9, GREEN },
     { 11, 1, BLUE }, { 11, 4, BLUE }, { 14, 4, BLUE }, /* fan: (11,7) only in a culled triangle */
     { 1, 11, WHITE }, { 1, 14, WHITE }, { 4, 11, WHITE }, /* indirect strip: (6,11) (9,11) (6,14) culled */
+    { 11, 9, RED },   { 11, 11, RED }, { 13, 9, RED },  /* direct */
+    { 11, 13, BLUE }, { 11, 15, BLUE }, { 13, 13, BLUE }, /* indirect */
+    { 14, 9, GREEN }, { 14, 11, GREEN }, { 15, 9, GREEN }, /* direct, the first's parameters */
 };
 
 static uint32_t expect_points(uint32_t x, uint32_t y)
@@ -3503,13 +3508,17 @@ static void test_polygon_points(void)
                                        GREEN, BLUE, BLUE, BLUE, BLUE, WHITE, WHITE, WHITE, WHITE, WHITE, WHITE };
     static const uint16_t strips16[] = { 6, 7, 8, 0xffff, 9, 10, 11, 12 };
     static const uint32_t strips32[] = { 17, 18, 19, 0xffffffffu, 20, 21, 22 };
+    static const uint32_t three[][3] = { /* vertices 23-31 */
+        { 11, 9, RED },   { 11, 11, RED },  { 13, 9, RED },  { 11, 13, BLUE }, { 11, 15, BLUE },
+        { 13, 13, BLUE }, { 14, 9, GREEN }, { 14, 11, GREEN }, { 15, 9, GREEN },
+    };
     VkPipelineVertexInputStateCreateInfo vi;
     struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
-    struct buf out = make_buf(W * H * 4), vb = make_buf(sizeof(struct vtx) * 32), ib = make_buf(256);
+    struct buf out = make_buf(W * H * 4), vb = make_buf(sizeof(struct vtx) * 48), ib = make_buf(256);
     struct buf args = make_buf(256);
     struct vtx *v = (struct vtx *)vb.data;
     uint32_t *a = (uint32_t *)args.data, i;
-    VkDeviceSize zero_offset = 0;
+    VkDeviceSize zero_offset = 0, three_offsets[2] = { sizeof(struct vtx) * 23, sizeof(struct vtx) * 29 };
     struct pipe p;
     VkPipeline pipeline;
     VkCommandBuffer cb;
@@ -3538,12 +3547,18 @@ static void test_polygon_points(void)
         v[i].y = ndc_y((float)pos[i][1] + 0.5f);
         v[i].rgba = colors[i];
     }
+    for (i = 0; i < PVK_ARRAY_SIZE(three); i++) {
+        v[23 + i].x = ndc_x((float)three[i][0] + 0.5f);
+        v[23 + i].y = ndc_y((float)three[i][1] + 0.5f);
+        v[23 + i].rgba = three[i][2];
+    }
     memcpy(ib.data, strips16, sizeof(strips16));
     memcpy(ib.data + 64, strips32, sizeof(strips32));
     a[0] = 4, a[1] = 1, a[2] = 13, a[3] = 0;          /* fan: VkDrawIndirectCommand */
     a[4] = 3, a[5] = 1, a[6] = 0, a[7] = 0;           /* (beyond the count) */
     a[8] = 1;                                         /* count */
     a[16] = 7, a[17] = 1, a[18] = 0, a[19] = 0, a[20] = 0; /* VkDrawIndexedIndirectCommand */
+    a[24] = 3, a[25] = 1, a[26] = 3, a[27] = 0;            /* the second of three */
     cb = begin_cmd();
     begin_rendering(cb, &target, 1, black, NULL);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
@@ -3559,6 +3574,13 @@ static void test_polygon_points(void)
     vkCmdSetPrimitiveTopology(cb, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
     vkCmdBindIndexBuffer(cb, ib.buffer, 64, VK_INDEX_TYPE_UINT32);
     vkCmdDrawIndexedIndirect(cb, args.buffer, 64, 1, 20);
+    vkCmdSetPrimitiveRestartEnable(cb, VK_FALSE);
+    vkCmdSetPrimitiveTopology(cb, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    vkCmdBindVertexBuffers(cb, 0, 1, &vb.buffer, &three_offsets[0]);
+    vkCmdDraw(cb, 3, 1, 0, 0);
+    vkCmdDrawIndirect(cb, args.buffer, 96, 1, 16);
+    vkCmdBindVertexBuffers(cb, 0, 1, &vb.buffer, &three_offsets[1]);
+    vkCmdDraw(cb, 3, 1, 0, 0);
     vkCmdEndRendering(cb);
     download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
     submit(cb);

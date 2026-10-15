@@ -57732,6 +57732,13 @@ struct pvk_encoder {
      * queue->cmd_labels are debug groups on it */
     id label_enc;
     uint32_t label_pushed;
+    /* Polygon points: what PVK_MSL_POINTS_STATE_BUFFER and PVK_MSL_POINTS_BUFFER
+     * hold (pvk_render_points_bind) when points_valid's bits 0 and 1 say so;
+     * a new render encoder starts with neither (out of struct pvk_render,
+     * which tile memory replays copy) */
+    struct pvk_msl_points_state points_state_set;
+    struct pvk_msl_points points_set;
+    uint32_t points_valid;
 };
 
 /* A new upload chunk of `size` bytes, resident; NULL with e->result set. */
@@ -60996,6 +61003,7 @@ static void pvk_render_takeover(struct pvk_encoder *e, id enc)
     r->draw_index = UINT32_MAX;
     r->bounds_valid = false;
     r->counting = false;
+    e->points_valid = 0;
     e->push_bound = 0; /* the render stages have not seen the push constants */
     memset(e->sets_bound, 0, sizeof(e->sets_bound));
 }
@@ -61906,40 +61914,48 @@ static unsigned long pvk_points_triangles(uint32_t topology, uint32_t n)
 }
 
 /* Binds a polygon-point draw's struct pvk_msl_points_state and, unless
- * NULL (made by preprocessing), its struct pvk_msl_points. */
+ * NULL (made by preprocessing), its struct pvk_msl_points; what the table
+ * holds already is not uploaded and bound again. */
 static bool pvk_render_points_bind(struct pvk_encoder *e, const struct pvk_msl_points *g)
 {
     struct pvk_render *r = &e->render;
-    struct pvk_msl_points_state *s;
+    struct pvk_msl_points_state s;
     pvk_MTLGPUAddress address;
+    void *p;
     uint32_t i;
-    if (!(s = pvk_upload(e, sizeof(*s), 16, NULL, NULL, &address)))
-        return false;
-    memset(s, 0, sizeof(*s));
-    s->cull = r->dyn.cull_mode & VK_CULL_MODE_FRONT_AND_BACK;
-    s->ccw = r->dyn.front_face == VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    memset(&s, 0, sizeof(s));
+    s.cull = r->dyn.cull_mode & VK_CULL_MODE_FRONT_AND_BACK;
+    s.ccw = r->dyn.front_face == VK_FRONT_FACE_COUNTER_CLOCKWISE;
     for (i = 0; i < r->dyn.viewport_count && i < PVK_MAX_VIEWPORTS && i < 16; i++) {
         if (r->dyn.viewports[i].height < 0.0f)
-            s->flips |= 1u << i;
-        s->viewports[i][0] = r->dyn.viewports[i].width;
-        s->viewports[i][1] = r->dyn.viewports[i].height;
-        s->viewports[i][2] = r->dyn.viewports[i].minDepth;
-        s->viewports[i][3] = r->dyn.viewports[i].maxDepth;
+            s.flips |= 1u << i;
+        s.viewports[i][0] = r->dyn.viewports[i].width;
+        s.viewports[i][1] = r->dyn.viewports[i].height;
+        s.viewports[i][2] = r->dyn.viewports[i].minDepth;
+        s.viewports[i][3] = r->dyn.viewports[i].maxDepth;
     }
     if (r->dyn.depth_bias_enable && r->depth_fmt) {
-        s->bias = 1;
-        s->bias_constant = r->dyn.depth_bias[0];
-        s->bias_clamp = r->dyn.depth_bias[1];
-        s->bias_slope = r->dyn.depth_bias[2];
-        s->bias_r = r->depth_fmt->mtl == PVK_MTLPixelFormatDepth16Unorm ? 1.0f / 65536.0f : 0.0f;
+        s.bias = 1;
+        s.bias_constant = r->dyn.depth_bias[0];
+        s.bias_clamp = r->dyn.depth_bias[1];
+        s.bias_slope = r->dyn.depth_bias[2];
+        s.bias_r = r->depth_fmt->mtl == PVK_MTLPixelFormatDepth16Unorm ? 1.0f / 65536.0f : 0.0f;
     }
-    pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_POINTS_STATE_BUFFER);
-    if (g) {
-        void *p = pvk_upload(e, sizeof(*g), 16, NULL, NULL, &address);
-        if (!p)
+    if (!(e->points_valid & 1u) || memcmp(&s, &e->points_state_set, sizeof(s)) != 0) {
+        if (!(p = pvk_upload(e, sizeof(s), 16, NULL, NULL, &address)))
+            return false;
+        memcpy(p, &s, sizeof(s));
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_POINTS_STATE_BUFFER);
+        e->points_state_set = s;
+        e->points_valid |= 1u;
+    }
+    if (g && (!(e->points_valid & 2u) || memcmp(g, &e->points_set, sizeof(*g)) != 0)) {
+        if (!(p = pvk_upload(e, sizeof(*g), 16, NULL, NULL, &address)))
             return false;
         memcpy(p, g, sizeof(*g));
         pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_POINTS_BUFFER);
+        e->points_set = *g;
+        e->points_valid |= 2u;
     }
     return true;
 }
@@ -62083,6 +62099,7 @@ static void pvk_encode_draw_indirect(struct pvk_encoder *e, const struct pvk_cmd
     if (pvk_render_points(r)) { /* records of points and struct pvk_msl_points per draw */
         if (!res || !res->points || !res->records || !pvk_render_points_bind(e, NULL))
             return;
+        e->points_valid &= ~2u; /* (the draws' own struct pvk_msl_points) */
         for (d = 0; d < n; d++) {
             if (r->pipeline->gfx->draw_index && !pvk_render_draw_index(e, d))
                 return;
