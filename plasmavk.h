@@ -42804,6 +42804,7 @@ struct pvk_spv {
     uint32_t hoist_indent;
     struct pvk_spv_func *fn; /* function being emitted */
     signed char shapes[512]; /* pvk_spv_shape of the opcodes below 512, + 2 (0: not asked yet) */
+    bool loop_return;        /* it has a return inside a loop (pvk_spv_ret) */
 };
 
 /* ---- Errors and memory ---- */
@@ -48222,6 +48223,15 @@ static uint32_t pvk_spv_hidden(struct pvk_spv *ctx, const struct pvk_spv_func *f
     return n;
 }
 
+/* A return statement is emitted here: notes one inside a loop. */
+static void pvk_spv_ret(struct pvk_spv *ctx)
+{
+    uint32_t i;
+    for (i = 0; i < ctx->nframes; i++)
+        if (ctx->frames[i].kind == PVK_SPV_FR_LOOP)
+            ctx->loop_return = true;
+}
+
 static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     uint32_t rid = in->w[2], i, g, sets;
@@ -48271,6 +48281,7 @@ static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", callee->msl, args));
     ctx->fn->interp_locs |= callee->interp_locs;
     if (callee->implicit & PVK_SPV_I_KILL) { /* the callee terminated the invocation: so does the caller */
+        pvk_spv_ret(ctx);
         if (pvk_spv_type(ctx, ctx->fn->ret)->op == PVK_SPV_OpTypeVoid)
             pvk_spv_line(ctx, "if (pvk_killed)\n%*s    return;", (int)ctx->indent * 4, "");
         else
@@ -50676,9 +50687,11 @@ static void pvk_spv_emit_chain(struct pvk_spv *ctx, uint32_t label, bool in_loop
         term = pvk_spv_insn_at(ctx, blk.end);
         switch (term.op) {
         case PVK_SPV_OpReturn:
+            pvk_spv_ret(ctx);
             pvk_spv_line(ctx, "return;");
             break;
         case PVK_SPV_OpReturnValue:
+            pvk_spv_ret(ctx);
             pvk_spv_line(ctx, "return %s;", pvk_spv_val(ctx, pvk_spv_arg(ctx, &term, 1)));
             break;
         case PVK_SPV_OpUnreachable:
@@ -50694,6 +50707,7 @@ static void pvk_spv_emit_chain(struct pvk_spv *ctx, uint32_t label, bool in_loop
             ctx->result->discards = true;
             pvk_spv_line(ctx, "discard_fragment();");
             pvk_spv_line(ctx, "pvk_killed = true;");
+            pvk_spv_ret(ctx);
             if (pvk_spv_type(ctx, ctx->fn->ret)->op == PVK_SPV_OpTypeVoid)
                 pvk_spv_line(ctx, "return;");
             else
@@ -50882,6 +50896,7 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
     ctx->indent = 1;
     ctx->nframes = 0;
     ctx->depth = 0;
+    ctx->loop_return = false;
     pvk_spv_emit_chain(ctx, fn->blocks[0].label, false);
 
     /* Signature */
@@ -50950,15 +50965,16 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
         /* A loop it returns from as well as after it: not inlined. Metal's
          * compiler returned 0 from such a function inlined where its argument
          * is uniform (macOS 27.2: the Khronos CTS's control_flow
-         * mixed_return_break_continue_vertex; noinline was what helped). */
-        uint32_t b, loops = 0, returns = 0;
+         * mixed_return_break_continue_vertex; noinline was what helped).
+         * Returns only outside loops (an early out before a loop) inline:
+         * a call costs a full-screen pass up to 10%. */
+        uint32_t b, returns = 0;
         for (b = 0; b < fn->nblocks; b++) {
-            const struct pvk_spv_block *blk = &fn->blocks[b];
-            uint32_t op = pvk_spv_insn_at(ctx, blk->end).op;
-            loops += blk->merge && pvk_spv_insn_at(ctx, blk->merge).op == PVK_SPV_OpLoopMerge;
+            uint32_t op = pvk_spv_insn_at(ctx, fn->blocks[b].end).op;
             returns += op == PVK_SPV_OpReturn || op == PVK_SPV_OpReturnValue;
         }
-        pvk_sb_printf(ctx, out, "%s %s %s(", loops && returns > 1 ? "__attribute__((noinline)) static" : "static inline",
+        pvk_sb_printf(ctx, out, "%s %s %s(",
+                      ctx->loop_return && returns > 1 ? "__attribute__((noinline)) static" : "static inline",
                       pvk_spv_type(ctx, fn->ret)->msl, fn->msl);
     }
     for (i = 0; i < nparams; i++)
