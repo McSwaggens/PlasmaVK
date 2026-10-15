@@ -8,6 +8,19 @@
  *                    materials) every 8 draws
  *   instanced        objects in batches: vkCmdPushConstants (batch offset) +
  *                    vkCmdDraw with per-instance vertex attributes
+ *   rebind           per draw: the object's whole state again, as renderers
+ *                    that do not track state send it - viewport, scissor,
+ *                    the same pipeline, push constants, and its mesh's
+ *                    vertex and index buffers (one of 64, at their offsets
+ *                    in one buffer each) - then vkCmdDrawIndexed
+ *   secondary        rebind's draws in secondary command buffers (a few
+ *                    large ones, or one per object) that the frame executes
+ *                    in one render pass instance. They are recorded on the
+ *                    submitting thread: this is the driver's cost of
+ *                    secondaries, not of threading.
+ *   vs_heavy         push_constants with 6144 vertices per draw, all but six
+ *                    clipped away: the GPU time is vertex shading that reads
+ *                    per-draw data (the GPU side of the per-draw path)
  *
  * Reports CPU recording + submit time and GPU time per frame. The first
  * frame is read back and compared with a CPU rasterization of the scene.
@@ -21,8 +34,12 @@
 #define MESHES 64
 #define MATERIALS 4
 #define DRAWS_PER_MATERIAL 8
+#define MAX_SECONDARIES 2000
+#define VS_HEAVY_VERTICES 6144
 
-enum mode { MODE_PUSH, MODE_INDEXED_VB, MODE_PIPELINE_SWITCH, MODE_INSTANCED };
+enum mode {
+    MODE_PUSH, MODE_INDEXED_VB, MODE_PIPELINE_SWITCH, MODE_INSTANCED, MODE_REBIND, MODE_SECONDARY, MODE_VS_HEAVY
+};
 
 struct config {
     const char *name;
@@ -30,16 +47,21 @@ struct config {
     int objects;
     int batch; /* instances per draw */
     int frames;
+    int secondaries; /* MODE_SECONDARY: secondary command buffers the draws are split over */
 };
 
 static const struct config configs[] = {
-    { "push_constants_1000", MODE_PUSH, 1000, 1, 300 },
-    { "push_constants_10000", MODE_PUSH, 10000, 1, 200 },
-    { "push_constants_50000", MODE_PUSH, 50000, 1, 60 },
-    { "indexed_vb_10000", MODE_INDEXED_VB, 10000, 1, 200 },
-    { "pipeline_switch_10000", MODE_PIPELINE_SWITCH, 10000, 1, 200 },
-    { "instanced_50000_x64", MODE_INSTANCED, 50000, 64, 200 },
-    { "instanced_50000_x1024", MODE_INSTANCED, 50000, 1024, 200 },
+    { "push_constants_1000", MODE_PUSH, 1000, 1, 300, 0 },
+    { "push_constants_10000", MODE_PUSH, 10000, 1, 200, 0 },
+    { "push_constants_50000", MODE_PUSH, 50000, 1, 60, 0 },
+    { "indexed_vb_10000", MODE_INDEXED_VB, 10000, 1, 200, 0 },
+    { "pipeline_switch_10000", MODE_PIPELINE_SWITCH, 10000, 1, 200, 0 },
+    { "instanced_50000_x64", MODE_INSTANCED, 50000, 64, 200, 0 },
+    { "instanced_50000_x1024", MODE_INSTANCED, 50000, 1024, 200, 0 },
+    { "rebind_10000", MODE_REBIND, 10000, 1, 200, 0 },
+    { "secondary_x4_10000", MODE_SECONDARY, 10000, 1, 200, 4 },
+    { "secondary_x1_2000", MODE_SECONDARY, 2000, 1, 200, 2000 },
+    { "vs_heavy_1000", MODE_VS_HEAVY, 1000, 1, 100, 0 },
 };
 
 struct push {
@@ -61,15 +83,91 @@ struct scene {
     struct bench_image targets[BENCH_FRAMES_IN_FLIGHT];
     struct bench_buffer readback, instances, mesh_vertices, mesh_indices;
     VkPipelineLayout layout, instanced_layout;
-    VkPipeline push_pipeline, mesh_pipeline, instanced_pipeline;
+    VkPipeline push_pipeline, mesh_pipeline, instanced_pipeline, vs_heavy_pipeline;
     VkPipeline materials[MATERIALS];
+    VkCommandPool secondary_pools[BENCH_FRAMES_IN_FLIGHT];
+    VkCommandBuffer secondaries[BENCH_FRAMES_IN_FLIGHT][MAX_SECONDARIES];
 };
+
+/* Not in bench_vk.h's table. */
+static PFN_vkCmdExecuteCommands CmdExecuteCommands;
 
 /* Batch b of an instanced draw moves by a few whole pixels. */
 static void batch_offset_px(int b, int *dx, int *dy)
 {
     *dx = ((b * 7) % 5 - 2) * 4;
     *dy = ((b * 3) % 5 - 2) * 4;
+}
+
+/* rebind and secondary: everything object i's draw needs, set again. Only
+ * the viewport, scissor and pipeline repeat the previous draw's. */
+static void draw_rebind(struct scene *s, VkCommandBuffer cmd, int i)
+{
+    VkDeviceSize vertices = (VkDeviceSize)(i % MESHES) * 4 * 2 * sizeof(float);
+    VkDeviceSize indices = (VkDeviceSize)(i % MESHES) * 6 * sizeof(uint16_t);
+    bench_cmd_viewport(cmd, WIDTH, HEIGHT);
+    vkd.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s->mesh_pipeline);
+    vkd.CmdPushConstants(cmd, s->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(struct push), &s->push[i]);
+    vkd.CmdBindVertexBuffers(cmd, 0, 1, &s->mesh_vertices.buffer, &vertices);
+    vkd.CmdBindIndexBuffer(cmd, s->mesh_indices.buffer, indices, VK_INDEX_TYPE_UINT16);
+    vkd.CmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
+}
+
+/* Records the frame's secondaries, then begins a render pass instance that
+ * clears the target and executes them. */
+static void record_secondaries(struct scene *s, const struct bench_frame *f, const float clear[4])
+{
+    const struct config *cfg = s->cfg;
+    const struct bench_image *target = &s->targets[f->slot];
+    VkCommandBuffer *secondaries = s->secondaries[f->slot];
+    VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+    VkCommandBufferInheritanceRenderingInfo rendering = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO,
+        .colorAttachmentCount = 1,
+        .pColorAttachmentFormats = &format,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+    };
+    VkCommandBufferInheritanceInfo inheritance = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO,
+        .pNext = &rendering,
+    };
+    VkCommandBufferBeginInfo begin = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT | VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT,
+        .pInheritanceInfo = &inheritance,
+    };
+    VkRenderingAttachmentInfo color = {
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .imageView = target->view,
+        .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+    };
+    VkRenderingInfo info = {
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .flags = VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT,
+        .renderArea = { { 0, 0 }, { target->width, target->height } },
+        .layerCount = 1,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &color,
+    };
+    int k, i = 0;
+
+    BENCH_VK(vkd.ResetCommandPool(s->vk->device, s->secondary_pools[f->slot], 0));
+    for (k = 0; k < cfg->secondaries; k++) {
+        int end = (int)((long long)cfg->objects * (k + 1) / cfg->secondaries);
+        BENCH_VK(vkd.BeginCommandBuffer(secondaries[k], &begin));
+        for (; i < end; i++)
+            draw_rebind(s, secondaries[k], i);
+        BENCH_VK(vkd.EndCommandBuffer(secondaries[k]));
+    }
+    memcpy(color.clearValue.color.float32, clear, sizeof(float) * 4);
+    bench_image_barrier(f->cmd, target, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_COPY_BIT,
+                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    vkd.CmdBeginRendering(f->cmd, &info);
+    CmdExecuteCommands(f->cmd, (uint32_t)cfg->secondaries, secondaries);
 }
 
 static void record(void *user, const struct bench_frame *f)
@@ -81,7 +179,10 @@ static void record(void *user, const struct bench_frame *f)
     VkDeviceSize zero = 0;
     int i;
 
-    bench_cmd_begin_color(cmd, &s->targets[f->slot], clear);
+    if (cfg->mode == MODE_SECONDARY)
+        record_secondaries(s, f, clear);
+    else
+        bench_cmd_begin_color(cmd, &s->targets[f->slot], clear);
     switch (cfg->mode) {
     case MODE_PUSH:
         vkd.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s->push_pipeline);
@@ -118,6 +219,19 @@ static void record(void *user, const struct bench_frame *f)
             vkd.CmdPushConstants(cmd, s->instanced_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float) * 2,
                                  s->batch_offset[i]);
             vkd.CmdDraw(cmd, 6, (uint32_t)count, 0, (uint32_t)first);
+        }
+        break;
+    case MODE_REBIND:
+        for (i = 0; i < cfg->objects; i++)
+            draw_rebind(s, cmd, i);
+        break;
+    case MODE_SECONDARY: /* recorded above */
+        break;
+    case MODE_VS_HEAVY:
+        vkd.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s->vs_heavy_pipeline);
+        for (i = 0; i < cfg->objects; i++) {
+            vkd.CmdPushConstants(cmd, s->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(struct push), &s->push[i]);
+            vkd.CmdDraw(cmd, VS_HEAVY_VERTICES, 1, 0, 0);
         }
         break;
     }
@@ -167,11 +281,12 @@ static void setup(struct scene *s)
 {
     struct bench_vk *vk = s->vk;
     struct bench_gfx_desc desc;
-    VkShaderModule push_vs, mesh_vs, instanced_vs, fs;
+    VkShaderModule push_vs, mesh_vs, instanced_vs, vs_heavy_vs, fs;
     uint32_t material;
     VkSpecializationMapEntry entry = { 0, 0, sizeof(uint32_t) };
     VkSpecializationInfo spec = { 1, &entry, sizeof(uint32_t), &material };
-    static const uint16_t indices[6] = { 0, 1, 2, 1, 3, 2 };
+    static const uint16_t quad[6] = { 0, 1, 2, 1, 3, 2 };
+    uint16_t indices[MESHES][6];
     float corners[MESHES][4][2];
     struct instance *inst;
     int i;
@@ -205,6 +320,7 @@ static void setup(struct scene *s)
             corners[i][c][0] = (float)(c & 1);
             corners[i][c][1] = (float)(c >> 1);
         }
+        memcpy(indices[i], quad, sizeof(quad));
     }
     bench_buffer_create(vk, &s->mesh_vertices, sizeof(corners),
                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, BENCH_DEVICE_LOCAL);
@@ -219,6 +335,7 @@ static void setup(struct scene *s)
     push_vs = BENCH_SHADER(vk, rect_push_vert);
     mesh_vs = BENCH_SHADER(vk, rect_mesh_vert);
     instanced_vs = BENCH_SHADER(vk, rect_instanced_vert);
+    vs_heavy_vs = BENCH_SHADER(vk, rect_push_many_vert);
     fs = BENCH_SHADER(vk, rect_flat_frag);
 
     memset(&desc, 0, sizeof(desc));
@@ -232,8 +349,11 @@ static void setup(struct scene *s)
         s->materials[material] = bench_gfx_pipeline(vk, &desc);
     s->push_pipeline = s->materials[0];
 
-    desc.vs = mesh_vs;
+    desc.vs = vs_heavy_vs;
     desc.fs_spec = NULL;
+    s->vs_heavy_pipeline = bench_gfx_pipeline(vk, &desc);
+
+    desc.vs = mesh_vs;
     desc.binding_count = 1;
     desc.bindings[0] = (VkVertexInputBindingDescription){ 0, 2 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX };
     desc.attribute_count = 1;
@@ -252,7 +372,25 @@ static void setup(struct scene *s)
     vkd.DestroyShaderModule(vk->device, push_vs, NULL);
     vkd.DestroyShaderModule(vk->device, mesh_vs, NULL);
     vkd.DestroyShaderModule(vk->device, instanced_vs, NULL);
+    vkd.DestroyShaderModule(vk->device, vs_heavy_vs, NULL);
     vkd.DestroyShaderModule(vk->device, fs, NULL);
+
+    /* Secondary command buffers: a pool per frame in flight, reset with it. */
+    for (i = 0; i < BENCH_FRAMES_IN_FLIGHT; i++) {
+        VkCommandPoolCreateInfo pool_info = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
+            .queueFamilyIndex = vk->queue_family,
+        };
+        VkCommandBufferAllocateInfo alloc = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .level = VK_COMMAND_BUFFER_LEVEL_SECONDARY,
+            .commandBufferCount = MAX_SECONDARIES,
+        };
+        BENCH_VK(vkd.CreateCommandPool(vk->device, &pool_info, NULL, &s->secondary_pools[i]));
+        alloc.commandPool = s->secondary_pools[i];
+        BENCH_VK(vkd.AllocateCommandBuffers(vk->device, &alloc, s->secondaries[i]));
+    }
 }
 
 static void teardown(struct scene *s)
@@ -264,10 +402,13 @@ static void teardown(struct scene *s)
         vkd.DestroyPipeline(vk->device, s->materials[i], NULL);
     vkd.DestroyPipeline(vk->device, s->mesh_pipeline, NULL);
     vkd.DestroyPipeline(vk->device, s->instanced_pipeline, NULL);
+    vkd.DestroyPipeline(vk->device, s->vs_heavy_pipeline, NULL);
     vkd.DestroyPipelineLayout(vk->device, s->layout, NULL);
     vkd.DestroyPipelineLayout(vk->device, s->instanced_layout, NULL);
-    for (i = 0; i < BENCH_FRAMES_IN_FLIGHT; i++)
+    for (i = 0; i < BENCH_FRAMES_IN_FLIGHT; i++) {
         bench_image_destroy(vk, &s->targets[i]);
+        vkd.DestroyCommandPool(vk->device, s->secondary_pools[i], NULL);
+    }
     bench_buffer_destroy(vk, &s->readback);
     bench_buffer_destroy(vk, &s->instances);
     bench_buffer_destroy(vk, &s->mesh_vertices);
@@ -283,6 +424,9 @@ int main(void)
 
     bench_begin("draw_calls");
     bench_vk_init(&vk, BENCH_NEED_DYNAMIC_RENDERING | BENCH_NEED_SYNC2);
+    CmdExecuteCommands = (PFN_vkCmdExecuteCommands)vkGetDeviceProcAddr(vk.device, "vkCmdExecuteCommands");
+    if (!CmdExecuteCommands)
+        bench_fatal("vkGetDeviceProcAddr(vkCmdExecuteCommands) returned NULL");
     s = bench_alloc(sizeof(*s));
     s->vk = &vk;
     setup(s);
@@ -308,6 +452,8 @@ int main(void)
         bench_json_int(&j, "objects", cfg->objects);
         bench_json_int(&j, "draws", draws);
         bench_json_int(&j, "instances_per_draw", cfg->batch);
+        bench_json_int(&j, "vertices_per_draw", cfg->mode == MODE_VS_HEAVY ? VS_HEAVY_VERTICES : 6);
+        bench_json_int(&j, "secondaries", cfg->secondaries);
         bench_loop_report(&loop, &j);
         bench_json_num(&j, "cpu_ns_per_draw", cpu_median * 1000.0 / draws);
         bench_json_end(&j);
