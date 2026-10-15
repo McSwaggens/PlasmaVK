@@ -2,8 +2,8 @@
  * included), depth and stencil input attachments, graphics pipelines with
  * every state block, draws of every kind (multi-draws with DrawIndex),
  * dynamic state, clears of attachments, depth bounds, sample masks, logical
- * operations, specialization constant operations and pipeline caches,
- * checked on offscreen images, pixel by pixel.
+ * operations, specialization constant operations, pipeline caches and
+ * the shader cache, checked on offscreen images, pixel by pixel.
  *
  * Shaders: GLSL in the comment above each array, compiled with
  *   glslangValidator -V --target-env vulkan1.3 */
@@ -10001,6 +10001,354 @@ static void test_pipeline_cache(void)
     vkDestroyPipelineCache(device, bogus, NULL);
 }
 
+/* The shader cache's key (section 17, pvk_stage_key) changes with the code,
+ * the entry point and every translator option, through its pointers, but
+ * not with where the options live. */
+static void test_shader_cache_key(void)
+{
+    static const uint64_t hash[2] = { 1, 2 }, hash2[2] = { 1, 3 };
+    static const VkSpecializationMapEntry map[2] = { { 0, 0, 4 }, { 1, 4, 4 } };
+    static const uint32_t spec_data[2] = { 7, 9 }, spec_data2[2] = { 7, 8 };
+    static const VkVertexInputAttributeDescription attrs[2] = { { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 },
+                                                                { 1, 0, VK_FORMAT_R8G8B8A8_UNORM, 8 } };
+    static const VkVertexInputAttributeDescription attrs2[2] = { { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 },
+                                                                 { 1, 0, VK_FORMAT_R8G8B8A8_UNORM, 4 } };
+    static const VkVertexInputBindingDescription vbind[1] = { { 0, 12, VK_VERTEX_INPUT_RATE_VERTEX } };
+    static const VkVertexInputBindingDescription vbind2[1] = { { 0, 16, VK_VERTEX_INPUT_RATE_VERTEX } };
+    static const VkVertexInputBindingDivisorDescription div[1] = { { 0, 2 } }, div2[1] = { { 0, 3 } };
+    static const struct pvk_msl_varying outs[2] = { { 0, 0, 0xf, PVK_MSL_SCALAR_FLOAT, 0 },
+                                                    { 1, 0, 0x3, PVK_MSL_SCALAR_UINT, PVK_MSL_INTERP_FLAT } };
+    static const struct pvk_msl_varying outs2[2] = { { 0, 0, 0xf, PVK_MSL_SCALAR_FLOAT, 0 },
+                                                     { 1, 0, 0x3, PVK_MSL_SCALAR_UINT, 0 } };
+    static const uint32_t ia[2] = { 0, 1 }, ia2[2] = { 0, 2 };
+    struct pvk_msl_binding bind[2], bind2[2], bind_copy[2];
+    struct pvk_msl_set_layout sets[2], sets2[2], sets_copy[2];
+    struct pvk_ycbcr conv[2], conv2[2];
+    struct pvk_msl_ycbcr_binding yb[1], yb2[1];
+    VkSpecializationInfo spec, spec2;
+    struct pvk_msl_options base, o;
+    struct pvk_key k0, k;
+    uint32_t i;
+
+    memset(bind, 0, sizeof(bind));
+    bind[0].binding = 0;
+    bind[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bind[0].count = 1;
+    bind[0].stride = 8;
+    bind[1].binding = 1;
+    bind[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bind[1].count = 2;
+    bind[1].offset = 8;
+    bind[1].stride = 16;
+    memcpy(bind2, bind, sizeof(bind));
+    bind2[1].offset = 16;
+    memcpy(bind_copy, bind, sizeof(bind));
+    sets[0].bindings = bind;
+    sets[0].binding_count = 2;
+    sets[1].bindings = NULL;
+    sets[1].binding_count = 0;
+    memcpy(sets2, sets, sizeof(sets));
+    sets2[0].bindings = bind2;
+    memcpy(sets_copy, sets, sizeof(sets));
+    sets_copy[0].bindings = bind_copy;
+    memset(conv, 0, sizeof(conv));
+    for (i = 0; i < 2; i++) {
+        conv[i].planes = 2;
+        conv[i].bits = 8;
+        conv[i].max_lod = 4.0f;
+    }
+    memcpy(conv2, conv, sizeof(conv));
+    conv2[1].lod_bias = 0.5f;
+    yb[0].set = 0;
+    yb[0].binding = 1;
+    yb[0].conversions = conv;
+    yb2[0] = yb[0];
+    yb2[0].conversions = conv2;
+    spec.mapEntryCount = 2;
+    spec.pMapEntries = map;
+    spec.dataSize = sizeof(spec_data);
+    spec.pData = spec_data;
+    spec2 = spec;
+    spec2.pData = spec_data2;
+
+    memset(&base, 0, sizeof(base));
+    base.specialization = &spec;
+    base.set_layouts = sets;
+    base.set_layout_count = 2;
+    base.vertex_attributes = attrs;
+    base.vertex_attribute_count = 2;
+    base.vertex_bindings = vbind;
+    base.vertex_binding_count = 1;
+    base.vertex_divisors = div;
+    base.vertex_divisor_count = 1;
+    base.vertex_outputs = outs;
+    base.vertex_output_count = 2;
+    base.input_attachment_colors = ia;
+    base.input_attachment_color_count = 2;
+    base.ycbcr_bindings = yb;
+    base.ycbcr_binding_count = 1;
+    k0 = pvk_stage_key(hash, 100, "main", &base);
+
+    o = base; /* the same contents elsewhere */
+    o.set_layouts = sets_copy;
+    k = pvk_stage_key(hash, 100, "main", &o);
+    CHECK(k.a == k0.a && k.b == k0.b);
+    k = pvk_stage_key(hash2, 100, "main", &base);
+    CHECK(k.a != k0.a || k.b != k0.b);
+    k = pvk_stage_key(hash, 99, "main", &base);
+    CHECK(k.a != k0.a || k.b != k0.b);
+    k = pvk_stage_key(hash, 100, "main2", &base);
+    CHECK(k.a != k0.a || k.b != k0.b);
+
+#define SC_DIFFERS(change)                                                                   \
+    do {                                                                                     \
+        o = base;                                                                            \
+        change;                                                                              \
+        k = pvk_stage_key(hash, 100, "main", &o);                                            \
+        if (k.a == k0.a && k.b == k0.b)                                                      \
+            PVK_TEST_FAIL("the shader cache key does not change with %s", #change);          \
+    } while (0)
+    SC_DIFFERS(o.specialization = &spec2);
+    SC_DIFFERS(o.specialization = NULL);
+    SC_DIFFERS(o.set_layouts = sets2);
+    SC_DIFFERS(o.set_layouts = NULL);
+    SC_DIFFERS(o.set_layout_count = 1);
+    SC_DIFFERS(o.push_constant_buffer = 29);
+    SC_DIFFERS(o.image_1d_as_2d = true);
+    SC_DIFFERS(o.dispatch_base = true);
+    SC_DIFFERS(o.dispatch_base_offset = 16);
+    SC_DIFFERS(o.robust_storage_buffers = true);
+    SC_DIFFERS(o.robust_uniform_buffers = true);
+    SC_DIFFERS(o.robust_images = true);
+    SC_DIFFERS(o.stage = VK_SHADER_STAGE_VERTEX_BIT);
+    SC_DIFFERS(o.vertex_attributes = attrs2);
+    SC_DIFFERS(o.vertex_attribute_count = 1);
+    SC_DIFFERS(o.vertex_bindings = vbind2);
+    SC_DIFFERS(o.vertex_binding_count = 0);
+    SC_DIFFERS(o.vertex_divisors = div2);
+    SC_DIFFERS(o.vertex_divisor_count = 0);
+    SC_DIFFERS(o.dynamic_vertex_strides = true);
+    SC_DIFFERS(o.robust_vertex_input = true);
+    SC_DIFFERS(o.vertex_table_buffer = 28);
+    SC_DIFFERS(o.point_size = true);
+    SC_DIFFERS(o.no_point_size = true);
+    SC_DIFFERS(o.polygon_points = true);
+    SC_DIFFERS(o.view_mask = 3);
+    SC_DIFFERS(o.exact_outputs = true);
+    SC_DIFFERS(o.linked = true);
+    SC_DIFFERS(o.vertex_outputs = outs2);
+    SC_DIFFERS(o.vertex_output_count = 1);
+    SC_DIFFERS(o.input_attachment_colors = ia2);
+    SC_DIFFERS(o.input_attachment_color_count = 1);
+    SC_DIFFERS(o.input_attachment_depth = 1);
+    SC_DIFFERS(o.input_attachment_stencil = 1);
+    SC_DIFFERS(o.input_attachment_undecorated = PVK_MSL_IA_UNDECORATED_DEPTH);
+    SC_DIFFERS(o.color_attachments_valid = true);
+    SC_DIFFERS(o.color_attachments = 1);
+    SC_DIFFERS(o.color_attachment_types[7] = PVK_MSL_SCALAR_INT);
+    SC_DIFFERS(o.sample_shading = true);
+    SC_DIFFERS(o.hidden_depth_output = 2);
+    SC_DIFFERS(o.hidden_depth_bits = 16);
+    SC_DIFFERS(o.hidden_depth_samples = 4);
+    SC_DIFFERS(o.depth_bounds = true);
+    SC_DIFFERS(o.sample_mask_enable = true);
+    SC_DIFFERS(o.sample_mask = 1);
+    SC_DIFFERS(o.logic_op = VK_LOGIC_OP_XOR);
+    SC_DIFFERS(o.logic_targets[7].kind = PVK_MSL_LOGIC_UNORM);
+    SC_DIFFERS(o.logic_targets[0].bits[3] = 8);
+    SC_DIFFERS(o.alpha_to_coverage = true);
+    SC_DIFFERS(o.alpha_to_one = true);
+    SC_DIFFERS(o.samples = 4);
+    SC_DIFFERS(o.ycbcr_bindings = yb2);
+    SC_DIFFERS(o.ycbcr_binding_count = 0);
+#undef SC_DIFFERS
+}
+
+/* Quadrant q (top left, top right, bottom left, bottom right) written with
+ * write mask R, G, B, RGBA over opaque black. */
+static uint32_t expect_masks(uint32_t x, uint32_t y)
+{
+    static const uint32_t q[4] = { RGBA(255, 0, 0, 255), RGBA(0, 255, 0, 255), RGBA(0, 0, 255, 255), WHITE };
+    return q[(y >= H / 2) * 2 + (x >= W / 2)];
+}
+
+/* Pipelines share the device's translations and libraries: one made
+ * again, or in another state, adds none. With the cache holding nothing
+ * (each entry dropped as the next comes, also while a creation still uses
+ * it), pipelines are made and draw as ever. */
+static void test_shader_cache(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    static const VkColorComponentFlags masks[4] = { VK_COLOR_COMPONENT_R_BIT, VK_COLOR_COMPONENT_G_BIT,
+                                                    VK_COLOR_COMPONENT_B_BIT, 0xf };
+    struct pvk_shader_cache *sc = ((struct pvk_device *)device)->shaders;
+    struct img target;
+    struct buf out;
+    VkPipeline pipes[4], again;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t i, count;
+    int round;
+
+    target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    out = make_buf(W * H * 4);
+    for (round = 0; round < 2; round++) {
+        size_t cap = sc->cap;
+        pthread_mutex_lock(&sc->lock);
+        if (round == 1) {
+            sc->cap = 1; /* (every insertion drops all the others) */
+            while (sc->oldest) /* and what it holds now */
+                pvk_shader_remove_locked(sc, sc->oldest);
+        }
+        pthread_mutex_unlock(&sc->lock);
+        for (i = 0; i < 4; i++) {
+            pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+            p.has_blend = true;
+            memset(&p.blend[0], 0, sizeof(p.blend[0]));
+            p.blend[0].colorWriteMask = masks[i];
+            pthread_mutex_lock(&sc->lock);
+            count = sc->count;
+            pthread_mutex_unlock(&sc->lock);
+            pipes[i] = make_pipe(&p);
+            REQUIRE(pipes[i]);
+            if (round == 0 && i > 0) { /* the first one's translations and libraries */
+                pthread_mutex_lock(&sc->lock);
+                CHECK(sc->count == count);
+                pthread_mutex_unlock(&sc->lock);
+            }
+        }
+        if (round == 0) {
+            pthread_mutex_lock(&sc->lock);
+            count = sc->count;
+            pthread_mutex_unlock(&sc->lock);
+            again = make_pipe(&p);
+            REQUIRE(again);
+            pthread_mutex_lock(&sc->lock);
+            CHECK(sc->count == count);
+            pthread_mutex_unlock(&sc->lock);
+            vkDestroyPipeline(device, again, NULL);
+        }
+        cb = begin_cmd();
+        begin_rendering(cb, &target, 1, black, NULL);
+        for (i = 0; i < 4; i++) {
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[i]);
+            rect(cb, i & 1 ? 0 : -1, i & 2 ? 0 : -1, i & 1 ? 1 : 0, i & 2 ? 1 : 0, 1, 1, 1, 1, 0);
+        }
+        vkCmdEndRendering(cb);
+        download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        CHECK(count_bad(&out, expect_masks, round ? "write masks, nothing cached" : "write masks") == 0);
+        for (i = 0; i < 4; i++)
+            vkDestroyPipeline(device, pipes[i], NULL);
+        pthread_mutex_lock(&sc->lock);
+        if (round == 1)
+            CHECK(sc->count <= 1);
+        sc->cap = cap;
+        pthread_mutex_unlock(&sc->lock);
+    }
+    free_buf(&out);
+    free_img(&target);
+}
+
+/* Pipelines made from several threads at once: each thread makes the same
+ * four pipelines (write masks R, G, B, RGBA) through an empty pipeline
+ * cache of its own, so that all of them translate and compile, racing for
+ * the same shader cache entries - first with the cache emptied, then with
+ * it holding nothing (each entry dropped as the next comes, also while
+ * other threads still use it) - and every pipeline draws as ever. */
+#define SC_THREADS 4
+
+struct sc_thread {
+    pthread_t thread;
+    VkPipelineCache cache;
+    VkPipeline pipes[4];
+    VkResult results[4];
+};
+
+static int sc_go;
+
+static void *sc_thread_main(void *arg)
+{
+    static const VkColorComponentFlags masks[4] = { VK_COLOR_COMPONENT_R_BIT, VK_COLOR_COMPONENT_G_BIT,
+                                                    VK_COLOR_COMPONENT_B_BIT, 0xf };
+    struct sc_thread *t = arg;
+    struct pipe p;
+    uint32_t i;
+    while (!__atomic_load_n(&sc_go, __ATOMIC_ACQUIRE))
+        ;
+    for (i = 0; i < 4; i++) {
+        pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+        p.cache = t->cache;
+        p.has_blend = true;
+        memset(&p.blend[0], 0, sizeof(p.blend[0]));
+        p.blend[0].colorWriteMask = masks[i];
+        t->results[i] = make_pipe_result(&p, &t->pipes[i]);
+    }
+    return NULL;
+}
+
+static void test_shader_cache_threads(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    struct pvk_shader_cache *sc = ((struct pvk_device *)device)->shaders;
+    struct sc_thread threads[SC_THREADS];
+    VkPipelineCacheCreateInfo cci;
+    struct img target;
+    struct buf out;
+    VkCommandBuffer cb;
+    uint32_t t, i;
+    size_t cap;
+    int round;
+
+    memset(&cci, 0, sizeof(cci));
+    cci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    out = make_buf(W * H * 4);
+    for (round = 0; round < 2; round++) {
+        memset(threads, 0, sizeof(threads));
+        pthread_mutex_lock(&sc->lock);
+        cap = sc->cap;
+        if (round == 1)
+            sc->cap = 1;
+        while (sc->oldest)
+            pvk_shader_remove_locked(sc, sc->oldest);
+        pthread_mutex_unlock(&sc->lock);
+        __atomic_store_n(&sc_go, 0, __ATOMIC_RELEASE);
+        for (t = 0; t < SC_THREADS; t++) {
+            REQUIRE_VK(vkCreatePipelineCache(device, &cci, NULL, &threads[t].cache));
+            REQUIRE(pthread_create(&threads[t].thread, NULL, sc_thread_main, &threads[t]) == 0);
+        }
+        __atomic_store_n(&sc_go, 1, __ATOMIC_RELEASE);
+        for (t = 0; t < SC_THREADS; t++)
+            pthread_join(threads[t].thread, NULL);
+        pthread_mutex_lock(&sc->lock);
+        if (round == 1)
+            CHECK(sc->count <= 1);
+        sc->cap = cap;
+        pthread_mutex_unlock(&sc->lock);
+        for (t = 0; t < SC_THREADS; t++) {
+            for (i = 0; i < 4; i++)
+                CHECK_VK(threads[t].results[i], VK_SUCCESS);
+            REQUIRE(threads[t].pipes[0] && threads[t].pipes[1] && threads[t].pipes[2] && threads[t].pipes[3]);
+            cb = begin_cmd();
+            begin_rendering(cb, &target, 1, black, NULL);
+            for (i = 0; i < 4; i++) {
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, threads[t].pipes[i]);
+                rect(cb, i & 1 ? 0 : -1, i & 2 ? 0 : -1, i & 1 ? 1 : 0, i & 2 ? 1 : 0, 1, 1, 1, 1, 0);
+            }
+            vkCmdEndRendering(cb);
+            download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+            submit(cb);
+            CHECK(count_bad(&out, expect_masks, round ? "threads, nothing cached" : "threads") == 0);
+            for (i = 0; i < 4; i++)
+                vkDestroyPipeline(device, threads[t].pipes[i], NULL);
+            vkDestroyPipelineCache(device, threads[t].cache, NULL);
+        }
+    }
+    free_buf(&out);
+    free_img(&target);
+}
+
 /* ==========================================================================
  * Y'CbCr conversion in fragment shaders
  * ========================================================================== */
@@ -10284,6 +10632,9 @@ int main(void)
     RUN(test_logic_op_snorm_exact);
     RUN(test_spec_fragment);
     RUN(test_pipeline_cache);
+    RUN(test_shader_cache_key);
+    RUN(test_shader_cache);
+    RUN(test_shader_cache_threads);
     RUN(test_ycbcr_fragment);
     teardown();
     return TEST_RESULT();
