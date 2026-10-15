@@ -39976,6 +39976,10 @@ struct pvk_descriptor_set_layout {
     uint64_t size;           /* table bytes but the variable-count binding's descriptors, 16-aligned */
     uint32_t dynamic_count;  /* dynamic offsets that binding a set takes */
     bool variable;           /* the last binding has a variable count */
+    /* Binding numbers 0..max_binding (dense enough): pvk_layout_find's
+     * answer for each; NULL: the binary search. */
+    const uint32_t *find;
+    uint32_t max_binding;
 };
 
 static struct pvk_descriptor_set_layout *pvk_set_layout_ref(struct pvk_descriptor_set_layout *layout)
@@ -40003,6 +40007,8 @@ static uint32_t pvk_binding_count(const struct pvk_set_binding *b, uint32_t vari
 static uint32_t pvk_layout_find(const struct pvk_descriptor_set_layout *layout, uint32_t binding)
 {
     uint32_t lo = 0, hi = layout->binding_count;
+    if (layout->find)
+        return binding <= layout->max_binding ? layout->find[binding] : hi;
     while (lo < hi) {
         uint32_t mid = lo + (hi - lo) / 2;
         if (layout->bindings[mid].binding < binding)
@@ -40071,23 +40077,29 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
 {
     struct pvk_device *device = (struct pvk_device *)_device;
     const VkAllocationCallbacks *alloc = pvk_device_alloc(device); /* see LAYOUTS */
-    uint32_t n = pCreateInfo->bindingCount, immutable = 0, dynamic = 0, i, j;
+    uint32_t n = pCreateInfo->bindingCount, immutable = 0, dynamic = 0, max_binding = 0, finds, i, j;
     struct pvk_descriptor_set_layout *layout;
     struct pvk_binding_info *sorted = NULL;
     pvk_MTLResourceID *ids;
     struct pvk_ycbcr *ycbcr;
+    uint32_t *find;
     uint64_t total;
 
     (void)pAllocator;
-    for (i = 0; i < n; i++)
+    for (i = 0; i < n; i++) {
         if (pCreateInfo->pBindings[i].pImmutableSamplers &&
             pvk_descriptor_has_sampler(pCreateInfo->pBindings[i].descriptorType))
             immutable += pCreateInfo->pBindings[i].descriptorCount;
-    /* After the bindings: the immutable samplers' ID pairs, then their
-     * Y'CbCr conversions (room for one per immutable sampler). */
+        if (pCreateInfo->pBindings[i].binding > max_binding)
+            max_binding = pCreateInfo->pBindings[i].binding;
+    }
+    finds = n && max_binding < 4 * n + 16 ? max_binding + 1 : 0; /* binding numbers dense enough for a map */
+    /* After the bindings: the immutable samplers' ID pairs, their Y'CbCr
+     * conversions (room for one per immutable sampler), then `find`. */
     layout = pvk_alloc(alloc,
                        sizeof(*layout) + sizeof(struct pvk_set_binding) * n +
-                           (2 * sizeof(pvk_MTLResourceID) + sizeof(struct pvk_ycbcr)) * immutable,
+                           (2 * sizeof(pvk_MTLResourceID) + sizeof(struct pvk_ycbcr)) * immutable +
+                           sizeof(uint32_t) * finds,
                        VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (n)
         sorted = pvk_alloc(alloc, sizeof(*sorted) * n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
@@ -40102,7 +40114,15 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
     layout->bindings = (struct pvk_set_binding *)(layout + 1);
     ids = (pvk_MTLResourceID *)(layout->bindings + n);
     ycbcr = (struct pvk_ycbcr *)(ids + 2 * immutable);
+    find = (uint32_t *)(ycbcr + immutable);
     total = pvk_layout_bindings(pCreateInfo, sorted, layout->bindings);
+    for (i = 0, j = 0; i < finds; i++) { /* the first binding numbered i or more */
+        while (j < n && layout->bindings[j].binding < i)
+            j++;
+        find[i] = j;
+    }
+    layout->find = finds ? find : NULL;
+    layout->max_binding = max_binding;
     for (i = 0; i < n; i++) {
         const VkDescriptorSetLayoutBinding *b = sorted[i].b;
         struct pvk_set_binding *lb = &layout->bindings[i];
@@ -40463,66 +40483,77 @@ VKAPI_ATTR VkResult VKAPI_CALL vkFreeDescriptorSets(VkDevice device, VkDescripto
 
 /* ---- Updates ---- */
 
-/* Writes one descriptor at dst from info: a VkDescriptorBufferInfo,
- * VkDescriptorImageInfo or VkBufferView, as the type says. A binding with
- * immutable samplers keeps them (immutable: the element's pair of sampler
- * IDs, else NULL). stride: the binding's (32: room for the planes of a
- * Y'CbCr view). */
-static void pvk_descriptor_write(char *dst, VkDescriptorType type, const void *info, const pvk_MTLResourceID *immutable,
-                                 uint32_t stride)
+/* Writes n consecutive descriptors of one binding: at dst, `stride` apart
+ * (the binding's; 32: room for the planes of a Y'CbCr view), from infos at
+ * info, info_stride apart: VkDescriptorBufferInfos, VkDescriptorImageInfos
+ * or VkBufferViews, as the type says (an inline uniform block: n bytes). A
+ * binding with immutable samplers keeps them (immutable: the first
+ * descriptor's pair of sampler IDs, else NULL). One loop per type. */
+static void pvk_descriptor_write(char *dst, uint32_t stride, VkDescriptorType type, const char *info,
+                                 size_t info_stride, uint32_t n, const pvk_MTLResourceID *immutable)
 {
+    static const pvk_MTLResourceID none[2]; /* null descriptors: 0 */
+    uint32_t j;
     switch (type) {
     case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
     case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
     case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
-    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: {
-        const VkDescriptorBufferInfo *bi = (const VkDescriptorBufferInfo *)info;
-        const struct pvk_buffer *buffer = (const struct pvk_buffer *)bi->buffer;
-        uint64_t d[2] = { 0, 0 }; /* address, size */
-        if (buffer) {
-            d[0] = buffer->gpu_address + bi->offset;
-            d[1] = bi->range == VK_WHOLE_SIZE ? buffer->size - bi->offset : bi->range;
+    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+        for (j = 0; j < n; j++, dst += stride, info += info_stride) {
+            const VkDescriptorBufferInfo *bi = (const VkDescriptorBufferInfo *)info;
+            const struct pvk_buffer *buffer = (const struct pvk_buffer *)bi->buffer;
+            uint64_t d[2] = { 0, 0 }; /* address, size */
+            if (buffer) {
+                d[0] = buffer->gpu_address + bi->offset;
+                d[1] = bi->range == VK_WHOLE_SIZE ? buffer->size - bi->offset : bi->range;
+            }
+            memcpy(dst, d, 16);
         }
-        memcpy(dst, d, 16);
         break;
-    }
     case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
     case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
-    case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
-        const VkDescriptorImageInfo *ii = (const VkDescriptorImageInfo *)info;
-        const struct pvk_image_view *view = (const struct pvk_image_view *)ii->imageView;
-        pvk_MTLResourceID none = { 0 };
-        if (type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) { /* (cubes: mtl_storage), then the residency texture */
-            memcpy(dst, view ? &view->storage_id : &none, 8);
-            memcpy(dst + 8, view ? &view->residency_id : &none, 8);
-            break;
-        }
-        memcpy(dst, view ? &view->texture_id : &none, 8);
-        if (type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) { /* (an A8_UNORM view takes the alpha sampler state) */
-            bool alpha = view && view->format == VK_FORMAT_A8_UNORM;
-            pvk_MTLResourceID sampler = immutable ? immutable[alpha] : pvk_sampler_id(ii->sampler, alpha);
-            memcpy(dst + 8, &sampler, 8);
-            if (stride >= 32 && view) /* planes 1 and 2 */
-                memcpy(dst + 16, view->plane_ids, 16);
-            else if (stride >= 32)
-                memset(dst + 16, 0, 16);
+        for (j = 0; j < n; j++, dst += stride, info += info_stride) {
+            const struct pvk_image_view *view =
+                (const struct pvk_image_view *)((const VkDescriptorImageInfo *)info)->imageView;
+            memcpy(dst, view ? &view->texture_id : none, 8);
         }
         break;
-    }
+    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: /* (cubes: mtl_storage), then the residency texture */
+        for (j = 0; j < n; j++, dst += stride, info += info_stride) {
+            const struct pvk_image_view *view =
+                (const struct pvk_image_view *)((const VkDescriptorImageInfo *)info)->imageView;
+            memcpy(dst, view ? &view->storage_id : none, 8);
+            memcpy(dst + 8, view ? &view->residency_id : none, 8);
+        }
+        break;
+    case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: /* (an A8_UNORM view takes the alpha sampler state) */
+        for (j = 0; j < n; j++, dst += stride, info += info_stride) {
+            const VkDescriptorImageInfo *ii = (const VkDescriptorImageInfo *)info;
+            const struct pvk_image_view *view = (const struct pvk_image_view *)ii->imageView;
+            bool alpha = view && view->format == VK_FORMAT_A8_UNORM;
+            pvk_MTLResourceID sampler = immutable ? immutable[2 * j + alpha] : pvk_sampler_id(ii->sampler, alpha);
+            memcpy(dst, view ? &view->texture_id : none, 8);
+            memcpy(dst + 8, &sampler, 8);
+            if (stride >= 32) /* planes 1 and 2 */
+                memcpy(dst + 16, view ? view->plane_ids : none, 16);
+        }
+        break;
     case VK_DESCRIPTOR_TYPE_SAMPLER:
-        if (!immutable) {
+        for (j = 0; !immutable && j < n; j++, dst += stride, info += info_stride) {
             pvk_MTLResourceID sampler = pvk_sampler_id(((const VkDescriptorImageInfo *)info)->sampler, false);
             memcpy(dst, &sampler, 8);
         }
         break;
     case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-    case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: {
-        const struct pvk_buffer_view *view = (const struct pvk_buffer_view *)*(const VkBufferView *)info;
-        pvk_MTLResourceID none = { 0 };
-        memcpy(dst, view ? &view->texture_id : &none, 8);
+    case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+        for (j = 0; j < n; j++, dst += stride, info += info_stride) {
+            const struct pvk_buffer_view *view = (const struct pvk_buffer_view *)*(const VkBufferView *)info;
+            memcpy(dst, view ? &view->texture_id : none, 8);
+        }
         break;
-    }
+    case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK:
+        memcpy(dst, info, n);
+        break;
     default:
         break;
     }
@@ -40536,23 +40567,19 @@ static void pvk_table_write(char *table, const struct pvk_descriptor_set_layout 
                             uint32_t binding, uint32_t element, uint32_t count, VkDescriptorType type,
                             const char *data, size_t stride)
 {
-    uint32_t i, k = 0, j;
+    uint32_t i, k = 0;
+    if (type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
+        stride = 1; /* bytes */
     for (i = pvk_layout_find(layout, binding); i < layout->binding_count && k < count; i++) {
         const struct pvk_set_binding *b = &layout->bindings[i];
         uint32_t have = pvk_binding_count(b, variable), n;
-        char *dst;
         if (element >= have) { /* past this binding (or an empty one) */
             element -= have;
             continue;
         }
         n = have - element < count - k ? have - element : count - k;
-        dst = table + b->offset + (size_t)element * b->stride;
-        if (type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
-            memcpy(dst, data + k, n);
-        else
-            for (j = 0; j < n; j++)
-                pvk_descriptor_write(dst + (size_t)j * b->stride, type, data + (k + j) * stride,
-                                     b->immutable ? &b->immutable[2 * (element + j)] : NULL, b->stride);
+        pvk_descriptor_write(table + b->offset + (size_t)element * b->stride, b->stride, type, data + k * stride,
+                             stride, n, b->immutable ? &b->immutable[2 * element] : NULL);
         k += n;
         element = 0;
     }
@@ -40759,20 +40786,14 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorUpdateTemplate(VkDevice device,
 static void pvk_table_write_template(char *table, uint32_t variable, const struct pvk_descriptor_update_template *t,
                                      const void *data)
 {
-    uint32_t i, j;
+    uint32_t i;
     for (i = 0; i < t->run_count; i++) {
         const struct pvk_template_run *r = &t->runs[i];
-        const char *src = (const char *)data + r->data_offset;
-        char *dst = table + r->offset;
         uint32_t n = r->count;
         if (r->variable) /* (an inline uniform block counts bytes, in `variable` too) */
             n = r->element >= variable ? 0 : variable - r->element < n ? variable - r->element : n;
-        if (r->type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
-            memcpy(dst, src, n);
-        else
-            for (j = 0; j < n; j++)
-                pvk_descriptor_write(dst + (size_t)j * r->stride, r->type, src + j * r->data_stride,
-                                     r->immutable ? &r->immutable[2 * j] : NULL, r->stride);
+        pvk_descriptor_write(table + r->offset, r->stride, r->type, (const char *)data + r->data_offset,
+                             r->data_stride, n, r->immutable);
     }
 }
 
