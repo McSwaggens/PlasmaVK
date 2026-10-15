@@ -53693,8 +53693,10 @@ static struct pvk_cmd_block *pvk_cmd_block_get(struct pvk_command_pool *pool, si
 }
 
 static void pvk_cb_render_free(struct pvk_command_buffer *cb);
+static void pvk_cb_render_reset(struct pvk_command_buffer *cb);
 
-/* Back to the initial state; blocks go to the pool unless released. */
+/* Back to the initial state; blocks go to the pool, and the render pass
+ * recording state is kept, unless released. */
 static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release)
 {
     struct pvk_command_pool *pool = cb->pool;
@@ -53715,9 +53717,12 @@ static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release
     cb->submitted = false;
     cb->debug_pipeline[0] = cb->debug_pipeline[1] = NULL;
     cb->render_group = false;
-    if (release)
+    if (release) {
         pvk_labels_free(&cb->labels, pvk_pool_alloc(pool));
-    pvk_cb_render_free(cb);
+        pvk_cb_render_free(cb);
+    } else { /* (secondaries recorded per object and frame would allocate it each time) */
+        pvk_cb_render_reset(cb);
+    }
     if (cb->push && release) {
         pvk_free(pvk_pool_alloc(pool), cb->push);
         cb->push = NULL;
@@ -53743,6 +53748,7 @@ static void pvk_command_buffer_free(struct pvk_command_buffer *cb)
         pvk_live_remove(cb);
     pvk_command_buffer_reset(cb, false);
     pvk_labels_free(&cb->labels, pvk_pool_alloc(pool));
+    pvk_cb_render_free(cb);
     pvk_free(pvk_pool_alloc(pool), cb->push);
     if (cb->prev)
         cb->prev->next = cb->next;
@@ -55791,6 +55797,25 @@ static void pvk_cb_render_free(struct pvk_command_buffer *cb)
     pvk_free(alloc, cb->render->clears);
     pvk_free(alloc, cb->render);
     cb->render = NULL;
+}
+
+/* A new recording's state, as allocated, its attachment arrays kept (each
+ * render pass instance writes the entries it uses). */
+static void pvk_cb_render_reset(struct pvk_command_buffer *cb)
+{
+    struct pvk_cb_render *r = cb->render;
+    struct pvk_image_view **views;
+    VkClearValue *clears;
+    uint32_t capacity;
+    if (!r)
+        return;
+    views = r->views;
+    clears = r->clears;
+    capacity = r->capacity;
+    memset(r, 0, sizeof(*r));
+    r->views = views;
+    r->clears = clears;
+    r->capacity = capacity;
 }
 
 static bool pvk_cb_in_render_pass(const struct pvk_command_buffer *cb)

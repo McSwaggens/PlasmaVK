@@ -2052,6 +2052,91 @@ static void test_render_pass_ops(void)
     free_img(&target);
 }
 
+/* A primary and a secondary that continues its render pass, recorded again
+ * three times (implicit resets keep their render pass recording state):
+ * each recording's clear value (right half) and draw (left half). */
+static void test_rerecord(void)
+{
+    static const uint32_t want[3] = { BLUE, WHITE, RED };
+    static const float colors[3][4] = { { 0, 0, 1, 1 }, { 1, 1, 1, 1 }, { 1, 0, 0, 1 } };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkRenderPass rp = make_simple_pass(VK_FORMAT_R8G8B8A8_UNORM, VK_ATTACHMENT_LOAD_OP_CLEAR,
+                                       VK_ATTACHMENT_STORE_OP_STORE);
+    VkFramebuffer fb = make_fb(rp, &target.view, 1, W, H, 1);
+    VkCommandBuffer cbs[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE }; /* primary, secondary */
+    VkCommandBufferAllocateInfo alloc;
+    VkCommandBufferInheritanceInfo inh;
+    VkCommandBufferBeginInfo begin;
+    VkRenderPassBeginInfo pass;
+    VkSubmitInfo info;
+    VkClearValue clear;
+    VkPipeline pipeline;
+    struct pipe p;
+    uint32_t k, x, y, i;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.rp = rp;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc.commandPool = cmd_pool; /* (RESET_COMMAND_BUFFER) */
+    alloc.commandBufferCount = 1;
+    for (i = 0; i < 2; i++) {
+        alloc.level = i ? VK_COMMAND_BUFFER_LEVEL_SECONDARY : VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        CHECK_VK(vkAllocateCommandBuffers(device, &alloc, &cbs[i]), VK_SUCCESS);
+    }
+    memset(&inh, 0, sizeof(inh));
+    inh.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+    inh.renderPass = rp;
+    inh.framebuffer = fb;
+    memset(&pass, 0, sizeof(pass));
+    pass.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    pass.renderPass = rp;
+    pass.framebuffer = fb;
+    pass.renderArea.extent.width = W;
+    pass.renderArea.extent.height = H;
+    pass.clearValueCount = 1;
+    pass.pClearValues = &clear;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    info.commandBufferCount = 1;
+    info.pCommandBuffers = &cbs[0];
+    for (k = 0; k < 3; k++) {
+        int bad = 0;
+        memset(&begin, 0, sizeof(begin));
+        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT | VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+        begin.pInheritanceInfo = &inh;
+        CHECK_VK(vkBeginCommandBuffer(cbs[1], &begin), VK_SUCCESS);
+        vkCmdBindPipeline(cbs[1], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        rect(cbs[1], -1, -1, 0, 1, colors[(k + 1) % 3][0], colors[(k + 1) % 3][1], colors[(k + 1) % 3][2], 1, 0);
+        CHECK_VK(vkEndCommandBuffer(cbs[1]), VK_SUCCESS);
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        begin.pInheritanceInfo = NULL;
+        CHECK_VK(vkBeginCommandBuffer(cbs[0], &begin), VK_SUCCESS);
+        memcpy(clear.color.float32, colors[k], sizeof(colors[k]));
+        vkCmdBeginRenderPass(cbs[0], &pass, VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
+        vkCmdExecuteCommands(cbs[0], 1, &cbs[1]);
+        vkCmdEndRenderPass(cbs[0]);
+        download(cbs[0], &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        CHECK_VK(vkEndCommandBuffer(cbs[0]), VK_SUCCESS);
+        CHECK_VK(vkQueueSubmit(queue, 1, &info, VK_NULL_HANDLE), VK_SUCCESS);
+        CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++)
+                bad += px(&out, x, y) != (x < W / 2 ? want[(k + 1) % 3] : want[k]);
+        CHECK(bad == 0);
+    }
+    vkFreeCommandBuffers(device, cmd_pool, 2, cbs);
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+    free_buf(&out);
+    free_img(&target);
+}
+
 /* A load op CLEAR limited to a render area (drawn), with a depth/stencil
  * attachment the pass loads (its clear value NaN): the color clears in the
  * area only; then vkCmdClearAttachments of part of it. */
@@ -9866,6 +9951,7 @@ int main(void)
         return TEST_RESULT();
     RUN(test_dynamic_rendering);
     RUN(test_render_pass_ops);
+    RUN(test_rerecord);
     RUN(test_render_area_clear_depth);
     RUN(test_depth_stencil);
     RUN(test_blend);
