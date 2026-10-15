@@ -42052,8 +42052,11 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   and emitted. Every SSA value becomes a named temporary, declared where it
  *   is defined when all its uses are in the same block, else at the top of
  *   the function; a loop's values before its first jump are declared ahead
- *   of the loop (pvk_spv_hoist). Access chains stay expressions until loaded
- *   or stored.
+ *   of the loop (pvk_spv_hoist). A pure scalar or vector used once in its
+ *   block is instead written into its use, as SPIRV-Cross does
+ *   (pvk_spv_forward): glslang names every intermediate value, and Metal
+ *   compiles fewer statements faster. Access chains stay expressions until
+ *   loaded or stored.
  *   Structured control flow is emitted recursively from the merge
  *   information: selections become if/else, OpSwitch a switch, loops
  *   for (;;) with the continue construct inlined at each continue edge, and
@@ -42867,6 +42870,7 @@ enum {
 #define PVK_SPV_SemanticsMakeAvailable 0x2000u
 #define PVK_SPV_SemanticsMakeVisible 0x4000u
 /* Memory Operands (OpLoad, OpStore, OpCopyMemory) */
+#define PVK_SPV_MemVolatile 0x1u
 #define PVK_SPV_MemAligned 0x2u
 #define PVK_SPV_MemMakePointerAvailable 0x8u
 #define PVK_SPV_MemMakePointerVisible 0x10u
@@ -42941,6 +42945,12 @@ enum pvk_spv_kind {
 #define PVK_SPV_F_INVARIANT 0x40000u
 #define PVK_SPV_F_IMAGE_VIEW 0x80000u /* a storage image loaded from a variable of narrower access (img_access):
                                        * the variable's name, never declared */
+/* values (pvk_spv_analyze, pvk_spv_forward) */
+#define PVK_SPV_F_PINNED 0x100000u    /* read later than its use: by a phi copy, or in a pointer's expression */
+#define PVK_SPV_F_MOVED 0x200000u     /* memory may change between its definition and its use */
+#define PVK_SPV_F_FORWARDED 0x400000u /* msl is its expression, written into its one use */
+#define PVK_SPV_F_READS 0x800000u     /* forwarded, reading memory that stores and calls change */
+#define PVK_SPV_F_REPEATED 0x1000000u /* an operand twice of one instruction (`vec3(x, x, x)`) */
 /* member flags */
 #define PVK_SPV_M_OFFSET 0x1u
 #define PVK_SPV_M_ROW_MAJOR 0x2u
@@ -43101,6 +43111,10 @@ struct pvk_spv_id {
     uint32_t ia_texture;           /* a loaded input attachment read from a texture (pvk_spv_ptr) */
     uint32_t img_access; /* a storage image variable (or its F_IMAGE_VIEW loads) only read or only written:
                           * PVK_SPV_ACCESS_*, narrower than its type's (pvk_spv_image_access); 0: the type's */
+    /* values: instructions that read it (counted up to 2), the memory writes
+     * before its definition in its function (pvk_spv_analyze); forwarded, the
+     * nesting of forwarded expressions in its own (pvk_spv_forward) */
+    uint32_t uses, epoch, depth;
 };
 
 struct pvk_spv_block {
@@ -43265,6 +43279,7 @@ struct pvk_spv {
     size_t hoist_at;
     uint32_t hoist_indent;
     struct pvk_spv_func *fn; /* function being emitted */
+    const struct pvk_spv_insn *insn; /* instruction being emitted */
     signed char shapes[512]; /* pvk_spv_shape of the opcodes below 512, + 2 (0: not asked yet) */
     bool merge_returns;      /* returns inside its loops break out to one after them (pvk_spv_return) */
     bool merged;             /* some did: declare pvk_ret, pvk_rv */
@@ -46646,21 +46661,46 @@ static bool pvk_spv_bit(const uint32_t *set, uint32_t i)
     return (set[i / 32] >> (i % 32)) & 1u;
 }
 
-static void pvk_spv_use(struct pvk_spv *ctx, struct pvk_spv_func *fn, uint32_t fidx, uint32_t v, uint32_t block)
+/* Operand v of an instruction in `block`, after `epoch` memory writes in the
+ * function (pvk_spv_writes). */
+static void pvk_spv_use(struct pvk_spv *ctx, struct pvk_spv_func *fn, uint32_t fidx, uint32_t v, uint32_t block,
+                        uint32_t epoch)
 {
     struct pvk_spv_id *x;
     if (v == 0 || v >= ctx->nids)
         return; /* reported when the instruction is emitted */
     x = pvk_spv_get(ctx, v);
-    if ((x->kind == PVK_SPV_K_VALUE || x->kind == PVK_SPV_K_PTR) && x->func == fidx && x->block != block)
-        x->flags |= PVK_SPV_F_CROSS_BLOCK;
+    if ((x->kind == PVK_SPV_K_VALUE || x->kind == PVK_SPV_K_PTR) && x->func == fidx) {
+        if (x->block != block)
+            x->flags |= PVK_SPV_F_CROSS_BLOCK;
+        if (x->epoch != epoch)
+            x->flags |= PVK_SPV_F_MOVED;
+        x->uses += x->uses < 2;
+    }
     if (x->kind == PVK_SPV_K_VAR && x->func == 0) {
         fn->globals[x->global / 32] |= 1u << (x->global % 32);
         if (x->p && x->p->storage == PVK_SPV_StoragePrivate) { /* initialized with a variable's address */
             struct pvk_spv_insn in = pvk_spv_insn_at(ctx, x->insn);
             if (in.wc > 4 && pvk_spv_get(ctx, in.w[4])->kind == PVK_SPV_K_VAR)
-                pvk_spv_use(ctx, fn, fidx, in.w[4], block);
+                pvk_spv_use(ctx, fn, fidx, in.w[4], block, epoch);
         }
+    }
+}
+
+/* Whether an instruction may write memory a forwarded load reads, or
+ * change what it reads (a demotion: helper invocations), so that loads
+ * before it and uses after it don't meet (pvk_spv_forward). */
+static bool pvk_spv_writes(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    switch (in->op) {
+    case PVK_SPV_OpStore: case PVK_SPV_OpCopyMemory: case PVK_SPV_OpFunctionCall: case PVK_SPV_OpImageWrite:
+    case PVK_SPV_OpControlBarrier: case PVK_SPV_OpMemoryBarrier: case PVK_SPV_OpKill:
+    case PVK_SPV_OpTerminateInvocation: case PVK_SPV_OpDemoteToHelperInvocation:
+        return true;
+    case PVK_SPV_OpExtInst: /* Modf and Frexp store through a pointer */
+        return in->wc > 4 && in->w[3] == ctx->glsl && (in->w[4] == PVK_SPV_GLSL_Modf || in->w[4] == PVK_SPV_GLSL_Frexp);
+    default:
+        return (in->op >= PVK_SPV_OpAtomicLoad && in->op <= PVK_SPV_OpAtomicXor) || in->op == PVK_SPV_OpAtomicFAddEXT;
     }
 }
 
@@ -46672,11 +46712,12 @@ static uint32_t pvk_spv_label_block(struct pvk_spv *ctx, uint32_t fidx, uint32_t
     return x->block;
 }
 
-/* Which values cross blocks, which globals and functions each function uses. */
+/* Which values cross blocks, how values are used (pvk_spv_forward), which
+ * globals and functions each function uses. */
 static void pvk_spv_analyze(struct pvk_spv *ctx, uint32_t fidx)
 {
     struct pvk_spv_func *fn = ctx->funcs[fidx - 1];
-    uint32_t bi, i, words = (ctx->nglobals + 31) / 32, *ptrs = NULL, nptrs = 0, cap_ptrs = 0;
+    uint32_t bi, i, words = (ctx->nglobals + 31) / 32, *ptrs = NULL, nptrs = 0, cap_ptrs = 0, epoch = 0;
 
     fn->globals = pvk_spv_alloc(ctx, sizeof(uint32_t) * (words ? words : 1));
     for (bi = 0; bi < fn->nblocks; bi++) {
@@ -46686,14 +46727,22 @@ static void pvk_spv_analyze(struct pvk_spv *ctx, uint32_t fidx)
             struct pvk_spv_insn in = pvk_spv_insn_at(ctx, off);
             int shape = pvk_spv_shape(ctx, in.op);
             uint32_t b, e;
-            if (in.op == PVK_SPV_OpPhi) {
-                for (i = 3; i + 1 < in.wc; i += 2)
-                    pvk_spv_use(ctx, fn, fidx, in.w[i], pvk_spv_label_block(ctx, fidx, in.w[i + 1]));
+            if (in.op == PVK_SPV_OpPhi) { /* (copied at the end of the predecessor) */
+                for (i = 3; i + 1 < in.wc; i += 2) {
+                    pvk_spv_use(ctx, fn, fidx, in.w[i], pvk_spv_label_block(ctx, fidx, in.w[i + 1]), epoch);
+                    if (in.w[i] < ctx->nids)
+                        ctx->ids[in.w[i]].flags |= PVK_SPV_F_PINNED;
+                }
             } else if (in.op == PVK_SPV_OpExtInst && pvk_spv_get(ctx, pvk_spv_arg(ctx, &in, 3))->kind == PVK_SPV_K_IMPORT &&
                        (pvk_spv_get(ctx, in.w[3])->flags & PVK_SPV_F_NONSEMANTIC)) {
                 /* debug info */
             } else {
                 uint32_t mask = pvk_spv_literal_word(in.op);
+                /* An atomic reads its operands after its release fence, and a
+                 * compare-exchange again on every try (pvk_spv_atomic): as if
+                 * after its write. */
+                uint32_t at = epoch + ((in.op >= PVK_SPV_OpAtomicLoad && in.op <= PVK_SPV_OpAtomicXor) ||
+                                       in.op == PVK_SPV_OpAtomicFAddEXT);
                 if ((in.op >= PVK_SPV_OpGroupNonUniformElect && in.op <= PVK_SPV_OpGroupNonUniformQuadSwap) ||
                     in.op == PVK_SPV_OpGroupNonUniformRotateKHR)
                     fn->implicit |= PVK_SPV_I_LANE;
@@ -46702,9 +46751,17 @@ static void pvk_spv_analyze(struct pvk_spv *ctx, uint32_t fidx)
                 fn->discards |= in.op == PVK_SPV_OpKill || in.op == PVK_SPV_OpTerminateInvocation ||
                                 in.op == PVK_SPV_OpDemoteToHelperInvocation;
                 pvk_spv_id_range(&in, shape, &b, &e);
-                for (i = b; i < e; i++)
-                    if (i != mask)
-                        pvk_spv_use(ctx, fn, fidx, in.w[i], bi);
+                for (i = b; i < e; i++) {
+                    uint32_t j = b;
+                    if (i == mask)
+                        continue;
+                    while (e - b <= 16 && j < i && (j == mask || in.w[j] != in.w[i]))
+                        j++;
+                    if (e - b > 16 || j == i)
+                        pvk_spv_use(ctx, fn, fidx, in.w[i], bi, at);
+                    else if (in.w[i] < ctx->nids) /* (one use: the instruction reads it once) */
+                        ctx->ids[in.w[i]].flags |= PVK_SPV_F_REPEATED;
+                }
                 if (in.op == PVK_SPV_OpFunctionCall) {
                     uint32_t callee = pvk_spv_get(ctx, pvk_spv_arg(ctx, &in, 3))->func, k;
                     if (pvk_spv_get(ctx, in.w[3])->kind != PVK_SPV_K_FUNC)
@@ -46717,8 +46774,15 @@ static void pvk_spv_analyze(struct pvk_spv *ctx, uint32_t fidx)
                 if ((in.op == PVK_SPV_OpAccessChain || in.op == PVK_SPV_OpInBoundsAccessChain ||
                      in.op == PVK_SPV_OpPtrAccessChain || in.op == PVK_SPV_OpCopyObject ||
                      in.op == PVK_SPV_OpImageTexelPointer) && shape == 2 &&
-                    pvk_spv_get(ctx, in.w[2])->kind == PVK_SPV_K_PTR)
+                    pvk_spv_get(ctx, in.w[2])->kind == PVK_SPV_K_PTR) {
                     PVK_SPV_PUSH(ctx, ptrs, nptrs, cap_ptrs, off);
+                    for (i = b; i < e; i++) /* (read where the pointer is used) */
+                        if (in.w[i] < ctx->nids)
+                            ctx->ids[in.w[i]].flags |= PVK_SPV_F_PINNED;
+                }
+                if (shape == 2 && in.w[2] < ctx->nids)
+                    ctx->ids[in.w[2]].epoch = epoch;
+                epoch += pvk_spv_writes(ctx, &in);
             }
             off += in.wc;
         }
@@ -47588,6 +47652,152 @@ static bool pvk_spv_hoist(struct pvk_spv *ctx, const struct pvk_spv_id *x, const
     return true;
 }
 
+#define PVK_SPV_FORWARD_DEPTH 16 /* forwarded expressions inside one another, at most */
+
+/* Expression e as an operand: in parentheses unless nothing in it binds
+ * more loosely than a postfix does (names, calls, members, subscripts). */
+static const char *pvk_spv_enclose(struct pvk_spv *ctx, const char *e)
+{
+    int depth = 0;
+    const char *s;
+    for (s = e; *s; s++) {
+        char c = *s;
+        if (c == '(' || c == '[')
+            depth++;
+        else if (c == ')' || c == ']')
+            depth--;
+        else if (depth == 0 && !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                                 c == '_' || c == '.'))
+            return pvk_spv_fmt(ctx, "(%s)", e);
+    }
+    return e;
+}
+
+/* Whether value rid, which the instruction being emitted defines as expr,
+ * is written into its use instead of a local (HOW IT WORKS). A scalar or
+ * vector used at most once, in its own block, by an instruction that reads
+ * it there (not a phi copy or a pointer, which read it later), made by a
+ * pure instruction: arithmetic, conversions, composites, GLSL.std.450 (in
+ * modules with float controls only data movement: an operation forwarded
+ * into another may contract with it), or a load with no write, barrier or
+ * call (pvk_spv_writes) before the use, unless of push constants or inputs.
+ * Also a descriptor's load: its name, not a copy (a texture and sampler
+ * copied to a local cost Metal's compiler about 30 ms a shader: vkQuake's
+ * basic_frag 90 ms against 59). Not derivatives, image or subgroup
+ * operations, whose results depend on where they run. */
+static bool pvk_spv_forward(struct pvk_spv *ctx, uint32_t rid, const char *expr)
+{
+    const struct pvk_spv_insn *in = ctx->insn;
+    struct pvk_spv_id *x = pvk_spv_get(ctx, rid);
+    struct pvk_spv_type *t = pvk_spv_type(ctx, x->type);
+    uint32_t b, e, i, depth = 0;
+    bool reads = false, arith = false, packed = false;
+
+    x->flags &= ~(PVK_SPV_F_FORWARDED | PVK_SPV_F_READS);
+    if (!in || pvk_spv_shape(ctx, in->op) != 2 || in->w[2] != rid || x->uses > 1 || !pvk_spv_local(x) ||
+        (x->flags & PVK_SPV_F_PINNED))
+        return false;
+    if (t->op == PVK_SPV_OpTypeVector)
+        t = pvk_spv_type(ctx, t->elem);
+    if (t->op != PVK_SPV_OpTypeBool && t->op != PVK_SPV_OpTypeInt && t->op != PVK_SPV_OpTypeFloat &&
+        !(t->opaque && in->op == PVK_SPV_OpLoad)) /* (descriptors: their name, not a copy) */
+        return false;
+    switch (in->op) {
+    case PVK_SPV_OpLoad: {
+        const struct pvk_spv_ptr *p = pvk_spv_ptr_of(ctx, in->w[3]);
+        if (t->opaque && (p->storage != PVK_SPV_StorageUniformConstant || p->ycbcr))
+            return false;
+        switch (p->storage) {
+        case PVK_SPV_StorageUniformConstant:
+            break;
+        case PVK_SPV_StorageFunction:
+        case PVK_SPV_StoragePrivate:
+        case PVK_SPV_StorageOutput:
+            reads = true;
+            break;
+        case PVK_SPV_StorageUniform:
+        case PVK_SPV_StorageStorageBuffer:
+        case PVK_SPV_StorageWorkgroup:
+            /* Other invocations' writes reach it through barriers and
+             * atomics only, which a forwarded load does not pass (else a
+             * data race, undefined). Not in modules that synchronize
+             * buffers at device scope (COHERENCE), nor volatile loads. */
+            if (strcmp(ctx->dev, "device") != 0 ||
+                (in->wc > 4 && (in->w[4] & (PVK_SPV_MemVolatile | PVK_SPV_MemMakePointerVisible))))
+                return false;
+            reads = packed = true;
+            break;
+        case PVK_SPV_StorageInput: /* (helper invocations: demotion changes it) */
+            reads = p->var && (pvk_spv_get(ctx, p->var)->flags & PVK_SPV_F_EXPR);
+            break;
+        case PVK_SPV_StoragePushConstant:
+            packed = true;
+            break;
+        default:
+            return false;
+        }
+        break;
+    }
+    case PVK_SPV_OpFAdd: case PVK_SPV_OpFSub: case PVK_SPV_OpFMul: case PVK_SPV_OpFDiv: case PVK_SPV_OpFRem:
+    case PVK_SPV_OpFMod: case PVK_SPV_OpVectorTimesScalar: case PVK_SPV_OpVectorTimesMatrix:
+    case PVK_SPV_OpMatrixTimesVector: case PVK_SPV_OpDot:
+        arith = true;
+        break;
+    case PVK_SPV_OpExtInst:
+        if (in->w[3] != ctx->glsl || in->w[4] == PVK_SPV_GLSL_Modf || in->w[4] == PVK_SPV_GLSL_Frexp ||
+            (in->w[4] >= PVK_SPV_GLSL_InterpolateAtCentroid && in->w[4] <= PVK_SPV_GLSL_InterpolateAtOffset))
+            return false;
+        arith = true;
+        break;
+    case PVK_SPV_OpCompositeExtract: case PVK_SPV_OpCompositeConstruct: case PVK_SPV_OpVectorShuffle:
+    case PVK_SPV_OpVectorExtractDynamic: case PVK_SPV_OpCopyObject: case PVK_SPV_OpFNegate:
+    case PVK_SPV_OpIAdd: case PVK_SPV_OpISub: case PVK_SPV_OpIMul: case PVK_SPV_OpUDiv: case PVK_SPV_OpSDiv:
+    case PVK_SPV_OpUMod: case PVK_SPV_OpSRem: case PVK_SPV_OpSMod: case PVK_SPV_OpShiftLeftLogical:
+    case PVK_SPV_OpShiftRightLogical: case PVK_SPV_OpShiftRightArithmetic: case PVK_SPV_OpBitwiseOr:
+    case PVK_SPV_OpBitwiseXor: case PVK_SPV_OpBitwiseAnd: case PVK_SPV_OpNot: case PVK_SPV_OpSNegate:
+    case PVK_SPV_OpBitFieldInsert: case PVK_SPV_OpBitFieldSExtract: case PVK_SPV_OpBitFieldUExtract:
+    case PVK_SPV_OpBitReverse: case PVK_SPV_OpBitCount: case PVK_SPV_OpIEqual: case PVK_SPV_OpINotEqual:
+    case PVK_SPV_OpUGreaterThan: case PVK_SPV_OpSGreaterThan: case PVK_SPV_OpUGreaterThanEqual:
+    case PVK_SPV_OpSGreaterThanEqual: case PVK_SPV_OpULessThan: case PVK_SPV_OpSLessThan:
+    case PVK_SPV_OpULessThanEqual: case PVK_SPV_OpSLessThanEqual: case PVK_SPV_OpFOrdEqual:
+    case PVK_SPV_OpFUnordEqual: case PVK_SPV_OpFOrdNotEqual: case PVK_SPV_OpFUnordNotEqual:
+    case PVK_SPV_OpFOrdLessThan: case PVK_SPV_OpFUnordLessThan: case PVK_SPV_OpFOrdGreaterThan:
+    case PVK_SPV_OpFUnordGreaterThan: case PVK_SPV_OpFOrdLessThanEqual: case PVK_SPV_OpFUnordLessThanEqual:
+    case PVK_SPV_OpFOrdGreaterThanEqual: case PVK_SPV_OpFUnordGreaterThanEqual: case PVK_SPV_OpLogicalEqual:
+    case PVK_SPV_OpLogicalNotEqual: case PVK_SPV_OpLogicalOr: case PVK_SPV_OpLogicalAnd: case PVK_SPV_OpLogicalNot:
+    case PVK_SPV_OpSelect: case PVK_SPV_OpAny: case PVK_SPV_OpAll: case PVK_SPV_OpIsNan: case PVK_SPV_OpIsInf:
+    case PVK_SPV_OpConvertFToU: case PVK_SPV_OpConvertFToS: case PVK_SPV_OpConvertSToF: case PVK_SPV_OpConvertUToF:
+    case PVK_SPV_OpUConvert: case PVK_SPV_OpSConvert: case PVK_SPV_OpFConvert: case PVK_SPV_OpQuantizeToF16:
+    case PVK_SPV_OpBitcast: case PVK_SPV_OpExpectKHR:
+        break;
+    default:
+        return false;
+    }
+    if (arith && !ctx->result->fast_math)
+        return false;
+    pvk_spv_id_range(in, 2, &b, &e);
+    for (i = b; i < e; i++) {
+        const struct pvk_spv_id *o = in->w[i] < ctx->nids ? &ctx->ids[in->w[i]] : NULL;
+        if (o && o->kind == PVK_SPV_K_VALUE && (o->flags & PVK_SPV_F_FORWARDED)) {
+            const char *at = strpbrk(o->msl, "([") ? strstr(expr, o->msl) : NULL;
+            if (at && strstr(at + 1, o->msl)) /* computed twice (a shuffle's components): not again */
+                return false;
+            reads |= (o->flags & PVK_SPV_F_READS) != 0;
+            if (o->depth >= depth)
+                depth = o->depth + 1;
+        }
+    }
+    if ((reads && (x->flags & PVK_SPV_F_MOVED)) || depth > PVK_SPV_FORWARD_DEPTH ||
+        ((x->flags & PVK_SPV_F_REPEATED) && strpbrk(expr, "([ ?"))) /* (written as often: names only) */
+        return false;
+    if (packed && pvk_spv_type(ctx, x->type)->op == PVK_SPV_OpTypeVector) /* (packed in memory: converted) */
+        expr = pvk_spv_fmt(ctx, "%s(%s)", pvk_spv_type(ctx, x->type)->msl, expr);
+    x->msl = pvk_spv_enclose(ctx, expr);
+    x->flags |= PVK_SPV_F_FORWARDED | (reads ? PVK_SPV_F_READS : 0);
+    x->depth = depth;
+    return true;
+}
+
 /* Declares result rid (where it is defined, if local) and returns its name;
  * follow with assignments. */
 static const char *pvk_spv_result(struct pvk_spv *ctx, uint32_t rid)
@@ -47608,6 +47818,8 @@ static void pvk_spv_set(struct pvk_spv *ctx, uint32_t rid, const char *expr)
     const char *type = pvk_spv_data_type(ctx, x->type)->msl;
     if (x->kind != PVK_SPV_K_VALUE || !x->msl)
         pvk_spv_fail(ctx, "id %u is not a value", rid);
+    if (pvk_spv_forward(ctx, rid, expr))
+        return;
     if (pvk_spv_local(x) && !pvk_spv_hoist(ctx, x, type))
         pvk_spv_line(ctx, "%s %s = %s;", type, x->msl, expr);
     else
@@ -47959,9 +48171,20 @@ static void pvk_spv_store(struct pvk_spv *ctx, const struct pvk_spv_ptr *p, cons
     pvk_spv_if_open(ctx, ok);
     if (p->rm_col) {
         struct pvk_spv_type *t = pvk_spv_type(ctx, p->type);
+        bool once = val[strspn(val, "_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")] != '\0';
         uint32_t r;
+        if (once) { /* an expression (pvk_spv_forward) may read the column: evaluated before a row changes */
+            pvk_spv_line(ctx, "{");
+            ctx->indent++;
+            pvk_spv_line(ctx, "%s pvk_col = %s;", t->msl, val);
+            val = "pvk_col";
+        }
         for (r = 0; r < t->count; r++)
             pvk_spv_line(ctx, "%s[%u]%s[%s] = %s[%u];", p->expr, r, p->node->padded ? ".v" : "", p->rm_col, val, r);
+        if (once) {
+            ctx->indent--;
+            pvk_spv_line(ctx, "}");
+        }
     } else {
         ctx->keep_pad = pvk_spv_shared(p);
         pvk_spv_copy(ctx, p->expr, p->node, p->type, val, NULL, vtype, 0);
@@ -49075,6 +49298,8 @@ static uint32_t pvk_spv_splat_of(struct pvk_spv *ctx, uint32_t v)
     for (i = 4; i < in.wc; i++)
         if (in.w[i] != in.w[3])
             return 0;
+    if ((pvk_spv_get(ctx, in.w[3])->flags & PVK_SPV_F_READS) && !(x->flags & PVK_SPV_F_FORWARDED))
+        return 0; /* (a forwarded load, read where the vector was: pvk_spv_forward) */
     return in.w[3];
 }
 
@@ -51400,7 +51625,9 @@ static void pvk_spv_emit_block_body(struct pvk_spv *ctx, const struct pvk_spv_bl
     uint32_t off = blk->begin;
     while (off < blk->end) {
         struct pvk_spv_insn in = pvk_spv_insn_at(ctx, off);
+        ctx->insn = &in;
         pvk_spv_emit_insn(ctx, &in);
+        ctx->insn = NULL;
         off += in.wc;
     }
 }
