@@ -100,6 +100,7 @@ static void test_physical_device(void)
     VkPhysicalDevice pd;
     VkPhysicalDeviceProperties props;
     uint32_t count = 0;
+    id system;
 
     REQUIRE(instance);
     CHECK_VK(vkEnumeratePhysicalDevices(instance, &count, NULL), VK_SUCCESS);
@@ -114,6 +115,11 @@ static void test_physical_device(void)
         CHECK(props.limits.maxComputeWorkGroupSize[0] >= 1024); /* struct return through objc_msgSend */
         CHECK(strncmp(props.deviceName, "Apple", 5) == 0);
         printf("  device: %s\n", props.deviceName);
+        /* the system default device (white box: found through
+         * MTLCopyAllDevices on macOS, pvk_system_default_device) */
+        system = pvk_MTLCreateSystemDefaultDevice();
+        CHECK(system && ((struct pvk_physical_device *)pd)->mtl_device == system);
+        pvk_release(system);
     }
     vkDestroyInstance(instance, NULL);
 }

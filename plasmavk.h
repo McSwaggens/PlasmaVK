@@ -29770,6 +29770,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetMemoryMetalHandlePropertiesEXT(
 #error "Compile the PlasmaVK implementation without ARC (-fno-objc-arc) or as plain C."
 #endif
 
+#include <TargetConditionals.h>
 #include <mach/mach_time.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
@@ -31491,6 +31492,8 @@ static inline void pvk_MTL4CommandQueue_addResidencySet(id self, id residencySet
 static inline id pvk_NSString_stringWithUTF8String(const char * nullTerminatedCString) { PVK_CLASS_CACHE("NSString"); PVK_SEL_CACHE("stringWithUTF8String:"); return PVK_MSG(id, (id, SEL, const char *))((id)pvk_cls_, pvk_sel_, nullTerminatedCString); }
 static inline id pvk_NSError_localizedDescription(id self) { PVK_SEL_CACHE("localizedDescription"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline long pvk_NSError_code(id self) { PVK_SEL_CACHE("code"); return PVK_MSG(long, (id, SEL))(self, pvk_sel_); }
+static inline unsigned long pvk_NSArray_count(id self) { PVK_SEL_CACHE("count"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_NSArray_objectAtIndex(id self, unsigned long index) { PVK_SEL_CACHE("objectAtIndex:"); return PVK_MSG(id, (id, SEL, unsigned long))(self, pvk_sel_, index); }
 static inline id pvk_MTLDevice_newCommandBuffer(id self) { PVK_SEL_CACHE("newCommandBuffer"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline id pvk_MTLDevice_newCommandAllocator(id self) { PVK_SEL_CACHE("newCommandAllocator"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline id pvk_MTLDevice_newArgumentTableWithDescriptor_error(id self, id descriptor, id * error) { PVK_SEL_CACHE("newArgumentTableWithDescriptor:error:"); return PVK_MSG(id, (id, SEL, id, id *))(self, pvk_sel_, descriptor, error); }
@@ -33570,10 +33573,31 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     m->memoryTypes[3].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
 }
 
+/* The system default Metal device (retained), NULL if there is none. On
+ * macOS, MTLCreateSystemDefaultDevice picks the GPU driving the main display
+ * through CoreGraphics, which costs a process that has not set it up yet (a
+ * tool, a test runner, the CTS; a windowed application has by then)
+ * 25-35 ms on M4 Max; MTLCopyAllDevices lists the GPUs in 5 ms. A Mac with
+ * one GPU, as every Mac with a Metal 4 GPU (Apple silicon) is, has no other
+ * to pick: MTLCopyAllDevices returns the same device object. With more, the
+ * system still picks. */
+static id pvk_system_default_device(void)
+{
+#if TARGET_OS_OSX
+    id all = pvk_MTLCopyAllDevices(), mtl = NULL;
+    if (all && pvk_NSArray_count(all) == 1)
+        mtl = pvk_retain(pvk_NSArray_objectAtIndex(all, 0));
+    pvk_release(all);
+    if (mtl)
+        return mtl;
+#endif
+    return pvk_MTLCreateSystemDefaultDevice();
+}
+
 static VkResult pvk_physical_device_create(struct pvk_instance *instance)
 {
     struct pvk_physical_device *pd;
-    id mtl = pvk_MTLCreateSystemDefaultDevice();
+    id mtl = pvk_system_default_device();
 
     if (!mtl) {
         pvk_logi(instance, PVK_LOG_INFO, "PlasmaVK-no-metal-device", "no Metal device; exposing no physical devices");
