@@ -177,10 +177,7 @@ struct scene {
 };
 
 /* Not in bench_vk.h's table. */
-static PFN_vkCmdExecuteCommands CmdExecuteCommands;
-static PFN_vkFreeDescriptorSets FreeDescriptorSets;
 static PFN_vkSetDebugUtilsObjectNameEXT SetDebugUtilsObjectName; /* NULL: VK_EXT_debug_utils not enabled */
-static PFN_vkGetDescriptorSetLayoutSupport GetDescriptorSetLayoutSupport;
 
 static int material_of(const struct config *cfg, int object)
 {
@@ -445,7 +442,7 @@ static void record(void *user, const struct bench_frame *f)
                             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
         vkd.CmdBeginRendering(cmd, &info);
-        CmdExecuteCommands(cmd, (uint32_t)s->cfg->threads, secondaries);
+        vkd.CmdExecuteCommands(cmd, (uint32_t)s->cfg->threads, secondaries);
     } else {
         bench_cmd_begin_color(cmd, &s->targets[f->slot], clear);
     }
@@ -708,7 +705,7 @@ static void run_cpu(struct scene *s, struct bench_loop *loop)
         case MODE_POOL_FREE_CHURN:
             for (k = 0; k < ops; k++) {
                 VkDescriptorSet *set = &s->check_sets[bench_rand(&seed) % (uint32_t)n];
-                BENCH_VK(FreeDescriptorSets(dev, pool, 1, set));
+                BENCH_VK(vkd.FreeDescriptorSets(dev, pool, 1, set));
                 BENCH_VK(vkd.AllocateDescriptorSets(dev, &alloc, set));
             }
             break;
@@ -1219,7 +1216,7 @@ static int array_supported(struct bench_vk *vk, const struct config *cfg)
     }
     /* Beyond maxPerSetDescriptors, a layout may still be supported. */
     table_layout(&table, (uint32_t)cfg->draws);
-    GetDescriptorSetLayoutSupport(vk->device, &table.info, &support);
+    vkd.GetDescriptorSetLayoutSupport(vk->device, &table.info, &support);
     if (!support.supported) {
         bench_skip(cfg->name, "vkGetDescriptorSetLayoutSupport: a table of %d textures is not supported",
                    cfg->draws);
@@ -1250,14 +1247,8 @@ int main(void)
     bench_begin("descriptor_churn");
     bench_vk_init(&vk, BENCH_NEED_DYNAMIC_RENDERING | BENCH_NEED_SYNC2 | BENCH_WANT_PUSH_DESCRIPTOR |
                            BENCH_WANT_UPDATE_AFTER_BIND);
-    CmdExecuteCommands = (PFN_vkCmdExecuteCommands)vkGetDeviceProcAddr(vk.device, "vkCmdExecuteCommands");
-    FreeDescriptorSets = (PFN_vkFreeDescriptorSets)vkGetDeviceProcAddr(vk.device, "vkFreeDescriptorSets");
     SetDebugUtilsObjectName =
         (PFN_vkSetDebugUtilsObjectNameEXT)vkGetDeviceProcAddr(vk.device, "vkSetDebugUtilsObjectNameEXT");
-    GetDescriptorSetLayoutSupport =
-        (PFN_vkGetDescriptorSetLayoutSupport)vkGetDeviceProcAddr(vk.device, "vkGetDescriptorSetLayoutSupport");
-    if (!CmdExecuteCommands || !FreeDescriptorSets || !GetDescriptorSetLayoutSupport)
-        bench_fatal("vkGetDeviceProcAddr returned NULL for a Vulkan 1.0 or 1.1 command");
     s = bench_alloc(sizeof(*s));
     s->vk = &vk;
     setup(s);

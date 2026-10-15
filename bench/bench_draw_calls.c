@@ -89,9 +89,6 @@ struct scene {
     VkCommandBuffer secondaries[BENCH_FRAMES_IN_FLIGHT][MAX_SECONDARIES];
 };
 
-/* Not in bench_vk.h's table. */
-static PFN_vkCmdExecuteCommands CmdExecuteCommands;
-
 /* Batch b of an instanced draw moves by a few whole pixels. */
 static void batch_offset_px(int b, int *dx, int *dy)
 {
@@ -167,7 +164,7 @@ static void record_secondaries(struct scene *s, const struct bench_frame *f, con
                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
     vkd.CmdBeginRendering(f->cmd, &info);
-    CmdExecuteCommands(f->cmd, (uint32_t)cfg->secondaries, secondaries);
+    vkd.CmdExecuteCommands(f->cmd, (uint32_t)cfg->secondaries, secondaries);
 }
 
 static void record(void *user, const struct bench_frame *f)
@@ -424,9 +421,6 @@ int main(void)
 
     bench_begin("draw_calls");
     bench_vk_init(&vk, BENCH_NEED_DYNAMIC_RENDERING | BENCH_NEED_SYNC2);
-    CmdExecuteCommands = (PFN_vkCmdExecuteCommands)vkGetDeviceProcAddr(vk.device, "vkCmdExecuteCommands");
-    if (!CmdExecuteCommands)
-        bench_fatal("vkGetDeviceProcAddr(vkCmdExecuteCommands) returned NULL");
     s = bench_alloc(sizeof(*s));
     s->vk = &vk;
     setup(s);

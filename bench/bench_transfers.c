@@ -73,13 +73,6 @@ static const struct config configs[] = {
     { "fill_x128", MODE_FILL, 200 },
 };
 
-/* Transfer commands that bench_vk.h does not load. */
-static struct {
-    PFN_vkCmdBlitImage CmdBlitImage;
-    PFN_vkCmdClearColorImage CmdClearColorImage;
-    PFN_vkCmdFillBuffer CmdFillBuffer;
-} vkx;
-
 /* An image with any type, layers and mips; transfers need no views. */
 struct img {
     VkImage image;
@@ -202,7 +195,7 @@ static void blit_level(VkCommandBuffer cmd, const struct img *im, uint32_t level
         .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, level, 0, im->layers },
         .dstOffsets = { { 0, 0, 0 }, { (int32_t)level_size(im->width, level), (int32_t)level_size(im->height, level), 1 } },
     };
-    vkx.CmdBlitImage(cmd, im->image, src_layout, im->image, dst_layout, 1, &blit, VK_FILTER_LINEAR);
+    vkd.CmdBlitImage(cmd, im->image, src_layout, im->image, dst_layout, 1, &blit, VK_FILTER_LINEAR);
 }
 
 /* The usual mip generation: level 0 (in from, written by src_stage) is the
@@ -275,7 +268,7 @@ static void record(void *user, const struct bench_frame *f)
         img_barrier(cmd, &s->volume, 0, 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, 0, VK_PIPELINE_STAGE_2_CLEAR_BIT,
                     VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        vkx.CmdClearColorImage(cmd, s->volume.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
+        vkd.CmdClearColorImage(cmd, s->volume.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
         img_barrier(cmd, &s->volume, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
@@ -340,7 +333,7 @@ static void record(void *user, const struct bench_frame *f)
             VkClearColorValue color;
             VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
             memcpy(color.float32, atlas_clear, sizeof(atlas_clear));
-            vkx.CmdClearColorImage(cmd, s->atlas.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
+            vkd.CmdClearColorImage(cmd, s->atlas.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
             bench_memory_barrier(cmd, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                                  VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
         }
@@ -353,7 +346,7 @@ static void record(void *user, const struct bench_frame *f)
                 .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
                 .dstOffsets = { { x, y, 0 }, { x + CELL, y + CELL, 1 } },
             };
-            vkx.CmdBlitImage(cmd, s->sprite.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s->atlas.image,
+            vkd.CmdBlitImage(cmd, s->sprite.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s->atlas.image,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
         }
         img_barrier(cmd, &s->atlas, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -388,7 +381,7 @@ static void record(void *user, const struct bench_frame *f)
                              VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                              VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
         for (i = 0; i < FILLS; i++)
-            vkx.CmdFillBuffer(cmd, s->fills.buffer, (VkDeviceSize)i * FILL_BYTES, FILL_BYTES, i & 1 ? FILL_FLOAT : 0);
+            vkd.CmdFillBuffer(cmd, s->fills.buffer, (VkDeviceSize)i * FILL_BYTES, FILL_BYTES, i & 1 ? FILL_FLOAT : 0);
         bench_memory_barrier(cmd, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
                              VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
@@ -636,12 +629,6 @@ static void setup(struct scene *s)
     struct bench_vk *vk = s->vk;
     const VkImageUsageFlags sampled = VK_IMAGE_USAGE_SAMPLED_BIT;
     uint32_t i, x, y, face;
-
-    vkx.CmdBlitImage = (PFN_vkCmdBlitImage)vkGetDeviceProcAddr(vk->device, "vkCmdBlitImage");
-    vkx.CmdClearColorImage = (PFN_vkCmdClearColorImage)vkGetDeviceProcAddr(vk->device, "vkCmdClearColorImage");
-    vkx.CmdFillBuffer = (PFN_vkCmdFillBuffer)vkGetDeviceProcAddr(vk->device, "vkCmdFillBuffer");
-    if (!vkx.CmdBlitImage || !vkx.CmdClearColorImage || !vkx.CmdFillBuffer)
-        bench_fatal("vkGetDeviceProcAddr returned NULL for a transfer command");
 
     bench_buffer_create(vk, &s->staging, STREAM_BYTES + UPLOAD_BYTES, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, BENCH_HOST, 0);
     bench_buffer_create(vk, &s->readback, (VkDeviceSize)BIG * BIG * 4 * 4 / 3 + (1u << 20),

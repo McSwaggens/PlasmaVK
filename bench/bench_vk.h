@@ -123,15 +123,17 @@ static inline void *bench_alloc(size_t size)
     X(WaitForFences) X(ResetFences) X(CreateSemaphore) X(DestroySemaphore)          \
     X(WaitSemaphores) X(SignalSemaphore) X(GetSemaphoreCounterValue)                \
     X(CreateBuffer) X(DestroyBuffer) X(GetBufferMemoryRequirements)                 \
-    X(GetBufferDeviceAddress) X(CreateBufferView) X(DestroyBufferView)              \
-    X(AllocateMemory) X(FreeMemory) X(BindBufferMemory) X(MapMemory)                \
-    X(UnmapMemory) X(FlushMappedMemoryRanges)                                       \
+    X(GetBufferMemoryRequirements2) X(GetBufferDeviceAddress) X(CreateBufferView)   \
+    X(DestroyBufferView) X(AllocateMemory) X(FreeMemory) X(BindBufferMemory)        \
+    X(MapMemory) X(UnmapMemory) X(FlushMappedMemoryRanges)                          \
     X(CreateImage) X(DestroyImage) X(GetImageMemoryRequirements) X(BindImageMemory) \
-    X(CreateImageView) X(DestroyImageView) X(CreateSampler) X(DestroySampler)       \
+    X(GetImageMemoryRequirements2) X(CreateImageView) X(DestroyImageView)           \
+    X(CreateSampler) X(DestroySampler)                                              \
     X(CreateShaderModule) X(DestroyShaderModule) X(CreatePipelineLayout)            \
     X(DestroyPipelineLayout) X(CreateGraphicsPipelines) X(CreateComputePipelines)   \
     X(DestroyPipeline) X(CreatePipelineCache) X(DestroyPipelineCache)               \
     X(GetPipelineCacheData) X(CreateDescriptorSetLayout)                            \
+    X(GetDescriptorSetLayoutSupport)                                                \
     X(DestroyDescriptorSetLayout) X(CreateDescriptorPool) X(DestroyDescriptorPool)  \
     X(ResetDescriptorPool) X(AllocateDescriptorSets) X(FreeDescriptorSets)          \
     X(UpdateDescriptorSets) X(CreateDescriptorUpdateTemplate)                       \

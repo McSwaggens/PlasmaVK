@@ -96,10 +96,6 @@ static const char *op_names[OP_COUNT] = {
 };
 
 /* Not in bench_vk.h's table. */
-static PFN_vkGetImageMemoryRequirements2 GetImageMemoryRequirements2;
-static PFN_vkGetBufferMemoryRequirements2 GetBufferMemoryRequirements2;
-static PFN_vkCreateBufferView CreateBufferView;
-static PFN_vkDestroyBufferView DestroyBufferView;
 static PFN_vkSetDebugUtilsObjectNameEXT SetDebugUtilsObjectName; /* NULL: VK_EXT_debug_utils not enabled */
 
 struct res {
@@ -217,7 +213,7 @@ static void image_reqs(struct scene *s, VkImage image, VkMemoryRequirements *out
     VkMemoryRequirements2 req = { .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2, .pNext = &dedicated };
     VkImageMemoryRequirementsInfo2 info = { .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2,
                                             .image = image };
-    TIMED(s, OP_IMAGE_REQS, GetImageMemoryRequirements2(s->vk->device, &info, &req));
+    TIMED(s, OP_IMAGE_REQS, vkd.GetImageMemoryRequirements2(s->vk->device, &info, &req));
     *out = req.memoryRequirements;
 }
 
@@ -227,7 +223,7 @@ static void buffer_reqs(struct scene *s, VkBuffer buffer, VkMemoryRequirements *
     VkMemoryRequirements2 req = { .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2, .pNext = &dedicated };
     VkBufferMemoryRequirementsInfo2 info = { .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2,
                                              .buffer = buffer };
-    TIMED(s, OP_BUFFER_REQS, GetBufferMemoryRequirements2(s->vk->device, &info, &req));
+    TIMED(s, OP_BUFFER_REQS, vkd.GetBufferMemoryRequirements2(s->vk->device, &info, &req));
     *out = req.memoryRequirements;
 }
 
@@ -278,7 +274,7 @@ static void destroy_set(struct scene *s, struct ring_set *set)
         if (r->sampler)
             TIMED(s, OP_DESTROY_SAMPLER, vkd.DestroySampler(dev, r->sampler, NULL));
         if (r->buffer_view)
-            TIMED(s, OP_DESTROY_BVIEW, DestroyBufferView(dev, r->buffer_view, NULL));
+            TIMED(s, OP_DESTROY_BVIEW, vkd.DestroyBufferView(dev, r->buffer_view, NULL));
         memset(r, 0, sizeof(*r));
     }
     set->n = 0;
@@ -774,7 +770,7 @@ static void buffer_view_frame(struct scene *s, const struct bench_frame *f, stru
                                         .offset = (VkDeviceSize)((f->index * 64u + (uint32_t)i) % 1024u) << 16,
                                         .range = 65536 };
         VkResult res;
-        TIMED(s, OP_CREATE_BVIEW, res = CreateBufferView(s->vk->device, &info, NULL, &r->buffer_view));
+        TIMED(s, OP_CREATE_BVIEW, res = vkd.CreateBufferView(s->vk->device, &info, NULL, &r->buffer_view));
         BENCH_VK(res);
     }
 }
@@ -1078,16 +1074,8 @@ int main(void)
 
     bench_begin("resource_churn");
     bench_vk_init(&vk, BENCH_NEED_SYNC2 | BENCH_NEED_DYNAMIC_RENDERING);
-#define LOAD(name) name = (PFN_vk##name)vkGetDeviceProcAddr(vk.device, "vk" #name)
-    LOAD(GetImageMemoryRequirements2);
-    LOAD(GetBufferMemoryRequirements2);
-    LOAD(CreateBufferView);
-    LOAD(DestroyBufferView);
-#undef LOAD
     SetDebugUtilsObjectName =
         (PFN_vkSetDebugUtilsObjectNameEXT)vkGetDeviceProcAddr(vk.device, "vkSetDebugUtilsObjectNameEXT");
-    if (!GetImageMemoryRequirements2 || !GetBufferMemoryRequirements2 || !CreateBufferView || !DestroyBufferView)
-        bench_fatal("vkGetDeviceProcAddr returned NULL for a Vulkan 1.0 or 1.1 command");
     for (i = 0; i < sizeof(configs) / sizeof(configs[0]); i++) {
         if (!bench_selected(configs[i].name))
             continue;

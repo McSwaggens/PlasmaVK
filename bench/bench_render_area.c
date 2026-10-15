@@ -38,12 +38,6 @@
 #define OUTSIDE_DEPTH 0.5f
 static const float outside_color[4] = { 0.25f, 0.5f, 0.75f, 1.0f };
 
-/* Device commands that bench_vk.h does not load. */
-static struct {
-    PFN_vkCmdClearColorImage CmdClearColorImage;
-    PFN_vkCmdClearDepthStencilImage CmdClearDepthStencilImage;
-} vkx;
-
 enum mode { MODE_ATLAS, MODE_SEPARATE, MODE_DYNRES, MODE_DYNRES_EXACT };
 
 struct config {
@@ -372,11 +366,11 @@ static void prefill(struct bench_vk *vk, struct bench_image *img, VkImageLayout 
                         VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
     if (img->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) {
         VkClearDepthStencilValue value = { OUTSIDE_DEPTH, 0 };
-        vkx.CmdClearDepthStencilImage(cmd, img->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &value, 1, &range);
+        vkd.CmdClearDepthStencilImage(cmd, img->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &value, 1, &range);
     } else {
         VkClearColorValue value;
         memcpy(value.float32, outside_color, sizeof(outside_color));
-        vkx.CmdClearColorImage(cmd, img->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &value, 1, &range);
+        vkd.CmdClearColorImage(cmd, img->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &value, 1, &range);
     }
     bench_image_barrier(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, layout, VK_PIPELINE_STAGE_2_CLEAR_BIT,
                         VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
@@ -404,12 +398,6 @@ static void setup(struct scene *s)
     struct bench_gfx_state *state;
     VkShaderModule vs, fs;
     int t, i;
-
-    vkx.CmdClearColorImage = (PFN_vkCmdClearColorImage)vkGetDeviceProcAddr(vk->device, "vkCmdClearColorImage");
-    vkx.CmdClearDepthStencilImage =
-        (PFN_vkCmdClearDepthStencilImage)vkGetDeviceProcAddr(vk->device, "vkCmdClearDepthStencilImage");
-    if (!vkx.CmdClearColorImage || !vkx.CmdClearDepthStencilImage)
-        bench_fatal("vkGetDeviceProcAddr returned NULL for the clear commands");
 
     /* Casters of tile t are instances t * CASTERS..., the scene's follow them. */
     for (t = 0; t < TILES; t++) {
