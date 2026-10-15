@@ -1463,6 +1463,62 @@ static void test_blit(void)
     free_buf(&out);
 }
 
+/* Blits as they are batched (pvk_encode_blit): consecutive blits into one
+ * destination in one render pass, then a barrier before one reading what
+ * they wrote. */
+static void test_blit_batched(void)
+{
+    struct buf out = make_buf(1 << 16, shared_type, 0);
+    uint32_t x, y, q;
+    VkBufferImageCopy dl;
+    VkCommandBuffer cb;
+    VkImageBlit r;
+    struct img a[4], b;
+
+    REQUIRE(out.data);
+    /* an atlas: four 4x4 sources, 2x up into its quadrants, no barriers
+     * between; after a barrier, its top-left quadrant flipped below them */
+    {
+        uint8_t src[4][4 * 4 * 4], fill[16 * 24 * 4];
+        for (q = 0; q < 4; q++) {
+            fill_pattern(src[q], sizeof(src[q]), q + 1);
+            a[q] = image_with(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 4, 4, 1, 1, 1, src[q], sizeof(src[q]));
+        }
+        memset(fill, 0xee, sizeof(fill));
+        b = image_with(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 16, 24, 1, 1, 1, fill, sizeof(fill));
+        cb = begin();
+        for (q = 0; q < 4; q++) {
+            int32_t qx = 8 * (int32_t)(q % 2), qy = 8 * (int32_t)(q / 2);
+            r = blit_region(0, 0, 0, 0, 0, 4, 4, 1, 0, 0, qx, qy, 0, qx + 8, qy + 8, 1, 1);
+            vkCmdBlitImage(cb, a[q].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r, VK_FILTER_NEAREST);
+        }
+        barrier(cb, b.image);
+        r = blit_region(0, 0, 0, 0, 0, 8, 8, 1, 0, 0, 8, 16, 0, 0, 24, 1, 1);
+        vkCmdBlitImage(cb, b.image, VK_IMAGE_LAYOUT_GENERAL, b.image, VK_IMAGE_LAYOUT_GENERAL, 1, &r, VK_FILTER_NEAREST);
+        CHECK_VK(finish(cb), VK_SUCCESS);
+        dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, 16, 24, 1);
+        download(b.image, &dl, &out);
+        for (y = 0; y < 24; y++)
+            for (x = 0; x < 16; x++) {
+                const uint8_t *got = out.data + (y * 16 + x) * 4, *want = fill;
+                if (y < 16)
+                    want = src[(y / 8) * 2 + x / 8] + (((y % 8) / 2) * 4 + (x % 8) / 2) * 4;
+                else if (x < 8)
+                    want = src[0] + (((y - 16) / 2) * 4 + (7 - x) / 2) * 4;
+                if (memcmp(got, want, 4)) {
+                    PVK_TEST_FAIL("atlas texel (%u, %u)", x, y);
+                    y = 24;
+                    break;
+                }
+            }
+        for (q = 0; q < 4; q++)
+            free_image(&a[q]);
+        free_image(&b);
+    }
+    free_buf(&out);
+}
+
 /* ---- Resolves ---- */
 
 static void test_resolve(void)
@@ -2710,6 +2766,7 @@ int main(void)
     RUN(test_clear_color);
     RUN(test_clear_depth_stencil);
     RUN(test_blit);
+    RUN(test_blit_batched);
     RUN(test_resolve);
     RUN(test_view_swizzle);
     RUN(test_view_types);

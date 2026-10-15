@@ -58865,6 +58865,11 @@ struct pvk_encoder {
     struct pvk_msl_points_state points_state_set;
     struct pvk_msl_points points_set;
     uint32_t points_valid;
+    /* The render encoder of the last blit or resolve (retained; NULL: none),
+     * open for the next one's draws into the same destination: blit_dst's
+     * level, slice and depth plane (pvk_blit_encoder) */
+    id blit_enc, blit_dst;
+    uint32_t blit_level, blit_slice, blit_plane;
 };
 
 /* A new upload chunk of `size` bytes, resident; NULL with e->result set. */
@@ -59046,6 +59051,17 @@ static void pvk_render_close(struct pvk_encoder *e, id enc)
     e->stamps_written = 0;
 }
 
+/* The last blit's render encoder ends (before any other encoder or command
+ * buffer command, and any packet but another blit). */
+static void pvk_blit_end(struct pvk_encoder *e)
+{
+    if (!e->blit_enc)
+        return;
+    pvk_render_close(e, e->blit_enc);
+    pvk_release(e->blit_enc);
+    e->blit_enc = NULL;
+}
+
 /* Whether a pass stores a multisampled attachment (e->ms_store), and
  * whether Metal runs it if it draws nothing (*runs): some attachment is
  * cleared, and stored or resolved. It skips one whose attachments are only
@@ -59113,6 +59129,7 @@ static bool pvk_encoder_stamp(struct pvk_encoder *e, id enc, pvk_MTLStages stage
 static id pvk_render_encoder_new(struct pvk_encoder *e, id pass)
 {
     id enc;
+    pvk_blit_end(e);
     e->ms_store = pvk_pass_stores_ms(pass, &e->drew); /* (a pass that runs counts as drawn) */
     enc = pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass);
     if (enc)
@@ -59263,6 +59280,7 @@ static id pvk_encoder_get(struct pvk_encoder *e)
     if (e->render.enc) /* not inside a render pass: Vulkan allows no such command there */
         pvk_render_end(e);
     if (!e->enc && e->result == VK_SUCCESS) {
+        pvk_blit_end(e);
         e->enc = pvk_MTL4CommandBuffer_computeCommandEncoder(e->cb);
         if (!e->enc) {
             e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -59286,6 +59304,7 @@ static id pvk_encoder_get(struct pvk_encoder *e)
 
 static void pvk_encoder_end(struct pvk_encoder *e)
 {
+    pvk_blit_end(e);
     if (!e->enc)
         return;
     pvk_encoder_close(e, e->enc);
@@ -59610,16 +59629,17 @@ static id pvk_encode_compute_state(struct pvk_encoder *e, const uint32_t base[3]
 /* ---- Image transfers ----
  *
  * The packets of section 15's image transfer commands. Copies are blits of
- * the compute encoder. Clears, blits and resolves draw, each in a render
- * encoder of its own between compute encoders (pvk_encoder_render): a clear
- * is a render pass whose load action clears (all layers of a level at once,
- * or all slice planes of a 3D level, with renderTargetArrayLength: Metal
- * clears a 3D attachment's planes from depthPlane as layers); blits and
- * resolves draw a triangle covering the destination rectangle (the
- * viewport) with an internal fragment shader that reads the source: nearest
- * texels with read(), linear filtering with a sampler, resolves average the
- * samples (float) or take sample 0. Render pipelines are made on first use
- * per function and destination format. */
+ * the compute encoder. Clears, blits and resolves draw, in render encoders
+ * between compute encoders (pvk_encoder_render): a clear is a render pass
+ * whose load action clears (all layers of a level at once, or all slice
+ * planes of a 3D level, with renderTargetArrayLength: Metal clears a 3D
+ * attachment's planes from depthPlane as layers); blits and resolves draw a
+ * triangle covering the destination rectangle (the viewport) with an
+ * internal fragment shader that reads the source: nearest texels with
+ * read(), linear filtering with a sampler, resolves average the samples
+ * (float) or take sample 0. Consecutive blits into the same destination
+ * share their render encoder (pvk_blit_encoder). Render pipelines are made
+ * on first use per function and destination format. */
 
 /* Arguments of the internal draws, at buffer index 0 (pvk_blit_args in
  * pvk_blit_msl). */
@@ -59977,6 +59997,40 @@ static void pvk_encode_copy_image(struct pvk_encoder *e, const struct pvk_cmd_co
     }
 }
 
+/* The render encoder of a blit's draw into a destination subresource: the
+ * last blit's when it drew into the same one (nothing encoded since: its
+ * draws stay in order), else a new pass that loads and stores it, kept open
+ * for the next blit (pvk_blit_end). So consecutive blits into a texture
+ * atlas load and store it once. */
+static id pvk_blit_encoder(struct pvk_encoder *e, id dst, uint32_t level, uint32_t slice, uint32_t plane)
+{
+    id pass, att, enc;
+    if (e->blit_enc && e->blit_dst == dst && e->blit_level == level && e->blit_slice == slice && e->blit_plane == plane)
+        return e->blit_enc;
+    if (!(pass = pvk_MTL4RenderPassDescriptor_new())) {
+        e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        return NULL;
+    }
+    att = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
+        pvk_MTL4RenderPassDescriptor_colorAttachments(pass), 0);
+    pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, dst);
+    pvk_MTLRenderPassAttachmentDescriptor_setLevel(att, level);
+    pvk_MTLRenderPassAttachmentDescriptor_setSlice(att, slice);
+    pvk_MTLRenderPassAttachmentDescriptor_setDepthPlane(att, plane);
+    pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, PVK_MTLLoadActionLoad);
+    pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
+    enc = pvk_encoder_render(e, pass); /* (the last blit's ends) */
+    pvk_release(pass);
+    if (enc) {
+        e->blit_enc = pvk_retain(enc);
+        e->blit_dst = dst;
+        e->blit_level = level;
+        e->blit_slice = slice;
+        e->blit_plane = plane;
+    }
+    return enc;
+}
+
 static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
 {
     bool resolve = c->function >= PVK_RESOLVE_F_MS;
@@ -60002,26 +60056,11 @@ static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
         return;
     for (p = 0; p < passes && e->result == VK_SUCCESS; p++) {
         uint32_t plane = c->dst_3d ? (uint32_t)z0 + p : 0;
-        id pass = pvk_MTL4RenderPassDescriptor_new(), att, enc;
         struct pvk_blit_args *args;
         pvk_MTLGPUAddress address;
         void *pool = objc_autoreleasePoolPush();
+        id enc = pvk_blit_encoder(e, c->dst, c->dst_level, c->dst_3d ? 0 : c->dst_layer + p, plane);
 
-        if (!pass) {
-            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
-            objc_autoreleasePoolPop(pool);
-            return;
-        }
-        att = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
-            pvk_MTL4RenderPassDescriptor_colorAttachments(pass), 0);
-        pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, c->dst);
-        pvk_MTLRenderPassAttachmentDescriptor_setLevel(att, c->dst_level);
-        pvk_MTLRenderPassAttachmentDescriptor_setSlice(att, c->dst_3d ? 0 : c->dst_layer + p);
-        pvk_MTLRenderPassAttachmentDescriptor_setDepthPlane(att, plane);
-        pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, PVK_MTLLoadActionLoad);
-        pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
-        enc = pvk_encoder_render(e, pass);
-        pvk_release(pass);
         args = enc ? pvk_upload(e, sizeof(*args), 16, NULL, NULL, &address) : NULL;
         if (args) {
             memset(args, 0, sizeof(*args));
@@ -60058,8 +60097,6 @@ static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
             pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount(enc, PVK_MTLPrimitiveTypeTriangle, 0, 3);
             e->drew = true;
         }
-        if (enc)
-            pvk_render_close(e, enc);
         objc_autoreleasePoolPop(pool);
     }
 }
@@ -64143,6 +64180,8 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
                 e->sub_block = b;
                 e->sub_at = at;
             }
+            if (c->op != PVK_CMD_BLIT_IMAGE) /* consecutive blits share a render encoder */
+                pvk_blit_end(e);
             switch ((enum pvk_cmd_op)c->op) {
             case PVK_CMD_FILL_BUFFER:
                 pvk_encode_fill(e, (const struct pvk_cmd_fill *)c);
