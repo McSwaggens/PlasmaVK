@@ -56344,7 +56344,12 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
  *   (pvk_image_committed).
  *   Color, depth and stencil resolves are store actions of their encoder,
  *   except that a stored depth/stencil attachment is resolved by an
- *   internal pass after it (pvk_render_resolve_ds, section 16).
+ *   internal pass after it (pvk_render_resolve_ds, section 16), and a color
+ *   attachment that the render area (or view mask) leaves part of resolves
+ *   into a texture of its own, from which the area of its views is copied
+ *   into the resolve attachment (Metal resolves whole tiles and every
+ *   layer; pvk_render_resolve_area). Depth/stencil resolves of such areas
+ *   still reach the texels outside them in the tiles their edges cross.
  *
  * DEPTH/STENCIL INPUT ATTACHMENTS
  *   Metal fetches color attachments only, so a Metal pass whose subpasses
@@ -56703,6 +56708,8 @@ struct pvk_pass_attachment {
     uint32_t resolve_filter;      /* depth/stencil resolves: pvk_MTLMultisample*ResolveFilter */
     uint32_t clear_in_area;       /* LOAD_OP_CLEAR by drawing in the render area */
     uint32_t clear_views;         /* multiview: the views it clears so (the others load) */
+    uint32_t resolve_in_area;     /* a color resolve copied in the render area (pvk_render_resolve_area) */
+    uint32_t resolve_3d;          /* resolve is a 3D texture: resolve_plane is the view's first slice */
     uint32_t width, height;       /* of the attachment */
     uint32_t samples;
     uint32_t array;               /* texture is an array texture (depth copies read it so) */
@@ -56986,6 +56993,7 @@ static void pvk_pass_att_resolve(struct pvk_pass_attachment *pa, const struct pv
         pa->resolve_slice = view->base_layer;
     }
     pa->resolve_plane = view->depth_plane;
+    pa->resolve_3d = view->image->type == VK_IMAGE_TYPE_3D;
 }
 
 /* Whether the render area leaves part of an attachment out. */
@@ -56993,6 +57001,22 @@ static bool pvk_area_partial(const VkRect2D *area, const struct pvk_pass_attachm
 {
     return area->offset.x > 0 || area->offset.y > 0 || (uint32_t)area->offset.x + area->extent.width < pa->width ||
            (uint32_t)area->offset.y + area->extent.height < pa->height;
+}
+
+/* Whether the render area, or a view mask missing views below its last
+ * (those layers keep their texels), leaves part of an attachment out. */
+static bool pvk_pass_partial(const VkRect2D *area, const struct pvk_pass_attachment *pa, uint32_t view_mask)
+{
+    return pvk_area_partial(area, pa) || (view_mask & (view_mask + 1)) != 0;
+}
+
+/* Whether color attachment pa, with a resolve, resolves into a texture of
+ * its own that the area is copied from when the pass ends: Metal resolves
+ * whole tiles of the render target (and every layer), which Vulkan leaves
+ * alone outside the render area (pvk_render_resolve_area). */
+static bool pvk_pass_resolve_in_area(const VkRect2D *area, const struct pvk_pass_attachment *pa, uint32_t view_mask)
+{
+    return pa->texture && pa->resolve && pvk_format_is_color(pa->fmt) && pvk_pass_partial(area, pa, view_mask);
 }
 
 /* The Metal load and store actions (RENDER PASSES above). first/last: this
@@ -57004,10 +57028,10 @@ static void pvk_pass_att_actions(struct pvk_pass_attachment *pa, VkAttachmentLoa
                                  bool memoryless)
 {
     uint32_t l = PVK_MTLLoadActionLoad, s = PVK_MTLStoreActionStore;
-    /* (views missing below the last view: those layers keep their texels) */
-    bool partial = pvk_area_partial(area, pa) || (view_mask & (view_mask + 1)) != 0;
+    bool partial = pvk_pass_partial(area, pa, view_mask);
     if (!pa->texture)
         return;
+    pa->resolve_in_area = pvk_pass_resolve_in_area(area, pa, view_mask);
     if (first && load == VK_ATTACHMENT_LOAD_OP_CLEAR) {
         if (partial) {
             pa->clear_in_area = 1;
@@ -58707,6 +58731,11 @@ struct pvk_render {
      * pvk_render_resolve_int) */
     struct pvk_pass_attachment resolve_int[PVK_MAX_COLOR_ATTACHMENTS];
     uint32_t resolve_int_count;
+    /* Color resolves of a partial render area to copy when the pass ends
+     * (texture: the one Metal resolved into; see pvk_render_resolve_area) */
+    struct pvk_pass_attachment resolve_area[PVK_MAX_COLOR_ATTACHMENTS];
+    uint32_t resolve_area_count;
+    bool resolve_wait; /* the next Metal pass resolves into such a texture that copies may still read */
     /* Depth/stencil copies (section 15, DEPTH/STENCIL INPUT ATTACHMENTS) */
     uint32_t hidden;            /* PVK_HIDDEN_* copies the Metal pass keeps */
     uint8_t hidden_slot[2];     /* their color slots */
@@ -61445,7 +61474,7 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
 struct pvk_hidden_texture {
     struct pvk_hidden_texture *next;
     pvk_MTLPixelFormat format;
-    uint32_t width, height, samples, layers;
+    uint32_t width, height, samples, layers, index;
     struct pvk_queue *queue; /* a private one's: its contents are that queue's (NULL: memoryless) */
     uint64_t serial;         /* a private one's last submission */
     id texture;
@@ -61453,23 +61482,32 @@ struct pvk_hidden_texture {
 
 /* A memoryless render target, or with `queue` a private one for that
  * queue's submission `serial` (queues run side by side, and a private
- * texture holds what one put in it); not retained: the device keeps it.
- * NULL when Metal cannot make it. layers: renderTargetArrayLength (0: 2D).
- * Making a private one frees the queue's others that are done, so sizes
- * that change (dynamic resolution) don't pile up. */
+ * texture holds what one put in it) that shaders can read; not retained:
+ * the device keeps it. NULL when Metal cannot make it. layers:
+ * renderTargetArrayLength (0: 2D). index: one of several alike a pass uses.
+ * busy (NULL: not asked): a private one's earlier use may still run (in
+ * this submission, or in one not done). Making a private one frees the
+ * queue's others that are done, so sizes that change (dynamic resolution)
+ * don't pile up. */
 static id pvk_hidden_texture(struct pvk_device *device, pvk_MTLPixelFormat format, uint32_t width, uint32_t height,
-                             uint32_t samples, uint32_t layers, struct pvk_queue *queue, uint64_t serial)
+                             uint32_t samples, uint32_t layers, struct pvk_queue *queue, uint64_t serial,
+                             uint32_t index, bool *busy)
 {
     struct pvk_hidden_texture *t, **at, *done_list = NULL;
     id texture;
     bool made = false;
+    if (busy)
+        *busy = false;
     pthread_mutex_lock(&pvk_graphics_lock);
     for (t = device->hidden_textures; t; t = t->next)
         if (t->format == format && t->width == width && t->height == height && t->samples == samples &&
-            t->layers == layers && t->queue == queue)
+            t->layers == layers && t->queue == queue && t->index == index)
             break;
-    if (t)
+    if (t) {
+        if (busy && queue)
+            *busy = t->serial == serial || t->serial > pvk_MTLSharedEvent_signaledValue(queue->timeline);
         t->serial = serial;
+    }
     if (!t && queue) { /* the queue's private ones it no longer uses */
         uint64_t done = pvk_MTLSharedEvent_signaledValue(queue->timeline);
         for (at = &device->hidden_textures; *at;) {
@@ -61500,7 +61538,8 @@ static id pvk_hidden_texture(struct pvk_device *device, pvk_MTLPixelFormat forma
             pvk_MTLTextureDescriptor_setResourceOptions(desc, (queue ? PVK_MTLResourceStorageModePrivate
                                                                      : PVK_MTLResourceStorageModeMemoryless) |
                                                                   PVK_MTLResourceHazardTrackingModeUntracked);
-            pvk_MTLTextureDescriptor_setUsage(desc, PVK_MTLTextureUsageRenderTarget);
+            pvk_MTLTextureDescriptor_setUsage(desc, PVK_MTLTextureUsageRenderTarget |
+                                                        (queue ? PVK_MTLTextureUsageShaderRead : 0));
             t->texture = pvk_MTLDevice_newTextureWithDescriptor(device->physical_device->mtl_device, desc);
             pvk_release(desc);
         }
@@ -61511,6 +61550,7 @@ static id pvk_hidden_texture(struct pvk_device *device, pvk_MTLPixelFormat forma
             t->height = height;
             t->samples = samples;
             t->layers = layers;
+            t->index = index;
             t->queue = queue;
             t->serial = serial;
             t->next = device->hidden_textures;
@@ -61777,6 +61817,7 @@ static void pvk_render_resolve_ds(struct pvk_encoder *e);
 static void pvk_render_resolve_clear(struct pvk_encoder *e);
 static void pvk_render_split_resolve(struct pvk_encoder *e);
 static void pvk_render_resolve_int(struct pvk_encoder *e);
+static void pvk_render_resolve_area(struct pvk_encoder *e);
 
 static void pvk_render_end(struct pvk_encoder *e)
 {
@@ -61789,6 +61830,7 @@ static void pvk_render_end(struct pvk_encoder *e)
         pvk_render_split_resolve(e);
         pvk_render_resolve_ds(e);
         pvk_render_resolve_int(e);
+        pvk_render_resolve_area(e);
         pvk_render_resolve_clear(e);
     }
     r->begin = NULL;
@@ -61951,6 +61993,13 @@ static void pvk_render_resolve_ds(struct pvk_encoder *e)
         }
         if (r->layers)
             pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, r->layers);
+        { /* the pass's render target, which may end at its render area's far corner (pvk_render_open) */
+            const struct pvk_pass_attachment *pa = r->resolve_depth.texture ? &r->resolve_depth : &r->resolve_stencil;
+            if (r->width < pa->width || r->height < pa->height) {
+                pvk_MTL4RenderPassDescriptor_setRenderTargetWidth(pass, r->width);
+                pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(pass, r->height);
+            }
+        }
         enc = pvk_render_encoder_new(e, pass);
         pvk_release(pass);
     }
@@ -62073,6 +62122,56 @@ static void pvk_render_resolve_int(struct pvk_encoder *e)
     e->wait_before = wait_before;
 }
 
+/* Color resolves of a partial render area (pvk_render_open): Metal resolved
+ * the render target's tiles into a texture of their own, and a nearest blit
+ * draws the render area of each layer (multiview: of each view) from it
+ * into the resolve attachment, which keeps the texels outside the area. */
+static void pvk_render_resolve_area(struct pvk_encoder *e)
+{
+    struct pvk_render *r = &e->render;
+    uint32_t n = r->resolve_area_count, mask = r->begin ? r->begin->view_mask : 0, i, l;
+    uint32_t layers = mask ? 32 : r->begin && r->begin->layers ? r->begin->layers : 1;
+    pvk_MTLStages wait_before = e->wait_before;
+
+    r->resolve_area_count = 0;
+    e->wait_before = PVK_STAGES_ALL; /* after the pass's resolves */
+    for (i = 0; i < n && r->begin; i++) {
+        const struct pvk_pass_attachment *pa = &r->resolve_area[i];
+        struct pvk_cmd_blit c;
+        memset(&c, 0, sizeof(c));
+        c.src = pa->texture;
+        c.dst = pa->resolve;
+        c.dst_format = pa->fmt->mtl;
+        c.function = r->begin->layers ? PVK_BLIT_F_2DARRAY : PVK_BLIT_F_2D;
+        c.dst_level = pa->resolve_level;
+        c.layers = 1;
+        c.src_w = (uint32_t)pvk_MTLTexture_width(pa->texture);
+        c.src_h = (uint32_t)pvk_MTLTexture_height(pa->texture);
+        c.src_d = 1;
+        c.src0[0] = c.dst0[0] = r->area.offset.x;
+        c.src0[1] = c.dst0[1] = r->area.offset.y;
+        c.src1[0] = c.dst1[0] = r->area.offset.x + (int32_t)r->area.extent.width;
+        c.src1[1] = c.dst1[1] = r->area.offset.y + (int32_t)r->area.extent.height;
+        c.src1[2] = c.dst1[2] = 1;
+        for (l = 0; l < 4; l++) /* (the texels as they are) */
+            c.swizzle[l] = l;
+        for (l = 0; l < layers && e->result == VK_SUCCESS; l++) {
+            if (mask && !(mask & (1u << l)))
+                continue;
+            c.src_layer = l;
+            if (pa->resolve_3d) { /* (layer l: slice resolve_plane + l of the 3D image) */
+                c.dst_3d = 1;
+                c.dst0[2] = (int32_t)(pa->resolve_plane + l);
+                c.dst1[2] = c.dst0[2] + 1;
+            } else {
+                c.dst_layer = pa->resolve_slice + l;
+            }
+            pvk_encode_blit(e, &c);
+        }
+    }
+    e->wait_before = wait_before;
+}
+
 /* What pvk_render_resolve_ds resolves of a stored, resolved depth/stencil
  * attachment (pa becomes Store without the resolve). */
 static void pvk_render_defer_resolve(struct pvk_pass_attachment *pa, struct pvk_pass_attachment *later)
@@ -62113,7 +62212,7 @@ static id pvk_render_seed_depth(struct pvk_encoder *e, const struct pvk_pass_att
                                 : (pa->array ? PVK_DSC_DEPTH_ARRAY : PVK_DSC_DEPTH);
     id pso = pvk_ds_copy_pipeline(e->device, kind, samples, layered);
     id tex = pvk_hidden_texture(e->device, PVK_MTLPixelFormatR32Float, tex_width, tex_height, samples, layers,
-                                e->queue, e->serial);
+                                e->queue, e->serial, 0, NULL);
     id pass, att, enc, map;
     struct pvk_dsc_args *args;
     pvk_MTLGPUAddress address;
@@ -62238,6 +62337,23 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
             pa.store = PVK_MTLStoreActionStore;
             pa.resolve = NULL;
         }
+        /* colors resolved in a partial render area: into a texture of the attachment's size (Metal's
+         * resolve textures match their attachments; it resolves the render target's tiles), the area
+         * copied into the resolve attachment when the pass ends (pvk_render_resolve_area); the pass
+         * waits for earlier copies out of it that may still run */
+        if (pa.resolve && pa.resolve_in_area && !(int_slots & (1u << s)) &&
+            r->resolve_area_count < PVK_MAX_COLOR_ATTACHMENTS) {
+            bool busy;
+            id t = pvk_hidden_texture(e->device, pa.fmt->mtl, pa.width, pa.height, 1, c->layers, e->queue, e->serial,
+                                      1 + s, &busy);
+            if (t) {
+                r->resolve_area[r->resolve_area_count] = pa;
+                r->resolve_area[r->resolve_area_count++].texture = t;
+                pa.resolve = t;
+                pa.resolve_level = pa.resolve_slice = pa.resolve_plane = 0;
+                r->resolve_wait |= busy;
+            }
+        }
         att = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
             pvk_MTL4RenderPassDescriptor_colorAttachments(pass), s);
         if ((int_slots & (1u << s)) && pa.int_texture) { /* the SNORM bits as integers */
@@ -62302,7 +62418,7 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
         tex = s >= PVK_MAX_COLOR_ATTACHMENTS ? NULL
               : seed ? pvk_render_seed_depth(e, depth, full_width, full_height, width, height, samples, c->layers)
                      : pvk_hidden_texture(e->device, k ? PVK_MTLPixelFormatR8Uint : PVK_MTLPixelFormatR32Float,
-                                          full_width, full_height, samples, c->layers, NULL, 0);
+                                          full_width, full_height, samples, c->layers, NULL, 0, 0, NULL);
         if (!tex) {
             static int warned;
             if (!warned) {
@@ -62411,8 +62527,11 @@ static void pvk_render_split_resolve(struct pvk_encoder *e)
     if (!enc)
         return;
     pvk_labels_open(e, enc, "Color resolves");
+    /* (also after the render encoders it waits for: a depth copy's, copies
+     * out of its resolve textures) */
     pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
         enc, PVK_STAGES_RENDER, PVK_STAGES_RENDER, e->queue->device->visibility);
+    e->prepassed = r->resolve_wait = false;
     pvk_render_close(e, enc);
     pvk_release(enc);
 }
@@ -62556,6 +62675,10 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
         return;
     /* (a later part of a render pass instance loads what the earlier stored) */
     before = pvk_queue_ordered(e, PVK_STAGES_RENDER, &after);
+    if (r->resolve_wait) { /* (after the copies, render encoders) */
+        after |= PVK_STAGES_RENDER;
+        before = PVK_STAGES_RENDER;
+    }
     if (e->prepassed || c->after || (c->flags & VK_RENDERING_RESUMING_BIT)) {
         after = PVK_STAGES_ALL;
         before = PVK_STAGES_RENDER;
@@ -62563,7 +62686,7 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
     if (before)
         pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
             enc, after, before, e->queue->device->visibility);
-    e->prepassed = false;
+    e->prepassed = r->resolve_wait = false;
     r->suspended = false;
     r->resolve_depth = resolve_depth;
     r->resolve_stencil = resolve_stencil;
@@ -62675,7 +62798,7 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
         pvk_render_tex_slots(c, track.tex)) {
         /* without the colors its draws only fetch, read from textures instead */
         e->result = VK_SUCCESS;
-        r->resolve_int_count = 0;
+        r->resolve_int_count = r->resolve_area_count = 0;
         pvk_render_begin_group(e, c, &track, (((1u << c->color_count) - 1u) & ~track.tex) | PVK_GROUP_EMPTY, true,
                                true);
         r->tex_slots = r->enc ? track.tex : 0u;
@@ -62689,7 +62812,7 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     if (n < 2)
         return;
     e->result = VK_SUCCESS;
-    r->resolve_int_count = 0;
+    r->resolve_int_count = r->resolve_area_count = 0;
     /* more color attachments than tile memory takes: the packets again for each group */
     p->count = n;
     p->next = 1;
@@ -62712,8 +62835,8 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
 static bool pvk_replay_next(struct pvk_encoder *e)
 {
     struct pvk_replay *p = &e->replay;
-    struct pvk_pass_attachment ints[PVK_MAX_COLOR_ATTACHMENTS];
-    uint32_t pp_count = e->pp_count, nints;
+    struct pvk_pass_attachment ints[PVK_MAX_COLOR_ATTACHMENTS], areas[PVK_MAX_COLOR_ATTACHMENTS];
+    uint32_t pp_count = e->pp_count, nints, nareas;
     if (!p->count)
         return false;
     if (p->next >= p->count || e->result != VK_SUCCESS) {
@@ -62724,6 +62847,8 @@ static bool pvk_replay_next(struct pvk_encoder *e)
      * also resolves the integer colors of all the groups) */
     nints = e->render.resolve_int_count;
     memcpy(ints, e->render.resolve_int, sizeof(ints[0]) * nints);
+    nareas = e->render.resolve_area_count;
+    memcpy(areas, e->render.resolve_area, sizeof(areas[0]) * nareas);
     e->render.begin = NULL;
     pvk_render_end(e);
     if (e->result != VK_SUCCESS) {
@@ -62734,6 +62859,8 @@ static bool pvk_replay_next(struct pvk_encoder *e)
     e->render.enc = NULL;
     memcpy(e->render.resolve_int, ints, sizeof(ints[0]) * nints);
     e->render.resolve_int_count = nints;
+    memcpy(e->render.resolve_area, areas, sizeof(areas[0]) * nareas);
+    e->render.resolve_area_count = nareas;
     memcpy(e->sets[0], p->sets, sizeof(p->sets));
     memcpy(e->push, p->push, sizeof(p->push));
     e->push_dirty = true;

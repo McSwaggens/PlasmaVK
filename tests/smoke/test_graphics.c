@@ -2366,19 +2366,23 @@ static void area_begin(VkCommandBuffer cb, const struct img *img, bool depth, Vk
     vkCmdBeginRendering(cb, &info);
 }
 
-/* Clears color images to red and depth images to 1, then a barrier. */
-static void area_reset(VkCommandBuffer cb, const struct img *const *images, uint32_t n)
+/* Clears color images to red (`ms`, a multisampled one, to blue: resolved
+ * outside the area, it shows) and depth images to 1, then a barrier. */
+static void area_reset(VkCommandBuffer cb, const struct img *const *images, uint32_t n, const struct img *ms)
 {
     static const VkClearDepthStencilValue one = { 1.0f, 0 };
     VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    VkClearColorValue red;
+    VkClearColorValue red, blue;
     uint32_t i;
     memset(&red, 0, sizeof(red));
     red.float32[0] = red.float32[3] = 1.0f;
+    memset(&blue, 0, sizeof(blue));
+    blue.float32[2] = blue.float32[3] = 1.0f;
     for (i = 0; i < n; i++) {
         range.aspectMask = images[i]->aspects;
         if (images[i]->aspects & VK_IMAGE_ASPECT_COLOR_BIT)
-            vkCmdClearColorImage(cb, images[i]->image, VK_IMAGE_LAYOUT_GENERAL, &red, 1, &range);
+            vkCmdClearColorImage(cb, images[i]->image, VK_IMAGE_LAYOUT_GENERAL, images[i] == ms ? &blue : &red, 1,
+                                 &range);
         else
             vkCmdClearDepthStencilImage(cb, images[i]->image, VK_IMAGE_LAYOUT_GENERAL, &one, 1, &range);
     }
@@ -2416,7 +2420,7 @@ static void test_render_area_partial(void)
     for (c = 0; c < 5; c++) {
         bool depth = c >= 3;
         VkCommandBuffer cb = begin_cmd();
-        area_reset(cb, images, 2);
+        area_reset(cb, images, 2, NULL);
         area_begin(cb, depth ? &ds : &target, depth, c == 1 ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR,
                    c == 2 || c == 4 ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE, NULL);
         if (c == 1) {
@@ -2476,7 +2480,7 @@ static void test_render_area_bounds(void)
         VkRenderingInfo info;
         VkCommandBuffer cb = begin_cmd();
         vkCmdClearDepthStencilImage(cb, ds.image, VK_IMAGE_LAYOUT_GENERAL, &half, 1, &range);
-        area_reset(cb, images, 1);
+        area_reset(cb, images, 1, NULL);
         memset(&ca, 0, sizeof(ca));
         ca.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         ca.imageView = target.view;
@@ -2526,6 +2530,373 @@ static void test_render_area_bounds(void)
     free_buf(&depth);
     free_img(&ds);
     free_img(&target);
+}
+
+/* 4x color resolves of area_rect into an image the area covers part of:
+ * the texels outside keep their contents (red; the multisampled image is
+ * blue there). Dynamic rendering, the multisampled image not stored,
+ * stored, or lazily allocated; render passes, the multisampled image
+ * device-local or lazily allocated. */
+static void test_render_area_resolve(void)
+{
+    static const char *const names[5] = { "4x resolve", "4x stored, resolve", "4x lazy, resolve",
+                                          "render pass 4x resolve", "render pass 4x lazy, resolve" };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, AREA_W, AREA_H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img ms = make_img(VK_FORMAT_R8G8B8A8_UNORM, AREA_W, AREA_H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img lazy = make_img_mem(VK_FORMAT_R8G8B8A8_UNORM, AREA_W, AREA_H, 1, VK_SAMPLE_COUNT_4_BIT,
+                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+                                   lazy_type != UINT32_MAX ? lazy_type : device_type);
+    const struct img *images[2];
+    struct buf out = make_buf(AREA_W * AREA_H * 4);
+    VkAttachmentDescription a[2];
+    VkAttachmentReference refs[2];
+    VkSubpassDescription sp;
+    VkRenderPassCreateInfo rpi;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    uint32_t c;
+    int bad = 0;
+
+    images[0] = &target;
+    images[1] = &ms;
+    memset(a, 0, sizeof(a));
+    for (c = 0; c < 2; c++) {
+        a[c].format = VK_FORMAT_R8G8B8A8_UNORM;
+        a[c].samples = c ? VK_SAMPLE_COUNT_1_BIT : VK_SAMPLE_COUNT_4_BIT;
+        a[c].loadOp = c ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        a[c].storeOp = c ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        a[c].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        a[c].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        a[c].initialLayout = a[c].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        refs[c].attachment = c;
+        refs[c].layout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    memset(&sp, 0, sizeof(sp));
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &refs[0];
+    sp.pResolveAttachments = &refs[1];
+    memset(&rpi, 0, sizeof(rpi));
+    rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpi.attachmentCount = 2;
+    rpi.pAttachments = a;
+    rpi.subpassCount = 1;
+    rpi.pSubpasses = &sp;
+    CHECK_VK(vkCreateRenderPass(device, &rpi, NULL, &rp), VK_SUCCESS);
+    REQUIRE(rp);
+    for (c = 0; c < 5; c++) {
+        const struct img *src = c == 2 || c == 4 ? &lazy : &ms;
+        VkCommandBuffer cb = begin_cmd();
+        area_reset(cb, images, 2, &ms);
+        if (c >= 3) {
+            VkImageView views[2];
+            VkFramebuffer fb;
+            VkClearValue clears[2];
+            views[0] = src->view;
+            views[1] = target.view;
+            fb = make_fb(rp, views, 2, AREA_W, AREA_H, 1);
+            memset(clears, 0, sizeof(clears));
+            clears[0].color.float32[1] = clears[0].color.float32[3] = 1.0f; /* green */
+            begin_pass(cb, rp, fb, area_rect.offset.x, area_rect.offset.y, area_rect.extent.width,
+                       area_rect.extent.height, clears, 2);
+            vkCmdEndRenderPass(cb);
+            download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+            submit(cb);
+            vkDestroyFramebuffer(device, fb, NULL);
+        } else {
+            area_begin(cb, src, false, VK_ATTACHMENT_LOAD_OP_CLEAR,
+                       c == 1 ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE, &target);
+            vkCmdEndRendering(cb);
+            download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+            submit(cb);
+        }
+        bad += area_bad(&out, GREEN, true, RED, names[c]);
+    }
+    CHECK(bad == 0);
+    vkDestroyRenderPass(device, rp, NULL);
+    free_buf(&out);
+    free_img(&lazy);
+    free_img(&ms);
+    free_img(&target);
+}
+
+/* An sRGB 4x color resolved in area_rect has there what a resolve of the
+ * whole attachment has (a color whose channels are not 0 or 1), red
+ * outside (where the multisampled image is blue). */
+static void test_render_area_resolve_srgb(void)
+{
+    struct img ms = make_img(VK_FORMAT_R8G8B8A8_SRGB, AREA_W, AREA_H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img targets[2];
+    const struct img *images[3];
+    struct buf out[2];
+    uint32_t k, x, y;
+    int bad = 0;
+
+    for (k = 0; k < 2; k++) {
+        targets[k] = make_img(VK_FORMAT_R8G8B8A8_SRGB, AREA_W, AREA_H, 1, VK_SAMPLE_COUNT_1_BIT);
+        out[k] = make_buf(AREA_W * AREA_H * 4);
+    }
+    images[0] = &ms;
+    images[1] = &targets[0];
+    images[2] = &targets[1];
+    for (k = 0; k < 2; k++) { /* area_rect into targets[0], the whole attachment into targets[1] */
+        VkRenderingAttachmentInfo att;
+        VkRenderingInfo info;
+        VkCommandBuffer cb = begin_cmd();
+        area_reset(cb, images, 3, &ms);
+        memset(&att, 0, sizeof(att));
+        att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView = ms.view;
+        att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att.clearValue.color.float32[0] = 0.2f;
+        att.clearValue.color.float32[1] = 0.5f;
+        att.clearValue.color.float32[2] = 0.7f;
+        att.clearValue.color.float32[3] = 0.6f;
+        att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        att.resolveImageView = targets[k].view;
+        att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        info.renderArea = area_rect;
+        if (k) {
+            info.renderArea.offset.x = info.renderArea.offset.y = 0;
+            info.renderArea.extent.width = AREA_W;
+            info.renderArea.extent.height = AREA_H;
+        }
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &att;
+        vkCmdBeginRendering(cb, &info);
+        vkCmdEndRendering(cb);
+        download(cb, &targets[k], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out[k]);
+        submit(cb);
+    }
+    for (y = 0; y < AREA_H; y++)
+        for (x = 0; x < AREA_W; x++) {
+            bool in = x >= (uint32_t)area_rect.offset.x && x < area_rect.offset.x + area_rect.extent.width &&
+                      y >= (uint32_t)area_rect.offset.y && y < area_rect.offset.y + area_rect.extent.height;
+            uint32_t got, want;
+            memcpy(&got, out[0].data + 4 * (y * AREA_W + x), 4);
+            memcpy(&want, out[1].data + 4 * (y * AREA_W + x), 4);
+            if (!in)
+                want = RED;
+            if (got != want && bad++ < 4)
+                fprintf(stderr, "render area sRGB resolve: (%u, %u) is %08x, expected %08x\n", x, y, got, want);
+        }
+    CHECK(bad == 0);
+    for (k = 0; k < 2; k++) {
+        free_buf(&out[k]);
+        free_img(&targets[k]);
+    }
+    free_img(&ms);
+}
+
+/* A 4x color resolved in area_rect into slice 2 of a 3D image (a 2D view of
+ * it): green there, red outside and in the other slices (the multisampled
+ * image is blue outside the area). */
+static void test_render_area_resolve_3d(void)
+{
+    struct img ms = make_img(VK_FORMAT_R8G8B8A8_UNORM, AREA_W, AREA_H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct buf out = make_buf(AREA_W * AREA_H * 4 * 4);
+    VkImageCreateInfo info;
+    VkImageViewCreateInfo view;
+    VkMemoryAllocateInfo alloc;
+    VkMemoryRequirements req;
+    VkBufferImageCopy r;
+    VkCommandBuffer cb;
+    struct img vol;
+    const struct img *images[2];
+    uint32_t z;
+    int bad = 0;
+
+    memset(&vol, 0, sizeof(vol));
+    vol.format = VK_FORMAT_R8G8B8A8_UNORM;
+    vol.aspects = VK_IMAGE_ASPECT_COLOR_BIT;
+    vol.w = AREA_W;
+    vol.h = AREA_H;
+    vol.layers = 1;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    info.flags = VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
+    info.imageType = VK_IMAGE_TYPE_3D;
+    info.format = vol.format;
+    info.extent.width = AREA_W;
+    info.extent.height = AREA_H;
+    info.extent.depth = 4;
+    info.mipLevels = info.arrayLayers = 1;
+    info.samples = VK_SAMPLE_COUNT_1_BIT;
+    info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    info.usage =
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    CHECK_VK(vkCreateImage(device, &info, NULL, &vol.image), VK_SUCCESS);
+    vkGetImageMemoryRequirements(device, vol.image, &req);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = device_type;
+    CHECK_VK(vkAllocateMemory(device, &alloc, NULL, &vol.memory), VK_SUCCESS);
+    vkBindImageMemory(device, vol.image, vol.memory, 0);
+    memset(&view, 0, sizeof(view));
+    view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view.image = vol.image;
+    view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view.format = vol.format;
+    view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view.subresourceRange.baseArrayLayer = 2;
+    view.subresourceRange.levelCount = view.subresourceRange.layerCount = 1;
+    CHECK_VK(vkCreateImageView(device, &view, NULL, &vol.view), VK_SUCCESS);
+    REQUIRE(vol.view);
+
+    images[0] = &ms;
+    images[1] = &vol;
+    cb = begin_cmd();
+    area_reset(cb, images, 2, &ms);
+    area_begin(cb, &ms, false, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_DONT_CARE, &vol);
+    vkCmdEndRendering(cb);
+    barrier(cb);
+    memset(&r, 0, sizeof(r));
+    r.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    r.imageSubresource.layerCount = 1;
+    r.imageExtent.width = AREA_W;
+    r.imageExtent.height = AREA_H;
+    r.imageExtent.depth = 4;
+    vkCmdCopyImageToBuffer(cb, vol.image, VK_IMAGE_LAYOUT_GENERAL, out.buffer, 1, &r);
+    barrier(cb);
+    submit(cb);
+    for (z = 0; z < 4; z++) {
+        struct buf slice = out;
+        slice.data += (size_t)z * AREA_W * AREA_H * 4;
+        bad += area_bad(&slice, z == 2 ? GREEN : RED, true, RED, z == 2 ? "3D resolve" : "3D resolve, another slice");
+    }
+    CHECK(bad == 0);
+    free_buf(&out);
+    free_img(&vol);
+    free_img(&ms);
+}
+
+/* 4x color resolves that leave layers out (the multisampled images are blue
+ * where nothing clears them, the resolve images red): multiview with view
+ * mask 0b101 over the whole of 3-layer images (layer 1 keeps its red), and
+ * layerCount 2 in area_rect (red outside it, and in layer 2). */
+static void test_render_area_resolve_layers(void)
+{
+    static const VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 3 };
+    struct img ms = make_img(VK_FORMAT_R8G8B8A8_UNORM, AREA_W, AREA_H, 3, VK_SAMPLE_COUNT_4_BIT);
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, AREA_W, AREA_H, 3, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out[3];
+    VkClearColorValue red, blue;
+    uint32_t c, l;
+    int bad = 0;
+
+    for (l = 0; l < 3; l++)
+        out[l] = make_buf(AREA_W * AREA_H * 4);
+    memset(&red, 0, sizeof(red));
+    red.float32[0] = red.float32[3] = 1.0f;
+    memset(&blue, 0, sizeof(blue));
+    blue.float32[2] = blue.float32[3] = 1.0f;
+    for (c = 0; c < 2; c++) {
+        VkRenderingAttachmentInfo att;
+        VkRenderingInfo info;
+        VkCommandBuffer cb = begin_cmd();
+        vkCmdClearColorImage(cb, target.image, VK_IMAGE_LAYOUT_GENERAL, &red, 1, &range);
+        vkCmdClearColorImage(cb, ms.image, VK_IMAGE_LAYOUT_GENERAL, &blue, 1, &range);
+        barrier(cb);
+        memset(&att, 0, sizeof(att));
+        att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView = ms.view;
+        att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att.clearValue.color.float32[1] = att.clearValue.color.float32[3] = 1.0f; /* green */
+        att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        att.resolveImageView = target.view;
+        att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        if (c) {
+            info.renderArea = area_rect;
+            info.layerCount = 2;
+        } else {
+            info.renderArea.extent.width = AREA_W;
+            info.renderArea.extent.height = AREA_H;
+            info.viewMask = 0x5;
+        }
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &att;
+        vkCmdBeginRendering(cb, &info);
+        vkCmdEndRendering(cb);
+        for (l = 0; l < 3; l++)
+            download(cb, &target, l, VK_IMAGE_ASPECT_COLOR_BIT, &out[l]);
+        submit(cb);
+        for (l = 0; l < 3; l++)
+            bad += c ? area_bad(&out[l], l < 2 ? GREEN : RED, true, RED, l < 2 ? "layered resolve" : "layer 2 left out")
+                     : area_bad(&out[l], l == 1 ? RED : GREEN, true, l == 1 ? RED : GREEN,
+                                l == 1 ? "view 1 left out" : "multiview resolve");
+    }
+    CHECK(bad == 0);
+    for (l = 0; l < 3; l++)
+        free_buf(&out[l]);
+    free_img(&target);
+    free_img(&ms);
+}
+
+/* Two passes of a command buffer resolving 4x images in area_rect into two
+ * images, green then blue, through the same texture (pvk_render_open): the
+ * second waits for the copy out of it that ends the first (red outside the
+ * area, where the multisampled images are blue). */
+static void test_render_area_resolve_twice(void)
+{
+    struct img ms[2], targets[2];
+    const struct img *images[4];
+    struct buf out[2];
+    VkCommandBuffer cb;
+    uint32_t k;
+    int bad = 0;
+
+    for (k = 0; k < 2; k++) {
+        ms[k] = make_img(VK_FORMAT_R8G8B8A8_UNORM, AREA_W, AREA_H, 1, VK_SAMPLE_COUNT_4_BIT);
+        targets[k] = make_img(VK_FORMAT_R8G8B8A8_UNORM, AREA_W, AREA_H, 1, VK_SAMPLE_COUNT_1_BIT);
+        out[k] = make_buf(AREA_W * AREA_H * 4);
+        images[2 * k] = &ms[k];
+        images[2 * k + 1] = &targets[k];
+    }
+    cb = begin_cmd();
+    area_reset(cb, images, 2, &ms[0]);
+    area_reset(cb, images + 2, 2, &ms[1]);
+    for (k = 0; k < 2; k++) {
+        VkRenderingAttachmentInfo att;
+        VkRenderingInfo info;
+        memset(&att, 0, sizeof(att));
+        att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView = ms[k].view;
+        att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att.clearValue.color.float32[k ? 2 : 1] = att.clearValue.color.float32[3] = 1.0f;
+        att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        att.resolveImageView = targets[k].view;
+        att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        info.renderArea = area_rect;
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &att;
+        vkCmdBeginRendering(cb, &info);
+        vkCmdEndRendering(cb);
+    }
+    for (k = 0; k < 2; k++)
+        download(cb, &targets[k], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out[k]);
+    submit(cb);
+    bad += area_bad(&out[0], GREEN, true, RED, "first of two resolves");
+    bad += area_bad(&out[1], BLUE, true, RED, "second of two resolves");
+    CHECK(bad == 0);
+    for (k = 0; k < 2; k++) {
+        free_buf(&out[k]);
+        free_img(&targets[k]);
+        free_img(&ms[k]);
+    }
 }
 
 /* ==========================================================================
@@ -11194,6 +11565,11 @@ int main(void)
     RUN(test_render_area_clear_depth);
     RUN(test_render_area_partial);
     RUN(test_render_area_bounds);
+    RUN(test_render_area_resolve);
+    RUN(test_render_area_resolve_srgb);
+    RUN(test_render_area_resolve_3d);
+    RUN(test_render_area_resolve_layers);
+    RUN(test_render_area_resolve_twice);
     RUN(test_depth_stencil);
     RUN(test_blend);
     RUN(test_cull);
