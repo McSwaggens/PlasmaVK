@@ -65828,6 +65828,20 @@ static void pvk_key_add_sets(struct pvk_key *k, const struct pvk_msl_set_layout 
         }
 }
 
+/* The conversions of options->ycbcr_bindings[i]: one per descriptor of
+ * its binding. */
+static uint32_t pvk_msl_ycbcr_count(const struct pvk_msl_options *options, uint32_t i)
+{
+    const struct pvk_msl_ycbcr_binding *y = &options->ycbcr_bindings[i];
+    const struct pvk_msl_set_layout *set =
+        options->set_layouts && y->set < options->set_layout_count ? &options->set_layouts[y->set] : NULL;
+    uint32_t j, count = 0;
+    for (j = 0; set && j < set->binding_count; j++)
+        if (set->bindings[j].binding == y->binding)
+            count = set->bindings[j].count;
+    return count;
+}
+
 /* The Y'CbCr conversions a shader applies (options->ycbcr_bindings). */
 static void pvk_key_add_ycbcr(struct pvk_key *k, const struct pvk_msl_options *options)
 {
@@ -65835,11 +65849,7 @@ static void pvk_key_add_ycbcr(struct pvk_key *k, const struct pvk_msl_options *o
     pvk_key_add(k, &options->ycbcr_binding_count, sizeof(options->ycbcr_binding_count));
     for (i = 0; i < options->ycbcr_binding_count; i++) {
         const struct pvk_msl_ycbcr_binding *y = &options->ycbcr_bindings[i];
-        const struct pvk_msl_set_layout *set = y->set < options->set_layout_count ? &options->set_layouts[y->set] : NULL;
-        uint32_t count = 0;
-        for (j = 0; set && j < set->binding_count; j++)
-            if (set->bindings[j].binding == y->binding)
-                count = set->bindings[j].count;
+        uint32_t count = pvk_msl_ycbcr_count(options, i);
         pvk_key_add(k, &y->set, sizeof(y->set));
         pvk_key_add(k, &y->binding, sizeof(y->binding));
         for (j = 0; j < count; j++) { /* member by member: no padding */
@@ -66006,6 +66016,110 @@ static void pvk_stage_put(struct pvk_device *device, struct pvk_shader_entry *e)
     pthread_mutex_unlock(&device->shaders->lock);
     if (!refs) /* (no longer in the cache) */
         pvk_shader_entry_free(e);
+}
+
+/* A fragment stage linked to the outputs of a translated vertex stage, as
+ * pvk_spirv_to_msl_graphics translates it, through the shader cache. */
+static VkResult pvk_stage_translate_fragment(struct pvk_device *device, const struct pvk_shader_entry *vs,
+                                             const uint32_t *code, size_t words, const uint64_t hash[2],
+                                             const char *entry, const struct pvk_msl_options *options,
+                                             struct pvk_shader_entry **out, char *error, size_t error_size)
+{
+    struct pvk_msl_options fo = *options;
+    pvk_msl_link_fragment(&fo, &vs->res);
+    return pvk_stage_translate(device, code, words, hash, entry, &fo, out, error, error_size);
+}
+
+static unsigned char *pvk_copy_bump(unsigned char **at, const void *src, size_t size)
+{
+    unsigned char *p = *at;
+    if (size)
+        memcpy(p, src, size);
+    *at += (size + 7) & ~(size_t)7;
+    return p;
+}
+
+/* A copy of a stage's translation inputs - its SPIR-V and entry point, the
+ * options and everything they point to but vertex outputs - in one
+ * allocation (*out, free with pvk_free), for translating it after the
+ * command that had them (struct pvk_gfx_variants). */
+static VkResult pvk_stage_inputs_copy(const VkAllocationCallbacks *alloc, const uint32_t *code, size_t words,
+                                      const char *entry, const struct pvk_msl_options *o, uint32_t **code_copy,
+                                      char **entry_copy, struct pvk_msl_options *dst, void **out)
+{
+    const VkSpecializationInfo *spec = o->specialization;
+    size_t size = 0, n = strlen(entry ? entry : "") + 1;
+    unsigned char *at;
+    uint32_t i;
+#define PVK_COPY_SIZE(bytes) (size += ((size_t)(bytes) + 7) & ~(size_t)7)
+    PVK_COPY_SIZE(words * 4);
+    PVK_COPY_SIZE(n);
+    if (spec) {
+        PVK_COPY_SIZE(sizeof(*spec));
+        PVK_COPY_SIZE(sizeof(*spec->pMapEntries) * spec->mapEntryCount);
+        PVK_COPY_SIZE(spec->pData ? spec->dataSize : 0);
+    }
+    if (o->set_layouts) {
+        PVK_COPY_SIZE(sizeof(*o->set_layouts) * o->set_layout_count);
+        for (i = 0; i < o->set_layout_count; i++)
+            PVK_COPY_SIZE(sizeof(*o->set_layouts[i].bindings) * o->set_layouts[i].binding_count);
+    }
+    if (o->vertex_attributes)
+        PVK_COPY_SIZE(sizeof(*o->vertex_attributes) * o->vertex_attribute_count);
+    if (o->vertex_bindings)
+        PVK_COPY_SIZE(sizeof(*o->vertex_bindings) * o->vertex_binding_count);
+    if (o->vertex_divisors)
+        PVK_COPY_SIZE(sizeof(*o->vertex_divisors) * o->vertex_divisor_count);
+    if (o->input_attachment_colors)
+        PVK_COPY_SIZE(sizeof(uint32_t) * o->input_attachment_color_count);
+    PVK_COPY_SIZE(sizeof(*o->ycbcr_bindings) * o->ycbcr_binding_count);
+    for (i = 0; i < o->ycbcr_binding_count; i++)
+        PVK_COPY_SIZE(sizeof(struct pvk_ycbcr) * pvk_msl_ycbcr_count(o, i));
+#undef PVK_COPY_SIZE
+    *out = at = pvk_alloc(alloc, size, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!at)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    *dst = *o;
+    *code_copy = (uint32_t *)pvk_copy_bump(&at, code, words * 4);
+    *entry_copy = (char *)pvk_copy_bump(&at, entry ? entry : "", n);
+    if (spec) {
+        VkSpecializationInfo *c = (VkSpecializationInfo *)pvk_copy_bump(&at, spec, sizeof(*spec));
+        c->pMapEntries = (const VkSpecializationMapEntry *)pvk_copy_bump(
+            &at, spec->pMapEntries, sizeof(*spec->pMapEntries) * spec->mapEntryCount);
+        c->pData = spec->pData ? pvk_copy_bump(&at, spec->pData, spec->dataSize) : NULL;
+        dst->specialization = c;
+    }
+    if (o->set_layouts) {
+        struct pvk_msl_set_layout *sets = (struct pvk_msl_set_layout *)pvk_copy_bump(
+            &at, o->set_layouts, sizeof(*o->set_layouts) * o->set_layout_count);
+        for (i = 0; i < o->set_layout_count; i++)
+            sets[i].bindings = (const struct pvk_msl_binding *)pvk_copy_bump(
+                &at, o->set_layouts[i].bindings, sizeof(*o->set_layouts[i].bindings) * o->set_layouts[i].binding_count);
+        dst->set_layouts = sets;
+    }
+    if (o->vertex_attributes)
+        dst->vertex_attributes = (const VkVertexInputAttributeDescription *)pvk_copy_bump(
+            &at, o->vertex_attributes, sizeof(*o->vertex_attributes) * o->vertex_attribute_count);
+    if (o->vertex_bindings)
+        dst->vertex_bindings = (const VkVertexInputBindingDescription *)pvk_copy_bump(
+            &at, o->vertex_bindings, sizeof(*o->vertex_bindings) * o->vertex_binding_count);
+    if (o->vertex_divisors)
+        dst->vertex_divisors = (const VkVertexInputBindingDivisorDescription *)pvk_copy_bump(
+            &at, o->vertex_divisors, sizeof(*o->vertex_divisors) * o->vertex_divisor_count);
+    dst->vertex_outputs = NULL;
+    dst->vertex_output_count = 0;
+    if (o->input_attachment_colors)
+        dst->input_attachment_colors = (const uint32_t *)pvk_copy_bump(
+            &at, o->input_attachment_colors, sizeof(uint32_t) * o->input_attachment_color_count);
+    if (o->ycbcr_binding_count) {
+        struct pvk_msl_ycbcr_binding *y = (struct pvk_msl_ycbcr_binding *)pvk_copy_bump(
+            &at, o->ycbcr_bindings, sizeof(*o->ycbcr_bindings) * o->ycbcr_binding_count);
+        for (i = 0; i < o->ycbcr_binding_count; i++)
+            y[i].conversions = (const struct pvk_ycbcr *)pvk_copy_bump(
+                &at, o->ycbcr_bindings[i].conversions, sizeof(struct pvk_ycbcr) * pvk_msl_ycbcr_count(o, i));
+        dst->ycbcr_bindings = y;
+    }
+    return VK_SUCCESS;
 }
 
 /* What a pipeline keeps from its translation. */
@@ -67400,18 +67514,28 @@ static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *
  * that tests depth bounds one that compares the copy with the bounds
  * (section 13's hidden_depth_output, depth_bounds). Pipelines without a
  * fragment shader get a fragment function that does only that. A variant
- * is translated with the pipeline and compiled with it when it will be
- * needed (the pipeline's subpass reads the depth, or its depth bounds test
- * is static), else on first use: when the device enabled
- * dynamicRenderingLocalRead or depthBounds, a pass's need of a copy is
- * only known when it is encoded. */
+ * is translated and compiled with the pipeline when it will be needed (the
+ * pipeline's subpass reads the depth, or its depth bounds test is static),
+ * else on first use: when the device enabled dynamicRenderingLocalRead or
+ * depthBounds, a pass's need of a copy is only known when it is encoded,
+ * and most pipelines never draw in a pass with one. The pipeline keeps its
+ * vertex stage (a shader cache entry) and a copy of its fragment shader's
+ * translation inputs for that. */
 
 struct pvk_gfx_variants {
     pthread_mutex_t lock;
     struct pvk_gfx_desc desc; /* the pipeline's, with the copy's color attachment */
     bool layered, invariant;
-    char *vs_msl, *fs_msl[PVK_VARIANT_COUNT]; /* fs_msl NULL: not needed */
-    char vs_entry[64], fs_entry[PVK_VARIANT_COUNT][64];
+    uint32_t want;                /* bit k: the pipeline has variant k */
+    struct pvk_shader_entry *vs;  /* its vertex stage (held) */
+    /* the fragment shader's inputs (code NULL: none), fo with the depth copy's options */
+    uint32_t *fs_code;
+    size_t fs_words;
+    uint64_t fs_hash[2];
+    char *fs_entry;
+    struct pvk_msl_options fo;
+    void *inputs;                 /* (pvk_stage_inputs_copy) */
+    uint32_t sample_mask;         /* without a fragment shader: pSampleMask (0: none) */
     id pso[PVK_VARIANT_COUNT];
     bool failed[PVK_VARIANT_COUNT];
 };
@@ -67579,16 +67703,16 @@ static void pvk_render_tex_inputs(struct pvk_encoder *e, const struct pvk_pipeli
     }
 }
 
-static void pvk_gfx_variants_free(const VkAllocationCallbacks *alloc, struct pvk_gfx_variants *v)
+static void pvk_gfx_variants_free(struct pvk_device *device, const VkAllocationCallbacks *alloc,
+                                  struct pvk_gfx_variants *v)
 {
     unsigned k;
     if (!v)
         return;
-    for (k = 0; k < PVK_VARIANT_COUNT; k++) {
+    for (k = 0; k < PVK_VARIANT_COUNT; k++)
         pvk_release(v->pso[k]);
-        pvk_free(alloc, v->fs_msl[k]);
-    }
-    pvk_free(alloc, v->vs_msl);
+    pvk_stage_put(device, v->vs);
+    pvk_free(alloc, v->inputs);
     pthread_mutex_destroy(&v->lock);
     pvk_free(alloc, v);
 }
@@ -67602,26 +67726,49 @@ static char *pvk_strdup_alloc(const VkAllocationCallbacks *alloc, const char *s)
     return d;
 }
 
-/* Variant `kind` of a pipeline (not retained), compiled on first use; NULL
- * when the pipeline has none or Metal could not make it. */
+/* Variant `kind` of a pipeline (not retained), translated and compiled on
+ * first use; NULL when the pipeline has none or it could not be made. No
+ * application allocator calls: this also runs while encoding. */
 static id pvk_gfx_variant(struct pvk_device *device, struct pvk_pipeline *p, unsigned kind)
 {
     struct pvk_gfx_variants *v = p->gfx ? p->gfx->variants : NULL;
     id pso;
-    if (!v || !v->fs_msl[kind])
+    if (!v || !(v->want & (1u << kind)))
         return NULL;
     pthread_mutex_lock(&v->lock);
     if (!v->pso[kind] && !v->failed[kind]) {
-        char error[256];
-        v->pso[kind] = pvk_gfx_compile(device, &v->desc, v->vs_msl, v->vs_entry, v->fs_msl[kind], v->fs_entry[kind],
-                                       v->layered, v->invariant, "PlasmaVK depth copy variant", error, sizeof(error));
+        struct pvk_shader_entry *fs = NULL;
+        char error[256], *hidden = NULL;
+        const char *msl = NULL, *entry = "pvk_depth_fs";
+        if (v->fs_code) {
+            struct pvk_msl_options fo = v->fo;
+            fo.depth_bounds = kind == PVK_VARIANT_BOUNDS;
+            if (pvk_stage_translate_fragment(device, v->vs, v->fs_code, v->fs_words, v->fs_hash, v->fs_entry, &fo, &fs,
+                                             error, sizeof(error)) == VK_SUCCESS) {
+                msl = fs->res.msl;
+                entry = fs->res.entry_point;
+            }
+        } else { /* no fragment shader: one that writes the copy (system memory) */
+            msl = hidden = pvk_hidden_fragment_msl(NULL, v->fo.hidden_depth_output - 1, v->fo.hidden_depth_bits,
+                                                   v->fo.hidden_depth_samples, kind == PVK_VARIANT_BOUNDS,
+                                                   v->sample_mask);
+            if (!msl)
+                snprintf(error, sizeof(error), "out of memory");
+        }
+        if (msl)
+            v->pso[kind] = pvk_gfx_compile(device, &v->desc, v->vs->res.msl, v->vs->res.entry_point, msl, entry,
+                                           v->layered, v->invariant, "PlasmaVK depth copy variant", error, sizeof(error));
         if (!v->pso[kind]) {
             v->failed[kind] = true;
-            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-compilation", VK_OBJECT_TYPE_PIPELINE,
-                     (uint64_t)(uintptr_t)p, "a graphics pipeline's depth copy variant: %s", error);
-            pvk_logd(device, PVK_LOG_DEBUG, "PlasmaVK-shader-msl", VK_OBJECT_TYPE_PIPELINE, (uint64_t)(uintptr_t)p,
-                     "fragment MSL:\n%s", v->fs_msl[kind]);
+            pvk_logd(device, PVK_LOG_ERROR, msl ? "PlasmaVK-shader-compilation" : "PlasmaVK-shader-translation",
+                     VK_OBJECT_TYPE_PIPELINE, (uint64_t)(uintptr_t)p, "a graphics pipeline's depth copy variant: %s",
+                     error);
+            if (msl)
+                pvk_logd(device, PVK_LOG_DEBUG, "PlasmaVK-shader-msl", VK_OBJECT_TYPE_PIPELINE, (uint64_t)(uintptr_t)p,
+                         "fragment MSL:\n%s", msl);
         }
+        pvk_stage_put(device, fs);
+        pvk_free(NULL, hidden);
     }
     pso = v->pso[kind];
     pthread_mutex_unlock(&v->lock);
@@ -67651,17 +67798,15 @@ static VkResult pvk_gfx_translate(struct pvk_device *device, const struct pvk_gf
                                   struct pvk_shader_entry **vs, struct pvk_shader_entry **fs, char *error,
                                   size_t error_size)
 {
-    struct pvk_msl_options vo = *vs_options, fo;
+    struct pvk_msl_options vo = *vs_options;
     VkResult r;
     *fs = NULL;
     pvk_msl_link_vertex(&vo);
     r = pvk_stage_translate(device, src->vs_code, src->vs_words, src->vs_hash, src->vs->pName, &vo, vs, error, error_size);
     if (r != VK_SUCCESS || !src->fs || !src->fs_words)
         return r;
-    fo = *fs_options;
-    pvk_msl_link_fragment(&fo, &(*vs)->res);
-    return pvk_stage_translate(device, src->fs_code, src->fs_words, src->fs_hash, src->fs->pName, &fo, fs, error,
-                               error_size);
+    return pvk_stage_translate_fragment(device, *vs, src->fs_code, src->fs_words, src->fs_hash, src->fs->pName,
+                                        fs_options, fs, error, error_size);
 }
 
 /* The fragment shader's options a desc decides: its attachments and the
@@ -67895,8 +68040,6 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     size_t vs_words = 0, fs_words = 0;
     const VkBaseInStructure *ext;
     const struct pvk_format *depth_fmt = NULL, *stencil_fmt = NULL;
-    char *variant_msl[PVK_VARIANT_COUNT] = { NULL, NULL }, *variant_vs = NULL;
-    char variant_entry[PVK_VARIANT_COUNT][64], variant_vs_entry[64];
     char *tex_msl[2] = { NULL, NULL }, tex_entry[2][64];
     uint32_t i, view_mask = 0, dynamic = 0, color_count = 0, readable = 0, reads, want = 0, eager = 0, k, tile = 0;
     uint32_t tex_inputs = 0;
@@ -68275,8 +68418,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
             pvk_stage_put(device, tf);
         }
     }
-    /* Depth copy variants (above): their shaders, translated while the
-     * options are alive */
+    /* Depth copy variants (above): which the pipeline has, and what
+     * translating them takes, kept while the options are alive */
     if (result == VK_SUCCESS && depth_fmt && !discard && hidden_logical[0] != PVK_NO_SLOT) {
         bool test = (dynamic & PVK_DYN_BIT(DEPTH_TEST_ENABLE)) || gfx.state.depth_test;
         bool write = (dynamic & PVK_DYN_BIT(DEPTH_WRITE_ENABLE)) || gfx.state.depth_write;
@@ -68290,37 +68433,46 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         }
     }
     eager &= want;
-    for (k = 0; k < PVK_VARIANT_COUNT; k++) {
-        struct pvk_msl_options fv = fo;
-        struct pvk_shader_entry *vv = NULL, *fvr = NULL;
-        uint32_t bits = depth_fmt && depth_fmt->mtl == PVK_MTLPixelFormatDepth16Unorm ? 16 : 32;
+    if (result == VK_SUCCESS && want) { /* the vertex stage and the fragment shader's inputs, for later */
+        struct pvk_gfx_variants *v = pvk_alloc(alloc, sizeof(*v), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+        struct pvk_msl_options vv = vo, fv = fo;
         char error[256];
-        bool ok;
-        if (!(want & (1u << k)))
-            continue;
+        VkResult r = VK_ERROR_OUT_OF_HOST_MEMORY;
         fv.hidden_depth_output = hidden_logical[0] + 1u;
-        fv.hidden_depth_bits = bits;
+        fv.hidden_depth_bits = depth_fmt->mtl == PVK_MTLPixelFormatDepth16Unorm ? 16 : 32;
         fv.hidden_depth_samples = d.samples;
-        fv.depth_bounds = k == PVK_VARIANT_BOUNDS;
-        ok = pvk_gfx_translate(device, &src, &vo, &fv, &vv, &fvr, error, sizeof(error)) == VK_SUCCESS;
-        if (ok && !variant_vs) { /* the vertex function is the pipeline's */
-            variant_vs = pvk_strdup_alloc(alloc, vv->res.msl);
-            snprintf(variant_vs_entry, sizeof(variant_vs_entry), "%s", vv->res.entry_point);
-        }
-        if (ok && fvr) {
-            variant_msl[k] = pvk_strdup_alloc(alloc, fvr->res.msl);
-            snprintf(variant_entry[k], sizeof(variant_entry[k]), "%s", fvr->res.entry_point);
-        } else if (ok) { /* no fragment shader: one that writes the copy */
-            variant_msl[k] = pvk_hidden_fragment_msl(alloc, hidden_logical[0], bits, d.samples, k == PVK_VARIANT_BOUNDS,
-                                                     d.sample_mask_enable ? d.sample_mask : 0);
-            snprintf(variant_entry[k], sizeof(variant_entry[k]), "pvk_depth_fs");
+        pvk_msl_link_vertex(&vv);
+        snprintf(error, sizeof(error), "out of memory");
+        if (v && pthread_mutex_init(&v->lock, NULL) == 0) {
+            v->want = want;
+            v->sample_mask = d.sample_mask_enable ? d.sample_mask : 0;
+            r = fs ? pvk_stage_inputs_copy(alloc, fs_code, fs_words, fs->pName, &fv, &v->fs_code, &v->fs_entry, &v->fo,
+                                           &v->inputs)
+                   : VK_SUCCESS;
+            if (!fs) {
+                v->fo.hidden_depth_output = fv.hidden_depth_output;
+                v->fo.hidden_depth_bits = fv.hidden_depth_bits;
+                v->fo.hidden_depth_samples = fv.hidden_depth_samples;
+            }
+            v->fs_words = fs_words;
+            memcpy(v->fs_hash, src.fs_hash, sizeof(v->fs_hash));
+            if (r == VK_SUCCESS)
+                r = pvk_stage_translate(device, vs_code, vs_words, src.vs_hash, vs->pName, &vv, &v->vs, error,
+                                        sizeof(error));
+            if (r != VK_SUCCESS) {
+                pvk_gfx_variants_free(device, alloc, v);
+                v = NULL;
+            }
         } else {
-            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-translation", VK_OBJECT_TYPE_SHADER_MODULE,
-                     (uint64_t)(uintptr_t)vs->module, "vkCreateGraphicsPipelines: cannot translate a depth copy "
-                     "variant: %s", error);
+            pvk_free(alloc, v);
+            v = NULL;
         }
-        pvk_stage_put(device, vv);
-        pvk_stage_put(device, fvr);
+        if (!v) {
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-translation", VK_OBJECT_TYPE_SHADER_MODULE,
+                     (uint64_t)(uintptr_t)vs->module, "vkCreateGraphicsPipelines: no depth copy variants: %s", error);
+            eager = 0;
+        }
+        gfx.variants = v;
     }
     pvk_free(alloc, bindings);
     pvk_free(alloc, ycbcr);
@@ -68334,35 +68486,16 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     }
     reads = ((ci.workgroup[0] & PVK_GFX_READS_DEPTH) ? PVK_HIDDEN_DEPTH : 0) |
             ((ci.workgroup[0] & PVK_GFX_READS_STENCIL) ? PVK_HIDDEN_STENCIL : 0);
-    if (variant_vs && (variant_msl[PVK_VARIANT_DEPTH] || variant_msl[PVK_VARIANT_BOUNDS])) {
-        struct pvk_gfx_variants *v = pvk_alloc(alloc, sizeof(*v), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-        if (v && pthread_mutex_init(&v->lock, NULL) == 0) {
-            v->desc = d;
-            pvk_gfx_hidden_formats(&v->desc, ci.workgroup[0]); /* the copies it reads */
-            v->desc.formats[hidden_logical[0]] = PVK_MTLPixelFormatR32Float; /* and the depth copy it writes */
-            v->desc.write_masks[hidden_logical[0]] = PVK_MTLColorWriteMaskRed;
-            v->desc.blend[hidden_logical[0]][0] = 0;
-            v->layered = ci.dispatch_base != 0;
-            v->invariant = ci.dispatch_base_offset != 0;
-            v->vs_msl = variant_vs;
-            memcpy(v->vs_entry, variant_vs_entry, sizeof(v->vs_entry));
-            variant_vs = NULL;
-            for (k = 0; k < PVK_VARIANT_COUNT; k++) {
-                v->fs_msl[k] = variant_msl[k];
-                memcpy(v->fs_entry[k], variant_entry[k], sizeof(v->fs_entry[k]));
-                variant_msl[k] = NULL;
-            }
-            gfx.variants = v;
-        } else {
-            pvk_free(alloc, v);
-            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-out-of-memory", VK_OBJECT_TYPE_DEVICE, 0,
-                     "vkCreateGraphicsPipelines: out of memory for the depth copy variants");
-            eager = 0;
-        }
+    if (gfx.variants) {
+        struct pvk_gfx_variants *v = gfx.variants;
+        v->desc = d;
+        pvk_gfx_hidden_formats(&v->desc, ci.workgroup[0]); /* the copies it reads */
+        v->desc.formats[hidden_logical[0]] = PVK_MTLPixelFormatR32Float; /* and the depth copy it writes */
+        v->desc.write_masks[hidden_logical[0]] = PVK_MTLColorWriteMaskRed;
+        v->desc.blend[hidden_logical[0]][0] = 0;
+        v->layered = ci.dispatch_base != 0;
+        v->invariant = ci.dispatch_base_offset != 0;
     }
-    for (k = 0; k < PVK_VARIANT_COUNT; k++)
-        pvk_free(alloc, variant_msl[k]);
-    pvk_free(alloc, variant_vs);
 
     if (kept.msl[0]) { /* (struct pvk_gfx_groups) */
         struct pvk_gfx_groups *g = pvk_alloc(alloc, sizeof(*g), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -68412,7 +68545,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     if (!pipeline) {
         pvk_release(pso);
         pvk_release(pso_snorm);
-        pvk_gfx_variants_free(alloc, gfx.variants);
+        pvk_gfx_variants_free(device, alloc, gfx.variants);
         pvk_gfx_groups_free(alloc, gfx.groups);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -68430,7 +68563,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         if (d.formats[i] && (ci.workgroup[0] & PVK_GFX_OUTPUTS) && (ci.workgroup[2] >> i & 1u))
             gfx.fetched |= 1u << i;
     gfx.reads = reads;
-    gfx.bounds = gfx.variants && gfx.variants->fs_msl[PVK_VARIANT_BOUNDS];
+    gfx.bounds = gfx.variants && (gfx.variants->want & (1u << PVK_VARIANT_BOUNDS));
     *pipeline->gfx = gfx;
     for (k = 0; k < PVK_VARIANT_COUNT; k++) /* variants that will be needed: now */
         if (eager & (1u << k))
@@ -68477,7 +68610,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
     pvk_release(pipeline->mtl_pipeline);
     pvk_release(pipeline->mtl_pipeline_snorm);
     if (pipeline->gfx) {
-        pvk_gfx_variants_free(alloc, pipeline->gfx->variants);
+        pvk_gfx_variants_free((struct pvk_device *)device, alloc, pipeline->gfx->variants);
         pvk_gfx_groups_free(alloc, pipeline->gfx->groups);
     }
     pvk_free(alloc, pipeline);
