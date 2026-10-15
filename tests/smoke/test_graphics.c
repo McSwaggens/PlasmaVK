@@ -3172,6 +3172,69 @@ static void test_blend(void)
     }
 }
 
+/* Blending on with ONE * source + ZERO * destination (which PlasmaVK turns
+ * off): the source as it is, clamped by UNORM and unclamped in a float
+ * attachment, with a write mask leaving blue alone in the float one. */
+static void test_blend_replace(void)
+{
+    static const float clear[4] = { 0.0f, 0.5f, 1.0f, 1.0f };
+    struct img targets[2];
+    struct buf out = make_buf(W * H * 4), fout = make_buf(W * H * 16);
+    VkPipelineColorBlendAttachmentState b;
+    VkPipeline pipe;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t i, k;
+    int bad = 0;
+
+    targets[0] = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    targets[1] = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect2_fs, sizeof(spv_rect2_fs));
+    p.colors = 2;
+    p.color_formats[1] = VK_FORMAT_R32G32B32A32_SFLOAT;
+    p.has_blend = true;
+    memset(&b, 0, sizeof(b));
+    b.blendEnable = VK_TRUE;
+    b.srcColorBlendFactor = b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    b.dstColorBlendFactor = b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    b.colorBlendOp = b.alphaBlendOp = VK_BLEND_OP_ADD;
+    b.colorWriteMask = 0xf;
+    p.blend[0] = b;
+    b.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_A_BIT;
+    p.blend[1] = b;
+    pipe = make_pipe(&p);
+    REQUIRE(pipe);
+    cb = begin_cmd();
+    begin_rendering(cb, targets, 2, clear, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    rect(cb, -1, -1, 0, 1, 1.5f, -0.25f, 0.25f, 0.75f, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &targets[0], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    download(cb, &targets[1], 0, VK_IMAGE_ASPECT_COLOR_BIT, &fout);
+    submit(cb);
+    for (i = 0; i < W * H; i++) {
+        bool left = i % W < W / 2;
+        static const float fleft[4] = { 1.5f, -0.25f, 1.0f, 0.75f };
+        const float *f = (const float *)fout.data + 4 * i, *want = left ? fleft : clear;
+        uint32_t got = px(&out, i % W, i / W), want8 = left ? RGBA(255, 0, 64, 191) : RGBA(0, 128, 255, 255), far = 0;
+        for (k = 0; k < 4; k++) { /* (UNORM: within 1) */
+            int d = (int)(got >> 8 * k & 0xffu) - (int)(want8 >> 8 * k & 0xffu);
+            far |= d > 1 || d < -1;
+        }
+        for (k = 0; k < 4 && f[k] == want[k]; k++)
+            ;
+        if ((far || k < 4) && bad++ < 4)
+            fprintf(stderr, "blend replace: pixel (%u, %u) is %08x / %g %g %g %g, expected %08x / %g %g %g %g\n", i % W,
+                    i / W, got, f[0], f[1], f[2], f[3], want8, want[0], want[1], want[2], want[3]);
+    }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipe, NULL);
+    free_buf(&out);
+    free_buf(&fout);
+    free_img(&targets[0]);
+    free_img(&targets[1]);
+}
+
 /* Cull modes and front faces: the strip spv_rect_vs draws is clockwise in
  * framebuffer space (y down), so back-facing with COUNTER_CLOCKWISE. */
 static uint32_t expect_cull(uint32_t x, uint32_t y)
@@ -8287,16 +8350,17 @@ static void test_imageless_noattachment(void)
 static uint32_t expect_dual(uint32_t x, uint32_t y)
 {
     (void)y;
-    return x < W / 2 ? RGBA(128, 64, 255, 255) : BLACK;
+    return x < W / 2 ? RGBA(128, 64, 255, 255) : RGBA(64, 128, 191, 255);
 }
 
-/* Dual-source blending: color x the second output. */
+/* Dual-source blending: color x the second output; and the same shader with
+ * blending ONE * source + ZERO * destination (off in Metal): the color. */
 static void test_dual_source(void)
 {
     static const float black[4] = { 0, 0, 0, 1 };
     struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
     struct buf out = make_buf(W * H * 4);
-    VkPipeline pipeline;
+    VkPipeline pipeline, replace;
     struct pipe p;
     VkCommandBuffer cb;
 
@@ -8316,16 +8380,21 @@ static void test_dual_source(void)
     p.blend[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     p.blend[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
     pipeline = make_pipe(&p);
-    REQUIRE(pipeline);
+    p.blend[0].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    replace = make_pipe(&p);
+    REQUIRE(pipeline && replace);
     cb = begin_cmd();
     begin_rendering(cb, &target, 1, black, NULL);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     rect(cb, -1, -1, 0, 1, 1, 1, 1, 1, 0);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, replace);
+    rect(cb, 0, -1, 1, 1, 0.25f, 0.5f, 0.75f, 1, 0);
     vkCmdEndRendering(cb);
     download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
     submit(cb);
     CHECK(count_far(&out, expect_dual, 1, "dual source") == 0);
     vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyPipeline(device, replace, NULL);
     free_buf(&out);
     free_img(&target);
 }
@@ -11572,6 +11641,7 @@ int main(void)
     RUN(test_render_area_resolve_twice);
     RUN(test_depth_stencil);
     RUN(test_blend);
+    RUN(test_blend_replace);
     RUN(test_cull);
     RUN(test_rebind_pipeline);
     RUN(test_depth_bias_clamp);

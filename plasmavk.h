@@ -68318,6 +68318,18 @@ static pvk_MTLBlendOperation pvk_blend_op(VkBlendOp op)
     }
 }
 
+/* Blending that writes the source as it is: ONE * source + ZERO *
+ * destination, for color and alpha. Off, it writes the same (fixed-point
+ * formats clamp the source and sRGB ones encode it either way; float ones
+ * differ only where the destination is Inf or NaN, 0 * Inf), and Metal
+ * keeps the pipeline opaque: no destination read, hidden surface removal. */
+static bool pvk_blend_replaces(const VkPipelineColorBlendAttachmentState *a)
+{
+    return a->srcColorBlendFactor == VK_BLEND_FACTOR_ONE && a->dstColorBlendFactor == VK_BLEND_FACTOR_ZERO &&
+           a->colorBlendOp == VK_BLEND_OP_ADD && a->srcAlphaBlendFactor == VK_BLEND_FACTOR_ONE &&
+           a->dstAlphaBlendFactor == VK_BLEND_FACTOR_ZERO && a->alphaBlendOp == VK_BLEND_OP_ADD;
+}
+
 static pvk_MTLColorWriteMask pvk_write_mask(VkColorComponentFlags m)
 {
     return ((m & VK_COLOR_COMPONENT_R_BIT) ? PVK_MTLColorWriteMaskRed : 0) |
@@ -69163,7 +69175,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
                 if (lt.kind && d.write_masks[i])
                     d.logic_targets[i] = (uint32_t)lt.kind | (uint32_t)lt.bits[0] << 8 | (uint32_t)lt.bits[1] << 14 |
                                          (uint32_t)lt.bits[2] << 20 | (uint32_t)lt.bits[3] << 26;
-            } else if (a && a->blendEnable && (f->caps & PVK_FC_BLEND)) {
+            } else if (a && a->blendEnable && (f->caps & PVK_FC_BLEND) && !pvk_blend_replaces(a)) {
                 d.blend[i][0] = 1;
                 d.blend[i][1] = pvk_blend_factor(a->srcColorBlendFactor);
                 d.blend[i][2] = pvk_blend_factor(a->dstColorBlendFactor);
