@@ -695,6 +695,123 @@ static void test_small_allocations_on_gpu(void)
     vkFreeMemory(device, dst, NULL);
 }
 
+/* Freed heaps of their own stay resident in the device's cache (section 10,
+ * HEAP CACHE): an allocation of their type and about their size takes one,
+ * with a buffer of its own size that the GPU sees; the cache keeps to its
+ * limits, lets go of heaps freed a while ago and of all of them under
+ * memory pressure; heaps it doesn't keep leave the residency set at once. */
+static VkDeviceMemory cached_alloc(uint32_t type, VkDeviceSize size, id *heap)
+{
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    if (allocate(type, size, NULL, &memory) == VK_SUCCESS)
+        *heap = ((struct pvk_device_memory *)memory)->mtl_heap;
+    return memory;
+}
+
+static void test_heap_cache(void)
+{
+    struct pvk_device *d = (struct pvk_device *)device;
+    const VkDeviceSize size = (2u << 20) + 4096, fifth = d->heap_cache_limit / 5;
+    VkDeviceMemory a, b, c, src, many[PVK_HEAP_CACHE_SLOTS + 4];
+    id heap, other, heaps[PVK_HEAP_CACHE_SLOTS + 4];
+    const struct pvk_device_memory *m;
+    int same = 1;
+    unsigned i;
+
+    REQUIRE(d->heap_cache_limit > 0 && d->heap_cache_limit <= PVK_HEAP_CACHE_BYTES && size < d->heap_cache_limit / 4);
+    /* The system's memory pressure is simulated below: the real one stops
+     * changing the cache first. */
+    CHECK(d->memory_source != NULL);
+    pvk_memory_unwatch_pressure(d);
+    pvk_heap_cache_pressure(d, PVK_DISPATCH_MEMORYPRESSURE_NORMAL);
+    pvk_heap_cache_flush(d, true, true);
+    CHECK(d->heap_cache_count == 0 && d->heap_cache_bytes == 0);
+
+    /* Taken again by memory of the same type, but not of another one or of
+     * another size class. */
+    a = cached_alloc(shared_type, size, &heap);
+    REQUIRE(a);
+    vkFreeMemory(device, a, NULL);
+    CHECK(d->heap_cache_count == 1 && d->heap_cache[0].heap == heap && d->heap_cache_bytes >= size);
+    b = cached_alloc(private_type, size, &other);
+    REQUIRE(b);
+    CHECK(other != heap && d->heap_cache_count == 1);
+    c = cached_alloc(shared_type, size + size / 4, &other);
+    REQUIRE(c);
+    CHECK(other != heap && d->heap_cache_count == 1);
+    vkFreeMemory(device, c, NULL);
+    CHECK(d->heap_cache_count == 2 && d->heap_cache[0].heap == other);
+    a = cached_alloc(shared_type, size - 65536, &other); /* smaller, within an eighth */
+    REQUIRE(a);
+    m = (const struct pvk_device_memory *)a;
+    CHECK(other == heap && d->heap_cache_count == 1 && !m->chunk);
+    CHECK(MSG0(unsigned long, m->mtl_buffer, "length") == size - 65536);
+    CHECK(m->gpu_address == MSG0(uint64_t, m->mtl_buffer, "gpuAddress") && m->contents);
+
+    /* The GPU sees it, resident from before. */
+    REQUIRE_VK(allocate(shared_type, 20000, NULL, &src));
+    fill(src, 20000, 5);
+    memset(m->contents, 0, (size_t)(size - 65536));
+    CHECK(gpu_copy(((struct pvk_device_memory *)src)->mtl_buffer, 0, ((struct pvk_device_memory *)b)->mtl_buffer, 0,
+                   20000));
+    CHECK(gpu_copy(((struct pvk_device_memory *)b)->mtl_buffer, 0, m->mtl_buffer, 8192, 20000));
+    for (i = 0; i < 20000; i++)
+        same &= ((const unsigned char *)m->contents)[8192 + i] == (unsigned char)(5 * 31 + i * 7);
+    CHECK(same);
+    vkFreeMemory(device, src, NULL);
+    vkFreeMemory(device, a, NULL);
+    vkFreeMemory(device, b, NULL);
+
+    /* At most PVK_HEAP_CACHE_SLOTS heaps, newest first... */
+    pvk_heap_cache_flush(d, true, true);
+    for (i = 0; i < PVK_ARRAY_SIZE(many); i++)
+        many[i] = cached_alloc(shared_type, size + i * 65536, &heaps[i]);
+    for (i = 0; i < PVK_ARRAY_SIZE(many); i++)
+        vkFreeMemory(device, many[i], NULL);
+    CHECK(d->heap_cache_count == PVK_HEAP_CACHE_SLOTS && d->heap_cache[0].heap == heaps[PVK_ARRAY_SIZE(many) - 1]);
+    /* ...of heap_cache_limit bytes, none over a quarter of it. */
+    for (i = 0; i < 6; i++)
+        many[i] = cached_alloc(private_type, fifth, &heaps[i]);
+    for (i = 0; i < 6; i++)
+        vkFreeMemory(device, many[i], NULL);
+    CHECK(d->heap_cache_bytes <= d->heap_cache_limit && d->heap_cache[0].heap == heaps[5]);
+    a = cached_alloc(private_type, d->heap_cache_limit / 4 + 65536, &heap);
+    REQUIRE(a);
+    i = d->heap_cache_count;
+    vkFreeMemory(device, a, NULL);
+    CHECK(d->heap_cache_count == i && d->heap_cache[0].heap != heap);
+    CHECK(d->residency_changes == 0); /* it left the residency set at once */
+
+    /* Heaps freed over a second ago leave at the next free. */
+    for (i = 0; i < d->heap_cache_count; i++)
+        d->heap_cache[i].freed -= 2 * (uint64_t)PVK_HEAP_CACHE_AGE;
+    a = cached_alloc(private_type, (1u << 20) + 4096, &heap);
+    REQUIRE(a);
+    vkFreeMemory(device, a, NULL);
+    CHECK(d->heap_cache_count == 1 && d->heap_cache[0].heap == heap);
+    /* ...and at the next submission, when frees stop. */
+    d->heap_cache[0].freed -= 2 * (uint64_t)PVK_HEAP_CACHE_AGE;
+    CHECK(vkQueueSubmit(queue, 0, NULL, VK_NULL_HANDLE) == VK_SUCCESS);
+    CHECK(d->heap_cache_count == 0 && d->heap_cache_bytes == 0 && d->residency_changes == 0);
+
+    /* Memory pressure empties the cache, and frees keep nothing until it is
+     * normal again. */
+    a = cached_alloc(private_type, size, &heap);
+    b = cached_alloc(private_type, size, &other);
+    REQUIRE(a && b);
+    vkFreeMemory(device, a, NULL);
+    CHECK(d->heap_cache_count == 1 && d->heap_cache[0].heap == heap);
+    pvk_heap_cache_pressure(d, PVK_DISPATCH_MEMORYPRESSURE_WARN);
+    CHECK(d->heap_cache_count == 0 && d->heap_cache_bytes == 0 && d->residency_changes == 0);
+    vkFreeMemory(device, b, NULL);
+    CHECK(d->heap_cache_count == 0 && d->residency_changes == 0);
+    pvk_heap_cache_pressure(d, PVK_DISPATCH_MEMORYPRESSURE_NORMAL);
+    a = cached_alloc(private_type, size, &heap);
+    REQUIRE(a);
+    vkFreeMemory(device, a, NULL);
+    CHECK(d->heap_cache_count == 1 && d->heap_cache[0].heap == heap);
+}
+
 int main(void)
 {
     setup();
@@ -712,6 +829,7 @@ int main(void)
     RUN(test_gpu_sees_memory);
     RUN(test_small_allocations);
     RUN(test_small_allocations_on_gpu);
+    RUN(test_heap_cache);
     vkDestroyDevice(device, NULL);
     vkDestroyInstance(instance, NULL);
     return TEST_RESULT();
