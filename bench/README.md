@@ -15,7 +15,7 @@ reports an error instead of fast-but-wrong numbers.
 |---|---|
 | `bench_startup` | Instance + device creation and teardown: the cost before the first frame. |
 | `bench_draw_calls` | CPU recording + submit cost and GPU time for thousands of small draws per frame (1k–50k), with push constants per draw. Configs: plain draws, indexed draws that bind a vertex buffer per draw, a pipeline switch every 8 draws, instanced batches of 64 or 1024, draws that each set their whole state again (`rebind`: viewport, scissor, the same pipeline, push constants, and their mesh's vertex and index buffers, one of 64), the same draws in secondary command buffers (4 large ones, or one per object as in Sascha's multithreading sample), and `vs_heavy`: 1000 draws of 6144 vertices, all but six of them clipped away, so `gpu_us` is vertex shading that reads per-draw data. Reports `cpu_ns_per_draw`. |
-| `bench_descriptor_churn` | 10k draws/frame, each with its own descriptors (1 uniform buffer + 4 textures), delivered six ways: pre-built sets (bind only), `vkAllocateDescriptorSets` + `vkUpdateDescriptorSets`, update templates, dynamic offsets, push descriptors, and push templates. |
+| `bench_descriptor_churn` | 10k draws/frame, each with its own descriptors (1 uniform buffer + 4 textures), delivered eight ways: pre-built sets (bind only), `vkAllocateDescriptorSets` + `vkUpdateDescriptorSets`, update templates, dynamic offsets, push descriptors, push templates, sets by update frequency (`multi_frequency`: set 0 per frame, set 1 per material every 8 draws, set 2 per object with a dynamic offset), and allocate + update recorded by 4 threads into secondaries from per-thread pools that share one set layout (`update_sets_mt4`). The `pool_` and `array_` configs time descriptor management alone (`ns_per_op`): a full `FREE_DESCRIPTOR_SET` pool of 4096 sets where a random set is freed and reallocated, batch allocation of 256 sets, pool creation, one-element writes into a bindless table of 65536 or 1024 textures (update after bind, partially bound), and 1, 2, 4 and 8 threads with a pool each; each then draws with the sets it leaves to check them. `_named` variants give one object a `VK_EXT_debug_utils` name first. |
 | `bench_compute` | Chains of 100 or 1000 small dispatches with a barrier between each, 1000 independent dispatches without barriers, and a multi-pass inclusive prefix sum of 1M and 16M `uint`s (reports `gelements_per_s`). |
 | `bench_render_passes` | A deferred frame with dynamic rendering: a G-buffer (RGBA8 + 2x RGBA16F + D32, ~2000 objects) and then 32-light shading. The variants change what leaves tile memory: G-buffer `CLEAR`/`LOAD`/`DONT_CARE`; 4x MSAA with resolve, with the MSAA images transient (memoryless) or stored; and a single-pass version that reads the G-buffer as input attachments (dynamic rendering local read) and never stores it. 1080p and 4K. GPU time is the number to watch. |
 | `bench_pipeline_compile` | The time to create each of 256 graphics and 128 compute pipelines (distinct shaders, specialization constants and fixed-function state), one call per pipeline. The spread is the stutter: watch p99 and max. Phases: `cold`, `warm_cache` (a fresh device given the cold run's `vkGetPipelineCacheData`), `no_cache`, and `cold_parallel4` (4 threads). |
@@ -118,6 +118,14 @@ to stderr.
   `gpu_final_us`); `st_bgcompile` adds the pipelines compiled while the
   frames were measured (`bg_compiles`, `bg_compiles_per_s`) and their
   `create_us`.
+- The `pool_` and `array_` configurations of `descriptor_churn` report
+  `round_us` (the wall time of a round of `ops_per_round` operations, on
+  every thread at once for `pool_threads_N`) and `ns_per_op`. An operation
+  is a free + allocate (`pool_free_churn`), a set of a batch allocation and
+  its share of the reset (`pool_alloc_batch`), a pool create + destroy
+  (`pool_create`), a one-element write (`array_write`), and a set allocated
+  and written on each thread (`pool_threads_N`: constant across N when
+  threads scale).
 - Derived numbers, all computed from medians: `cpu_ns_per_draw`,
   `cpu_ns_per_dispatch`, `gelements_per_s`, `cpu_gb_per_s`, `gpu_gb_per_s`.
 
@@ -131,7 +139,9 @@ results, and the program exits 0:
 
 A failed Vulkan call makes the rest of that program skip. An unsupported
 optional feature (MSAA, push descriptors, local read) skips only its
-configuration.
+configuration. So does a `_named` configuration when the instance does not
+enable `VK_EXT_debug_utils` (`vkGetDeviceProcAddr` has no
+`vkSetDebugUtilsObjectNameEXT`).
 
 A configuration whose output is wrong prints `error` and no numbers. So does
 a GPU hang, detected by a 10 s fence timeout. The program then exits 1, after

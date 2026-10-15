@@ -183,7 +183,8 @@ enum {
     BENCH_NEED_SYNC2 = 1 << 1,
     BENCH_NEED_MAINTENANCE4 = 1 << 2,    /* SPIR-V LocalSizeId (local_size_x_id) */
     BENCH_WANT_PUSH_DESCRIPTOR = 1 << 3, /* optional: see bench_vk.push_descriptor */
-    BENCH_WANT_LOCAL_READ = 1 << 4       /* optional: see bench_vk.local_read */
+    BENCH_WANT_LOCAL_READ = 1 << 4,      /* optional: see bench_vk.local_read */
+    BENCH_WANT_UPDATE_AFTER_BIND = 1 << 5 /* optional: see bench_vk.update_after_bind */
 };
 
 /* The core features of Vulkan 1.0 to 1.4. */
@@ -276,6 +277,8 @@ struct bench_vk {
     struct bench_features supported, enabled; /* not chained */
     const char *extensions[BENCH_MAX_EXTENSIONS]; /* enabled instance and device extensions */
     uint32_t extension_count;
+    int update_after_bind; /* descriptorBindingSampledImageUpdateAfterBind and descriptorBindingPartiallyBound
+                              enabled: bindless texture tables */
 };
 
 static inline int bench_has_extension(const VkExtensionProperties *exts, uint32_t count, const char *name)
@@ -421,12 +424,19 @@ static inline void bench_vk_init_with(struct bench_vk *vk, unsigned needs, const
             want.v14.pushDescriptor = VK_TRUE;
         if (needs & BENCH_WANT_LOCAL_READ)
             want.v14.dynamicRenderingLocalRead = VK_TRUE;
+        if (needs & BENCH_WANT_UPDATE_AFTER_BIND) {
+            want.v12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+            want.v12.descriptorBindingPartiallyBound = VK_TRUE;
+        }
         bench_features_and(&want, &have);
     }
     if (minor < 4)
         memset(&want.v14, 0, sizeof(want.v14));
     vk->push_descriptor = (needs & BENCH_WANT_PUSH_DESCRIPTOR) && want.v14.pushDescriptor;
     vk->local_read = (needs & BENCH_WANT_LOCAL_READ) && want.v14.dynamicRenderingLocalRead;
+    vk->update_after_bind = (needs & BENCH_WANT_UPDATE_AFTER_BIND) &&
+                            want.v12.descriptorBindingSampledImageUpdateAfterBind &&
+                            want.v12.descriptorBindingPartiallyBound;
     if (vk->local_read) {
         VkPhysicalDeviceVulkan14Properties props14 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES };
         VkPhysicalDeviceProperties2 props2 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &props14 };
