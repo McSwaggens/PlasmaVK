@@ -41157,7 +41157,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   analysed (which values cross blocks, which globals each function needs)
  *   and emitted. Every SSA value becomes a named temporary, declared where it
  *   is defined when all its uses are in the same block, else at the top of
- *   the function. Access chains stay expressions until loaded or stored.
+ *   the function; a loop's values before its first jump are declared ahead
+ *   of the loop (pvk_spv_hoist). Access chains stay expressions until loaded
+ *   or stored.
  *   Structured control flow is emitted recursively from the merge
  *   information: selections become if/else, OpSwitch a switch, loops
  *   for (;;) with the continue construct inlined at each continue edge, and
@@ -42334,6 +42336,9 @@ struct pvk_spv {
     uint32_t counter; /* makes switch-break flag names unique */
     struct pvk_spv_frame frames[PVK_SPV_MAX_FRAMES];
     uint32_t nframes;
+    struct pvk_sb *hoist; /* a loop's start: where its values are declared (pvk_spv_hoist), else NULL */
+    size_t hoist_at;
+    uint32_t hoist_indent;
     struct pvk_spv_func *fn; /* function being emitted */
 };
 
@@ -46220,6 +46225,28 @@ static bool pvk_spv_local(const struct pvk_spv_id *x)
     return !(x->flags & (PVK_SPV_F_CROSS_BLOCK | PVK_SPV_F_PHI));
 }
 
+/* Declares local value x ahead of the loop being started, when a loop's
+ * first blocks are emitted (ctx->hoist, until its first jump or another
+ * loop or switch): Metal optimizes no loop with a declaration before its
+ * exit test. A blur's 5 x 5 loop ran 2.3x slower with its test as
+ * `int _36 = x; bool _39 = _36 <= 2; if (!_39) break;` than with the two
+ * declared ahead (M4 Max, macOS 27.2). Plain data only: false for
+ * descriptors and pointers, which stay where they are. */
+static bool pvk_spv_hoist(struct pvk_spv *ctx, const struct pvk_spv_id *x, const char *type)
+{
+    const struct pvk_spv_type *t = pvk_spv_type(ctx, x->type);
+    const char *decl;
+    if (!ctx->hoist || ctx->hoist != ctx->out || t->opaque ||
+        !(t->op == PVK_SPV_OpTypeBool || t->op == PVK_SPV_OpTypeInt || t->op == PVK_SPV_OpTypeFloat ||
+          t->op == PVK_SPV_OpTypeVector || t->op == PVK_SPV_OpTypeMatrix || t->op == PVK_SPV_OpTypeArray ||
+          t->op == PVK_SPV_OpTypeStruct))
+        return false;
+    decl = pvk_spv_fmt(ctx, "%*s%s %s;\n", (int)(ctx->hoist_indent * 4), "", type, x->msl);
+    pvk_sb_insert(ctx, ctx->hoist, ctx->hoist_at, decl);
+    ctx->hoist_at += strlen(decl);
+    return true;
+}
+
 /* Declares result rid (where it is defined, if local) and returns its name;
  * follow with assignments. */
 static const char *pvk_spv_result(struct pvk_spv *ctx, uint32_t rid)
@@ -46228,7 +46255,7 @@ static const char *pvk_spv_result(struct pvk_spv *ctx, uint32_t rid)
     const char *type = pvk_spv_data_type(ctx, x->type)->msl;
     if (x->kind != PVK_SPV_K_VALUE || !x->msl)
         pvk_spv_fail(ctx, "id %u is not a value", rid);
-    if (pvk_spv_local(x))
+    if (pvk_spv_local(x) && !pvk_spv_hoist(ctx, x, type))
         pvk_spv_line(ctx, "%s %s;", type, x->msl);
     return x->msl;
 }
@@ -46240,7 +46267,7 @@ static void pvk_spv_set(struct pvk_spv *ctx, uint32_t rid, const char *expr)
     const char *type = pvk_spv_data_type(ctx, x->type)->msl;
     if (x->kind != PVK_SPV_K_VALUE || !x->msl)
         pvk_spv_fail(ctx, "id %u is not a value", rid);
-    if (pvk_spv_local(x))
+    if (pvk_spv_local(x) && !pvk_spv_hoist(ctx, x, type))
         pvk_spv_line(ctx, "%s %s = %s;", type, x->msl, expr);
     else
         pvk_spv_line(ctx, "%s = %s;", x->msl, expr);
@@ -49728,8 +49755,10 @@ static void pvk_spv_emit_chain(struct pvk_spv *ctx, uint32_t label, bool in_loop
 /* Control transfer to `target` (phi copies already done). */
 static void pvk_spv_goto(struct pvk_spv *ctx, uint32_t target)
 {
-    uint32_t frame = 0;
-    switch (pvk_spv_classify(ctx, target, &frame)) {
+    uint32_t frame = 0, go = pvk_spv_classify(ctx, target, &frame);
+    if (go != PVK_SPV_GO_BLOCK)
+        ctx->hoist = NULL; /* a jump: the loop's exit test (pvk_spv_hoist) */
+    switch (go) {
     case PVK_SPV_GO_NOTHING:
     case PVK_SPV_GO_FALLTHROUGH:
         return;
@@ -49949,6 +49978,9 @@ static void pvk_spv_emit_chain(struct pvk_spv *ctx, uint32_t label, bool in_loop
                 uint32_t cont = pvk_spv_arg(ctx, &merge, 2);
                 pvk_spv_label_block(ctx, pvk_spv_fidx(ctx), cont);
                 pvk_spv_push_frame(ctx, PVK_SPV_FR_LOOP, label, mlabel, cont);
+                ctx->hoist = ctx->out;
+                ctx->hoist_at = ctx->out->len;
+                ctx->hoist_indent = ctx->indent;
                 pvk_spv_line(ctx, "for (;;)");
                 pvk_spv_line(ctx, "{");
                 ctx->indent++;
@@ -49956,6 +49988,7 @@ static void pvk_spv_emit_chain(struct pvk_spv *ctx, uint32_t label, bool in_loop
                 ctx->indent--;
                 pvk_spv_line(ctx, "}");
                 ctx->nframes--;
+                ctx->hoist = NULL;
                 if (pvk_spv_classify(ctx, mlabel, &frame) != PVK_SPV_GO_BLOCK) {
                     pvk_spv_goto(ctx, mlabel);
                     break;
@@ -50023,6 +50056,7 @@ static void pvk_spv_emit_chain(struct pvk_spv *ctx, uint32_t label, bool in_loop
         case PVK_SPV_OpSwitch:
             if (merge.op != PVK_SPV_OpSelectionMerge)
                 pvk_spv_fail(ctx, "OpSwitch without OpSelectionMerge");
+            ctx->hoist = NULL; /* (its break flag goes in at a position kept from before its cases) */
             pvk_spv_emit_switch(ctx, label, &term, mlabel);
             next = mlabel;
             if (pvk_spv_classify(ctx, next, &frame) != PVK_SPV_GO_BLOCK) {
