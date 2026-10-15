@@ -10,6 +10,7 @@
 #define PLASMAVK_IMPLEMENTATION
 #include "../../plasmavk.h"
 
+#include <mach/mach_time.h>
 #include <math.h>
 #include <string.h>
 
@@ -3017,6 +3018,240 @@ static void test_multiview_timestamps(void)
     CHECK(memcmp(out.data, r, sizeof(r)) == 0); /* the copy's are the same */
     vkDestroyQueryPool(device, pool, NULL);
     free_buf(&out);
+    free_img(&target);
+}
+
+/* Timestamps between commands are written by the encoder after them, once
+ * all earlier work is done (section 14, TIMESTAMPS), also by a render pass
+ * that draws nothing: one Metal runs anyway (it clears an attachment it
+ * stores or resolves) or one it skips. Per kind of render pass: a
+ * timestamp, long fills, a timestamp, the pass, a timestamp, a small fill.
+ * All are written within the submission, in order, and the middle one
+ * after the fills: nearer the last than the first. */
+static void test_timestamp_encoders(void)
+{
+    enum { PASSES = 10 };
+    static const float clear[4] = { 0, 0, 0, 1 };
+    static const struct {
+        VkAttachmentLoadOp load;
+        VkAttachmentStoreOp store;
+        uint32_t colors, draws;
+        bool resolve, depth; /* a multisampled color attachment resolved; a depth attachment */
+    } passes[PASSES] = {
+        { VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE, 1, 1, false, false },
+        { VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_DONT_CARE, 1, 1, false, false },
+        { VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, 1, 0, false, false },
+        { VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE, 1, 0, false, false },
+        { VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE, 1, 0, false, false },
+        { VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE, 0, 0, false, false },
+        { VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_DONT_CARE, 1, 0, true, false },
+        { VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_DONT_CARE, 1, 0, true, false },
+        { VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, 0, 0, false, true },
+        { VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_DONT_CARE, 0, 0, false, true },
+    };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img ms = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf b = make_buf(16u << 20);
+    VkRenderingAttachmentInfo att;
+    VkRenderingInfo info;
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool pool;
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint64_t r[3 * PASSES][2], t0, t1;
+    uint32_t i, k;
+
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    qi.queryCount = 3 * PASSES;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &pool));
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    cb = begin_cmd();
+    vkCmdResetQueryPool(cb, pool, 0, 3 * PASSES);
+    for (i = 0; i < PASSES; i++) {
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, 3 * i);
+        for (k = 0; k < 4; k++)
+            vkCmdFillBuffer(cb, b.buffer, 0, VK_WHOLE_SIZE, k);
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 3 * i + 1);
+        memset(&att, 0, sizeof(att));
+        att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView = passes[i].depth ? depth.view : passes[i].resolve ? ms.view : target.view;
+        att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att.loadOp = passes[i].load;
+        att.storeOp = passes[i].store;
+        memcpy(att.clearValue.color.float32, clear, 16);
+        if (passes[i].resolve) {
+            att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+            att.resolveImageView = target.view;
+            att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        info.renderArea.extent.width = W;
+        info.renderArea.extent.height = H;
+        info.layerCount = 1;
+        info.colorAttachmentCount = passes[i].colors;
+        info.pColorAttachments = &att;
+        info.pDepthAttachment = passes[i].depth ? &att : NULL;
+        vkCmdBeginRendering(cb, &info);
+        if (passes[i].draws) {
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            rect(cb, -1, -1, 1, 1, 1, 0, 0, 1, 0.5f);
+        }
+        vkCmdEndRendering(cb);
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 3 * i + 2);
+        vkCmdFillBuffer(cb, b.buffer, 0, 4096, 9);
+    }
+    t0 = mach_absolute_time();
+    submit(cb);
+    t1 = mach_absolute_time();
+    memset(r, 0, sizeof(r));
+    CHECK_VK(vkGetQueryPoolResults(device, pool, 0, 3 * PASSES, sizeof(r), r, 16,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
+             VK_SUCCESS);
+    for (i = 0; i < 3 * PASSES; i++) {
+        CHECK(r[i][1] == 1 && r[i][0] >= t0 && r[i][0] <= t1);
+        CHECK(i == 0 || r[i][0] >= r[i - 1][0]);
+    }
+    for (i = 0; i < PASSES; i++)
+        CHECK((int64_t)(r[3 * i + 1][0] - r[3 * i][0]) > (int64_t)(r[3 * i + 2][0] - r[3 * i + 1][0]));
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyQueryPool(device, pool, NULL);
+    free_buf(&b);
+    free_img(&depth);
+    free_img(&ms);
+    free_img(&target);
+}
+
+/* Runs of timestamps with nothing between them, more than an encoder
+ * writes (section 14, TIMESTAMPS): before a render pass that draws, inside
+ * one between draws, and at the end of the command buffer. All are written
+ * within the submission, in order. */
+static void test_timestamp_runs(void)
+{
+    enum { LEN = 7 };
+    static const float clear[4] = { 0, 0, 0, 1 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf b = make_buf(4096);
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool pool;
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint64_t r[3 * LEN][2], t0, t1;
+    uint32_t i, q = 0;
+
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    qi.queryCount = 3 * LEN;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &pool));
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    cb = begin_cmd();
+    vkCmdResetQueryPool(cb, pool, 0, 3 * LEN);
+    vkCmdFillBuffer(cb, b.buffer, 0, VK_WHOLE_SIZE, 1);
+    for (i = 0; i < LEN; i++)
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, q++);
+    begin_rendering(cb, &target, 1, clear, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    for (i = 0; i < LEN; i++) {
+        rect(cb, -1, -1, 1, 1, 1, 0, 0, 1, 0.5f);
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, q++);
+    }
+    vkCmdEndRendering(cb);
+    vkCmdFillBuffer(cb, b.buffer, 0, VK_WHOLE_SIZE, 2);
+    for (i = 0; i < LEN; i++)
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, q++);
+    t0 = mach_absolute_time();
+    submit(cb);
+    t1 = mach_absolute_time();
+    memset(r, 0, sizeof(r));
+    CHECK_VK(vkGetQueryPoolResults(device, pool, 0, 3 * LEN, sizeof(r), r, 16,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
+             VK_SUCCESS);
+    for (i = 0; i < 3 * LEN; i++) {
+        CHECK(r[i][1] == 1 && r[i][0] >= t0 && r[i][0] <= t1);
+        CHECK(i == 0 || r[i][0] >= r[i - 1][0]);
+    }
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyQueryPool(device, pool, NULL);
+    free_buf(&b);
+    free_img(&target);
+}
+
+/* Runs of more timestamps than an encoder writes, before long work: each is
+ * written before that work, not by the encoder after it (section 14,
+ * TIMESTAMPS). Runs of 5 to 8 timestamps, long fills, a timestamp; then a
+ * profiler's scopes: a timestamp, a render pass with 4 inside (written once
+ * it ends), 2 after it, long fills, a timestamp. Each of a run is nearer
+ * its first than the timestamp after the fills. */
+static void test_timestamp_long_runs(void)
+{
+    enum { RUNS = 5, QUERIES = 5 + 6 + 7 + 8 + 7 + RUNS };
+    static const float clear[4] = { 0, 0, 0, 1 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf b = make_buf(16u << 20);
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool pool;
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint64_t r[QUERIES][2];
+    uint32_t first[RUNS + 1], i, k, q = 0;
+
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    qi.queryCount = QUERIES;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &pool));
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    cb = begin_cmd();
+    vkCmdResetQueryPool(cb, pool, 0, QUERIES);
+    for (i = 0; i < RUNS; i++) {
+        first[i] = q;
+        if (i < RUNS - 1) {
+            for (k = 0; k < 5 + i; k++)
+                vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, q++);
+        } else {
+            vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, q++);
+            begin_rendering(cb, &target, 1, clear, NULL);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            for (k = 0; k < 4; k++) {
+                rect(cb, -1, -1, 1, 1, 1, 0, 0, 1, 0.5f);
+                vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, q++);
+            }
+            vkCmdEndRendering(cb);
+            vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, q++);
+            vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, q++);
+        }
+        for (k = 0; k < 4; k++)
+            vkCmdFillBuffer(cb, b.buffer, 0, VK_WHOLE_SIZE, k);
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, q++);
+    }
+    first[RUNS] = q;
+    REQUIRE(q == QUERIES);
+    submit(cb);
+    memset(r, 0, sizeof(r));
+    CHECK_VK(vkGetQueryPoolResults(device, pool, 0, QUERIES, sizeof(r), r, 16,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
+             VK_SUCCESS);
+    for (i = 0; i < RUNS; i++) {
+        uint64_t start = r[first[i]][0], end = r[first[i + 1] - 1][0];
+        for (k = first[i]; k < first[i + 1] - 1; k++)
+            CHECK(r[k][1] == 1 && (int64_t)(r[k][0] - start) < (int64_t)(end - r[k][0]));
+    }
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyQueryPool(device, pool, NULL);
+    free_buf(&b);
     free_img(&target);
 }
 
@@ -9993,6 +10228,9 @@ int main(void)
     RUN(test_multiview);
     RUN(test_multiview_subpass_clears);
     RUN(test_multiview_timestamps);
+    RUN(test_timestamp_encoders);
+    RUN(test_timestamp_runs);
+    RUN(test_timestamp_long_runs);
     RUN(test_occlusion);
     RUN(test_draw_kinds);
     RUN(test_draw_kinds_secondary);
