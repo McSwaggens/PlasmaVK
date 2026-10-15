@@ -1988,16 +1988,20 @@ static void test_depth_stencil_views(void)
 /* A view of all of an image in its format, texture type and channels is
  * the image's texture, also as an attachment, and outlives the image; a
  * view of a level, of a layer, of another type or with a channel mapping
- * gets one of its own, as does a depth view (it carries (D, 0, 0, 1)). */
+ * gets one of its own, as does a depth view shaders may read (it carries
+ * (D, 0, 0, 1)). A depth view no shader reads carries no mapping: it is
+ * its image's texture too. */
 static void test_view_reuse(void)
 {
     VkImageCreateInfo ci = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 4, 4, 1, 3, 2,
                                       VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
     VkImageCreateInfo si = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_D32_SFLOAT, 4, 4, 1, 1, 1,
                                       VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
-    struct img c = make_image(&ci), s = make_image(&si);
+    VkImageCreateInfo ai = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_D32_SFLOAT, 4, 4, 1, 1, 1,
+                                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+    struct img c = make_image(&ci), s = make_image(&si), a = make_image(&ai);
     VkComponentMapping rgba = identity_mapping(), swap = identity_mapping();
-    VkImageView whole, explicit_rgba, level, layer, swapped, depth;
+    VkImageView whole, explicit_rgba, level, layer, swapped, depth, attachment;
     id texture = texture_of(c.image);
 
     rgba.r = VK_COMPONENT_SWIZZLE_R;
@@ -2017,11 +2021,15 @@ static void test_view_reuse(void)
     swapped = make_view(c.image, VK_IMAGE_VIEW_TYPE_2D_ARRAY, ci.format, VK_IMAGE_ASPECT_COLOR_BIT, 0, 3, 0, 2, swap);
     depth = make_view(s.image, VK_IMAGE_VIEW_TYPE_2D, si.format, VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1,
                       identity_mapping());
-    REQUIRE(texture && whole && explicit_rgba && level && layer && swapped && depth);
+    attachment = make_view(a.image, VK_IMAGE_VIEW_TYPE_2D, ai.format, VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1,
+                           identity_mapping());
+    REQUIRE(texture && whole && explicit_rgba && level && layer && swapped && depth && attachment);
     CHECK(view_texture(whole) == texture && ((struct pvk_image_view *)whole)->mtl_attachment == texture);
     CHECK(view_texture(explicit_rgba) == texture);
     CHECK(view_texture(level) != texture && view_texture(layer) != texture && view_texture(swapped) != texture);
     CHECK(view_texture(depth) != texture_of(s.image));
+    CHECK(view_texture(attachment) == texture_of(a.image) &&
+          ((struct pvk_image_view *)attachment)->mtl_attachment == texture_of(a.image));
     free_image(&c); /* the views keep the texture */
     CHECK(msg_ulong(view_texture(whole), "arrayLength") == 2 &&
           msg_ulong(view_texture(whole), "mipmapLevelCount") == 3);
@@ -2031,7 +2039,9 @@ static void test_view_reuse(void)
     vkDestroyImageView(device, layer, NULL);
     vkDestroyImageView(device, swapped, NULL);
     vkDestroyImageView(device, depth, NULL);
+    vkDestroyImageView(device, attachment, NULL);
     free_image(&s);
+    free_image(&a);
 }
 
 /* Sampler parameters as Metal applies them. */

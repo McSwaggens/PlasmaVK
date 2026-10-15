@@ -37584,7 +37584,7 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  * Depth and stencil views carry the swizzle (R, 0, 0, 1) (composed with the
  * view's component mapping), so reads through color types give Vulkan's
  * (D, 0, 0, 1) instead of Metal's (D, D, D, 1); depth2d reads and compares
- * are unaffected.
+ * are unaffected. Views no shader can read (attachments only) carry none.
  *
  * Descriptor memory format (sections 12, 13 and 17 rely on it): a descriptor
  * set is a table in GPU memory, bound by address at argument-table buffer
@@ -38792,6 +38792,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
     pvk_MTLTextureSwizzleChannels swizzle;
     pvk_NSRange levels, slices;
     uint32_t depth, p;
+    VkImageUsageFlags usage = image->usage;
+    const VkBaseInStructure *ext;
     int plane = pvk_aspect_plane(image, range->aspectMask);
     bool planes = image->plane_count && range->aspectMask == VK_IMAGE_ASPECT_COLOR_BIT; /* every plane */
     id base = plane >= 0 ? image->planes[plane].mtl_texture : image->mtl_texture;
@@ -38851,10 +38853,23 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
         slices.location = 0;
         slices.length = 1;
     }
-    swizzle.red = pvk_view_swizzle(f, pCreateInfo->components.r, 0);
-    swizzle.green = pvk_view_swizzle(f, pCreateInfo->components.g, 1);
-    swizzle.blue = pvk_view_swizzle(f, pCreateInfo->components.b, 2);
-    swizzle.alpha = pvk_view_swizzle(f, pCreateInfo->components.a, 3);
+    /* Views no shader reads (their usage, VkImageViewUsageCreateInfo or the
+     * image's, is attachments only) take no channel mapping, so that one of
+     * all of the image can be its texture, depth views included. */
+    for (ext = pCreateInfo->pNext; ext; ext = ext->pNext)
+        if (ext->sType == VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO)
+            usage = ((const VkImageViewUsageCreateInfo *)ext)->usage;
+    if (usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)) {
+        swizzle.red = pvk_view_swizzle(f, pCreateInfo->components.r, 0);
+        swizzle.green = pvk_view_swizzle(f, pCreateInfo->components.g, 1);
+        swizzle.blue = pvk_view_swizzle(f, pCreateInfo->components.b, 2);
+        swizzle.alpha = pvk_view_swizzle(f, pCreateInfo->components.a, 3);
+    } else {
+        swizzle.red = PVK_MTLTextureSwizzleRed;
+        swizzle.green = PVK_MTLTextureSwizzleGreen;
+        swizzle.blue = PVK_MTLTextureSwizzleBlue;
+        swizzle.alpha = PVK_MTLTextureSwizzleAlpha;
+    }
 
     if (image->memoryless) {
         /* Metal makes no views of memoryless textures; attachments of
