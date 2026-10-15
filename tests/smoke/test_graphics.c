@@ -1653,6 +1653,7 @@ struct pipe {
     VkBool32 logic_op_enable;
     VkLogicOp logic_op;
     const VkSpecializationInfo *fs_spec;
+    const char *fs_name; /* the fragment shader module's (VK_EXT_debug_utils) */
 };
 
 static void pipe_init(struct pipe *p, const uint32_t *vs, size_t vs_size, const uint32_t *fs, size_t fs_size)
@@ -1690,6 +1691,15 @@ static VkResult make_pipe_result(const struct pipe *p, VkPipeline *out)
     VkResult r;
     uint32_t i;
 
+    if (p->fs_name && fs) {
+        VkDebugUtilsObjectNameInfoEXT name;
+        memset(&name, 0, sizeof(name));
+        name.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+        name.objectType = VK_OBJECT_TYPE_SHADER_MODULE;
+        name.objectHandle = (uint64_t)(uintptr_t)fs;
+        name.pObjectName = p->fs_name;
+        CHECK_VK(vkSetDebugUtilsObjectNameEXT(device, &name), VK_SUCCESS);
+    }
     memset(stages, 0, sizeof(stages));
     stages[0].sType = stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -10182,6 +10192,8 @@ static void test_shader_cache(void)
     static const VkColorComponentFlags masks[4] = { VK_COLOR_COMPONENT_R_BIT, VK_COLOR_COMPONENT_G_BIT,
                                                     VK_COLOR_COMPONENT_B_BIT, 0xf };
     struct pvk_shader_cache *sc = ((struct pvk_device *)device)->shaders;
+    VkPipelineCacheCreateInfo cci;
+    VkPipelineCache empty;
     struct img target;
     struct buf out;
     VkPipeline pipes[4], again;
@@ -10190,6 +10202,9 @@ static void test_shader_cache(void)
     uint32_t i, count;
     int round;
 
+    memset(&cci, 0, sizeof(cci));
+    cci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    REQUIRE_VK(vkCreatePipelineCache(device, &cci, NULL, &empty));
     target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
     out = make_buf(W * H * 4);
     for (round = 0; round < 2; round++) {
@@ -10203,6 +10218,8 @@ static void test_shader_cache(void)
         pthread_mutex_unlock(&sc->lock);
         for (i = 0; i < 4; i++) {
             pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+            if (round == 1)
+                p.cache = empty; /* (not the implicit cache's pipeline states of round 0) */
             p.has_blend = true;
             memset(&p.blend[0], 0, sizeof(p.blend[0]));
             p.blend[0].colorWriteMask = masks[i];
@@ -10246,8 +10263,91 @@ static void test_shader_cache(void)
         sc->cap = cap;
         pthread_mutex_unlock(&sc->lock);
     }
+    vkDestroyPipelineCache(device, empty, NULL);
     free_buf(&out);
     free_img(&target);
+}
+
+/* Pipelines made without a VkPipelineCache: made again, from the device's
+ * implicit cache (its pipeline state, no application cache hit), but not
+ * with FAIL_ON_PIPELINE_COMPILE_REQUIRED, and not with the label of a
+ * module of another name; past its capacity it forgets the least recently
+ * used. (The modules' names, which its keys take, keep other tests'
+ * pipelines out.) */
+static bool implicit_has(struct pvk_pipeline_cache *ic, id pso)
+{
+    struct pvk_cache_entry *e;
+    bool found = false;
+    pthread_mutex_lock(&ic->lock);
+    for (e = ic->entries; e; e = e->next)
+        found = found || e->pso == pso;
+    pthread_mutex_unlock(&ic->lock);
+    return found;
+}
+
+static void test_implicit_cache(void)
+{
+    struct pvk_pipeline_cache *ic = ((struct pvk_device *)device)->pipeline_cache;
+    VkPipelineCreationFeedback fb;
+    VkPipelineCreationFeedbackCreateInfo fbi;
+    VkPipeline a, b, c, d;
+    uint32_t cap;
+    id pso;
+    struct pipe p;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.fs_name = "implicit cache test";
+    a = make_pipe(&p);
+    REQUIRE(a);
+    pso = ((struct pvk_pipeline *)a)->mtl_pipeline;
+    vkDestroyPipeline(device, a, NULL);
+    memset(&fb, 0, sizeof(fb));
+    memset(&fbi, 0, sizeof(fbi));
+    fbi.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO;
+    fbi.pPipelineCreationFeedback = &fb;
+    p.next = &fbi;
+    b = make_pipe(&p);
+    REQUIRE(b);
+    CHECK(((struct pvk_pipeline *)b)->mtl_pipeline == pso);
+    CHECK((fb.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT) != 0);
+    CHECK((fb.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT) == 0);
+    p.next = NULL;
+    p.flags = VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
+    c = VK_NULL_HANDLE;
+    CHECK_VK(make_pipe_result(&p, &c), VK_PIPELINE_COMPILE_REQUIRED);
+    CHECK(c == VK_NULL_HANDLE);
+    p.flags = 0;
+
+    /* the same code in a module of another name: a pipeline state labeled after it */
+    p.fs_name = "implicit cache test, renamed";
+    c = make_pipe(&p);
+    REQUIRE(c);
+    CHECK(((struct pvk_pipeline *)c)->mtl_pipeline != pso);
+    CHECK(strstr(pvk_ns_utf8(pvk_MTLRenderPipelineState_label(((struct pvk_pipeline *)c)->mtl_pipeline)),
+                 "implicit cache test, renamed") != NULL);
+    p.fs_name = "implicit cache test";
+
+    /* holding 2: a third pipeline drops the least recently used */
+    pthread_mutex_lock(&ic->lock);
+    cap = ic->cap;
+    ic->cap = 2;
+    pthread_mutex_unlock(&ic->lock);
+    vkDestroyPipeline(device, make_pipe(&p), NULL); /* (b's entry, now the most recently used) */
+    p.has_blend = true; /* (another Metal pipeline: a write mask) */
+    memset(&p.blend[0], 0, sizeof(p.blend[0]));
+    p.blend[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+    d = make_pipe(&p);
+    REQUIRE(d);
+    CHECK(implicit_has(ic, pso));
+    CHECK(implicit_has(ic, ((struct pvk_pipeline *)d)->mtl_pipeline));
+    CHECK(!implicit_has(ic, ((struct pvk_pipeline *)c)->mtl_pipeline));
+    pthread_mutex_lock(&ic->lock);
+    CHECK(ic->count == 2);
+    ic->cap = cap;
+    pthread_mutex_unlock(&ic->lock);
+    vkDestroyPipeline(device, d, NULL);
+    vkDestroyPipeline(device, c, NULL);
+    vkDestroyPipeline(device, b, NULL);
 }
 
 /* Pipelines made from several threads at once: each thread makes the same
@@ -10635,6 +10735,7 @@ int main(void)
     RUN(test_shader_cache_key);
     RUN(test_shader_cache);
     RUN(test_shader_cache_threads);
+    RUN(test_implicit_cache);
     RUN(test_ycbcr_fragment);
     teardown();
     return TEST_RESULT();

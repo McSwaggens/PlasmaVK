@@ -32402,6 +32402,7 @@ struct pvk_device {
     id prepass_pipelines[4];                  /* draw preprocessing kernels (section 16) */
     struct pvk_fan_buffer *fan_buffers;       /* triangle fan index patterns, newest first */
     struct pvk_shader_cache *shaders;         /* translations and libraries pipelines share (section 17) */
+    struct pvk_pipeline_cache *pipeline_cache; /* the implicit one, for VK_NULL_HANDLE (section 17) */
     id draw_indices;                          /* MTLBuffer of uints 0, 1, 2, ...: DrawIndex values */
     pvk_MTLGPUAddress draw_indices_address;
     struct pvk_hidden_texture *hidden_textures; /* memoryless depth/stencil copies, by format and size */
@@ -32440,6 +32441,9 @@ static void pvk_device_finish(struct pvk_device *device);
 struct pvk_shader_cache;
 static struct pvk_shader_cache *pvk_shader_cache_new(void);
 static void pvk_shader_cache_free(struct pvk_shader_cache *c);
+struct pvk_pipeline_cache;
+static struct pvk_pipeline_cache *pvk_implicit_cache_new(struct pvk_device *device);
+static void pvk_pipeline_cache_free(struct pvk_pipeline_cache *cache);
 
 static const VkAllocationCallbacks *pvk_instance_alloc(const struct pvk_instance *instance)
 {
@@ -36516,6 +36520,7 @@ static void pvk_device_free(struct pvk_device *device)
 {
     uint32_t i;
     pvk_device_finish(device);
+    pvk_pipeline_cache_free(device->pipeline_cache);
     pvk_shader_cache_free(device->shaders);
     pvk_memory_pools_free(device);
     pvk_private_data_free_reserve(device);
@@ -36730,7 +36735,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
         device->has_alloc = true;
     }
     device->shaders = pvk_shader_cache_new();
-    if (!device->shaders) {
+    device->pipeline_cache = pvk_implicit_cache_new(device);
+    if (!device->shaders || !device->pipeline_cache) {
         pvk_device_free(device);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -65219,9 +65225,10 @@ static void pvk_debug_relabel(struct pvk_device *device, VkObjectType type, uint
  *   translation (Metal's own shader cache then usually serves the compile).
  *   vkGetPipelineCacheData writes the standard header (pipelineCacheUUID
  *   names this PlasmaVK version and GPU) and the entries; data with another
- *   header, or malformed, is ignored. Whatever the cache, translations and
- *   Metal libraries are the device's shader cache's, which pipelines share
- *   (Shader cache, below).
+ *   header, or malformed, is ignored. Pipelines made without a cache use
+ *   the device's implicit cache, which keeps pipeline states only. Whatever
+ *   the cache, translations and Metal libraries are the device's shader
+ *   cache's, which pipelines share (Shader cache, below).
  * ========================================================================== */
 
 struct pvk_shader_module {
@@ -65797,6 +65804,22 @@ static void pvk_key_add_string(struct pvk_key *k, const char *s)
     pvk_key_add(k, s ? s : "", s ? strlen(s) : 0);
 }
 
+/* The name of a stage's module, which its label shows (pvk_stage_label):
+ * in implicit cache keys, so that pipeline states keep their labels. */
+static void pvk_key_add_stage_name(struct pvk_key *k, const VkPipelineShaderStageCreateInfo *stage)
+{
+    const VkBaseInStructure *s;
+    char name[256];
+    name[0] = 0;
+    if (stage->module)
+        pvk_name_get((uint64_t)(uintptr_t)stage->module, name, sizeof(name));
+    for (s = stage->pNext; s && !stage->module; s = s->pNext)
+        if (s->sType == VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT &&
+            ((const VkDebugUtilsObjectNameInfoEXT *)s)->pObjectName)
+            snprintf(name, sizeof(name), "%s", ((const VkDebugUtilsObjectNameInfoEXT *)s)->pObjectName);
+    pvk_key_add_string(k, name);
+}
+
 static void pvk_key_add_spec(struct pvk_key *k, const VkSpecializationInfo *spec)
 {
     uint32_t i;
@@ -66139,20 +66162,34 @@ struct pvk_cache_info {
 #define PVK_GFX_OUTPUTS 0x10u      /* workgroup[1]: the color locations it writes, workgroup[2]: the colors it fetches */
 
 struct pvk_cache_entry {
-    struct pvk_cache_entry *next;
+    struct pvk_cache_entry *next, *prev; /* the cache's entries, newest (implicit: most recently used) first */
+    struct pvk_cache_entry *chain;       /* in its bucket */
     struct pvk_key key;
     struct pvk_cache_info info;
     char entry[2][64];
-    char *msl[2]; /* NUL-terminated, [1] NULL: one stage */
+    char *msl[2]; /* NUL-terminated, [1] NULL: one stage; the implicit cache's: NULL */
     id pso;       /* made in this process (retained), else NULL */
 };
+
+/* The implicit cache: every device's own, which pipelines made without a
+ * VkPipelineCache use (except with FAIL_ON_PIPELINE_COMPILE_REQUIRED, which
+ * then fails as before). It keeps the pipeline states of the most recently
+ * used pipelines, so that pipelines made again - after a resize, a
+ * settings change, a level - cost a lookup; their MSL is the shader cache's.
+ * Its keys also take the pipeline state's label (it is fixed at creation),
+ * and its hits are not application pipeline cache hits. */
+#define PVK_IMPLICIT_PIPELINES 4096
 
 struct pvk_pipeline_cache {
     struct pvk_device *device;
     VkAllocationCallbacks alloc;
     bool has_alloc;
+    bool implicit;
     pthread_mutex_t lock;
-    struct pvk_cache_entry *entries;
+    struct pvk_cache_entry *entries, *oldest;
+    struct pvk_cache_entry **buckets; /* by key.a (bucket_count, a power of two; NULL: none yet) */
+    uint32_t bucket_count, count;
+    uint32_t cap; /* the entries it keeps, most recently used (0: all) */
 };
 
 static const VkAllocationCallbacks *pvk_cache_alloc(const struct pvk_pipeline_cache *cache)
@@ -66160,20 +66197,50 @@ static const VkAllocationCallbacks *pvk_cache_alloc(const struct pvk_pipeline_ca
     return cache->has_alloc ? &cache->alloc : NULL;
 }
 
-/* An entry (locked by the caller). */
+static void pvk_cache_unlink_locked(struct pvk_pipeline_cache *cache, struct pvk_cache_entry *e)
+{
+    if (e->prev)
+        e->prev->next = e->next;
+    else
+        cache->entries = e->next;
+    if (e->next)
+        e->next->prev = e->prev;
+    else
+        cache->oldest = e->prev;
+}
+
+static void pvk_cache_link_locked(struct pvk_pipeline_cache *cache, struct pvk_cache_entry *e)
+{
+    e->prev = NULL;
+    e->next = cache->entries;
+    if (cache->entries)
+        cache->entries->prev = e;
+    else
+        cache->oldest = e;
+    cache->entries = e;
+}
+
+/* An entry (locked by the caller); in the implicit cache, now the most
+ * recently used. */
 static struct pvk_cache_entry *pvk_cache_find_locked(struct pvk_pipeline_cache *cache, const struct pvk_key *key)
 {
-    struct pvk_cache_entry *e;
-    for (e = cache->entries; e; e = e->next)
-        if (e->key.a == key->a && e->key.b == key->b)
-            return e;
-    return NULL;
+    struct pvk_cache_entry *e = NULL;
+    if (cache->buckets)
+        for (e = cache->buckets[key->a & (cache->bucket_count - 1)]; e; e = e->chain)
+            if (e->key.a == key->a && e->key.b == key->b)
+                break;
+    if (e && cache->implicit && cache->entries != e) {
+        pvk_cache_unlink_locked(cache, e);
+        pvk_cache_link_locked(cache, e);
+    }
+    return e;
 }
 
 /* What an entry holds. Returns 0: miss, 1: hit, 2: hit with a pipeline
- * state (*pso retained). msl[] points into the entry: entries never change
- * and live until the cache is destroyed, which cannot happen during a
- * command that uses it. */
+ * state (*pso retained). msl[] points into the entry: entries of
+ * application caches never change and live until the cache is destroyed,
+ * which cannot happen during a command that uses it (the implicit cache
+ * forgets entries, but keeps no MSL). */
 static int pvk_cache_lookup(struct pvk_pipeline_cache *cache, const struct pvk_key *key, struct pvk_cache_info *info,
                             char entry[2][64], const char *msl[2], id *pso)
 {
@@ -66218,6 +66285,46 @@ static void pvk_cache_entry_free(const struct pvk_pipeline_cache *cache, struct 
     pvk_free(pvk_cache_alloc(cache), e);
 }
 
+/* Adds an entry to the list and its bucket (the buckets grow with the
+ * entries: out of memory, the chains do), then drops the least recently
+ * used beyond the cap. */
+static void pvk_cache_add_locked(struct pvk_pipeline_cache *cache, struct pvk_cache_entry *e)
+{
+    struct pvk_cache_entry **b;
+    uint32_t i, n = cache->bucket_count ? 2 * cache->bucket_count : 64;
+    if (cache->count >= cache->bucket_count &&
+        (b = pvk_alloc(pvk_cache_alloc(cache), sizeof(*b) * n, VK_SYSTEM_ALLOCATION_SCOPE_CACHE))) {
+        for (i = 0; i < cache->bucket_count; i++)
+            while (cache->buckets[i]) {
+                struct pvk_cache_entry *m = cache->buckets[i];
+                cache->buckets[i] = m->chain;
+                m->chain = b[m->key.a & (n - 1)];
+                b[m->key.a & (n - 1)] = m;
+            }
+        pvk_free(pvk_cache_alloc(cache), cache->buckets);
+        cache->buckets = b;
+        cache->bucket_count = n;
+    }
+    if (!cache->buckets) {
+        pvk_cache_entry_free(cache, e);
+        return;
+    }
+    b = &cache->buckets[e->key.a & (cache->bucket_count - 1)];
+    e->chain = *b;
+    *b = e;
+    pvk_cache_link_locked(cache, e);
+    cache->count++;
+    while (cache->cap && cache->count > cache->cap && cache->oldest != e) {
+        struct pvk_cache_entry *old = cache->oldest;
+        for (b = &cache->buckets[old->key.a & (cache->bucket_count - 1)]; *b != old; b = &(*b)->chain)
+            ;
+        *b = old->chain;
+        pvk_cache_unlink_locked(cache, old);
+        cache->count--;
+        pvk_cache_entry_free(cache, old);
+    }
+}
+
 /* Adds an entry, or the pipeline state to an entry without one. Out of
  * memory: nothing is added (a cache may forget). */
 static void pvk_cache_insert(struct pvk_pipeline_cache *cache, const struct pvk_key *key, const struct pvk_cache_info *info,
@@ -66227,6 +66334,11 @@ static void pvk_cache_insert(struct pvk_pipeline_cache *cache, const struct pvk_
     struct pvk_cache_entry *e;
     if (!cache)
         return;
+    if (cache->implicit) { /* (pipeline states only) */
+        if (!pso)
+            return;
+        msl0 = msl1 = NULL;
+    }
     pthread_mutex_lock(&cache->lock);
     if ((e = pvk_cache_find_locked(cache, key))) {
         if (!e->pso && pso)
@@ -66242,8 +66354,7 @@ static void pvk_cache_insert(struct pvk_pipeline_cache *cache, const struct pvk_
             pvk_cache_entry_free(cache, e);
         } else {
             e->pso = pso ? pvk_retain(pso) : NULL;
-            e->next = cache->entries;
-            cache->entries = e;
+            pvk_cache_add_locked(cache, e);
         }
     }
     pthread_mutex_unlock(&cache->lock);
@@ -66309,36 +66420,27 @@ static void pvk_cache_load(struct pvk_pipeline_cache *cache, const unsigned char
     }
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineCache(VkDevice _device, const VkPipelineCacheCreateInfo *pCreateInfo,
-                                                     const VkAllocationCallbacks *pAllocator,
-                                                     VkPipelineCache *pPipelineCache)
+/* An empty cache (alloc NULL: system memory); NULL when out of memory. */
+static struct pvk_pipeline_cache *pvk_pipeline_cache_new(struct pvk_device *device, const VkAllocationCallbacks *alloc)
 {
-    struct pvk_device *device = (struct pvk_device *)_device;
-    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
     struct pvk_pipeline_cache *cache = pvk_alloc(alloc, sizeof(*cache), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (!cache)
-        return VK_ERROR_OUT_OF_HOST_MEMORY;
+        return NULL;
     if (pthread_mutex_init(&cache->lock, NULL) != 0) {
         pvk_free(alloc, cache);
-        return VK_ERROR_OUT_OF_HOST_MEMORY;
+        return NULL;
     }
     cache->device = device;
     if (alloc) {
         cache->alloc = *alloc;
         cache->has_alloc = true;
     }
-    pvk_cache_load(cache, pCreateInfo->pInitialData, pCreateInfo->initialDataSize);
-    *pPipelineCache = (VkPipelineCache)cache;
-    return VK_SUCCESS;
+    return cache;
 }
 
-VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineCache(VkDevice device, VkPipelineCache pipelineCache,
-                                                  const VkAllocationCallbacks *pAllocator)
+static void pvk_pipeline_cache_free(struct pvk_pipeline_cache *cache)
 {
-    struct pvk_pipeline_cache *cache = (struct pvk_pipeline_cache *)pipelineCache;
     void *pool;
-    (void)device;
-    (void)pAllocator; /* must match creation; the stored copy is authoritative */
     if (!cache)
         return;
     pool = objc_autoreleasePoolPush();
@@ -66348,8 +66450,42 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineCache(VkDevice device, VkPipelineCac
         pvk_cache_entry_free(cache, e);
     }
     objc_autoreleasePoolPop(pool);
+    pvk_free(pvk_cache_alloc(cache), cache->buckets);
     pthread_mutex_destroy(&cache->lock);
     pvk_free(pvk_cache_alloc(cache), cache);
+}
+
+/* The device's implicit cache (system memory: it outlives the commands
+ * that fill it). */
+static struct pvk_pipeline_cache *pvk_implicit_cache_new(struct pvk_device *device)
+{
+    struct pvk_pipeline_cache *cache = pvk_pipeline_cache_new(device, NULL);
+    if (cache) {
+        cache->implicit = true;
+        cache->cap = PVK_IMPLICIT_PIPELINES;
+    }
+    return cache;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineCache(VkDevice _device, const VkPipelineCacheCreateInfo *pCreateInfo,
+                                                     const VkAllocationCallbacks *pAllocator,
+                                                     VkPipelineCache *pPipelineCache)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    struct pvk_pipeline_cache *cache = pvk_pipeline_cache_new(device, pAllocator ? pAllocator : pvk_device_alloc(device));
+    if (!cache)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    pvk_cache_load(cache, pCreateInfo->pInitialData, pCreateInfo->initialDataSize);
+    *pPipelineCache = (VkPipelineCache)cache;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineCache(VkDevice device, VkPipelineCache pipelineCache,
+                                                  const VkAllocationCallbacks *pAllocator)
+{
+    (void)device;
+    (void)pAllocator; /* must match creation; the stored copy is authoritative */
+    pvk_pipeline_cache_free((struct pvk_pipeline_cache *)pipelineCache);
 }
 
 /* Pipeline Cache > Retrieving Pipeline Cache Data: as many whole entries as
@@ -66459,6 +66595,8 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
     uint64_t start = pvk_now_ns();
 
     *pPipeline = VK_NULL_HANDLE;
+    if (!cache && !(flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT))
+        cache = device->pipeline_cache; /* the implicit cache */
     pvk_stage_code(stage, &code, &words, hash);
     memset(&options, 0, sizeof(options));
     options.specialization = stage->pSpecializationInfo;
@@ -66491,6 +66629,8 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
         pvk_key_add(&key, &options.robust_storage_buffers, sizeof(options.robust_storage_buffers));
         pvk_key_add(&key, &options.robust_uniform_buffers, sizeof(options.robust_uniform_buffers));
         pvk_key_add(&key, &options.robust_images, sizeof(options.robust_images));
+        if (cache->implicit)
+            pvk_key_add_stage_name(&key, stage);
         hit = pvk_cache_lookup(cache, &key, &ci, entry, msl, &pso);
     }
     if (hit != 2 && (flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)) {
@@ -66566,7 +66706,7 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
     pipeline->dispatch_base = ci.dispatch_base != 0;
     pipeline->dispatch_base_offset = ci.dispatch_base_offset;
     pipeline->set_mask = ci.set_mask;
-    pvk_creation_feedback(info->pNext, start, hit != 0);
+    pvk_creation_feedback(info->pNext, start, hit != 0 && !cache->implicit);
     *pPipeline = (VkPipeline)pipeline;
     return VK_SUCCESS;
 }
@@ -67901,6 +68041,11 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
             pvk_key_add(&key, src->divisors->pVertexBindingDivisors,
                         sizeof(VkVertexInputBindingDivisorDescription) * src->divisors->vertexBindingDivisorCount);
         pvk_key_add(&key, d, sizeof(*d));
+        if (cache->implicit) {
+            pvk_key_add_stage_name(&key, vs);
+            if (fs)
+                pvk_key_add_stage_name(&key, fs);
+        }
         *hit = pvk_cache_lookup(cache, &key, ci, entry, msl, pso);
     }
     if (*hit != 2 && (src->flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT))
@@ -67976,8 +68121,16 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
     pvk_cache_insert(cache, &key, ci, names[0], names[1], sources[0], sources[0] ? strlen(sources[0]) : 0, sources[1],
                      sources[1] ? strlen(sources[1]) : 0, *pso);
     if (kept) { /* (msl NULL when out of memory: no variants) */
-        if (*hit && fs) /* the dependencies of fetched colors, translated again (pvk_spv_fetch_deps) */
+        /* the dependencies of fetched colors (pvk_spv_fetch_deps), and the
+         * MSL the implicit cache does not keep: translated again */
+        if (*hit && (fs || !sources[0]))
             pvk_gfx_translate(device, src, vo, fo, &vst, &fst, error, sizeof(error));
+        if (!sources[0] && vst) {
+            sources[0] = vst->res.msl;
+            sources[1] = fst ? fst->res.msl : NULL;
+            names[0] = vst->res.entry_point;
+            names[1] = fst ? fst->res.entry_point : NULL;
+        }
         if (fst) {
             memcpy(kept->fetch_deps, fst->res.fetch_deps, sizeof(kept->fetch_deps));
             kept->fetch_deps_known = fst->res.fetch_deps_known;
@@ -68053,6 +68206,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     uint64_t start = pvk_now_ns();
 
     *pPipeline = VK_NULL_HANDLE;
+    if (!cache && !(flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT))
+        cache = device->pipeline_cache; /* the implicit cache */
     for (i = 0; i < info->stageCount; i++) {
         if (info->pStages[i].stage == VK_SHADER_STAGE_VERTEX_BIT)
             vs = &info->pStages[i];
@@ -68568,7 +68723,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     for (k = 0; k < PVK_VARIANT_COUNT; k++) /* variants that will be needed: now */
         if (eager & (1u << k))
             pvk_gfx_variant(device, pipeline, k);
-    pvk_creation_feedback(info->pNext, start, hit != 0);
+    pvk_creation_feedback(info->pNext, start, hit != 0 && !cache->implicit);
     *pPipeline = (VkPipeline)pipeline;
     return VK_SUCCESS;
 }
