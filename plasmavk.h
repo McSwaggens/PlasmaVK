@@ -42803,6 +42803,7 @@ struct pvk_spv {
     size_t hoist_at;
     uint32_t hoist_indent;
     struct pvk_spv_func *fn; /* function being emitted */
+    signed char shapes[512]; /* pvk_spv_shape of the opcodes below 512, + 2 (0: not asked yet) */
 };
 
 /* ---- Errors and memory ---- */
@@ -43863,7 +43864,7 @@ static void pvk_spv_parse_constant(struct pvk_spv *ctx, const struct pvk_spv_ins
 /* ---- Parsing ---- */
 
 /* 0: no result, 1: result id only, 2: result type and id, -1: unsupported. */
-static int pvk_spv_shape(uint32_t op)
+static int pvk_spv_shape_of(uint32_t op)
 {
     switch (op) {
     case PVK_SPV_OpNop: case PVK_SPV_OpSourceContinued: case PVK_SPV_OpSource: case PVK_SPV_OpSourceExtension:
@@ -43918,6 +43919,18 @@ static int pvk_spv_shape(uint32_t op)
         (op >= PVK_SPV_OpSDot && op <= PVK_SPV_OpSUDotAccSat))
         return 2;
     return -1;
+}
+
+/* pvk_spv_shape_of, remembered per opcode: every pass over the
+ * instructions asks for each one, and the switch's comparisons took a tenth
+ * of the translation time. */
+static int pvk_spv_shape(struct pvk_spv *ctx, uint32_t op)
+{
+    if (op >= PVK_ARRAY_SIZE(ctx->shapes))
+        return pvk_spv_shape_of(op);
+    if (!ctx->shapes[op])
+        ctx->shapes[op] = (signed char)(pvk_spv_shape_of(op) + 2);
+    return ctx->shapes[op] - 2;
 }
 
 static const char *pvk_spv_unsupported_reason(uint32_t op)
@@ -44723,7 +44736,7 @@ static void pvk_spv_parse(struct pvk_spv *ctx)
     uint32_t off = 5;
     while (off < ctx->nw) {
         struct pvk_spv_insn in = pvk_spv_insn_at(ctx, off);
-        int shape = pvk_spv_shape(in.op);
+        int shape = pvk_spv_shape(ctx, in.op);
         if (shape < 0)
             pvk_spv_fail(ctx, "%s (opcode %u)", pvk_spv_unsupported_reason(in.op), in.op);
         if (shape > 0) {
@@ -45948,7 +45961,7 @@ static void pvk_spv_analyze(struct pvk_spv *ctx, uint32_t fidx)
         uint32_t off = blk->begin;
         while (off <= blk->end) {
             struct pvk_spv_insn in = pvk_spv_insn_at(ctx, off);
-            int shape = pvk_spv_shape(in.op);
+            int shape = pvk_spv_shape(ctx, in.op);
             uint32_t b, e;
             if (in.op == PVK_SPV_OpPhi) {
                 for (i = 3; i + 1 < in.wc; i += 2)
@@ -49786,7 +49799,7 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
     struct pvk_spv_type *r = NULL;
     const char *a, *b, *s;
 
-    if (pvk_spv_shape(op) == 2) {
+    if (pvk_spv_shape(ctx, op) == 2) {
         rtype = in->w[1];
         rid = in->w[2];
         r = pvk_spv_type(ctx, rtype);
@@ -50854,7 +50867,7 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
         uint32_t off = fn->blocks[bi].begin;
         while (off <= fn->blocks[bi].end) {
             struct pvk_spv_insn in = pvk_spv_insn_at(ctx, off);
-            if (pvk_spv_shape(in.op) == 2 && pvk_spv_get(ctx, in.w[2])->kind == PVK_SPV_K_VALUE)
+            if (pvk_spv_shape(ctx, in.op) == 2 && pvk_spv_get(ctx, in.w[2])->kind == PVK_SPV_K_VALUE)
                 ctx->ids[in.w[2]].msl = pvk_spv_name(ctx, in.w[2]);
             off += in.wc;
         }
@@ -51037,7 +51050,7 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             struct pvk_spv_insn in = pvk_spv_insn_at(ctx, off);
             struct pvk_spv_id *x;
             off += in.wc;
-            if (pvk_spv_shape(in.op) != 2)
+            if (pvk_spv_shape(ctx, in.op) != 2)
                 continue;
             x = &ctx->ids[in.w[2]];
             if (x->kind == PVK_SPV_K_VALUE && !pvk_spv_local(x) && !(x->flags & PVK_SPV_F_IMAGE_VIEW) &&
@@ -51461,7 +51474,7 @@ static bool pvk_spv_member_used(struct pvk_spv *ctx, uint32_t var, uint32_t m)
                 }
                 if (in.op == PVK_SPV_OpPhi)
                     continue;
-                pvk_spv_id_range(&in, pvk_spv_shape(in.op), &b, &e);
+                pvk_spv_id_range(&in, pvk_spv_shape(ctx, in.op), &b, &e);
                 for (k = b; k < e; k++)
                     if (in.w[k] == var)
                         return true;
