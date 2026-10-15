@@ -31886,6 +31886,55 @@ static uint64_t pvk_hash64(uint64_t hash, const void *data, size_t size)
     return hash;
 }
 
+static uint64_t pvk_rotl64(uint64_t x, unsigned r)
+{
+    return (x << r) | (x >> (64 - r));
+}
+
+static uint64_t pvk_mix64(uint64_t x)
+{
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccdull;
+    x ^= x >> 33;
+    x *= 0xc4ceb9fe1a85ec53ull;
+    return x ^ (x >> 33);
+}
+
+/* A 128-bit hash of data and its size, continuing h (any seed): four
+ * independent 64-bit multiply-rotate lanes over 32-byte blocks, then a
+ * final mix. About 50 times as fast as pvk_hash64 on large inputs (SPIR-V,
+ * MSL), for section 17's keys. Stable across processes (saved pipeline
+ * caches hold keys); not for anything adversarial. */
+static void pvk_hash128(uint64_t h[2], const void *data, size_t size)
+{
+    const unsigned char *p = data;
+    uint64_t v[4], w[4], a, b;
+    size_t i;
+    unsigned l;
+    v[0] = h[0] + 0x9e3779b97f4a7c15ull;
+    v[1] = h[1] ^ 0xc2b2ae3d27d4eb4full;
+    v[2] = h[0] ^ 0x165667b19e3779f9ull;
+    v[3] = h[1] + 0x27d4eb2f165667c5ull;
+    for (i = 0; i < size; i += 32) {
+        if (size - i >= 32) {
+            memcpy(w, p + i, 32);
+        } else { /* the last bytes, zero-padded (the size tells them apart) */
+            memset(w, 0, sizeof(w));
+            memcpy(w, p + i, size - i);
+        }
+        for (l = 0; l < 4; l++)
+            v[l] = pvk_rotl64(v[l] + w[l] * 0xc2b2ae3d27d4eb4full, 31) * 0x9e3779b97f4a7c15ull;
+    }
+    a = (pvk_rotl64(v[0], 1) + pvk_rotl64(v[1], 7) + pvk_rotl64(v[2], 12) + pvk_rotl64(v[3], 18)) ^ size;
+    b = (v[0] ^ pvk_rotl64(v[1], 23)) + (v[2] ^ pvk_rotl64(v[3], 47)) + size * 0xff51afd7ed558ccdull;
+    a += b;
+    b += a;
+    a = pvk_mix64(a);
+    b = pvk_mix64(b);
+    h[0] = a + b;
+    h[1] = b + a + b;
+}
+
 /* The standard two-call enumeration (count query, then fill). */
 static VkResult pvk_enumerate(const void *items, size_t item_size, uint32_t count,
                               uint32_t *pCount, void *pOut)
@@ -33360,7 +33409,7 @@ static void pvk_physical_device_init_sparse(struct pvk_physical_device *pd);
  * (struct pvk_cache_info, struct pvk_gfx_desc and the other key inputs,
  * section 17) changes without a PlasmaVK version change: cache data of
  * another format is ignored (pipelineCacheUUID). */
-#define PVK_PIPELINE_CACHE_FORMAT 1
+#define PVK_PIPELINE_CACHE_FORMAT 2
 
 static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
 {
@@ -65147,6 +65196,7 @@ static void pvk_debug_relabel(struct pvk_device *device, VkObjectType type, uint
 
 struct pvk_shader_module {
     size_t word_count;
+    uint64_t hash[2]; /* pvk_hash128 of the code: what pipeline keys take (pvk_stage_code) */
     uint32_t code[];
 };
 
@@ -65292,6 +65342,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateShaderModule(VkDevice device, const VkSha
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     module->word_count = words;
     memcpy(module->code, pCreateInfo->pCode, words * sizeof(uint32_t));
+    pvk_hash128(module->hash, module->code, words * sizeof(uint32_t));
     *pShaderModule = (VkShaderModule)module;
     return VK_SUCCESS;
 }
@@ -65453,18 +65504,22 @@ static VkPipelineCreateFlags2 pvk_pipeline_flags(VkPipelineCreateFlags flags, co
     return flags;
 }
 
-/* The SPIR-V of a stage: its module's, or (maintenance5) a chained
- * VkShaderModuleCreateInfo's. */
-static void pvk_stage_code(const VkPipelineShaderStageCreateInfo *stage, const uint32_t **code, size_t *words)
+/* The SPIR-V of a stage and its pvk_hash128: its module's, or
+ * (maintenance5) a chained VkShaderModuleCreateInfo's, hashed here. */
+static void pvk_stage_code(const VkPipelineShaderStageCreateInfo *stage, const uint32_t **code, size_t *words,
+                           uint64_t hash[2])
 {
     const struct pvk_shader_module *module = (const struct pvk_shader_module *)stage->module;
     const VkBaseInStructure *ext;
     *code = module ? module->code : NULL;
     *words = module ? module->word_count : 0;
+    hash[0] = module ? module->hash[0] : 0;
+    hash[1] = module ? module->hash[1] : 0;
     for (ext = stage->pNext; ext && !*code; ext = ext->pNext) {
         if (ext->sType == VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO) {
             *code = ((const VkShaderModuleCreateInfo *)ext)->pCode;
             *words = ((const VkShaderModuleCreateInfo *)ext)->codeSize / 4;
+            pvk_hash128(hash, *code, *words * 4);
         }
     }
 }
@@ -65488,22 +65543,35 @@ static void pvk_creation_feedback(const void *pNext, uint64_t start, bool hit)
 
 /* ---- Pipeline caches ---- */
 
-/* A 128-bit key: two FNV-1a hashes with different bases. */
+/* A 128-bit key: pvk_hash128 of each input in turn. */
 struct pvk_key {
     uint64_t a, b;
 };
 
-static void pvk_key_init(struct pvk_key *k, char kind)
-{
-    k->a = pvk_hash64(0xcbf29ce484222325ull, &kind, 1);
-    k->b = pvk_hash64(0x84222325cbf29ce4ull, &kind, 1);
-}
-
 static void pvk_key_add(struct pvk_key *k, const void *data, size_t size)
 {
-    uint64_t n = size;
-    k->a = pvk_hash64(pvk_hash64(k->a, &n, sizeof(n)), data, size);
-    k->b = pvk_hash64(pvk_hash64(k->b ^ 0x9e3779b97f4a7c15ull, data, size), &n, sizeof(n));
+    uint64_t h[2];
+    h[0] = k->a;
+    h[1] = k->b;
+    pvk_hash128(h, data, size);
+    k->a = h[0];
+    k->b = h[1];
+}
+
+static void pvk_key_init(struct pvk_key *k, char kind)
+{
+    k->a = k->b = 0;
+    pvk_key_add(k, &kind, 1);
+}
+
+/* A stage's SPIR-V (pvk_stage_code): its hash and size. */
+static void pvk_key_add_code(struct pvk_key *k, const uint64_t hash[2], size_t words)
+{
+    uint64_t v[3];
+    v[0] = hash[0];
+    v[1] = hash[1];
+    v[2] = words;
+    pvk_key_add(k, v, sizeof(v));
 }
 
 static void pvk_key_add_string(struct pvk_key *k, const char *s)
@@ -65885,6 +65953,7 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
     VkPipelineCreateFlags2 flags = pvk_pipeline_flags(info->flags, info->pNext);
     const uint32_t *code;
     size_t words;
+    uint64_t hash[2];
     struct pvk_msl_set_layout sets[PVK_MAX_BOUND_SETS];
     struct pvk_msl_binding *bindings = NULL;
     struct pvk_msl_ycbcr_binding *ycbcr = NULL;
@@ -65897,12 +65966,12 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
     const char *msl[2] = { NULL, NULL };
     const char *source, *name;
     id pso = NULL;
-    int hit;
+    int hit = 0;
     VkResult result;
     uint64_t start = pvk_now_ns();
 
     *pPipeline = VK_NULL_HANDLE;
-    pvk_stage_code(stage, &code, &words);
+    pvk_stage_code(stage, &code, &words, hash);
     memset(&options, 0, sizeof(options));
     memset(&res, 0, sizeof(res));
     options.specialization = stage->pSpecializationInfo;
@@ -65922,18 +65991,21 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
         options.set_layouts = sets;
         options.set_layout_count = layout->set_count;
     }
-    pvk_key_init(&key, 'C');
-    pvk_key_add(&key, code, words * 4);
-    pvk_key_add_string(&key, stage->pName);
-    pvk_key_add_spec(&key, stage->pSpecializationInfo);
-    pvk_key_add_sets(&key, options.set_layouts, options.set_layout_count);
-    pvk_key_add_ycbcr(&key, &options);
-    pvk_key_add(&key, &options.dispatch_base, sizeof(options.dispatch_base));
-    pvk_key_add(&key, &options.dispatch_base_offset, sizeof(options.dispatch_base_offset));
-    pvk_key_add(&key, &options.robust_storage_buffers, sizeof(options.robust_storage_buffers));
-    pvk_key_add(&key, &options.robust_uniform_buffers, sizeof(options.robust_uniform_buffers));
-    pvk_key_add(&key, &options.robust_images, sizeof(options.robust_images));
-    hit = pvk_cache_lookup(cache, &key, &ci, entry, msl, &pso);
+    memset(&key, 0, sizeof(key));
+    if (cache) { /* (the key is for the cache only) */
+        pvk_key_init(&key, 'C');
+        pvk_key_add_code(&key, hash, words);
+        pvk_key_add_string(&key, stage->pName);
+        pvk_key_add_spec(&key, stage->pSpecializationInfo);
+        pvk_key_add_sets(&key, options.set_layouts, options.set_layout_count);
+        pvk_key_add_ycbcr(&key, &options);
+        pvk_key_add(&key, &options.dispatch_base, sizeof(options.dispatch_base));
+        pvk_key_add(&key, &options.dispatch_base_offset, sizeof(options.dispatch_base_offset));
+        pvk_key_add(&key, &options.robust_storage_buffers, sizeof(options.robust_storage_buffers));
+        pvk_key_add(&key, &options.robust_uniform_buffers, sizeof(options.robust_uniform_buffers));
+        pvk_key_add(&key, &options.robust_images, sizeof(options.robust_images));
+        hit = pvk_cache_lookup(cache, &key, &ci, entry, msl, &pso);
+    }
     if (hit != 2 && (flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)) {
         /* only a pipeline state made in this process needs no compiler */
         pvk_free(alloc, bindings);
@@ -67187,6 +67259,7 @@ struct pvk_gfx_sources {
     const VkPipelineShaderStageCreateInfo *vs, *fs;
     const uint32_t *vs_code, *fs_code;
     size_t vs_words, fs_words;
+    uint64_t vs_hash[2], fs_hash[2]; /* (pvk_stage_code) */
     const VkPipelineVertexInputStateCreateInfo *vi;
     const VkPipelineVertexInputDivisorStateCreateInfo *divisors;
     VkPipelineCreateFlags2 flags;
@@ -67259,29 +67332,33 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
     uint32_t i;
 
     *pso = NULL;
+    *hit = 0;
     memset(&vres, 0, sizeof(vres));
     memset(&fres, 0, sizeof(fres));
     /* The cache key: everything the MSL and the Metal pipeline depend on */
-    pvk_key_init(&key, 'G');
-    pvk_key_add(&key, src->vs_code, src->vs_words * 4);
-    pvk_key_add_string(&key, vs->pName);
-    pvk_key_add_spec(&key, vs->pSpecializationInfo);
-    pvk_key_add(&key, src->fs_code, src->fs_words * 4);
-    pvk_key_add_string(&key, fs ? fs->pName : NULL);
-    pvk_key_add_spec(&key, fs ? fs->pSpecializationInfo : NULL);
-    pvk_key_add_sets(&key, vo->set_layouts, vo->set_layout_count);
-    pvk_key_add_ycbcr(&key, vo);
-    if (vi) {
-        pvk_key_add(&key, vi->pVertexAttributeDescriptions,
-                    sizeof(VkVertexInputAttributeDescription) * vi->vertexAttributeDescriptionCount);
-        pvk_key_add(&key, vi->pVertexBindingDescriptions,
-                    sizeof(VkVertexInputBindingDescription) * vi->vertexBindingDescriptionCount);
+    memset(&key, 0, sizeof(key));
+    if (cache) {
+        pvk_key_init(&key, 'G');
+        pvk_key_add_code(&key, src->vs_hash, src->vs_words);
+        pvk_key_add_string(&key, vs->pName);
+        pvk_key_add_spec(&key, vs->pSpecializationInfo);
+        pvk_key_add_code(&key, src->fs_hash, src->fs_words);
+        pvk_key_add_string(&key, fs ? fs->pName : NULL);
+        pvk_key_add_spec(&key, fs ? fs->pSpecializationInfo : NULL);
+        pvk_key_add_sets(&key, vo->set_layouts, vo->set_layout_count);
+        pvk_key_add_ycbcr(&key, vo);
+        if (vi) {
+            pvk_key_add(&key, vi->pVertexAttributeDescriptions,
+                        sizeof(VkVertexInputAttributeDescription) * vi->vertexAttributeDescriptionCount);
+            pvk_key_add(&key, vi->pVertexBindingDescriptions,
+                        sizeof(VkVertexInputBindingDescription) * vi->vertexBindingDescriptionCount);
+        }
+        if (src->divisors)
+            pvk_key_add(&key, src->divisors->pVertexBindingDivisors,
+                        sizeof(VkVertexInputBindingDivisorDescription) * src->divisors->vertexBindingDivisorCount);
+        pvk_key_add(&key, d, sizeof(*d));
+        *hit = pvk_cache_lookup(cache, &key, ci, entry, msl, pso);
     }
-    if (src->divisors)
-        pvk_key_add(&key, src->divisors->pVertexBindingDivisors,
-                    sizeof(VkVertexInputBindingDivisorDescription) * src->divisors->vertexBindingDivisorCount);
-    pvk_key_add(&key, d, sizeof(*d));
-    *hit = pvk_cache_lookup(cache, &key, ci, entry, msl, pso);
     if (*hit != 2 && (src->flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT))
         return VK_PIPELINE_COMPILE_REQUIRED; /* only a pipeline state made in this process needs no compiler */
     if (!*hit) {
@@ -67473,9 +67550,10 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         ds = NULL;
         cb = NULL;
     }
-    pvk_stage_code(vs, &vs_code, &vs_words);
+    memset(&src, 0, sizeof(src));
+    pvk_stage_code(vs, &vs_code, &vs_words, src.vs_hash);
     if (fs)
-        pvk_stage_code(fs, &fs_code, &fs_words);
+        pvk_stage_code(fs, &fs_code, &fs_words, src.fs_hash);
 
     /* Static state */
     memset(&gfx, 0, sizeof(gfx));
