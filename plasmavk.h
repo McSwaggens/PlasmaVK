@@ -58592,7 +58592,11 @@ struct pvk_draw_track {
      * whether a draw's outputs in one depend on colors it fetches in another */
     uint32_t split[PVK_MAX_COLOR_ATTACHMENTS], nsplit;
     bool fetch_bad;
-    uint32_t hidden;     /* PVK_HIDDEN_* copies the pipelines bound read (or depth bounds need) */
+    /* PVK_HIDDEN_* copies the pipelines bound read, or draws testing depth
+     * bounds need; bounds: the depth bounds test is on (the encoder's
+     * struct pvk_dynamic_state will have it so) */
+    uint32_t hidden;
+    bool bounds;
     uint32_t int_colors; /* a pipeline renders SNORM attachments through SINT views (pvk_render_rebind) */
     /* The slots the pass's first draw binds through SINT views (first_slots,
      * once first_draw), from the bound pipeline's int_colors and the color map */
@@ -60872,9 +60876,11 @@ static void pvk_track_pipeline(struct pvk_draw_track *t, const struct pvk_pipeli
         t->topology = p->gfx->state.topology;
     if (!(p->gfx->dynamic & PVK_DYN_BIT(PRIMITIVE_RESTART_ENABLE)))
         t->restart = p->gfx->state.primitive_restart;
+    if (!(p->gfx->dynamic & PVK_DYN_BIT(DEPTH_BOUNDS_TEST_ENABLE)))
+        t->bounds = p->gfx->state.depth_bounds_test != 0;
     if (!t->samples)
         t->samples = p->gfx->samples;
-    t->hidden |= p->gfx->reads | (p->gfx->bounds ? PVK_HIDDEN_DEPTH : 0); /* the copies the pass needs */
+    t->hidden |= p->gfx->reads; /* the copies the pass needs (depth bounds: pvk_scan_packet) */
     if (p->gfx->int_colors)
         t->int_colors = 1;
     t->pipeline_int = p->gfx->int_colors;
@@ -60927,6 +60933,11 @@ static void pvk_scan_draw(struct pvk_draw_track *t)
     t->tex |= t->map_only;
     t->written |= t->map_writes;
     t->tex_bad |= (g->fetched & ~g->writes) && !g->tex_variant;
+    /* the depth copy, only for a pass whose draws test depth bounds (its
+     * earlier depth writers write the copy too): pipelines that leave the
+     * test dynamic seldom turn it on */
+    if (t->bounds && g->bounds)
+        t->hidden |= PVK_HIDDEN_DEPTH;
     if (g->fetches && t->nsplit > 1 && !t->fetch_bad) {
         uint32_t gr, h;
         t->fetch_bad = !g->fetch_split;
@@ -60967,6 +60978,8 @@ static bool pvk_scan_packet(struct pvk_encoder *e, struct pvk_draw_track *t, con
             t->topology = *(const uint32_t *)(d + 1);
         else if (d->state == PVK_DYN_PRIMITIVE_RESTART_ENABLE)
             t->restart = *(const uint32_t *)(d + 1);
+        else if (d->state == PVK_DYN_DEPTH_BOUNDS_TEST_ENABLE)
+            t->bounds = *(const uint32_t *)(d + 1) != 0;
         break;
     }
     case PVK_CMD_BIND_INDEX: {
@@ -61044,7 +61057,8 @@ static const struct pvk_cmd *pvk_cursor_next(struct pvk_cursor *cur)
 }
 
 /* Preprocesses the draws of the render pass instance starting at the cursor,
- * or, begun in a secondary command buffer, in the rest of it (where it ends). */
+ * or, begun in a secondary command buffer, in the rest of it (where it ends
+ * or is suspended). */
 static void pvk_prepass_scan(struct pvk_encoder *e, struct pvk_draw_track *t)
 {
     struct pvk_cursor cur = e->cursor;
@@ -61059,6 +61073,10 @@ static void pvk_prepass_scan(struct pvk_encoder *e, struct pvk_draw_track *t)
                 if (pvk_scan_packet(e, t, c, e->depth))
                     return;
             }
+        /* suspended: draws not scanned resume it, which may test depth
+         * bounds (only with the depth copy) */
+        if (e->device->features.core.depthBounds)
+            t->hidden |= PVK_HIDDEN_DEPTH;
         return;
     }
     while (e->result == VK_SUCCESS && (c = pvk_cursor_next(&cur)))
@@ -62615,9 +62633,8 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     track.draws = 0;
     memset(track.map, PVK_NO_SLOT, sizeof(track.map));
     track.mapped = false;
-    track.hidden = r->pipeline && r->pipeline->gfx /* the depth/stencil copies its pipelines need */
-                       ? r->pipeline->gfx->reads | (r->pipeline->gfx->bounds ? PVK_HIDDEN_DEPTH : 0u)
-                       : 0;
+    track.hidden = r->pipeline && r->pipeline->gfx ? r->pipeline->gfx->reads : 0; /* the depth/stencil copies needed */
+    track.bounds = r->dyn.depth_bounds_test != 0;
     if (pvk_pass_scanned(e, c, &track))
         pvk_prepass_scan(e, &track);
     pvk_encoder_end(e);

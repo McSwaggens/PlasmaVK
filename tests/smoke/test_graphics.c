@@ -6751,6 +6751,122 @@ static void test_depth_bounds(void)
     depth_bounds_case(VK_SAMPLE_COUNT_4_BIT);
 }
 
+/* A pipeline leaving the depth bounds test dynamic: the left half drawn red
+ * at depth 0.5 with the test off, then (later passes) everything blue at 0.9
+ * with bounds [0.4, 0.6] on, which passes where the first draw wrote. A pass
+ * keeps its depth copy only when a draw tests the bounds: the earlier draw
+ * must write the copy too, and a pass that never tests them draws alike.
+ * The third pass begins in a secondary command buffer, which draws the left
+ * half and suspends it; the primary resumes it to test the bounds. */
+static void test_depth_bounds_later(void)
+{
+    static const VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_DEPTH_BOUNDS, VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE };
+    static const float black[4] = { 0, 0, 0, 1 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img ds = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4), depth = make_buf(W * H * 4);
+    VkRenderingAttachmentInfo att[2];
+    VkRenderingInfo info;
+    VkCommandBufferAllocateInfo alloc;
+    VkCommandBufferInheritanceInfo inh;
+    VkCommandBufferBeginInfo begin;
+    struct pipe p;
+    VkPipeline pipeline;
+    VkCommandBuffer cb, sec = VK_NULL_HANDLE;
+    uint32_t x, y;
+    int pass, bad = 0;
+
+    REQUIRE(features.depthBounds);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.depth_format = VK_FORMAT_D32_SFLOAT;
+    p.has_ds = true;
+    p.ds.depthTestEnable = p.ds.depthWriteEnable = VK_TRUE;
+    p.ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    p.dynamic = dyn;
+    p.dynamic_count = 2;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    memset(att, 0, sizeof(att)); /* (begin_rendering's, for the third pass) */
+    for (x = 0; x < 2; x++) {
+        att[x].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att[x].imageView = x ? ds.view : target.view;
+        att[x].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att[x].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att[x].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    }
+    memcpy(att[0].clearValue.color.float32, black, sizeof(black));
+    att[1].clearValue.depthStencil.depth = 1.0f;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &att[0];
+    info.pDepthAttachment = &att[1];
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc.commandPool = cmd_pool;
+    alloc.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+    alloc.commandBufferCount = 1;
+    memset(&inh, 0, sizeof(inh));
+    inh.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+    memset(&begin, 0, sizeof(begin));
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    begin.pInheritanceInfo = &inh;
+    for (pass = 0; pass < 3; pass++) {
+        VkCommandBuffer rec = cb = begin_cmd();
+        if (pass < 2) {
+            begin_rendering(cb, &target, 1, black, &ds); /* depth cleared to 1 */
+        } else {
+            vkAllocateCommandBuffers(device, &alloc, &sec);
+            vkBeginCommandBuffer(sec, &begin);
+            rec = sec;
+            info.flags = VK_RENDERING_SUSPENDING_BIT;
+            vkCmdBeginRendering(sec, &info);
+        }
+        vkCmdBindPipeline(rec, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdSetDepthBoundsTestEnable(rec, VK_FALSE);
+        vkCmdSetDepthBounds(rec, 0.4f, 0.6f);
+        rect(rec, -1, -1, 0, 1, 1, 0, 0, 1, 0.5f);
+        if (pass == 2) {
+            vkCmdEndRendering(sec);
+            vkEndCommandBuffer(sec);
+            vkCmdExecuteCommands(cb, 1, &sec);
+            info.flags = VK_RENDERING_RESUMING_BIT;
+            vkCmdBeginRendering(cb, &info);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            vkCmdSetDepthBounds(cb, 0.4f, 0.6f);
+        }
+        if (pass) {
+            vkCmdSetDepthBoundsTestEnable(cb, VK_TRUE);
+            rect(cb, -1, -1, 1, 1, 0, 0, 1, 1, 0.9f);
+        }
+        vkCmdEndRendering(cb);
+        download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        download(cb, &ds, 0, VK_IMAGE_ASPECT_DEPTH_BIT, &depth);
+        submit(cb);
+        if (pass == 2)
+            vkFreeCommandBuffers(device, cmd_pool, 1, &sec);
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++) {
+                bool left = x < W / 2;
+                uint32_t want = left ? (pass ? BLUE : RED) : BLACK;
+                float d = ((const float *)depth.data)[y * W + x], want_d = left ? (pass ? 0.9f : 0.5f) : 1.0f;
+                if ((px(&out, x, y) != want || d != want_d) && bad++ < 4)
+                    fprintf(stderr, "depth bounds turned on later, pass %d: pixel (%u, %u) is %08x depth %g, "
+                            "expected %08x %g\n", pass, x, y, px(&out, x, y), d, want, want_d);
+            }
+    }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_buf(&depth);
+    free_img(&target);
+    free_img(&ds);
+}
+
 static void test_ds_subpasses(void)
 {
     ds_subpass_case(VK_FORMAT_D32_SFLOAT_S8_UINT, VK_SAMPLE_COUNT_1_BIT, true, false, false);
@@ -10897,6 +11013,7 @@ int main(void)
     RUN(test_ds_resolve_stencil);
     RUN(test_alpha_to_coverage_no_color);
     RUN(test_depth_bounds);
+    RUN(test_depth_bounds_later);
     RUN(test_msaa);
     RUN(test_msaa_int_resolve);
     RUN(test_suspend_secondary);
