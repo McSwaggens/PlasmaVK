@@ -31815,13 +31815,44 @@ static void pvk_private_data_forget(const void *object);
 static long pvk_named_objects; /* in all devices' tables (atomic) */
 static void pvk_names_forget(const void *object);
 
+/* Handles that have private data, and handles that have a name or tags,
+ * counted in buckets by a hash of the handle: updated under the table's
+ * lock, read without it (a count that reaches 255 stays). Freeing an object
+ * whose bucket is 0 takes neither lock; the locks are global, so with one
+ * object named anywhere, every free in every thread took them. */
+#define PVK_MARK_BITS 13
+static unsigned char pvk_private_data_marks[1u << PVK_MARK_BITS];
+static unsigned char pvk_names_marks[1u << PVK_MARK_BITS];
+
+static unsigned char *pvk_mark(unsigned char *marks, uint64_t handle)
+{
+    return &marks[(handle * 0x9e3779b97f4a7c15ull) >> (64 - PVK_MARK_BITS)];
+}
+
+/* An entry for handle was added (+1) or removed (-1). Table lock held. */
+static void pvk_mark_add(unsigned char *marks, uint64_t handle, int delta)
+{
+    unsigned char *m = pvk_mark(marks, handle), n = __atomic_load_n(m, __ATOMIC_RELAXED);
+    if (n != 255)
+        __atomic_store_n(m, (unsigned char)(n + delta), __ATOMIC_RELAXED);
+}
+
+/* Whether handle may have an entry (entries: the table's count). The
+ * bucket's load is relaxed: adding an object's entry happens before the
+ * object is freed (the application synchronizes the two), so its count is
+ * seen. */
+static bool pvk_marked(unsigned char *marks, const long *entries, uint64_t handle)
+{
+    return __atomic_load_n(entries, __ATOMIC_ACQUIRE) && __atomic_load_n(pvk_mark(marks, handle), __ATOMIC_RELAXED);
+}
+
 /* What freeing an object drops, for an object whose memory is kept to be
  * the next of its kind (a descriptor set's). */
 static void pvk_forget(const void *p)
 {
-    if (p && __atomic_load_n(&pvk_private_data_entries, __ATOMIC_ACQUIRE))
+    if (p && pvk_marked(pvk_private_data_marks, &pvk_private_data_entries, (uint64_t)(uintptr_t)p))
         pvk_private_data_forget(p);
-    if (p && __atomic_load_n(&pvk_named_objects, __ATOMIC_ACQUIRE))
+    if (p && pvk_marked(pvk_names_marks, &pvk_named_objects, (uint64_t)(uintptr_t)p))
         pvk_names_forget(p);
 }
 
@@ -35585,6 +35616,7 @@ static VkResult pvk_private_data_rehash(struct pvk_private_data_slot *slot, uint
 
 static void pvk_private_data_delete(struct pvk_private_data_slot *slot, struct pvk_private_data_entry *entry)
 {
+    pvk_mark_add(pvk_private_data_marks, entry->handle, -1);
     entry->handle = PVK_PRIVATE_DATA_GONE;
     entry->value = 0;
     slot->live--;
@@ -35621,6 +35653,7 @@ static VkResult pvk_private_data_set(struct pvk_private_data_slot *slot, uint64_
     slot->entries[i].handle = handle;
     slot->entries[i].value = value;
     slot->live++;
+    pvk_mark_add(pvk_private_data_marks, handle, 1);
     __atomic_add_fetch(&pvk_private_data_entries, 1, __ATOMIC_RELEASE);
     return VK_SUCCESS;
 }
@@ -35714,11 +35747,15 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPrivateDataSlot(VkDevice device, VkPrivateDa
                                                     const VkAllocationCallbacks *pAllocator)
 {
     struct pvk_private_data_slot *slot = (struct pvk_private_data_slot *)privateDataSlot;
+    uint32_t i;
     (void)device;
     (void)pAllocator; /* must match creation; the stored copy is authoritative */
     if (!slot)
         return;
     pthread_mutex_lock(&pvk_private_data_lock);
+    for (i = 0; i < slot->capacity; i++)
+        if (slot->entries[i].handle && slot->entries[i].handle != PVK_PRIVATE_DATA_GONE)
+            pvk_mark_add(pvk_private_data_marks, slot->entries[i].handle, -1);
     if (slot->prev)
         slot->prev->next = slot->next;
     else
@@ -35827,6 +35864,7 @@ static void pvk_names_clear(struct pvk_names *t, struct pvk_name *e)
         next = tag->next;
         pvk_free_raw(alloc, tag);
     }
+    pvk_mark_add(pvk_names_marks, e->handle, -1);
     e->handle = PVK_PRIVATE_DATA_GONE;
     e->name = NULL;
     e->tags = NULL;
@@ -35883,6 +35921,7 @@ static struct pvk_name *pvk_names_entry(struct pvk_device *device, uint64_t hand
     t->entries[i].name = NULL;
     t->entries[i].tags = NULL;
     t->live++;
+    pvk_mark_add(pvk_names_marks, handle, 1);
     __atomic_add_fetch(&pvk_named_objects, 1, __ATOMIC_RELEASE);
     return &t->entries[i];
 }
@@ -35903,7 +35942,7 @@ static bool pvk_name_get(uint64_t handle, char *buf, size_t size)
     const struct pvk_names *t;
     const struct pvk_name *e;
     bool found = false;
-    if (!handle || !__atomic_load_n(&pvk_named_objects, __ATOMIC_ACQUIRE))
+    if (!handle || !pvk_marked(pvk_names_marks, &pvk_named_objects, handle))
         return false;
     pthread_mutex_lock(&pvk_names_lock);
     for (t = pvk_names_tables; t && !found; t = t->next)

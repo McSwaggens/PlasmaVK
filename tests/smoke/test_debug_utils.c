@@ -240,6 +240,81 @@ static void test_internal_messages(void)
     vkDestroyInstance(instance, NULL);
 }
 
+/* A handle with a name or tags, and one with private data, count in their
+ * marks' buckets until the entries go: renaming adds nothing, freeing the
+ * object or destroying the slot takes them out. pvk_free and pvk_name_get
+ * skip the tables (and their locks) for handles whose bucket is 0. */
+static void test_marks(void)
+{
+    VkPrivateDataSlotCreateInfo slot_info;
+    VkPhysicalDeviceVulkan13Features v13;
+    VkPhysicalDeviceFeatures2 features;
+    VkPrivateDataSlot slot;
+    VkBufferCreateInfo bi;
+    VkBuffer buffer, other;
+    VkInstance instance;
+    VkDevice device = VK_NULL_HANDLE;
+    VkPhysicalDevice pd;
+    VkDeviceQueueCreateInfo queue;
+    VkDeviceCreateInfo info;
+    unsigned char names, data, other_data;
+    uint32_t count = 1;
+    float priority = 1.0f;
+    char text[8];
+
+    REQUIRE_VK(create_instance(false, NULL, NULL, &instance));
+    vkEnumeratePhysicalDevices(instance, &count, &pd);
+    memset(&v13, 0, sizeof(v13));
+    v13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    v13.privateData = VK_TRUE;
+    memset(&features, 0, sizeof(features));
+    features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features.pNext = &v13;
+    memset(&queue, 0, sizeof(queue));
+    queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queue.queueCount = 1;
+    queue.pQueuePriorities = &priority;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    info.pNext = &features;
+    info.queueCreateInfoCount = 1;
+    info.pQueueCreateInfos = &queue;
+    REQUIRE_VK(vkCreateDevice(pd, &info, NULL, &device));
+    memset(&bi, 0, sizeof(bi));
+    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bi.size = 256;
+    bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    memset(&slot_info, 0, sizeof(slot_info));
+    slot_info.sType = VK_STRUCTURE_TYPE_PRIVATE_DATA_SLOT_CREATE_INFO;
+    REQUIRE_VK(vkCreateBuffer(device, &bi, NULL, &buffer));
+    REQUIRE_VK(vkCreateBuffer(device, &bi, NULL, &other));
+    REQUIRE_VK(vkCreatePrivateDataSlot(device, &slot_info, NULL, &slot));
+    names = *pvk_mark(pvk_names_marks, H(buffer));
+    data = *pvk_mark(pvk_private_data_marks, H(buffer));
+
+    CHECK(!pvk_name_get(H(buffer), text, sizeof(text)));
+    set_name(device, VK_OBJECT_TYPE_BUFFER, H(buffer), "a");
+    set_name(device, VK_OBJECT_TYPE_BUFFER, H(buffer), "b");
+    CHECK(*pvk_mark(pvk_names_marks, H(buffer)) == names + 1);
+    CHECK(pvk_name_get(H(buffer), text, sizeof(text)) && strcmp(text, "b") == 0);
+    CHECK_VK(vkSetPrivateData(device, VK_OBJECT_TYPE_BUFFER, H(buffer), slot, 7), VK_SUCCESS);
+    CHECK_VK(vkSetPrivateData(device, VK_OBJECT_TYPE_BUFFER, H(buffer), slot, 0), VK_SUCCESS); /* deleted */
+    CHECK(*pvk_mark(pvk_private_data_marks, H(buffer)) == data);
+    CHECK_VK(vkSetPrivateData(device, VK_OBJECT_TYPE_BUFFER, H(buffer), slot, 7), VK_SUCCESS);
+    CHECK(*pvk_mark(pvk_private_data_marks, H(buffer)) == data + 1);
+    vkDestroyBuffer(device, buffer, NULL);
+    CHECK(*pvk_mark(pvk_names_marks, H(buffer)) == names && *pvk_mark(pvk_private_data_marks, H(buffer)) == data);
+
+    other_data = *pvk_mark(pvk_private_data_marks, H(other));
+    CHECK_VK(vkSetPrivateData(device, VK_OBJECT_TYPE_BUFFER, H(other), slot, 9), VK_SUCCESS);
+    CHECK(*pvk_mark(pvk_private_data_marks, H(other)) == other_data + 1);
+    vkDestroyPrivateDataSlot(device, slot, NULL);
+    CHECK(*pvk_mark(pvk_private_data_marks, H(other)) == other_data);
+    vkDestroyBuffer(device, other, NULL);
+    vkDestroyDevice(device, NULL);
+    vkDestroyInstance(instance, NULL);
+}
+
 /* ---- Metal labels of named objects ---- */
 
 /*
@@ -874,6 +949,7 @@ int main(void)
 {
     RUN(test_create_info_messages);
     RUN(test_internal_messages);
+    RUN(test_marks);
     RUN(test_names_metal_labels);
     RUN(test_labels_metal);
     RUN(test_layer);
