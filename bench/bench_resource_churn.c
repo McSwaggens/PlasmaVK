@@ -35,8 +35,9 @@
  *                          buffer (D3D-on-Vulkan layers renaming buffers)
  *
  * The _named variants also give every new resource a VK_EXT_debug_utils
- * name, as engines that name everything do; they are skipped when the
- * instance does not have the extension enabled.
+ * name, as engines that name everything do. The instance enables the
+ * extension wherever it is offered (for every configuration); without it
+ * they are skipped.
  *
  * cpu_us is the frame's CPU time; ns_per_op has each call's mean cost
  * (write_descriptor's per descriptor written: one vkUpdateDescriptorSets
@@ -71,16 +72,17 @@ static const struct config configs[] = {
     { "textures_dedicated", K_TEXTURES, 1, 0, 8, 300, 0, { 0, 0 } },
     { "textures_suballoc", K_TEXTURES, 0, 0, 8, 300, 0, { 0, 0 } },
     { "textures_suballoc_ws4k", K_TEXTURES, 0, 4000, 8, 300, 0, { 0, 0 } },
-    { "textures_suballoc_named", K_TEXTURES, 0, 0, 8, 300, 1, { 0, 0 } },
     { "buffers_dedicated", K_BUFFERS, 1, 0, 32, 300, 0, { 4, 64 } },
     { "buffers_dedicated_256k", K_BUFFERS, 1, 0, 32, 300, 0, { 64, 512 } },
     { "buffers_suballoc", K_BUFFERS, 0, 0, 32, 300, 0, { 4, 64 } },
     { "rendertargets_aliased", K_TARGETS, 0, 0, 6, 300, 0, { 0, 0 } },
-    { "rendertargets_aliased_named", K_TARGETS, 0, 0, 6, 300, 1, { 0, 0 } },
     { "views_x128", K_VIEWS, 0, 0, 128, 300, 0, { 0, 0 } },
     { "samplers_x16", K_SAMPLERS, 0, 0, 16, 300, 0, { 0, 0 } },
     { "load_oneshot_x4", K_ONESHOT, 1, 0, 4, 200, 0, { 0, 0 } },
     { "bufferviews_x64", K_BUFFER_VIEWS, 0, 0, 64, 300, 0, { 0, 0 } },
+    /* Last: the configurations above run after the same ones as when these were skipped. */
+    { "textures_suballoc_named", K_TEXTURES, 0, 0, 8, 300, 1, { 0, 0 } },
+    { "rendertargets_aliased_named", K_TARGETS, 0, 0, 6, 300, 1, { 0, 0 } },
 };
 
 enum op {
@@ -95,8 +97,7 @@ static const char *op_names[OP_COUNT] = {
     "set_object_name",
 };
 
-/* Not in bench_vk.h's table. */
-static PFN_vkSetDebugUtilsObjectNameEXT SetDebugUtilsObjectName; /* NULL: VK_EXT_debug_utils not enabled */
+static int debug_names; /* VK_EXT_debug_utils enabled: the _named configurations can run */
 
 struct res {
     VkImage image;
@@ -176,7 +177,7 @@ static void name_object(struct scene *s, VkObjectType type, uint64_t handle, con
         return;
     snprintf(name, sizeof(name), "%s %u", what, s->name_serial++);
     info.pObjectName = name;
-    TIMED(s, OP_NAME, r = SetDebugUtilsObjectName(s->vk->device, &info));
+    TIMED(s, OP_NAME, r = vkd.SetDebugUtilsObjectNameEXT(s->vk->device, &info));
     BENCH_VK(r);
 }
 
@@ -1070,18 +1071,20 @@ static void run(struct bench_vk *vk, const struct config *cfg)
 int main(void)
 {
     struct bench_vk vk;
+    struct bench_vk_wants wants;
     size_t i;
 
     bench_begin("resource_churn");
-    bench_vk_init(&vk, BENCH_NEED_SYNC2 | BENCH_NEED_DYNAMIC_RENDERING);
-    SetDebugUtilsObjectName =
-        (PFN_vkSetDebugUtilsObjectNameEXT)vkGetDeviceProcAddr(vk.device, "vkSetDebugUtilsObjectNameEXT");
+    memset(&wants, 0, sizeof(wants));
+    wants.instance_extensions[0] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    bench_vk_init_with(&vk, BENCH_NEED_SYNC2 | BENCH_NEED_DYNAMIC_RENDERING, &wants);
+    debug_names = bench_vk_extension(&vk, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) && vkd.SetDebugUtilsObjectNameEXT;
     for (i = 0; i < sizeof(configs) / sizeof(configs[0]); i++) {
         if (!bench_selected(configs[i].name))
             continue;
         bench_config = configs[i].name;
-        if (configs[i].named && !SetDebugUtilsObjectName)
-            bench_skip(configs[i].name, "VK_EXT_debug_utils not enabled on the instance");
+        if (configs[i].named && !debug_names)
+            bench_skip(configs[i].name, "VK_EXT_debug_utils not supported");
         else
             run(&vk, &configs[i]);
         bench_config = NULL;

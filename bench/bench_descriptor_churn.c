@@ -45,7 +45,8 @@
  *
  * The _named variants first give one object (the sampler) a name with
  * VK_EXT_debug_utils, as development builds of engines name everything.
- * They are skipped when the instance does not have the extension enabled.
+ * The instance enables the extension wherever it is offered (for every
+ * configuration); without it they are skipped.
  */
 #include <pthread.h>
 
@@ -92,7 +93,6 @@ static const struct config configs[] = {
     { "push_template_10000", MODE_PUSH_TEMPLATE, OBJECTS, 100, 0, 0 },
     { "multi_frequency_10000", MODE_MULTI_FREQUENCY, OBJECTS, 100, 0, 0 },
     { "update_sets_mt4_10000", MODE_UPDATE_THREADS, OBJECTS, 100, RECORD_THREADS, 0 },
-    { "update_sets_mt4_named_10000", MODE_UPDATE_THREADS, OBJECTS, 100, RECORD_THREADS, 1 },
     { "pool_free_churn_4096", MODE_POOL_FREE_CHURN, 4096, 200, 0, 0 },
     { "pool_alloc_batch_256", MODE_POOL_ALLOC_BATCH, 256, 200, 0, 0 },
     { "pool_create_256", MODE_POOL_CREATE, 256, 100, 0, 0 },
@@ -102,6 +102,8 @@ static const struct config configs[] = {
     { "pool_threads_2", MODE_POOL_THREADS, THREAD_SETS, 20, 2, 0 },
     { "pool_threads_4", MODE_POOL_THREADS, THREAD_SETS, 20, 4, 0 },
     { "pool_threads_8", MODE_POOL_THREADS, THREAD_SETS, 20, 8, 0 },
+    /* Last: the configurations above run after the same ones as when these were skipped. */
+    { "update_sets_mt4_named_10000", MODE_UPDATE_THREADS, OBJECTS, 100, RECORD_THREADS, 1 },
     { "pool_threads_8_named", MODE_POOL_THREADS, THREAD_SETS, 20, 8, 1 },
 };
 
@@ -176,8 +178,7 @@ struct scene {
     VkPipeline check_pipeline;     /* (array_write) their update-after-bind twins */
 };
 
-/* Not in bench_vk.h's table. */
-static PFN_vkSetDebugUtilsObjectNameEXT SetDebugUtilsObjectName; /* NULL: VK_EXT_debug_utils not enabled */
+static int debug_names; /* VK_EXT_debug_utils enabled: the _named configurations can run */
 
 static int material_of(const struct config *cfg, int object)
 {
@@ -1234,21 +1235,24 @@ static void name_sampler(struct scene *s, const char *name)
         .objectHandle = (uint64_t)(uintptr_t)s->sampler,
         .pObjectName = name,
     };
-    BENCH_VK(SetDebugUtilsObjectName(s->vk->device, &info));
+    BENCH_VK(vkd.SetDebugUtilsObjectNameEXT(s->vk->device, &info));
 }
 
 int main(void)
 {
     struct bench_vk vk;
+    struct bench_vk_wants wants;
     struct bench_loop loop;
     struct scene *s;
     size_t c;
 
     bench_begin("descriptor_churn");
-    bench_vk_init(&vk, BENCH_NEED_DYNAMIC_RENDERING | BENCH_NEED_SYNC2 | BENCH_WANT_PUSH_DESCRIPTOR |
-                           BENCH_WANT_UPDATE_AFTER_BIND);
-    SetDebugUtilsObjectName =
-        (PFN_vkSetDebugUtilsObjectNameEXT)vkGetDeviceProcAddr(vk.device, "vkSetDebugUtilsObjectNameEXT");
+    memset(&wants, 0, sizeof(wants));
+    wants.instance_extensions[0] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    bench_vk_init_with(&vk, BENCH_NEED_DYNAMIC_RENDERING | BENCH_NEED_SYNC2 | BENCH_WANT_PUSH_DESCRIPTOR |
+                                BENCH_WANT_UPDATE_AFTER_BIND,
+                       &wants);
+    debug_names = bench_vk_extension(&vk, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) && vkd.SetDebugUtilsObjectNameEXT;
     s = bench_alloc(sizeof(*s));
     s->vk = &vk;
     setup(s);
@@ -1268,8 +1272,8 @@ int main(void)
             bench_skip(cfg->name, "feature pushDescriptor (Vulkan 1.4) not supported");
             continue;
         }
-        if (cfg->named && !SetDebugUtilsObjectName) {
-            bench_skip(cfg->name, "VK_EXT_debug_utils not enabled on the instance");
+        if (cfg->named && !debug_names) {
+            bench_skip(cfg->name, "VK_EXT_debug_utils not supported");
             continue;
         }
         if (cfg->mode == MODE_ARRAY_WRITE && !array_supported(&vk, cfg))

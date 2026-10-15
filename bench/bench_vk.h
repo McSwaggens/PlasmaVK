@@ -160,14 +160,15 @@ static inline void *bench_alloc(size_t size)
     X(CmdCopyQueryPoolResults) X(CmdWriteTimestamp2)
 
 /* NULL when the device lacks them; benchmarks check before use. Vulkan 1.4,
- * the indirect-count draws (some 1.3 portability drivers leave them out) and
- * VK_KHR_swapchain (when enabled, see struct bench_vk_wants). */
+ * the indirect-count draws (some 1.3 portability drivers leave them out),
+ * VK_KHR_swapchain and VK_EXT_debug_utils (when enabled, see struct
+ * bench_vk_wants). */
 #define BENCH_DEVICE_COMMANDS_OPTIONAL(X)                                           \
     X(CmdPushDescriptorSet) X(CmdPushDescriptorSetWithTemplate)                     \
     X(CmdSetRenderingAttachmentLocations) X(CmdSetRenderingInputAttachmentIndices)  \
     X(CmdDrawIndirectCount) X(CmdDrawIndexedIndirectCount)                          \
     X(CreateSwapchainKHR) X(DestroySwapchainKHR) X(GetSwapchainImagesKHR)           \
-    X(AcquireNextImageKHR) X(QueuePresentKHR)
+    X(AcquireNextImageKHR) X(QueuePresentKHR) X(SetDebugUtilsObjectNameEXT)
 
 static struct bench_device_commands {
 #define BENCH_DECLARE(name) PFN_vk##name name;
