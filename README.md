@@ -91,5 +91,5 @@ Testing needs Xcode (clang, macOS/iOS 26 SDKs). Users need none of this.
 
 ## License
 
-MIT. The embedded Khronos Vulkan headers are used under their MIT option.
-Both licenses are at the end of `plasmavk.h` and in `LICENSE`.
+MIT (`LICENSE`). The embedded Khronos Vulkan headers are used under their
+MIT option. Both licenses are at the end of `plasmavk.h`.

@@ -76,8 +76,8 @@ Run comparisons on an idle machine, plugged in. GPU clocks ramp, so
 
 ## Output
 
-Each measured configuration prints one JSON line on stdout. Diagnostics,
-including PlasmaVK's "not implemented" log, go to stderr.
+Each measured configuration prints one JSON line on stdout. Diagnostics go
+to stderr.
 
 ```json
 {"bench":"draw_calls","impl":"moltenvk","device":"Apple M4 Max","config":"push_constants_10000",

@@ -18,9 +18,7 @@
  *   Objective-C without ARC.
  *
  * CONFIGURATION (define before including the implementation)
- *   PLASMAVK_ABORT_ON_UNIMPLEMENTED  abort() when an unimplemented command is
- *                                    called, instead of logging once.
- *   PLASMAVK_QUAD_MERGING            let Apple GPUs pack fragments of two
+ *   PLASMAVK_QUAD_MERGING           let Apple GPUs pack fragments of two
  *                                    triangles into one 2x2 quad, as
  *                                    MoltenVK does: fragment shaders using
  *                                    derivatives run faster, but their
@@ -75,8 +73,7 @@
  *   16. Queue submission and synchronization
  *   17. Pipelines
  *   18. Window system integration
- *   19. Unimplemented commands
- *   20. Entry points
+ *   19. Entry points
  *   Licenses
  *
  * LICENSE
@@ -31757,22 +31754,6 @@ static VkBool32 pvk_vmessage(const struct pvk_msg *m, enum pvk_log_level level, 
 static void pvk_logi(const struct pvk_instance *instance, enum pvk_log_level level, const char *id, const char *fmt, ...)
     __attribute__((format(printf, 4, 5)));
 
-/* Body of every stub in section 19. */
-#ifdef PLASMAVK_ABORT_ON_UNIMPLEMENTED
-#define PVK_UNIMPLEMENTED() \
-    (pvk_logi(NULL, PVK_LOG_ERROR, "PlasmaVK-unimplemented", "%s is not implemented", __func__), abort())
-#else
-#define PVK_UNIMPLEMENTED()                                              \
-    do {                                                                 \
-        static int pvk_warned_;                                          \
-        if (!pvk_warned_) {                                              \
-            pvk_warned_ = 1;                                             \
-            pvk_logi(NULL, PVK_LOG_WARN, "PlasmaVK-unimplemented",       \
-                     "%s is not implemented", __func__);                 \
-        }                                                                \
-    } while (0)
-#endif
-
 /* PLASMAVK_QUAD_MERGING (CONFIGURATION): fragment shaders don't keep their
  * 2x2 quads within a triangle (section 13, the fragment entry point). */
 #ifdef PLASMAVK_QUAD_MERGING
@@ -31876,10 +31857,10 @@ static VkResult pvk_enumerate(const void *items, size_t item_size, uint32_t coun
  * and, as Vulkan 1.4 drivers do, every extension promoted to Vulkan 1.1-1.4
  * whose functionality PlasmaVK has (Core Revisions). Applications written
  * for an older apiVersion enable those and call the core commands by their
- * KHR/EXT names (section 20). A promoted extension that needs a feature
+ * KHR/EXT names (section 19). A promoted extension that needs a feature
  * Vulkan 1.4 leaves optional is offered only with that feature
  * (pvk_device_extension_features, section 7). An extension's own commands
- * get stubs in section 19 until implemented, and entries in section 20.
+ * get entries in section 19.
  * ========================================================================== */
 
 enum pvk_instance_extension {
@@ -32124,7 +32105,7 @@ static const VkExtensionProperties pvk_device_extensions[PVK_DEVICE_EXTENSION_CO
  * Extension Dependencies: a device extension whose instance extension
  * dependency was not enabled by vkCreateInstance is unsupported, so it is
  * neither listed by vkEnumerateDeviceExtensionProperties nor accepted by
- * vkCreateDevice, and its commands are not available (section 20).
+ * vkCreateDevice, and its commands are not available (section 19).
  *
  * The promoted extensions depend on core versions, on other promoted
  * extensions, or on either (e.g. "VK_KHR_get_physical_device_properties2 or
@@ -33102,11 +33083,7 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
  * extensions that core has no members for report what Vulkan 1.3 made core
  * (VK_EXT_extended_dynamic_state, VK_EXT_extended_dynamic_state2,
  * VK_EXT_texel_buffer_alignment), or formats the GPU has (VK_EXT_4444_formats,
- * pvk_physical_device_init_texture_features).
- *
- * Most of these have no implementation yet (their commands are stubs in
- * section 19): reporting them follows from claiming 1.4, and each subsystem
- * must honour them as it lands. */
+ * pvk_physical_device_init_texture_features). */
 static void pvk_physical_device_init_features(struct pvk_features *f)
 {
     VkPhysicalDeviceFeatures *c = &f->core;
@@ -67808,25 +67785,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue _queue, const VkPresent
 }
 
 /* ==========================================================================
- * 19. Unimplemented commands
- *
- * Every other Vulkan 1.4 command, plus the commands of the extensions in
- * section 6. To implement one, delete its line here and write it in its
- * subsystem's section. Its entry in section 20 stays as is.
- * ========================================================================== */
-
-#if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunused-parameter"
-#endif
-
-
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#endif
-
-/* ==========================================================================
- * 20. Entry points
+ * 19. Entry points
  *
  * Every command vkGetInstanceProcAddr / vkGetDeviceProcAddr can return,
  * with its scope, the core version that added it and the extension it

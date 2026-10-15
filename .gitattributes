@@ -1,0 +1,3 @@
+# plasmavk.h declares a few Objective-C classes for Objective-C includers,
+# which would make GitHub count the C99 header as Objective-C.
+*.h linguist-language=C
