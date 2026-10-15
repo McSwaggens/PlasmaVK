@@ -54166,15 +54166,12 @@ VKAPI_ATTR void VKAPI_CALL vkCmdInsertDebugUtilsLabelEXT(VkCommandBuffer command
                   pLabelInfo->color);
 }
 
-/* Debug layer: the packets recorded until pvk_cmd_group_end are one debug
- * group "<command>: <object>, <object>" (objects with handle NULL left out).
- * True if a group began. */
-static bool pvk_cmd_group_begin(struct pvk_command_buffer *cb, const char *command, VkObjectType t1, const void *o1,
-                                VkObjectType t2, const void *o2)
+/* pvk_cmd_group_begin's group, its text built out of line (the buffers are
+ * 1 KB of stack a draw without the debug layer should not set up). */
+static bool pvk_cmd_group_text(struct pvk_command_buffer *cb, const char *command, VkObjectType t1, const void *o1,
+                               VkObjectType t2, const void *o2)
 {
     char text[600], a[256], b[256];
-    if (!pvk_cb_debug(cb))
-        return false;
     if (o1)
         pvk_object_label(a, sizeof(a), t1, (uint64_t)(uintptr_t)o1);
     if (o2)
@@ -54184,7 +54181,16 @@ static bool pvk_cmd_group_begin(struct pvk_command_buffer *cb, const char *comma
     return pvk_cmd_label(cb, PVK_LABEL_BEGIN, true, text, NULL) != NULL;
 }
 
-static void pvk_cmd_group_end(struct pvk_command_buffer *cb, bool begun)
+/* Debug layer: the packets recorded until pvk_cmd_group_end are one debug
+ * group "<command>: <object>, <object>" (objects with handle NULL left out).
+ * True if a group began. */
+static inline bool pvk_cmd_group_begin(struct pvk_command_buffer *cb, const char *command, VkObjectType t1,
+                                       const void *o1, VkObjectType t2, const void *o2)
+{
+    return pvk_cb_debug(cb) && pvk_cmd_group_text(cb, command, t1, o1, t2, o2);
+}
+
+static inline void pvk_cmd_group_end(struct pvk_command_buffer *cb, bool begun)
 {
     if (begun)
         pvk_cmd_label(cb, PVK_LABEL_END, true, NULL, NULL);
@@ -58315,7 +58321,7 @@ static void pvk_encode_push_set(struct pvk_encoder *e, const struct pvk_cmd_push
 static id pvk_encode_compute_state(struct pvk_encoder *e, const uint32_t base[3])
 {
     struct pvk_pipeline *p = e->pipeline;
-    uint32_t need, n;
+    uint32_t need, n, left;
     id enc;
 
     if (!p || !p->mtl_pipeline || !(enc = pvk_encoder_get(e)))
@@ -58324,8 +58330,9 @@ static id pvk_encode_compute_state(struct pvk_encoder *e, const uint32_t base[3]
         pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, p->mtl_pipeline);
         e->pipeline_dirty = false;
     }
-    for (n = 0; n < PVK_MAX_BOUND_SETS; n++) {
-        if ((p->set_mask & (1u << n)) && e->sets_bound[n] != e->sets[1][n]) {
+    for (left = p->set_mask & ((1u << PVK_MAX_BOUND_SETS) - 1); left; left &= left - 1) {
+        n = (uint32_t)__builtin_ctz(left);
+        if (e->sets_bound[n] != e->sets[1][n]) {
             pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, e->sets[1][n], n);
             e->sets_bound[n] = e->sets[1][n];
         }
@@ -61587,7 +61594,7 @@ static bool pvk_render_flush(struct pvk_encoder *e)
     struct pvk_dynamic_state *d = &r->dyn;
     struct pvk_pipeline *p = r->pipeline;
     const struct pvk_gfx_pipeline *g;
-    uint32_t dirty = r->dirty, i, n, need;
+    uint32_t dirty = r->dirty, i, n, left, need;
     int variant = -1;
     bool snorm;
     id enc = r->enc, pso;
@@ -61849,8 +61856,9 @@ static bool pvk_render_flush(struct pvk_encoder *e)
     }
     sent->valid |= dirty & ~(uint32_t)PVK_RD_VERTEX;
     r->dirty = 0;
-    for (n = 0; n < PVK_MAX_BOUND_SETS; n++) {
-        if ((p->set_mask & (1u << n)) && e->sets_bound[n] != e->sets[0][n]) {
+    for (left = p->set_mask & ((1u << PVK_MAX_BOUND_SETS) - 1); left; left &= left - 1) {
+        n = (uint32_t)__builtin_ctz(left);
+        if (e->sets_bound[n] != e->sets[0][n]) {
             pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, e->sets[0][n], n);
             e->sets_bound[n] = e->sets[0][n];
         }
