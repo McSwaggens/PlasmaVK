@@ -37634,6 +37634,10 @@ struct pvk_image_view {
                        * input attachments read from textures (section 15, RENDER PASSES) */
     id mtl_residency; /* storage views of images with a residency texture: the same view of it (2D array for cubes) */
     id planes[2];     /* views with a Y'CbCr conversion of multi-planar images: planes 1 and 2 */
+    /* Their resource IDs, fetched once at creation (0: none): mtl_texture's;
+     * what storage descriptors hold, mtl_storage's or else mtl_texture's;
+     * then mtl_residency's or else that; the planes'. */
+    pvk_MTLResourceID texture_id, storage_id, residency_id, plane_ids[2];
     /* section 11: */
     struct pvk_image *image;
     VkFormat format;
@@ -37654,6 +37658,7 @@ struct pvk_image_view {
 
 struct pvk_buffer_view {
     id mtl_texture; /* texture buffer over the bound memory's MTLBuffer (sparse buffers: of its own) */
+    pvk_MTLResourceID texture_id; /* its resource ID */
     /* section 11: */
     VkFormat format;
     VkDeviceSize offset, elements; /* (mtl_texture is in the device residency set) */
@@ -37669,6 +37674,7 @@ struct pvk_buffer_view {
 struct pvk_sampler {
     id mtl_sampler; /* MTLSamplerState created with supportArgumentBuffers */
     id mtl_alpha;   /* for A8_UNORM views (struct pvk_sampler_state) */
+    pvk_MTLResourceID sampler_id, alpha_id; /* their resource IDs */
     struct pvk_ycbcr ycbcr; /* VkSamplerYcbcrConversionInfo (planes 0: none) */
     /* section 11: */
     struct pvk_sampler_state *state; /* the shared state mtl_sampler belongs to */
@@ -38724,6 +38730,13 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageSubresourceLayout(VkDevice device, co
 
 /* ---- Image views ---- */
 
+/* A texture's resource ID, what descriptors hold (0: none). */
+static pvk_MTLResourceID pvk_texture_id(id texture)
+{
+    pvk_MTLResourceID none = { 0 };
+    return texture ? pvk_MTLTexture_gpuResourceID(texture) : none;
+}
+
 /* The Metal channel a view reads for one component: the view's component
  * mapping, then the format's own swizzle (section 7). */
 static pvk_MTLTextureSwizzle pvk_view_swizzle(const struct pvk_format *f, VkComponentSwizzle c, unsigned identity)
@@ -38944,6 +38957,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
         pvk_free(alloc, view);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
+    view->texture_id = pvk_texture_id(view->mtl_texture);
+    view->storage_id = view->mtl_storage ? pvk_texture_id(view->mtl_storage) : view->texture_id;
+    view->residency_id = view->mtl_residency ? pvk_texture_id(view->mtl_residency) : view->storage_id;
+    view->plane_ids[0] = pvk_texture_id(view->planes[0]);
+    view->plane_ids[1] = pvk_texture_id(view->planes[1]);
     /* Descriptors name the view's texture by its resource ID. The heap
      * covers its memory, but Metal's shader validation also wants the view
      * object itself resident. Memoryless textures can't join a set. */
@@ -39158,6 +39176,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateBufferView(VkDevice _device, const VkBuff
         return buffer->sparse.mtl_buffer ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_ERROR_OUT_OF_HOST_MEMORY;
     }
     pvk_device_make_resident(device, view->mtl_texture); /* as for image views */
+    view->texture_id = pvk_texture_id(view->mtl_texture);
     *pView = (VkBufferView)view;
     return VK_SUCCESS;
 }
@@ -39220,6 +39239,7 @@ struct pvk_sampler_state {
      * reads (0, 0, 0, 0) from A8Unorm, its opaque white (0, 0, 0, 1),
      * Vulkan's opaque black there). NULL: none. */
     id mtl_alpha;
+    pvk_MTLResourceID sampler_id, alpha_id; /* mtl_sampler's; mtl_alpha's, or else mtl_sampler's */
     uint32_t refs;
 };
 
@@ -39450,6 +39470,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSampler(VkDevice _device, const VkSampler
             return state ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_ERROR_OUT_OF_HOST_MEMORY;
         }
         state->key = key;
+        state->sampler_id = pvk_MTLSamplerState_gpuResourceID(state->mtl_sampler);
+        state->alpha_id = state->mtl_alpha ? pvk_MTLSamplerState_gpuResourceID(state->mtl_alpha) : state->sampler_id;
         state->refs = 1;
         state->next = device->sampler_states;
         device->sampler_states = state;
@@ -39458,6 +39480,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSampler(VkDevice _device, const VkSampler
     sampler->state = state;
     sampler->mtl_sampler = state->mtl_sampler;
     sampler->mtl_alpha = state->mtl_alpha ? state->mtl_alpha : state->mtl_sampler;
+    sampler->sampler_id = state->sampler_id;
+    sampler->alpha_id = state->alpha_id;
     pvk_live_add(device, VK_OBJECT_TYPE_SAMPLER, sampler, NULL, pAllocator != NULL);
     *pSampler = (VkSampler)sampler;
     return VK_SUCCESS;
@@ -39876,19 +39900,12 @@ static uint64_t pvk_align16(uint64_t x)
     return (x + 15) & ~(uint64_t)15;
 }
 
-static pvk_MTLResourceID pvk_texture_id(id texture)
-{
-    pvk_MTLResourceID none = { 0 };
-    return texture ? pvk_MTLTexture_gpuResourceID(texture) : none;
-}
-
 /* alpha: for an A8_UNORM view (struct pvk_sampler_state) */
 static pvk_MTLResourceID pvk_sampler_id(VkSampler sampler, bool alpha)
 {
     pvk_MTLResourceID none = { 0 };
     const struct pvk_sampler *s = (const struct pvk_sampler *)sampler;
-    id smp = s ? (alpha ? s->mtl_alpha : s->mtl_sampler) : NULL;
-    return smp ? pvk_MTLSamplerState_gpuResourceID(smp) : none;
+    return !s ? none : alpha ? s->alpha_id : s->sampler_id;
 }
 
 /* ---- Layouts ---- */
@@ -40428,25 +40445,21 @@ static void pvk_descriptor_write(char *dst, VkDescriptorType type, const void *i
     case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
         const VkDescriptorImageInfo *ii = (const VkDescriptorImageInfo *)info;
         const struct pvk_image_view *view = (const struct pvk_image_view *)ii->imageView;
-        id t = view && type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE && view->mtl_storage ? view->mtl_storage /* cubes */
-               : view                                                            ? view->mtl_texture
-                                                                                 : NULL;
-        pvk_MTLResourceID texture = pvk_texture_id(t);
-        memcpy(dst, &texture, 8);
-        if (type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) { /* its residency texture (SPARSE IMAGES), else itself */
-            pvk_MTLResourceID residency = view && view->mtl_residency ? pvk_texture_id(view->mtl_residency) : texture;
-            memcpy(dst + 8, &residency, 8);
+        pvk_MTLResourceID none = { 0 };
+        if (type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) { /* (cubes: mtl_storage), then the residency texture */
+            memcpy(dst, view ? &view->storage_id : &none, 8);
+            memcpy(dst + 8, view ? &view->residency_id : &none, 8);
+            break;
         }
+        memcpy(dst, view ? &view->texture_id : &none, 8);
         if (type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) { /* (an A8_UNORM view takes the alpha sampler state) */
             bool alpha = view && view->format == VK_FORMAT_A8_UNORM;
             pvk_MTLResourceID sampler = immutable ? immutable[alpha] : pvk_sampler_id(ii->sampler, alpha);
             memcpy(dst + 8, &sampler, 8);
-        }
-        if (type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && stride >= 32) {
-            pvk_MTLResourceID planes[2];
-            planes[0] = pvk_texture_id(view ? view->planes[0] : NULL);
-            planes[1] = pvk_texture_id(view ? view->planes[1] : NULL);
-            memcpy(dst + 16, planes, 16);
+            if (stride >= 32 && view) /* planes 1 and 2 */
+                memcpy(dst + 16, view->plane_ids, 16);
+            else if (stride >= 32)
+                memset(dst + 16, 0, 16);
         }
         break;
     }
@@ -40459,8 +40472,8 @@ static void pvk_descriptor_write(char *dst, VkDescriptorType type, const void *i
     case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
     case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: {
         const struct pvk_buffer_view *view = (const struct pvk_buffer_view *)*(const VkBufferView *)info;
-        pvk_MTLResourceID texture = pvk_texture_id(view ? view->mtl_texture : NULL);
-        memcpy(dst, &texture, 8);
+        pvk_MTLResourceID none = { 0 };
+        memcpy(dst, view ? &view->texture_id : &none, 8);
         break;
     }
     default:
