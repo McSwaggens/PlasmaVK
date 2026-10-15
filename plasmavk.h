@@ -31584,6 +31584,7 @@ static inline void pvk_MTL4ArgumentTable_setTexture_atIndex(id self, pvk_MTLReso
 static inline id pvk_MTLRenderPipelineDescriptor_new(void) { PVK_CLASS_CACHE("MTLRenderPipelineDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
 static inline void pvk_MTLRenderPipelineDescriptor_setVertexFunction(id self, id vertexFunction) { PVK_SEL_CACHE("setVertexFunction:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, vertexFunction); }
 static inline void pvk_MTLRenderPipelineDescriptor_setFragmentFunction(id self, id fragmentFunction) { PVK_SEL_CACHE("setFragmentFunction:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, fragmentFunction); }
+static inline void pvk_MTLRenderPipelineDescriptor_setInputPrimitiveTopology(id self, pvk_MTLPrimitiveTopologyClass inputPrimitiveTopology) { PVK_SEL_CACHE("setInputPrimitiveTopology:"); PVK_MSG(void, (id, SEL, pvk_MTLPrimitiveTopologyClass))(self, pvk_sel_, inputPrimitiveTopology); }
 static inline id pvk_MTLRenderPipelineDescriptor_colorAttachments(id self) { PVK_SEL_CACHE("colorAttachments"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline id pvk_MTLRenderPipelineColorAttachmentDescriptorArray_objectAtIndexedSubscript(id self, unsigned long attachmentIndex) { PVK_SEL_CACHE("objectAtIndexedSubscript:"); return PVK_MSG(id, (id, SEL, unsigned long))(self, pvk_sel_, attachmentIndex); }
 static inline void pvk_MTLRenderPipelineColorAttachmentDescriptor_setPixelFormat(id self, pvk_MTLPixelFormat pixelFormat) { PVK_SEL_CACHE("setPixelFormat:"); PVK_MSG(void, (id, SEL, pvk_MTLPixelFormat))(self, pvk_sel_, pixelFormat); }
@@ -55745,8 +55746,8 @@ enum pvk_blit_function {
     PVK_BLIT_FUNCTION_COUNT
 };
 
-/* One region of a blit or a resolve: draws into dst, one pass per layer (or
- * per slice of a 3D destination). */
+/* One region of a blit or a resolve: draws into dst, one instance per layer
+ * (or per slice of a 3D destination) of a layered pass. */
 struct pvk_cmd_blit {
     struct pvk_cmd hdr;
     id src, dst;
@@ -58867,9 +58868,9 @@ struct pvk_encoder {
     uint32_t points_valid;
     /* The render encoder of the last blit or resolve (retained; NULL: none),
      * open for the next one's draws into the same destination: blit_dst's
-     * level, slice and depth plane (pvk_blit_encoder) */
+     * level, layers from a slice or depth plane (pvk_blit_encoder) */
     id blit_enc, blit_dst;
-    uint32_t blit_level, blit_slice, blit_plane;
+    uint32_t blit_level, blit_slice, blit_plane, blit_layers;
 };
 
 /* A new upload chunk of `size` bytes, resident; NULL with e->result set. */
@@ -59634,12 +59635,13 @@ static id pvk_encode_compute_state(struct pvk_encoder *e, const uint32_t base[3]
  * whose load action clears (all layers of a level at once, or all slice
  * planes of a 3D level, with renderTargetArrayLength: Metal clears a 3D
  * attachment's planes from depthPlane as layers); blits and resolves draw a
- * triangle covering the destination rectangle (the viewport) with an
- * internal fragment shader that reads the source: nearest texels with
- * read(), linear filtering with a sampler, resolves average the samples
- * (float) or take sample 0. Consecutive blits into the same destination
- * share their render encoder (pvk_blit_encoder). Render pipelines are made
- * on first use per function and destination format. */
+ * triangle covering the destination rectangle (the viewport), an instance
+ * per layer or plane of a layered pass, with an internal fragment shader
+ * that reads the source: nearest texels with read(), linear filtering with
+ * a sampler, resolves average the samples (float) or take sample 0.
+ * Consecutive blits into the same layers share their render encoder
+ * (pvk_blit_encoder). Render pipelines are made on first use per function,
+ * destination format and layering. */
 
 /* Arguments of the internal draws, at buffer index 0 (pvk_blit_args in
  * pvk_blit_msl). */
@@ -59647,39 +59649,64 @@ struct pvk_blit_args {
     float src[4];        /* blits: source rectangle x0, y0, x1, y1 (texels) */
     float dst[4];        /* blits: destination rectangle x0, y0, x1, y1 (pixels) */
     float size[4];       /* source level width, height, depth; source level */
-    float layer[4];      /* .x: source layer, or z (texels) in a 3D source */
+    float layer[4];      /* source layers: first, step; 3D: z0, destination z0, z1 - z0, destination z1 - z0 */
     uint32_t swizzle[4]; /* source components: 0-3 a channel, 4 zero, 5 one */
-    int32_t offset[4];   /* resolves: source - destination x, y; source layer */
+    int32_t offset[4];   /* resolves: source - destination x, y; source layer. 3D blits: .x destination plane */
 };
 
-#define PVK_MSL_BLIT_NEAREST(T, P)                                                                              \
-    "fragment vec<" T ", 4> pvk_blit_" P "_2d(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n" \
-    "    texture2d<" T "> t [[texture(0)]])\n"                                                                  \
+/* What destination texel pos (its center) of destination layer l gets: of
+ * the source texel it maps to (nearest), or sampled there (linear). */
+#define PVK_MSL_NEAREST_2D "pvk_swizzle(t.read(pvk_texel(pos, a), uint(a.size.w)), a.swizzle)"
+#define PVK_MSL_NEAREST_2DARRAY(L) "pvk_swizzle(t.read(pvk_texel(pos, a), pvk_layer(" L ", a), uint(a.size.w)), a.swizzle)"
+#define PVK_MSL_NEAREST_3D(L)                                                                                   \
+    "pvk_swizzle(t.read(uint3(pvk_texel(pos, a), uint(clamp(floor(pvk_z(" L ", a)), 0.0, a.size.z - 1.0))),\n" \
+    "                   uint(a.size.w)), a.swizzle)"
+#define PVK_MSL_LINEAR_2D "pvk_swizzle(t.sample(pvk_linear, pvk_coord(pos, a) / a.size.xy, level(a.size.w)), a.swizzle)"
+#define PVK_MSL_LINEAR_2DARRAY(L)                                                                               \
+    "pvk_swizzle(t.sample(pvk_linear, pvk_coord(pos, a) / a.size.xy, pvk_layer(" L ", a), level(a.size.w)),\n" \
+    "                   a.swizzle)"
+#define PVK_MSL_LINEAR_3D(L)                                                                                    \
+    "pvk_swizzle(t.sample(pvk_linear, float3(pvk_coord(pos, a) / a.size.xy, pvk_z(" L ", a) / a.size.z),\n"    \
+    "                   level(a.size.w)), a.swizzle)"
+
+/* The functions reading array layers or 3D slices come twice: drawing one
+ * layer or plane (destination layer l 0), and layered (suffix _l, after
+ * pvk_blit_vs_layered: destination layer l is the instance's). */
+#define PVK_MSL_LAYER_ARG " uint l [[render_target_array_index]],"
+#define PVK_MSL_BLIT_FRAGMENT(R, NAME, TEX, VALUE, ARG)                                                         \
+    "fragment " R " " NAME "(float4 pos [[position]]," ARG " constant pvk_blit_args &a [[buffer(0)]],\n"        \
+    "    " TEX " t [[texture(0)]])\n"                                                                           \
     "{\n"                                                                                                       \
-    "    return pvk_swizzle(t.read(pvk_texel(pos, a), uint(a.size.w)), a.swizzle);\n"                          \
-    "}\n"                                                                                                       \
-    "fragment vec<" T ", 4> pvk_blit_" P "_2darray(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n" \
-    "    texture2d_array<" T "> t [[texture(0)]])\n"                                                            \
-    "{\n"                                                                                                       \
-    "    return pvk_swizzle(t.read(pvk_texel(pos, a), uint(a.layer.x), uint(a.size.w)), a.swizzle);\n"         \
-    "}\n"                                                                                                       \
-    "fragment vec<" T ", 4> pvk_blit_" P "_3d(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n" \
-    "    texture3d<" T "> t [[texture(0)]])\n"                                                                  \
-    "{\n"                                                                                                       \
-    "    uint3 i = uint3(pvk_texel(pos, a), uint(clamp(floor(a.layer.x), 0.0, a.size.z - 1.0)));\n"             \
-    "    return pvk_swizzle(t.read(i, uint(a.size.w)), a.swizzle);\n"                                           \
+    "    return " VALUE ";\n"                                                                                   \
     "}\n"
-#define PVK_MSL_RESOLVE(T, P, SUM, ARRAY_ARG)                                                                   \
+#define PVK_MSL_BLIT_NEAREST(T, P)                                                                              \
+    PVK_MSL_BLIT_FRAGMENT("vec<" T ", 4>", "pvk_blit_" P "_2d", "texture2d<" T ">", PVK_MSL_NEAREST_2D, "")     \
+    PVK_MSL_BLIT_FRAGMENT("vec<" T ", 4>", "pvk_blit_" P "_2darray", "texture2d_array<" T ">",                  \
+                          PVK_MSL_NEAREST_2DARRAY("0u"), "")                                                    \
+    PVK_MSL_BLIT_FRAGMENT("vec<" T ", 4>", "pvk_blit_" P "_3d", "texture3d<" T ">", PVK_MSL_NEAREST_3D("0u"), "") \
+    PVK_MSL_BLIT_FRAGMENT("vec<" T ", 4>", "pvk_blit_" P "_2darray_l", "texture2d_array<" T ">",                \
+                          PVK_MSL_NEAREST_2DARRAY("l"), PVK_MSL_LAYER_ARG)                                      \
+    PVK_MSL_BLIT_FRAGMENT("vec<" T ", 4>", "pvk_blit_" P "_3d_l", "texture3d<" T ">", PVK_MSL_NEAREST_3D("l"),  \
+                          PVK_MSL_LAYER_ARG)
+#define PVK_MSL_BLIT_LINEAR                                                                                     \
+    PVK_MSL_BLIT_FRAGMENT("float4", "pvk_blit_fl_2d", "texture2d<float>", PVK_MSL_LINEAR_2D, "")                \
+    PVK_MSL_BLIT_FRAGMENT("float4", "pvk_blit_fl_2darray", "texture2d_array<float>", PVK_MSL_LINEAR_2DARRAY("0u"), "") \
+    PVK_MSL_BLIT_FRAGMENT("float4", "pvk_blit_fl_3d", "texture3d<float>", PVK_MSL_LINEAR_3D("0u"), "")          \
+    PVK_MSL_BLIT_FRAGMENT("float4", "pvk_blit_fl_2darray_l", "texture2d_array<float>", PVK_MSL_LINEAR_2DARRAY("l"), \
+                          PVK_MSL_LAYER_ARG)                                                                    \
+    PVK_MSL_BLIT_FRAGMENT("float4", "pvk_blit_fl_3d_l", "texture3d<float>", PVK_MSL_LINEAR_3D("l"), PVK_MSL_LAYER_ARG)
+#define PVK_MSL_RESOLVE_LAYERS(T, P, SUM, S, L, ARG)                                                            \
+    "fragment vec<" T ", 4> pvk_resolve_" P "_msarray" S "(float4 pos [[position]]," ARG                        \
+    " constant pvk_blit_args &a [[buffer(0)]], texture2d_ms_array<" T "> t [[texture(0)]])\n"                   \
+    "{\n"                                                                                                       \
+    "    uint2 i = uint2(int2(pos.xy) + a.offset.xy);\n" SUM("uint(a.offset.z) + " L ", ")                     \
+    "}\n"
+#define PVK_MSL_RESOLVE(T, P, SUM)                                                                              \
     "fragment vec<" T ", 4> pvk_resolve_" P "_ms(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n" \
     "    texture2d_ms<" T "> t [[texture(0)]])\n"                                                               \
     "{\n"                                                                                                       \
     "    uint2 i = uint2(int2(pos.xy) + a.offset.xy);\n" SUM("")                                               \
-    "}\n"                                                                                                       \
-    "fragment vec<" T ", 4> pvk_resolve_" P "_msarray(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n" \
-    "    texture2d_ms_array<" T "> t [[texture(0)]])\n"                                                         \
-    "{\n"                                                                                                       \
-    "    uint2 i = uint2(int2(pos.xy) + a.offset.xy);\n" SUM(ARRAY_ARG)                                        \
-    "}\n"
+    "}\n" PVK_MSL_RESOLVE_LAYERS(T, P, SUM, "", "0u", "") PVK_MSL_RESOLVE_LAYERS(T, P, SUM, "_l", "l", PVK_MSL_LAYER_ARG)
 #define PVK_MSL_AVERAGE(L)                                                                                      \
     "    float4 s = 0.0;\n"                                                                                     \
     "    uint n = t.get_num_samples();\n"                                                                       \
@@ -59698,6 +59725,14 @@ static const char *const pvk_blit_msl[] = {
     "    float2 p = float2((vid << 1) & 2, vid & 2);\n"
     "    return float4(p * 2.0 - 1.0, 0.0, 1.0);\n"
     "}\n"
+    "struct pvk_blit_vl { float4 pos [[position]]; uint layer [[render_target_array_index]]; };\n"
+    "vertex pvk_blit_vl pvk_blit_vs_layered(uint vid [[vertex_id]], uint iid [[instance_id]])\n"
+    "{\n"
+    "    pvk_blit_vl o;\n"
+    "    o.pos = float4(float2((vid << 1) & 2, vid & 2) * 2.0 - 1.0, 0.0, 1.0);\n"
+    "    o.layer = iid;\n"
+    "    return o;\n"
+    "}\n"
     "template <typename T> vec<T, 4> pvk_swizzle(vec<T, 4> c, uint4 s)\n"
     "{\n"
     "    T v[6] = { c.x, c.y, c.z, c.w, T(0), T(1) };\n"
@@ -59711,30 +59746,23 @@ static const char *const pvk_blit_msl[] = {
     "{\n"
     "    return uint2(clamp(floor(pvk_coord(pos, a)), float2(0.0), a.size.xy - 1.0));\n"
     "}\n"
+    /* the source layer of destination layer l; the source z at the center
+     * of destination plane offset.x + l (the same formula as x and y) */
+    "static uint pvk_layer(uint l, constant pvk_blit_args &a)\n"
+    "{\n"
+    "    return uint(a.layer.x) + l * uint(a.layer.y);\n"
+    "}\n"
+    "static float pvk_z(uint l, constant pvk_blit_args &a)\n"
+    "{\n"
+    "    return a.layer.x + (float(a.offset.x + int(l)) + 0.5 - a.layer.y) * a.layer.z / a.layer.w;\n"
+    "}\n",
     PVK_MSL_BLIT_NEAREST("float", "f"),
-    PVK_MSL_BLIT_NEAREST("uint", "u")
+    PVK_MSL_BLIT_NEAREST("uint", "u"),
     PVK_MSL_BLIT_NEAREST("int", "i"),
-    "constexpr sampler pvk_linear(filter::linear, mip_filter::nearest, address::clamp_to_edge);\n"
-    "fragment float4 pvk_blit_fl_2d(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n"
-    "    texture2d<float> t [[texture(0)]])\n"
-    "{\n"
-    "    return pvk_swizzle(t.sample(pvk_linear, pvk_coord(pos, a) / a.size.xy, level(a.size.w)), a.swizzle);\n"
-    "}\n"
-    "fragment float4 pvk_blit_fl_2darray(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n"
-    "    texture2d_array<float> t [[texture(0)]])\n"
-    "{\n"
-    "    return pvk_swizzle(t.sample(pvk_linear, pvk_coord(pos, a) / a.size.xy, uint(a.layer.x), level(a.size.w)),\n"
-    "                       a.swizzle);\n"
-    "}\n"
-    "fragment float4 pvk_blit_fl_3d(float4 pos [[position]], constant pvk_blit_args &a [[buffer(0)]],\n"
-    "    texture3d<float> t [[texture(0)]])\n"
-    "{\n"
-    "    float3 c = float3(pvk_coord(pos, a) / a.size.xy, a.layer.x / a.size.z);\n"
-    "    return pvk_swizzle(t.sample(pvk_linear, c, level(a.size.w)), a.swizzle);\n"
-    "}\n"
-    PVK_MSL_RESOLVE("float", "f", PVK_MSL_AVERAGE, "uint(a.offset.z), "),
-    PVK_MSL_RESOLVE("uint", "u", PVK_MSL_SAMPLE0, "uint(a.offset.z), ")
-    PVK_MSL_RESOLVE("int", "i", PVK_MSL_SAMPLE0, "uint(a.offset.z), "),
+    "constexpr sampler pvk_linear(filter::linear, mip_filter::nearest, address::clamp_to_edge);\n" PVK_MSL_BLIT_LINEAR,
+    PVK_MSL_RESOLVE("float", "f", PVK_MSL_AVERAGE),
+    PVK_MSL_RESOLVE("uint", "u", PVK_MSL_SAMPLE0),
+    PVK_MSL_RESOLVE("int", "i", PVK_MSL_SAMPLE0),
 };
 
 static const char *const pvk_blit_function_names[PVK_BLIT_FUNCTION_COUNT] = {
@@ -59748,12 +59776,12 @@ struct pvk_blit_pipeline {
     struct pvk_blit_pipeline *next;
     uint32_t function;
     pvk_MTLPixelFormat format;
+    bool layered;
     id pso; /* MTLRenderPipelineState */
 };
 
 static pthread_mutex_t pvk_blit_lock = PTHREAD_MUTEX_INITIALIZER; /* queues of a device encode concurrently */
 
-/* The render pipeline of an internal function drawing into a format. */
 static id pvk_msl_library(struct pvk_device *device, const char *msl, bool invariant, char *error, size_t error_size);
 
 /* The internal blit/resolve shaders (made on first use, or by
@@ -59779,7 +59807,16 @@ static id pvk_blit_library(struct pvk_device *device)
     return device->blit_library;
 }
 
-static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MTLPixelFormat format)
+/* Whether an internal function reads the destination layer drawn (array
+ * layers, 3D slices): it has a layered variant. */
+static bool pvk_blit_reads_layer(uint32_t function)
+{
+    return function >= PVK_RESOLVE_F_MS ? (function - PVK_RESOLVE_F_MS) % 2 == 1 : function % 3 != 0;
+}
+
+/* The render pipeline of an internal function drawing into a format; layered:
+ * a draw's instances draw the pass's layers. */
+static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MTLPixelFormat format, bool layered)
 {
     id mtl = device->physical_device->mtl_device, pso = NULL, library;
     struct pvk_blit_pipeline *p;
@@ -59787,7 +59824,7 @@ static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MT
 
     pthread_mutex_lock(&pvk_blit_lock);
     for (p = device->blit_pipelines; p; p = p->next)
-        if (p->function == function && p->format == format)
+        if (p->function == function && p->format == format && p->layered == layered)
             break;
     if (p) {
         pso = p->pso;
@@ -59796,13 +59833,18 @@ static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MT
     }
     pool = objc_autoreleasePoolPush();
     if ((library = pvk_blit_library(device))) {
-        id desc = pvk_MTLRenderPipelineDescriptor_new(), err = NULL;
-        id vs = pvk_MTLLibrary_newFunctionWithName(library, pvk_NSString_stringWithUTF8String("pvk_blit_vs"));
-        id fs = pvk_MTLLibrary_newFunctionWithName(library,
-                                                   pvk_NSString_stringWithUTF8String(pvk_blit_function_names[function]));
+        char name[64];
+        id desc = pvk_MTLRenderPipelineDescriptor_new(), err = NULL, vs, fs;
+        snprintf(name, sizeof(name), "%s%s", pvk_blit_function_names[function],
+                 layered && pvk_blit_reads_layer(function) ? "_l" : "");
+        vs = pvk_MTLLibrary_newFunctionWithName(
+            library, pvk_NSString_stringWithUTF8String(layered ? "pvk_blit_vs_layered" : "pvk_blit_vs"));
+        fs = pvk_MTLLibrary_newFunctionWithName(library, pvk_NSString_stringWithUTF8String(name));
         if (desc && vs && fs) {
             pvk_MTLRenderPipelineDescriptor_setVertexFunction(desc, vs);
             pvk_MTLRenderPipelineDescriptor_setFragmentFunction(desc, fs);
+            if (layered)
+                pvk_MTLRenderPipelineDescriptor_setInputPrimitiveTopology(desc, PVK_MTLPrimitiveTopologyClassTriangle);
             pvk_MTLRenderPipelineColorAttachmentDescriptor_setPixelFormat(
                 pvk_MTLRenderPipelineColorAttachmentDescriptorArray_objectAtIndexedSubscript(
                     pvk_MTLRenderPipelineDescriptor_colorAttachments(desc), 0),
@@ -59810,7 +59852,7 @@ static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MT
             pso = pvk_MTLDevice_newRenderPipelineStateWithDescriptor_error(mtl, desc, &err);
             if (!pso)
                 pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
-                         "internal blit pipeline %s, pixel format %lu: %s", pvk_blit_function_names[function], format,
+                         "internal blit pipeline %s, pixel format %lu: %s", name, format,
                          err ? pvk_ns_utf8(pvk_NSError_localizedDescription(err)) : "failed");
         }
         pvk_release(fs);
@@ -59823,6 +59865,7 @@ static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MT
         if (p) {
             p->function = function;
             p->format = format;
+            p->layered = layered;
             p->pso = pso;
             p->next = device->blit_pipelines;
             device->blit_pipelines = p;
@@ -59997,15 +60040,17 @@ static void pvk_encode_copy_image(struct pvk_encoder *e, const struct pvk_cmd_co
     }
 }
 
-/* The render encoder of a blit's draw into a destination subresource: the
- * last blit's when it drew into the same one (nothing encoded since: its
- * draws stay in order), else a new pass that loads and stores it, kept open
- * for the next blit (pvk_blit_end). So consecutive blits into a texture
- * atlas load and store it once. */
-static id pvk_blit_encoder(struct pvk_encoder *e, id dst, uint32_t level, uint32_t slice, uint32_t plane)
+/* The render encoder of a blit's draw into layers of a destination level
+ * from a slice (3D: depth plane): the last blit's when it drew into the same
+ * (nothing encoded since: its draws stay in order), else a new pass that
+ * loads and stores them, kept open for the next blit (pvk_blit_end). So
+ * consecutive blits into a texture atlas load and store it once. */
+static id pvk_blit_encoder(struct pvk_encoder *e, id dst, uint32_t level, uint32_t slice, uint32_t plane,
+                           uint32_t layers)
 {
     id pass, att, enc;
-    if (e->blit_enc && e->blit_dst == dst && e->blit_level == level && e->blit_slice == slice && e->blit_plane == plane)
+    if (e->blit_enc && e->blit_dst == dst && e->blit_level == level && e->blit_slice == slice &&
+        e->blit_plane == plane && e->blit_layers == layers)
         return e->blit_enc;
     if (!(pass = pvk_MTL4RenderPassDescriptor_new())) {
         e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -60019,6 +60064,8 @@ static id pvk_blit_encoder(struct pvk_encoder *e, id dst, uint32_t level, uint32
     pvk_MTLRenderPassAttachmentDescriptor_setDepthPlane(att, plane);
     pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, PVK_MTLLoadActionLoad);
     pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
+    if (layers > 1)
+        pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, layers);
     enc = pvk_encoder_render(e, pass); /* (the last blit's ends) */
     pvk_release(pass);
     if (enc) {
@@ -60027,6 +60074,7 @@ static id pvk_blit_encoder(struct pvk_encoder *e, id dst, uint32_t level, uint32
         e->blit_level = level;
         e->blit_slice = slice;
         e->blit_plane = plane;
+        e->blit_layers = layers;
     }
     return enc;
 }
@@ -60035,70 +60083,73 @@ static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
 {
     bool resolve = c->function >= PVK_RESOLVE_F_MS;
     int32_t z0 = c->dst0[2] < c->dst1[2] ? c->dst0[2] : c->dst1[2];
-    uint32_t passes = c->dst_3d ? (uint32_t)(c->dst1[2] > c->dst0[2] ? c->dst1[2] - c->dst0[2] : c->dst0[2] - c->dst1[2])
+    uint32_t layers = c->dst_3d ? (uint32_t)(c->dst1[2] > c->dst0[2] ? c->dst1[2] - c->dst0[2] : c->dst0[2] - c->dst1[2])
                                 : c->layers;
-    float dz = (float)(c->dst1[2] - c->dst0[2]);
-    id pso = pvk_blit_pipeline(e->device, c->function, c->dst_format);
+    struct pvk_blit_args a, *args;
+    pvk_MTLGPUAddress address;
     pvk_MTLViewport vp;
-    uint32_t p, i;
+    void *pool;
+    uint32_t i;
+    id pso, enc;
 
-    if (!pso) {
-        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
-        return;
-    }
     vp.originX = c->dst0[0] < c->dst1[0] ? c->dst0[0] : c->dst1[0];
     vp.originY = c->dst0[1] < c->dst1[1] ? c->dst0[1] : c->dst1[1];
     vp.width = c->dst1[0] > c->dst0[0] ? c->dst1[0] - c->dst0[0] : c->dst0[0] - c->dst1[0];
     vp.height = c->dst1[1] > c->dst0[1] ? c->dst1[1] - c->dst0[1] : c->dst0[1] - c->dst1[1];
     vp.znear = 0.0;
     vp.zfar = 1.0;
-    if (vp.width <= 0.0 || vp.height <= 0.0)
+    if (!layers || vp.width <= 0.0 || vp.height <= 0.0)
         return;
-    for (p = 0; p < passes && e->result == VK_SUCCESS; p++) {
-        uint32_t plane = c->dst_3d ? (uint32_t)z0 + p : 0;
-        struct pvk_blit_args *args;
-        pvk_MTLGPUAddress address;
-        void *pool = objc_autoreleasePoolPush();
-        id enc = pvk_blit_encoder(e, c->dst, c->dst_level, c->dst_3d ? 0 : c->dst_layer + p, plane);
-
-        args = enc ? pvk_upload(e, sizeof(*args), 16, NULL, NULL, &address) : NULL;
-        if (args) {
-            memset(args, 0, sizeof(*args));
-            if (resolve) {
-                args->offset[0] = c->src0[0] - c->dst0[0];
-                args->offset[1] = c->src0[1] - c->dst0[1];
-                args->offset[2] = (int32_t)(c->src_layer + p);
-            } else {
-                for (i = 0; i < 2; i++) {
-                    args->src[i] = (float)c->src0[i];
-                    args->src[2 + i] = (float)c->src1[i];
-                    args->dst[i] = (float)c->dst0[i];
-                    args->dst[2 + i] = (float)c->dst1[i];
-                }
-                args->size[0] = (float)c->src_w;
-                args->size[1] = (float)c->src_h;
-                args->size[2] = (float)c->src_d;
-                args->size[3] = (float)c->src_level;
-                if (c->src_3d) /* the source z of this destination slice's center */
-                    args->layer[0] = (float)c->src0[2] +
-                                     ((float)(c->dst_3d ? (int32_t)plane : c->dst0[2]) + 0.5f - (float)c->dst0[2]) *
-                                         (float)(c->src1[2] - c->src0[2]) / (dz != 0.0f ? dz : 1.0f);
-                else
-                    args->layer[0] = (float)(c->src_layer + (c->dst_3d ? 0 : p));
-            }
-            for (i = 0; i < 4; i++)
-                args->swizzle[i] = c->swizzle[i];
-            pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
-            pvk_MTL4RenderCommandEncoder_setViewport(enc, vp);
-            pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->render_table,
-                                                                   PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
-            pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->render_table, address, 0);
-            pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->render_table, pvk_MTLTexture_gpuResourceID(c->src), 0);
-            pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount(enc, PVK_MTLPrimitiveTypeTriangle, 0, 3);
+    memset(&a, 0, sizeof(a));
+    if (resolve) {
+        a.offset[0] = c->src0[0] - c->dst0[0];
+        a.offset[1] = c->src0[1] - c->dst0[1];
+        a.offset[2] = (int32_t)c->src_layer;
+    } else {
+        for (i = 0; i < 2; i++) {
+            a.src[i] = (float)c->src0[i];
+            a.src[2 + i] = (float)c->src1[i];
+            a.dst[i] = (float)c->dst0[i];
+            a.dst[2 + i] = (float)c->dst1[i];
+        }
+        a.size[0] = (float)c->src_w;
+        a.size[1] = (float)c->src_h;
+        a.size[2] = (float)c->src_d;
+        a.size[3] = (float)c->src_level;
+        if (c->src_3d) { /* each destination plane samples the source z of its center (pvk_z) */
+            a.layer[0] = (float)c->src0[2];
+            a.layer[1] = (float)c->dst0[2];
+            a.layer[2] = (float)(c->src1[2] - c->src0[2]);
+            a.layer[3] = c->dst1[2] != c->dst0[2] ? (float)(c->dst1[2] - c->dst0[2]) : 1.0f;
+            a.offset[0] = c->dst_3d ? z0 : c->dst0[2];
+        } else { /* each destination layer reads its own, a 3D destination's planes the one */
+            a.layer[0] = (float)c->src_layer;
+            a.layer[1] = c->dst_3d ? 0.0f : 1.0f;
             e->drew = true;
         }
-        objc_autoreleasePoolPop(pool);
     }
+    for (i = 0; i < 4; i++)
+        a.swizzle[i] = c->swizzle[i];
+
+    if (!(pso = pvk_blit_pipeline(e->device, c->function, c->dst_format, layers > 1))) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return;
+    }
+    pool = objc_autoreleasePoolPush();
+    enc = pvk_blit_encoder(e, c->dst, c->dst_level, c->dst_3d ? 0 : c->dst_layer, c->dst_3d ? (uint32_t)z0 : 0, layers);
+    args = enc ? pvk_upload(e, sizeof(a), 16, NULL, NULL, &address) : NULL;
+    if (args) {
+        memcpy(args, &a, sizeof(a));
+        pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
+        pvk_MTL4RenderCommandEncoder_setViewport(enc, vp);
+        pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->render_table,
+                                                               PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->render_table, address, 0);
+        pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->render_table, pvk_MTLTexture_gpuResourceID(c->src), 0);
+        pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
+            enc, PVK_MTLPrimitiveTypeTriangle, 0, 3, layers, 0);
+    }
+    objc_autoreleasePoolPop(pool);
 }
 
 static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *c)
@@ -62158,14 +62209,14 @@ static void pvk_render_resolve_int(struct pvk_encoder *e)
                       : pa->fmt->kind == PVK_FK_SINT ? PVK_RESOLVE_I_MS
                                                      : PVK_RESOLVE_F_MS) + (pa->array ? 1u : 0u);
         c.dst_level = pa->resolve_level;
-        c.layers = 1;
+        c.layers = mask ? 1 : layers; /* (all layers in one layered draw) */
         c.src0[0] = c.dst0[0] = r->area.offset.x;
         c.src0[1] = c.dst0[1] = r->area.offset.y;
         c.dst1[0] = r->area.offset.x + (int32_t)r->area.extent.width;
         c.dst1[1] = r->area.offset.y + (int32_t)r->area.extent.height;
         c.dst1[2] = 1;
         pvk_blit_swizzle(pa->fmt, c.swizzle);
-        for (l = 0; l < layers && e->result == VK_SUCCESS; l++) {
+        for (l = 0; l < layers && e->result == VK_SUCCESS; l += c.layers) {
             if (mask && !(mask & (1u << l)))
                 continue;
             c.src_layer = pa->slice + l;

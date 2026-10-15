@@ -1465,11 +1465,11 @@ static void test_blit(void)
 
 /* Blits as they are batched (pvk_encode_blit): consecutive blits into one
  * destination in one render pass, then a barrier before one reading what
- * they wrote. */
+ * they wrote; all layers or slice planes in one layered draw. */
 static void test_blit_batched(void)
 {
     struct buf out = make_buf(1 << 16, shared_type, 0);
-    uint32_t x, y, q;
+    uint32_t x, y, z, l, q;
     VkBufferImageCopy dl;
     VkCommandBuffer cb;
     VkImageBlit r;
@@ -1514,6 +1514,80 @@ static void test_blit_batched(void)
             }
         for (q = 0; q < 4; q++)
             free_image(&a[q]);
+        free_image(&b);
+    }
+
+    /* array layers: 2x down, linear, all three in one blit; layers 1-2 into
+     * layers 0-1 of another, flipped, nearest */
+    {
+        uint8_t px[8 * 8 * 3 * 4];
+        struct img c;
+        fill_pattern(px, sizeof(px), 9);
+        a[0] = image_with(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 8, 8, 1, 1, 3, px, sizeof(px));
+        b = image_with(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 4, 4, 1, 1, 3, NULL, 0);
+        c = image_with(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 8, 8, 1, 1, 3, px, sizeof(px));
+        cb = begin();
+        r = blit_region(0, 0, 0, 0, 0, 8, 8, 1, 0, 0, 0, 0, 0, 4, 4, 1, 3);
+        vkCmdBlitImage(cb, a[0].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &r, VK_FILTER_LINEAR);
+        r = blit_region(0, 1, 0, 0, 0, 8, 8, 1, 0, 0, 8, 0, 0, 0, 8, 1, 2);
+        vkCmdBlitImage(cb, a[0].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, c.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &r, VK_FILTER_NEAREST);
+        CHECK_VK(finish(cb), VK_SUCCESS);
+        dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 3, 0, 0, 0, 4, 4, 1);
+        download(b.image, &dl, &out);
+        for (l = 0; l < 3; l++)
+            for (y = 0; y < 4; y++)
+                for (x = 0; x < 4; x++)
+                    for (q = 0; q < 4; q++) {
+                        unsigned sum = 0, k;
+                        for (k = 0; k < 4; k++)
+                            sum += px[((l * 8 + 2 * y + k / 2) * 8 + 2 * x + k % 2) * 4 + q];
+                        CHECK(near(out.data[((l * 4 + y) * 4 + x) * 4 + q], (int)(sum / 4)));
+                    }
+        dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 3, 0, 0, 0, 8, 8, 1);
+        download(c.image, &dl, &out);
+        for (l = 0; l < 3; l++)
+            for (y = 0; y < 8; y++)
+                for (x = 0; x < 8; x++) {
+                    const uint8_t *want = l < 2 ? px + (((l + 1) * 8 + y) * 8 + 7 - x) * 4 : px + ((l * 8 + y) * 8 + x) * 4;
+                    if (memcmp(out.data + ((l * 8 + y) * 8 + x) * 4, want, 4)) {
+                        PVK_TEST_FAIL("flipped layer %u texel (%u, %u)", l, x, y);
+                        l = 3;
+                        y = 8;
+                        break;
+                    }
+                }
+        free_image(&a[0]);
+        free_image(&b);
+        free_image(&c);
+    }
+
+    /* 3D: planes 0-3 into planes 4-1 (mirrored in z), nearest; planes 0 and
+     * 5 keep what they had */
+    {
+        float f[4 * 4 * 4], g[4 * 4 * 6];
+        for (x = 0; x < 64; x++)
+            f[x] = (float)x;
+        for (x = 0; x < 96; x++)
+            g[x] = -1.0f;
+        a[0] = image_with(VK_IMAGE_TYPE_3D, VK_FORMAT_R32_SFLOAT, 4, 4, 4, 1, 1, f, sizeof(f));
+        b = image_with(VK_IMAGE_TYPE_3D, VK_FORMAT_R32_SFLOAT, 4, 4, 6, 1, 1, g, sizeof(g));
+        r = blit_region(0, 0, 0, 0, 0, 4, 4, 4, 0, 0, 0, 0, 5, 4, 4, 1, 1);
+        blit(&a[0], &b, &r, VK_FILTER_NEAREST);
+        dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, 4, 4, 6);
+        download(b.image, &dl, &out);
+        for (z = 0; z < 6; z++)
+            for (x = 0; x < 16; x++) {
+                float got, want = z >= 1 && z <= 4 ? f[(4 - z) * 16 + x] : -1.0f;
+                memcpy(&got, out.data + (z * 16 + x) * 4, 4);
+                if (got != want) {
+                    PVK_TEST_FAIL("plane %u texel %u: %g, not %g", z, x, got, want);
+                    z = 6;
+                    break;
+                }
+            }
+        free_image(&a[0]);
         free_image(&b);
     }
     free_buf(&out);
