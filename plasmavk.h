@@ -46797,6 +46797,11 @@ static void pvk_spv_glsl(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
             fn = pvk_spv_fmt(ctx, "pvk_%s", fn); /* (pvk_spv_math_template) */
             ctx->use_math = true;
         }
+        /* pow of x < 0 is undefined: powr, which assumes x >= 0, is cheaper
+         * (an n-body kernel's pow-bound loop: 541 against 521 us, M4 Max).
+         * Float controls keep pow's specials. */
+        if (inst == PVK_SPV_GLSL_Pow && ctx->result->fast_math)
+            fn = "powr";
         if (nops == 1)
             pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", fn, pvk_spv_val(ctx, in->w[5])));
         else if (nops == 2)
@@ -47060,8 +47065,26 @@ static void pvk_spv_barrier(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         if (wide)
             pvk_spv_fence(ctx, scope, dev | PVK_SPV_SemanticsAcquire, PVK_SPV_SEM_ACQUIRE, 0);
     } else { /* OpMemoryBarrier: a fence */
-        pvk_spv_fence(ctx, pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 1)), pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2)),
-                      ~0u, 0);
+        const uint32_t storage = PVK_SPV_SemanticsUniformMemory | PVK_SPV_SemanticsWorkgroupMemory |
+                                 PVK_SPV_SemanticsCrossWorkgroupMemory | PVK_SPV_SemanticsImageMemory;
+        uint32_t scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 1));
+        uint32_t sem = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 2));
+        struct pvk_spv_insn next = pvk_spv_insn_at(ctx, in->off + in->wc);
+        while (next.op == PVK_SPV_OpLine || next.op == PVK_SPV_OpNoLine || next.op == PVK_SPV_OpNop)
+            next = pvk_spv_insn_at(ctx, next.off + next.wc);
+        /* memoryBarrierShared(); barrier() (a fence over threadgroup memory
+         * alone, at least as wide as the workgroup: no other sees that
+         * memory): the threadgroup barrier right after orders it for the
+         * threadgroup (as it does for barrier() alone); the device-scope
+         * fence this would be cost an n-body kernel's two per iteration 3 us
+         * of 541. */
+        if (next.op == PVK_SPV_OpControlBarrier && scope != PVK_SPV_ScopeSubgroup && scope != PVK_SPV_ScopeInvocation &&
+            (sem & storage) == PVK_SPV_SemanticsWorkgroupMemory &&
+            pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, &next, 1)) == PVK_SPV_ScopeWorkgroup &&
+            pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, &next, 2)) == PVK_SPV_ScopeWorkgroup &&
+            (pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, &next, 3)) & PVK_SPV_SemanticsWorkgroupMemory))
+            return;
+        pvk_spv_fence(ctx, scope, sem, ~0u, 0);
     }
 }
 
@@ -47612,6 +47635,29 @@ static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         else
             pvk_spv_line(ctx, "if (pvk_killed)\n%*s    return %s;", (int)ctx->indent * 4, "", pvk_spv_zero(ctx, ctx->fn->ret));
     }
+}
+
+/* The scalar a vector divisor repeats in every component (an
+ * OpCompositeConstruct of one id, used in its own block only), else 0. In
+ * Vulkan's default floating-point environment a division may be a product
+ * with the reciprocal: one reciprocal for every component then, which
+ * Metal's relaxed math doesn't do by itself (an n-body kernel's
+ * `len * g * w / vec3(pow(...))`: 1650 against 1724 frames per second). */
+static uint32_t pvk_spv_splat_of(struct pvk_spv *ctx, uint32_t v)
+{
+    const struct pvk_spv_id *x = pvk_spv_get(ctx, v);
+    struct pvk_spv_insn in;
+    uint32_t i;
+    if (x->kind != PVK_SPV_K_VALUE || x->op != PVK_SPV_OpCompositeConstruct || !pvk_spv_local(x) ||
+        pvk_spv_type(ctx, x->type)->op != PVK_SPV_OpTypeVector)
+        return 0;
+    in = pvk_spv_insn_at(ctx, x->insn);
+    if (in.wc < 5 || pvk_spv_vtype(ctx, in.w[3])->op != PVK_SPV_OpTypeFloat)
+        return 0;
+    for (i = 4; i < in.wc; i++)
+        if (in.w[i] != in.w[3])
+            return 0;
+    return in.w[3];
 }
 
 static const char *pvk_spv_binary_op(uint32_t op)
@@ -49293,10 +49339,17 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
     case PVK_SPV_OpVectorTimesScalar: case PVK_SPV_OpMatrixTimesScalar:
     case PVK_SPV_OpFOrdEqual: case PVK_SPV_OpFUnordNotEqual: case PVK_SPV_OpFOrdLessThan:
     case PVK_SPV_OpFOrdGreaterThan: case PVK_SPV_OpFOrdLessThanEqual: case PVK_SPV_OpFOrdGreaterThanEqual:
-    case PVK_SPV_OpLogicalOr: case PVK_SPV_OpLogicalAnd: case PVK_SPV_OpLogicalEqual: case PVK_SPV_OpLogicalNotEqual:
+    case PVK_SPV_OpLogicalOr: case PVK_SPV_OpLogicalAnd: case PVK_SPV_OpLogicalEqual: case PVK_SPV_OpLogicalNotEqual: {
+        uint32_t splat = op == PVK_SPV_OpFDiv && ctx->result->fast_math ? pvk_spv_splat_of(ctx, pvk_spv_arg(ctx, in, 4)) : 0;
+        if (splat) { /* (pvk_spv_splat_of) */
+            pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s * (1 / %s)", pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3)),
+                                              pvk_spv_val(ctx, splat)));
+            return;
+        }
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s %s %s", pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3)),
                                           pvk_spv_binary_op(op), pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 4))));
         return;
+    }
     case PVK_SPV_OpFUnordEqual:
     case PVK_SPV_OpFOrdNotEqual:
     case PVK_SPV_OpFUnordLessThan:
