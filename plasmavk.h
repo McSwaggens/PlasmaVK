@@ -43297,15 +43297,16 @@ static bool pvk_spv_is_reserved(const char *s)
     static const char *const scalars[] = { "bool", "char", "uchar", "short", "ushort", "int", "uint",
                                            "long", "ulong", "half", "float", "double", "bfloat" };
     size_t i, n;
+    /* (the first characters first: names are checked per struct member) */
     for (i = 0; i < PVK_ARRAY_SIZE(pvk_spv_reserved); i++)
-        if (strcmp(s, pvk_spv_reserved[i]) == 0)
+        if (s[0] == pvk_spv_reserved[i][0] && strcmp(s, pvk_spv_reserved[i]) == 0)
             return true;
     /* vector and matrix type names: float3, half2x2, packed_float3 ... */
     if (strncmp(s, "packed_", 7) == 0)
         s += 7;
     for (i = 0; i < PVK_ARRAY_SIZE(scalars); i++) {
         n = strlen(scalars[i]);
-        if (strncmp(s, scalars[i], n) == 0 && s[n] >= '1' && s[n] <= '9')
+        if (s[0] == scalars[i][0] && strncmp(s, scalars[i], n) == 0 && s[n] >= '1' && s[n] <= '9')
             return true;
     }
     return false;
