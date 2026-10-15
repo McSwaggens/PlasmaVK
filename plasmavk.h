@@ -31742,15 +31742,22 @@ static int pvk_log_threshold = PVK_LOG_WARN;
 static bool pvk_debug_env; /* PLASMAVK_DEBUG: the debug layer is on for every instance */
 static pthread_once_t pvk_log_once = PTHREAD_ONCE_INIT;
 
+/* Whether environment variable `name` is set, to something but "0". */
+static bool pvk_env_on(const char *name)
+{
+    const char *value = getenv(name);
+    return value && value[0] && strcmp(value, "0") != 0;
+}
+
 static void pvk_log_init(void)
 {
     static const char *const names[] = { "error", "warn", "info", "debug" };
-    const char *env = getenv("PLASMAVK_LOG"), *debug = getenv("PLASMAVK_DEBUG");
+    const char *env = getenv("PLASMAVK_LOG");
     unsigned i;
     for (i = 0; env && i < PVK_ARRAY_SIZE(names); i++)
         if (strcmp(env, names[i]) == 0)
             pvk_log_threshold = (int)i;
-    pvk_debug_env = debug && debug[0] && strcmp(debug, "0") != 0;
+    pvk_debug_env = pvk_env_on("PLASMAVK_DEBUG");
 }
 
 struct pvk_instance;
@@ -32282,6 +32289,7 @@ struct pvk_device {
     id residency_set; /* MTLResidencySet attached to every queue (section 9) */
     pthread_mutex_t residency_lock;
     uint32_t residency_changes; /* to the set since its last commit, under residency_lock */
+    bool view_residency; /* image and texel buffer views join the set too (section 11) */
     /* Small VkDeviceMemory: blocks of shared heaps, by memory type (section 10) */
     pthread_mutex_t pool_lock;
     struct pvk_memory_chunk *chunks[PVK_MEMORY_TYPE_COUNT];
@@ -36611,6 +36619,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
     device->physical_device = pd;
     device->features = features;
     device->debug = pd->instance->debug;
+    device->view_residency = device->debug || pvk_env_on("MTL_SHADER_VALIDATION");
     device->app_alloc = pAllocator != NULL;
     device->visibility = PVK_MTL4VisibilityOptionDevice;
     if (features.core.sparseBinding)
@@ -37507,7 +37516,12 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
  *     lazily allocated memory   a memoryless texture (tile memory only).
  *   Sparse images are textures made at creation instead (SPARSE IMAGES).
  *   The heap and its buffer are in the device's residency set (section 10),
- *   which makes placed and linear textures resident. Memoryless textures own
+ *   which makes placed and linear textures resident, their views and texel
+ *   buffer views included. Views join the set themselves only where Metal's
+ *   shader validation may run (MTL_SHADER_VALIDATION, or the debug layer),
+ *   which asks for the view objects too, or where no heap covers them
+ *   (sparse images and buffers): each add and removal costs a residency
+ *   change, committed in batches (section 9). Memoryless textures own
  *   no memory, and Metal's validation layer rejects them in residency sets.
  *   Memory requirements come from heapTextureSizeAndAlignWithDescriptor:, the
  *   largest over the storage modes the image may be bound to. Images Metal
@@ -37662,7 +37676,8 @@ struct pvk_buffer_view {
     pvk_MTLResourceID texture_id; /* its resource ID */
     /* section 11: */
     VkFormat format;
-    VkDeviceSize offset, elements; /* (mtl_texture is in the device residency set) */
+    VkDeviceSize offset, elements;
+    bool resident; /* mtl_texture is in the device residency set */
     /* Views of sparse buffers (BUFFER VIEWS): mtl_texture is a placement
      * sparse texture buffer whose pages mirror the buffer's from page
      * first_page on, in the buffer's list (device->sparse_lock); buffer
@@ -38989,9 +39004,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
     view->plane_ids[1] = pvk_texture_id(view->planes[1]);
     /* Descriptors name the view's texture by its resource ID. The heap
      * covers its memory, but Metal's shader validation also wants the view
-     * object itself resident; the image's own texture is covered as the
-     * image is. Memoryless textures can't join a set. */
-    if (!image->memoryless && !view->image_texture) {
+     * object itself resident: views join the set when it may run
+     * (device->view_residency), and views of sparse images, whose memory no
+     * heap of theirs covers, always. The image's own texture is covered as
+     * the image is. Memoryless textures can't join a set. */
+    if (!image->memoryless && !view->image_texture && (device->view_residency || image->sparse)) {
         pvk_device_make_resident(device, view->mtl_texture);
         for (p = 0; p < 2; p++)
             if (view->planes[p])
@@ -39201,7 +39218,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateBufferView(VkDevice _device, const VkBuff
         pvk_free(alloc, view);
         return buffer->sparse.mtl_buffer ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_ERROR_OUT_OF_HOST_MEMORY;
     }
-    pvk_device_make_resident(device, view->mtl_texture); /* as for image views */
+    if (device->view_residency || view->npages) { /* as for image views; a sparse buffer's view: its own pages */
+        pvk_device_make_resident(device, view->mtl_texture);
+        view->resident = true;
+    }
     view->texture_id = pvk_texture_id(view->mtl_texture);
     *pView = (VkBufferView)view;
     return VK_SUCCESS;
@@ -39224,7 +39244,8 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyBufferView(VkDevice device, VkBufferView buf
         }
         pthread_mutex_unlock(&d->sparse_lock);
     }
-    pvk_device_evict((struct pvk_device *)device, view->mtl_texture);
+    if (view->resident)
+        pvk_device_evict((struct pvk_device *)device, view->mtl_texture);
     pvk_release(view->mtl_texture);
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), view);
 }

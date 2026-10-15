@@ -1990,7 +1990,8 @@ static void test_depth_stencil_views(void)
  * view of a level, of a layer, of another type or with a channel mapping
  * gets one of its own, as does a depth view shaders may read (it carries
  * (D, 0, 0, 1)). A depth view no shader reads carries no mapping: it is
- * its image's texture too. */
+ * its image's texture too. Views of their own join the residency set only
+ * where Metal's shader validation may run. */
 static void test_view_reuse(void)
 {
     VkImageCreateInfo ci = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 4, 4, 1, 3, 2,
@@ -2027,6 +2028,7 @@ static void test_view_reuse(void)
     CHECK(view_texture(whole) == texture && ((struct pvk_image_view *)whole)->mtl_attachment == texture);
     CHECK(view_texture(explicit_rgba) == texture);
     CHECK(view_texture(level) != texture && view_texture(layer) != texture && view_texture(swapped) != texture);
+    CHECK(((struct pvk_image_view *)level)->resident == ((struct pvk_device *)device)->view_residency);
     CHECK(view_texture(depth) != texture_of(s.image));
     CHECK(view_texture(attachment) == texture_of(a.image) &&
           ((struct pvk_image_view *)attachment)->mtl_attachment == texture_of(a.image));
