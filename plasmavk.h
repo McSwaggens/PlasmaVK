@@ -42887,17 +42887,23 @@ static void pvk_sb_reserve(struct pvk_spv *ctx, struct pvk_sb *sb, size_t extra)
     sb->cap = cap;
 }
 
+/* Formats straight into the free capacity; only text that does not fit is
+ * formatted again, after growing (a sizing pass first would double the
+ * formatting, most of the translation time). */
 static void pvk_sb_vprintf(struct pvk_spv *ctx, struct pvk_sb *sb, const char *fmt, va_list args)
 {
     va_list copy;
     int n;
+    pvk_sb_reserve(ctx, sb, 0);
     va_copy(copy, args);
-    n = vsnprintf(NULL, 0, fmt, copy);
+    n = vsnprintf(sb->data + sb->len, sb->cap - sb->len, fmt, copy);
     va_end(copy);
     if (n < 0)
         pvk_spv_fail(ctx, "formatting failed");
-    pvk_sb_reserve(ctx, sb, (size_t)n);
-    vsnprintf(sb->data + sb->len, (size_t)n + 1, fmt, args);
+    if ((size_t)n >= sb->cap - sb->len) {
+        pvk_sb_reserve(ctx, sb, (size_t)n);
+        vsnprintf(sb->data + sb->len, (size_t)n + 1, fmt, args);
+    }
     sb->len += (size_t)n;
 }
 
@@ -42927,23 +42933,32 @@ static void pvk_sb_insert(struct pvk_spv *ctx, struct pvk_sb *sb, size_t pos, co
     sb->len += n;
 }
 
-/* printf into the arena. */
+/* printf into the arena: formatted where its next allocation starts, which
+ * then takes the text when it fits (the common case: chunks are 64 KB). */
 static const char *pvk_spv_fmt(struct pvk_spv *ctx, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 static const char *pvk_spv_fmt(struct pvk_spv *ctx, const char *fmt, ...)
 {
+    struct pvk_spv_chunk *c = ctx->chunks;
+    size_t room = c ? c->size - c->used : 0; /* a multiple of 16, like allocation sizes */
+    char *s = c ? (char *)c->data + c->used : NULL;
     va_list args, copy;
-    char *s;
     int n;
     va_start(args, fmt);
     va_copy(copy, args);
-    n = vsnprintf(NULL, 0, fmt, copy);
+    n = vsnprintf(s, room, fmt, copy);
     va_end(copy);
     if (n < 0) {
         va_end(args);
         pvk_spv_fail(ctx, "formatting failed");
     }
-    s = pvk_spv_alloc(ctx, (size_t)n + 1);
-    vsnprintf(s, (size_t)n + 1, fmt, args);
+    if ((size_t)n < room) {
+        pvk_spv_alloc(ctx, (size_t)n + 1); /* returns s */
+    } else {
+        if (room)
+            memset(s, 0, room); /* the arena's free memory stays zeroed */
+        s = pvk_spv_alloc(ctx, (size_t)n + 1);
+        vsnprintf(s, (size_t)n + 1, fmt, args);
+    }
     va_end(args);
     return s;
 }
