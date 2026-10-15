@@ -91,21 +91,26 @@ $(BUILD)/check/ios: tests/compile/impl.c tests/compile/user.c plasmavk.h
 run-two-tu: $(CHECKS)
 	@./$(BUILD)/check/two-tu
 
-# Every benchmark runs even if an earlier one reports an error (wrong output);
-# the target fails at the end if any did. See bench/README.md.
-bench:
-	@mkdir -p $(BUILD)/bench
-	@status=0; for b in $(BENCHES); do \
-		$(CC) -std=c99 $(WARN) -O2 bench/$$b.c -o $(BUILD)/bench/$$b || exit 1; \
-		./$(BUILD)/bench/$$b || status=1; \
-	done; exit $$status
+# Every bench/bench_*.c builds first (in parallel with make -j), then the
+# benchmarks run one at a time. Each runs even if an earlier one reports an
+# error (wrong output); the target fails at the end if any did. See
+# bench/README.md.
+BENCH_DEPS := plasmavk.h $(wildcard bench/*.h)
 
-bench-mvk:
-	@mkdir -p $(BUILD)/bench-loader
+$(BUILD)/bench/%: bench/%.c $(BENCH_DEPS)
+	@mkdir -p $(@D)
+	@$(CC) -std=c99 $(WARN) -O2 $< -o $@
+
+$(BUILD)/bench-loader/%: bench/%.c $(BENCH_DEPS)
+	@mkdir -p $(@D)
+	@$(CC) -std=c99 $(WARN) -O2 -DBENCH_USE_LOADER $< -L$(LOADER_LIB) -lvulkan -Wl,-rpath,$(LOADER_LIB) -o $@
+
+bench: $(addprefix $(BUILD)/bench/,$(BENCHES))
+	@status=0; for b in $(BENCHES); do $(BUILD)/bench/$$b || status=1; done; exit $$status
+
+bench-mvk: $(addprefix $(BUILD)/bench-loader/,$(BENCHES))
 	@status=0; for b in $(BENCHES); do \
-		$(CC) -std=c99 $(WARN) -O2 -DBENCH_USE_LOADER bench/$$b.c \
-			-L$(LOADER_LIB) -lvulkan -Wl,-rpath,$(LOADER_LIB) -o $(BUILD)/bench-loader/$$b || exit 1; \
-		VK_DRIVER_FILES=$(MVK_ICD) BENCH_IMPL=moltenvk ./$(BUILD)/bench-loader/$$b || status=1; \
+		VK_DRIVER_FILES=$(MVK_ICD) BENCH_IMPL=moltenvk $(BUILD)/bench-loader/$$b || status=1; \
 	done; exit $$status
 
 # Conformance tests (tests/conformance/README.md). The same sources build
