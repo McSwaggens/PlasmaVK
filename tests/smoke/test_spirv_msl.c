@@ -9310,6 +9310,47 @@ static void test_deterministic(void)
     pvk_msl_result_free(&b);
 }
 
+static int format_fast(char *buf, size_t cap, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+static int format_fast(char *buf, size_t cap, const char *fmt, ...)
+{
+    va_list args;
+    int n;
+    va_start(args, fmt);
+    n = pvk_spv_vsnprintf(buf, cap, fmt, args);
+    va_end(args);
+    return n;
+}
+
+/* The translator's formatter writes what snprintf writes, for the
+ * conversions it formats itself and for those it leaves to vsnprintf; too
+ * small a buffer still gets the length. */
+#define CHECK_FORMAT(...)                                                                \
+    do {                                                                                 \
+        char want_[256], got_[256];                                                      \
+        int n_ = snprintf(want_, sizeof(want_), __VA_ARGS__);                            \
+        CHECK(format_fast(got_, sizeof(got_), __VA_ARGS__) == n_ && strcmp(got_, want_) == 0); \
+        CHECK(format_fast(got_, (size_t)n_, __VA_ARGS__) == n_);                         \
+    } while (0)
+
+static void test_format(void)
+{
+    char buf[8];
+    CHECK_FORMAT("%s %s = %s;", "float4", "v_12", "float4(0.0f, 0.0f, 0.0f, 1.0f)");
+    CHECK_FORMAT("%u %u %d %d %d %x %x", 0u, 4294967295u, 0, -7, -2147483647 - 1, 0u, 0xdeadbeefu);
+    CHECK_FORMAT("%llu %lld %lld %llx %lu %ld", 18446744073709551615ull, -9223372036854775807ll - 1, 42ll,
+                 0x123456789abcdefull, 7ul, -7l);
+    CHECK_FORMAT("0x%08xu 0x%04xu [%5u] [%05d] [%5d] [%3d] [%*u] [%0*d]", 0x3f80u, 0xbu, 42u, -42, -42, 12345, 6, 7u,
+                 6, -7);
+    CHECK_FORMAT("[%5s] [%.3s] [%.0s] [%.*s] [%.*s] [%*s] [%6.2s] [%s]", "ab", "abcdef", "abc", 2, "xyz", -1, "xyz",
+                 4, "", "pq", "");
+    CHECK_FORMAT("%c%c [%3c] %s %% 6u %%", 'a', '%', 'z', "i");
+    /* vsnprintf's: floats, flags, a precision on numbers, a negative width */
+    CHECK_FORMAT("float(%s) / %.1ff [%-4s] [%+d] [%.3u] [%*s] [%#x]", "v", 127.0, "l", 5, 7u, -3, "r", 255u);
+    CHECK(format_fast(buf, sizeof(buf), "%s", "1234567") == 7 && strcmp(buf, "1234567") == 0);
+    CHECK(format_fast(buf, sizeof(buf), "%s%u", "1234567", 8u) == 8);
+    CHECK(format_fast(NULL, 0, "%u", 123u) == 3);
+}
+
 /* ==========================================================================
  * Images, samplers and descriptor sets
  *
@@ -13438,6 +13479,7 @@ int main(void)
     RUN(test_corrupted_modules);
     RUN(test_random_layouts);
     RUN(test_deterministic);
+    RUN(test_format);
     mt_shutdown();
     return TEST_RESULT();
 }

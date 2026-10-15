@@ -42887,6 +42887,130 @@ static void pvk_sb_reserve(struct pvk_spv *ctx, struct pvk_sb *sb, size_t extra)
     sb->cap = cap;
 }
 
+/* Appends n bytes (s, or n copies of fill when s is NULL) at *len when they
+ * fit in cap with a NUL after them; *len counts them either way. Once a
+ * piece has not fit, no later one does. */
+static void pvk_spv_put(char *buf, size_t cap, size_t *len, const char *s, char fill, size_t n)
+{
+    if (*len + n < cap) {
+        if (s)
+            memcpy(buf + *len, s, n);
+        else
+            memset(buf + *len, fill, n);
+    }
+    *len += n;
+}
+
+/* vsnprintf for the conversions the translator writes: %s %c %d %u %x and
+ * %%, l or ll on the numbers, a width (or *) with the 0 flag on numbers, a
+ * precision (or *) on strings. One pass and no locale lookups, where
+ * vsnprintf took most of the translation time. Anything else (the %.1f of
+ * vertex formats) is vsnprintf's. Returns the length (-1: failed); the text
+ * and its NUL are written only if they fit in cap bytes. */
+static int pvk_spv_vsnprintf(char *buf, size_t cap, const char *fmt, va_list args)
+{
+    const char *f = fmt;
+    size_t len = 0;
+    va_list ap;
+
+    va_copy(ap, args);
+    while (*f) {
+        const char *s = f, *spec;
+        char num[24], conv;
+        size_t n = 0, i = sizeof(num);
+        int width = 0, prec = -1, lng = 0;
+        bool zero = false, number;
+
+        while (*f && *f != '%')
+            f++;
+        if (f > s)
+            pvk_spv_put(buf, cap, &len, s, 0, (size_t)(f - s));
+        if (!*f)
+            break;
+        spec = ++f;
+        if (*f == '0') {
+            zero = true;
+            f++;
+        }
+        if (*f == '*') {
+            width = va_arg(ap, int);
+            f++;
+        } else {
+            while (*f >= '0' && *f <= '9')
+                width = width * 10 + (*f++ - '0');
+        }
+        if (*f == '.') {
+            prec = 0;
+            if (*++f == '*') {
+                prec = va_arg(ap, int);
+                f++;
+            } else {
+                while (*f >= '0' && *f <= '9')
+                    prec = prec * 10 + (*f++ - '0');
+            }
+        }
+        while (*f == 'l' && lng < 2) {
+            lng++;
+            f++;
+        }
+        conv = *f;
+        number = conv == 'd' || conv == 'u' || conv == 'x';
+        if (!(number || conv == 's' || conv == 'c' || conv == '%') || width < 0 || (zero && !number) ||
+            (lng && !number) || (prec >= 0 && conv != 's') || (conv == '%' && f != spec))
+            goto other;
+        f++;
+        if (conv == 's') {
+            s = va_arg(ap, const char *);
+            if (!s)
+                s = "(null)";
+            if (prec < 0)
+                n = strlen(s);
+            else
+                while (n < (size_t)prec && s[n])
+                    n++;
+        } else if (number) {
+            unsigned long long v;
+            bool neg = false;
+            if (conv == 'd') {
+                long long sv = lng == 2 ? va_arg(ap, long long) : lng ? va_arg(ap, long) : va_arg(ap, int);
+                neg = sv < 0;
+                v = neg ? 0ull - (unsigned long long)sv : (unsigned long long)sv;
+            } else {
+                v = lng == 2 ? va_arg(ap, unsigned long long) : lng ? va_arg(ap, unsigned long) : va_arg(ap, unsigned);
+            }
+            do {
+                num[--i] = conv == 'x' ? "0123456789abcdef"[v & 15u] : (char)('0' + v % 10u);
+                v = conv == 'x' ? v >> 4 : v / 10u;
+            } while (v);
+            if (neg && !zero)
+                num[--i] = '-';
+            if (neg && zero) { /* zeros go between the sign and the digits */
+                pvk_spv_put(buf, cap, &len, "-", 0, 1);
+                if (width > 0)
+                    width--;
+            }
+            s = num + i;
+            n = sizeof(num) - i;
+        } else {
+            num[0] = conv == 'c' ? (char)va_arg(ap, int) : '%';
+            s = num;
+            n = 1;
+        }
+        if ((size_t)width > n) /* right-justified */
+            pvk_spv_put(buf, cap, &len, NULL, zero ? '0' : ' ', (size_t)width - n);
+        pvk_spv_put(buf, cap, &len, s, 0, n);
+    }
+    va_end(ap);
+    if (len > 0x7fffffffu)
+        return -1;
+    if (len < cap)
+        buf[len] = '\0';
+    return (int)len;
+other:
+    va_end(ap);
+    return vsnprintf(buf, cap, fmt, args);
+}
+
 /* Formats straight into the free capacity; only text that does not fit is
  * formatted again, after growing (a sizing pass first would double the
  * formatting, most of the translation time). */
@@ -42896,13 +43020,13 @@ static void pvk_sb_vprintf(struct pvk_spv *ctx, struct pvk_sb *sb, const char *f
     int n;
     pvk_sb_reserve(ctx, sb, 0);
     va_copy(copy, args);
-    n = vsnprintf(sb->data + sb->len, sb->cap - sb->len, fmt, copy);
+    n = pvk_spv_vsnprintf(sb->data + sb->len, sb->cap - sb->len, fmt, copy);
     va_end(copy);
     if (n < 0)
         pvk_spv_fail(ctx, "formatting failed");
     if ((size_t)n >= sb->cap - sb->len) {
         pvk_sb_reserve(ctx, sb, (size_t)n);
-        vsnprintf(sb->data + sb->len, (size_t)n + 1, fmt, args);
+        pvk_spv_vsnprintf(sb->data + sb->len, (size_t)n + 1, fmt, args);
     }
     sb->len += (size_t)n;
 }
@@ -42945,7 +43069,7 @@ static const char *pvk_spv_fmt(struct pvk_spv *ctx, const char *fmt, ...)
     int n;
     va_start(args, fmt);
     va_copy(copy, args);
-    n = vsnprintf(s, room, fmt, copy);
+    n = pvk_spv_vsnprintf(s, room, fmt, copy);
     va_end(copy);
     if (n < 0) {
         va_end(args);
@@ -42957,7 +43081,7 @@ static const char *pvk_spv_fmt(struct pvk_spv *ctx, const char *fmt, ...)
         if (room)
             memset(s, 0, room); /* the arena's free memory stays zeroed */
         s = pvk_spv_alloc(ctx, (size_t)n + 1);
-        vsnprintf(s, (size_t)n + 1, fmt, args);
+        pvk_spv_vsnprintf(s, (size_t)n + 1, fmt, args);
     }
     va_end(args);
     return s;
