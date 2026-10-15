@@ -19,6 +19,7 @@ reports an error instead of fast-but-wrong numbers.
 | `bench_compute` | Chains of 100 or 1000 small dispatches with a barrier between each, 1000 independent dispatches without barriers, and a multi-pass inclusive prefix sum of 1M and 16M `uint`s (reports `gelements_per_s`). |
 | `bench_render_passes` | A deferred frame with dynamic rendering: a G-buffer (RGBA8 + 2x RGBA16F + D32, ~2000 objects) and then 32-light shading. The variants change what leaves tile memory: G-buffer `CLEAR`/`LOAD`/`DONT_CARE`; 4x MSAA with resolve, with the MSAA images transient (memoryless) or stored; and a single-pass version that reads the G-buffer as input attachments (dynamic rendering local read) and never stores it. 1080p and 4K. GPU time is the number to watch. |
 | `bench_pipeline_compile` | The time to create each of 256 graphics and 128 compute pipelines (distinct shaders, specialization constants and fixed-function state), one call per pipeline. The spread is the stutter: watch p99 and max. Phases: `cold`, `warm_cache` (a fresh device given the cold run's `vkGetPipelineCacheData`), `no_cache`, and `cold_parallel4` (4 threads). |
+| `bench_frame` | One engine-like deferred frame, the mix a game submits instead of one pattern at a time: streamed object constants, UI geometry and texture tiles; a per-frame descriptor pool; 4 shadow cascades (a depth-only pipeline, 1000 draws each); a G-buffer (3000 draws, 4 pipelines, 64 materials, a dynamic offset per draw); tiled light culling in compute; tiled lighting with shadow lookups; 11 bloom passes; tonemap and 600 scissored UI draws. 7613 draws in 18 rendering instances. Configs: one thread; 4 threads recording secondaries (`mt4_secondary`); 4 threads recording primaries submitted together (`mt4_primary`); timestamps around every pass, read a frame later like an engine's GPU profiler (`st_profiled`); a thread compiling pipelines meanwhile (`st_bgcompile`); 3840x2160; and a device with depth bounds enabled and made dynamic (and off), as translation layers do (`st_dynamic_depth_bounds`). |
 | `bench_upload_streaming` | Per-frame uploads: 256 x 4 KB buffer updates through a staging ring, one 32 MB bulk copy, 64 texture tiles into an atlas, a full 2048² mip chain, the same updates written directly into host-visible device-local memory, and map / flush / unmap per frame. CPU time includes writing the data. |
 
 ## Running
@@ -109,6 +110,14 @@ to stderr.
 - `startup` reports `wall_us` per iteration. `pipeline_compile` reports
   `create_us` per pipeline plus `total_ms` (and `wall_ms` for the threaded
   phase).
+- `frame`'s `cpu_us` is the main thread's critical path, including waiting
+  for its workers. The multithreaded configurations add `worker_cpu_us`
+  (the CPU time of all workers in a frame) and `record_wall_us`;
+  `st_profiled` adds the GPU time of each group of passes (`gpu_shadow_us`,
+  `gpu_gbuffer_us`, `gpu_cull_us`, `gpu_light_us`, `gpu_bloom_us`,
+  `gpu_final_us`); `st_bgcompile` adds the pipelines compiled while the
+  frames were measured (`bg_compiles`, `bg_compiles_per_s`) and their
+  `create_us`.
 - Derived numbers, all computed from medians: `cpu_ns_per_draw`,
   `cpu_ns_per_dispatch`, `gelements_per_s`, `cpu_gb_per_s`, `gpu_gb_per_s`.
 
@@ -144,9 +153,9 @@ its other configurations have run:
 - The benchmarks require Vulkan 1.3 with `dynamicRendering` and
   `synchronization2` (`compute` and `upload_streaming` need only the
   latter). `pipeline_compile` also needs `maintenance4`, because the SPIR-V
-  uses `LocalSizeId`. Push descriptors, dynamic rendering local read and 4x
-  MSAA are optional, per configuration. `VK_KHR_portability_subset` is
-  enabled whenever the device exposes it.
+  uses `LocalSizeId`. Push descriptors, dynamic rendering local read, 4x
+  MSAA and depth bounds are optional, per configuration.
+  `VK_KHR_portability_subset` is enabled whenever the device exposes it.
 - Device-level commands are called through pointers from
   `vkGetDeviceProcAddr` (`vkd.CmdDraw(...)`), as engines do. Loader builds
   therefore measure the driver, not the loader's trampolines.
@@ -157,8 +166,10 @@ its other configurations have run:
   submitted together.
 - Workloads are deterministic: fixed seeds, fixed scenes, and CPU references
   that are exact wherever possible. The exceptions use tolerances: float
-  lighting in `render_passes`, and the 5-way texture product in
-  `descriptor_churn` (±1 per channel).
+  lighting in `render_passes`, the 5-way texture product in
+  `descriptor_churn` (±1 per channel), and `frame`'s final image, lit,
+  bloomed and tonemapped in float (±2; its G-buffer, light lists and UI
+  glyphs are exact).
 - `pipeline_compile` mixes a per-run salt into a specialization constant,
   which changes the shader code. That way no earlier run's driver or OS
   shader cache can serve the "cold" pipelines. The CPU reference uses the
