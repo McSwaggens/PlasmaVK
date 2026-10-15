@@ -2308,6 +2308,226 @@ static void test_render_area_clear_depth(void)
     free_img(&target);
 }
 
+/* Render areas inside the attachments, off their origin and short of their
+ * far corner (Metal's tiles cross its edges): AREA_W x AREA_H attachments,
+ * area_rect. */
+#define AREA_W 64
+#define AREA_H 48
+static const VkRect2D area_rect = { { 5, 3 }, { 40, 30 } };
+
+/* Counts the texels of an AREA_W x AREA_H download (4 bytes each) that are
+ * not `inside` in area_rect (when check_inside) or `outside` beyond it. */
+static int area_bad(const struct buf *b, uint32_t inside, bool check_inside, uint32_t outside, const char *what)
+{
+    uint32_t x, y;
+    int bad = 0;
+    for (y = 0; y < AREA_H; y++)
+        for (x = 0; x < AREA_W; x++) {
+            bool in = x >= (uint32_t)area_rect.offset.x && x < area_rect.offset.x + area_rect.extent.width &&
+                      y >= (uint32_t)area_rect.offset.y && y < area_rect.offset.y + area_rect.extent.height;
+            uint32_t got;
+            memcpy(&got, b->data + 4 * (y * AREA_W + x), 4);
+            if ((in ? check_inside && got != inside : got != outside) && bad++ < 4)
+                fprintf(stderr, "render area %s: (%u, %u) is %08x, expected %08x\n", what, x, y, got,
+                        in ? inside : outside);
+        }
+    return bad;
+}
+
+/* Dynamic rendering in area_rect with one attachment, img: load and store
+ * ops, cleared to green or depth 0.25, resolved (averaged) into `resolve`. */
+static void area_begin(VkCommandBuffer cb, const struct img *img, bool depth, VkAttachmentLoadOp load,
+                       VkAttachmentStoreOp store, const struct img *resolve)
+{
+    VkRenderingAttachmentInfo att;
+    VkRenderingInfo info;
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = img->view;
+    att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.loadOp = load;
+    att.storeOp = store;
+    if (depth)
+        att.clearValue.depthStencil.depth = 0.25f;
+    else
+        att.clearValue.color.float32[1] = att.clearValue.color.float32[3] = 1.0f; /* green */
+    if (resolve) {
+        att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        att.resolveImageView = resolve->view;
+        att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea = area_rect;
+    info.layerCount = 1;
+    info.colorAttachmentCount = depth ? 0 : 1;
+    info.pColorAttachments = depth ? NULL : &att;
+    info.pDepthAttachment = depth ? &att : NULL;
+    vkCmdBeginRendering(cb, &info);
+}
+
+/* Clears color images to red and depth images to 1, then a barrier. */
+static void area_reset(VkCommandBuffer cb, const struct img *const *images, uint32_t n)
+{
+    static const VkClearDepthStencilValue one = { 1.0f, 0 };
+    VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    VkClearColorValue red;
+    uint32_t i;
+    memset(&red, 0, sizeof(red));
+    red.float32[0] = red.float32[3] = 1.0f;
+    for (i = 0; i < n; i++) {
+        range.aspectMask = images[i]->aspects;
+        if (images[i]->aspects & VK_IMAGE_ASPECT_COLOR_BIT)
+            vkCmdClearColorImage(cb, images[i]->image, VK_IMAGE_LAYOUT_GENERAL, &red, 1, &range);
+        else
+            vkCmdClearDepthStencilImage(cb, images[i]->image, VK_IMAGE_LAYOUT_GENERAL, &one, 1, &range);
+    }
+    barrier(cb);
+}
+
+/* The texels outside area_rect keep their contents (red, depth 1): color
+ * CLEAR / STORE; LOAD with a draw whose viewport covers twice the
+ * attachment, scissored to the area; CLEAR / DONT_CARE; depth CLEAR to 0.25,
+ * stored or not. */
+static void test_render_area_partial(void)
+{
+    static const VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    static const char *const names[5] = { "clear/store", "load, drawn", "clear/don't care", "depth clear/store",
+                                          "depth clear/don't care" };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, AREA_W, AREA_H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img ds = make_img(VK_FORMAT_D32_SFLOAT, AREA_W, AREA_H, 1, VK_SAMPLE_COUNT_1_BIT);
+    const struct img *images[2];
+    struct buf out = make_buf(AREA_W * AREA_H * 4);
+    float quarter = 0.25f, one = 1.0f;
+    uint32_t c, inside_depth, outside_depth;
+    struct pipe p;
+    VkPipeline pipeline;
+    int bad = 0;
+
+    images[0] = &target;
+    images[1] = &ds;
+    memcpy(&inside_depth, &quarter, 4);
+    memcpy(&outside_depth, &one, 4);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.dynamic = dyn;
+    p.dynamic_count = 2;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    for (c = 0; c < 5; c++) {
+        bool depth = c >= 3;
+        VkCommandBuffer cb = begin_cmd();
+        area_reset(cb, images, 2);
+        area_begin(cb, depth ? &ds : &target, depth, c == 1 ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR,
+                   c == 2 || c == 4 ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE, NULL);
+        if (c == 1) {
+            VkViewport vp = { 0, 0, 2 * AREA_W, 2 * AREA_H, 0, 1 };
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            vkCmdSetViewport(cb, 0, 1, &vp);
+            vkCmdSetScissor(cb, 0, 1, &area_rect);
+            rect(cb, -1, -1, 1, 1, 0, 0, 1, 1, 0);
+        }
+        vkCmdEndRendering(cb);
+        download(cb, depth ? &ds : &target, 0, depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        bad += area_bad(&out, depth ? inside_depth : c == 1 ? BLUE : GREEN, c != 2 && c != 4,
+                        depth ? outside_depth : RED, names[c]);
+    }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&ds);
+    free_img(&target);
+}
+
+/* Depth bounds tested in area_rect, the depth loaded (its copy rendered
+ * before the pass, up to the render target's end at the area's far corner)
+ * or cleared to 0.5: the left half drawn green at 0.8 with the test off,
+ * then everything blue at 0.9 with bounds [0.4, 0.6] on, which pass where
+ * the depth is still 0.5. Outside the area, red and 0.5 stay. */
+static void test_render_area_bounds(void)
+{
+    static const VkDynamicState dyn[4] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                                           VK_DYNAMIC_STATE_DEPTH_BOUNDS, VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE };
+    static const VkClearDepthStencilValue half = { 0.5f, 0 };
+    static const VkImageSubresourceRange range = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, AREA_W, AREA_H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img ds = make_img(VK_FORMAT_D32_SFLOAT, AREA_W, AREA_H, 1, VK_SAMPLE_COUNT_1_BIT);
+    const struct img *images[1];
+    struct buf out = make_buf(AREA_W * AREA_H * 4), depth = make_buf(AREA_W * AREA_H * 4);
+    VkViewport vp = { 0, 0, AREA_W, AREA_H, 0, 1 };
+    struct pipe p;
+    VkPipeline pipeline;
+    uint32_t c, x, y;
+    int bad = 0;
+
+    REQUIRE(features.depthBounds);
+    images[0] = &target;
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.depth_format = VK_FORMAT_D32_SFLOAT;
+    p.has_ds = true;
+    p.ds.depthTestEnable = p.ds.depthWriteEnable = VK_TRUE;
+    p.ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    p.dynamic = dyn;
+    p.dynamic_count = 4;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    for (c = 0; c < 2; c++) {
+        VkRenderingAttachmentInfo ca, da;
+        VkRenderingInfo info;
+        VkCommandBuffer cb = begin_cmd();
+        vkCmdClearDepthStencilImage(cb, ds.image, VK_IMAGE_LAYOUT_GENERAL, &half, 1, &range);
+        area_reset(cb, images, 1);
+        memset(&ca, 0, sizeof(ca));
+        ca.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        ca.imageView = target.view;
+        ca.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        da = ca;
+        da.imageView = ds.view;
+        da.loadOp = c ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        da.clearValue.depthStencil.depth = 0.5f;
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        info.renderArea = area_rect;
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &ca;
+        info.pDepthAttachment = &da;
+        vkCmdBeginRendering(cb, &info);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdSetViewport(cb, 0, 1, &vp);
+        vkCmdSetScissor(cb, 0, 1, &area_rect);
+        vkCmdSetDepthBounds(cb, 0.4f, 0.6f);
+        vkCmdSetDepthBoundsTestEnable(cb, VK_FALSE);
+        rect(cb, -1, -1, 0, 1, 0, 1, 0, 1, 0.8f);
+        vkCmdSetDepthBoundsTestEnable(cb, VK_TRUE);
+        rect(cb, -1, -1, 1, 1, 0, 0, 1, 1, 0.9f);
+        vkCmdEndRendering(cb);
+        download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        download(cb, &ds, 0, VK_IMAGE_ASPECT_DEPTH_BIT, &depth);
+        submit(cb);
+        for (y = 0; y < AREA_H; y++)
+            for (x = 0; x < AREA_W; x++) {
+                bool in = x >= (uint32_t)area_rect.offset.x && x < area_rect.offset.x + area_rect.extent.width &&
+                          y >= (uint32_t)area_rect.offset.y && y < area_rect.offset.y + area_rect.extent.height;
+                uint32_t got, want = !in ? RED : x < AREA_W / 2 ? GREEN : BLUE;
+                float d = ((const float *)depth.data)[y * AREA_W + x];
+                float want_d = !in ? 0.5f : x < AREA_W / 2 ? 0.8f : 0.9f;
+                memcpy(&got, out.data + 4 * (y * AREA_W + x), 4);
+                if ((got != want || d != want_d) && bad++ < 4)
+                    fprintf(stderr, "render area depth bounds, depth %s: (%u, %u) is %08x depth %g, "
+                            "expected %08x %g\n", c ? "cleared" : "loaded", x, y, got, d, want, want_d);
+            }
+    }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_buf(&depth);
+    free_img(&ds);
+    free_img(&target);
+}
+
 /* ==========================================================================
  * Pipeline state
  * ========================================================================== */
@@ -10972,6 +11192,8 @@ int main(void)
     RUN(test_render_pass_ops);
     RUN(test_rerecord);
     RUN(test_render_area_clear_depth);
+    RUN(test_render_area_partial);
+    RUN(test_render_area_bounds);
     RUN(test_depth_stencil);
     RUN(test_blend);
     RUN(test_cull);

@@ -56334,12 +56334,14 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearDepthStencilImage(VkCommandBuffer commandBu
  *   (pvk_pass_att_actions), except that a render area smaller than the
  *   attachment, or a view mask missing views below its last, clears by
  *   drawing (Metal clears the whole attachment, every layer up to the last
- *   view's) and always stores (DONT_CARE would lose what lies outside), an
- *   attachment used by subpasses of several encoders is stored and loaded
- *   between them, and memoryless (transient) attachments neither load nor
- *   store, except that render passes that load or store one, or use it in
- *   several encoders (or suspend or resume with it), render to memory
- *   committed to it instead (pvk_image_committed).
+ *   view's) and always stores (DONT_CARE would lose what lies outside; the
+ *   Metal pass's render target ends at the area's far corner, so only the
+ *   tiles up to it load and store, pvk_render_open), an attachment used by
+ *   subpasses of several encoders is stored and loaded between them, and
+ *   memoryless (transient) attachments neither load nor store, except that
+ *   render passes that load or store one, or use it in several encoders (or
+ *   suspend or resume with it), render to memory committed to it instead
+ *   (pvk_image_committed).
  *   Color, depth and stencil resolves are store actions of their encoder,
  *   except that a stored depth/stencil attachment is resolved by an
  *   internal pass after it (pvk_render_resolve_ds, section 16).
@@ -62098,17 +62100,20 @@ static void pvk_render_defer_resolve(struct pvk_pass_attachment *pa, struct pvk_
  * INPUT ATTACHMENTS): rendered from depth attachment pa before the pass,
  * into a texture the pass loads (in it, a read of the attachment returned
  * what the whole pass leaves there, in an 8 x 8 pass on M4 Max: draws
- * reading the copy before others wrote the depth saw those writes). NULL
- * when Metal cannot make it. */
-static id pvk_render_seed_depth(struct pvk_encoder *e, const struct pvk_pass_attachment *pa, uint32_t width,
-                                uint32_t height, uint32_t samples, uint32_t layers)
+ * reading the copy before others wrote the depth saw those writes). The
+ * texture is tex_width x tex_height (the attachments' size: render areas
+ * that change reuse it), the copy the pass's render target, width x height.
+ * NULL when Metal cannot make it. */
+static id pvk_render_seed_depth(struct pvk_encoder *e, const struct pvk_pass_attachment *pa, uint32_t tex_width,
+                                uint32_t tex_height, uint32_t width, uint32_t height, uint32_t samples,
+                                uint32_t layers)
 {
     bool layered = pa->array || layers, ok = false;
     uint32_t kind = samples > 1 ? (pa->array ? PVK_DSC_DEPTH_MS_ARRAY : PVK_DSC_DEPTH_MS)
                                 : (pa->array ? PVK_DSC_DEPTH_ARRAY : PVK_DSC_DEPTH);
     id pso = pvk_ds_copy_pipeline(e->device, kind, samples, layered);
-    id tex =
-        pvk_hidden_texture(e->device, PVK_MTLPixelFormatR32Float, width, height, samples, layers, e->queue, e->serial);
+    id tex = pvk_hidden_texture(e->device, PVK_MTLPixelFormatR32Float, tex_width, tex_height, samples, layers,
+                                e->queue, e->serial);
     id pass, att, enc, map;
     struct pvk_dsc_args *args;
     pvk_MTLGPUAddress address;
@@ -62125,6 +62130,10 @@ static id pvk_render_seed_depth(struct pvk_encoder *e, const struct pvk_pass_att
     pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
     if (layers)
         pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, layers);
+    if (width < tex_width || height < tex_height) {
+        pvk_MTL4RenderPassDescriptor_setRenderTargetWidth(pass, width);
+        pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(pass, height);
+    }
     pvk_MTL4RenderPassDescriptor_setSupportColorAttachmentMapping(pass, true);
     enc = pvk_retain(pvk_render_encoder_new(e, pass));
     pvk_release(pass);
@@ -62157,7 +62166,7 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
                           const struct pvk_pass_attachment *stencil, bool load_all, bool store_all, uint32_t int_slots)
 {
     struct pvk_render *r = &e->render;
-    uint32_t s, width = UINT32_MAX, height = UINT32_MAX, samples = 0, k;
+    uint32_t s, width = UINT32_MAX, height = UINT32_MAX, samples = 0, k, full_width, full_height;
     id pass, enc;
     void *pool = objc_autoreleasePoolPush();
 
@@ -62166,6 +62175,47 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
         e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
         objc_autoreleasePoolPop(pool);
         return NULL;
+    }
+    for (s = 0; s < PVK_MAX_COLOR_ATTACHMENTS + 2; s++) {
+        const struct pvk_pass_attachment *pa = s < PVK_MAX_COLOR_ATTACHMENTS ? &c->colors[s]
+                                             : s == PVK_MAX_COLOR_ATTACHMENTS ? &c->depth
+                                                                              : &c->stencil;
+        if (!pa->texture)
+            continue;
+        if (pa->width < width)
+            width = pa->width;
+        if (pa->height < height)
+            height = pa->height;
+        samples = pa->samples;
+    }
+    full_width = width; /* (the attachments' extent: the size of the depth/stencil copies) */
+    full_height = height;
+    if (c->layers)
+        pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, c->layers);
+    if (r->vis_pool) { /* queries add up across render passes */
+        pvk_MTL4RenderPassDescriptor_setVisibilityResultBuffer(pass, r->vis_pool->buffer);
+        pvk_MTL4RenderPassDescriptor_setVisibilityResultType(pass, PVK_MTLVisibilityResultTypeAccumulate);
+    }
+    if (!samples) { /* no attachments */
+        width = c->width;
+        height = c->height;
+        samples = r->samples_pass ? r->samples_pass : 1;
+        pvk_MTL4RenderPassDescriptor_setRenderTargetWidth(pass, width);
+        pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(pass, height);
+        pvk_MTL4RenderPassDescriptor_setDefaultRasterSampleCount(pass, samples);
+    } else if (c->area.extent.width && c->area.extent.height &&
+               ((uint32_t)c->area.offset.x + c->area.extent.width < width ||
+                (uint32_t)c->area.offset.y + c->area.extent.height < height)) {
+        /* A render area short of the attachments' far corner: the render
+         * target ends there, so Metal loads and stores only the tiles up to
+         * it (the attachments of such a pass all load and store, RENDER
+         * PASSES; Metal would clear beyond it) */
+        if ((uint32_t)c->area.offset.x + c->area.extent.width < width)
+            width = (uint32_t)c->area.offset.x + c->area.extent.width;
+        if ((uint32_t)c->area.offset.y + c->area.extent.height < height)
+            height = (uint32_t)c->area.offset.y + c->area.extent.height;
+        pvk_MTL4RenderPassDescriptor_setRenderTargetWidth(pass, width);
+        pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(pass, height);
     }
     for (s = 0; s < c->color_count; s++) {
         struct pvk_pass_attachment pa = c->colors[s];
@@ -62232,32 +62282,6 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
                 pvk_MTLRenderPassDepthAttachmentDescriptor_setDepthResolveFilter(att, pa.resolve_filter);
         }
     }
-    for (s = 0; s < PVK_MAX_COLOR_ATTACHMENTS + 2; s++) {
-        const struct pvk_pass_attachment *pa = s < PVK_MAX_COLOR_ATTACHMENTS ? &c->colors[s]
-                                             : s == PVK_MAX_COLOR_ATTACHMENTS ? &c->depth
-                                                                              : &c->stencil;
-        if (!pa->texture)
-            continue;
-        if (pa->width < width)
-            width = pa->width;
-        if (pa->height < height)
-            height = pa->height;
-        samples = pa->samples;
-    }
-    if (c->layers)
-        pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, c->layers);
-    if (r->vis_pool) { /* queries add up across render passes */
-        pvk_MTL4RenderPassDescriptor_setVisibilityResultBuffer(pass, r->vis_pool->buffer);
-        pvk_MTL4RenderPassDescriptor_setVisibilityResultType(pass, PVK_MTLVisibilityResultTypeAccumulate);
-    }
-    if (!samples) { /* no attachments */
-        width = c->width;
-        height = c->height;
-        samples = r->samples_pass ? r->samples_pass : 1;
-        pvk_MTL4RenderPassDescriptor_setRenderTargetWidth(pass, width);
-        pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(pass, height);
-        pvk_MTL4RenderPassDescriptor_setDefaultRasterSampleCount(pass, samples);
-    }
     if (r->centers && samples > 1) {
         pvk_MTLSamplePosition at[16];
         for (k = 0; k < samples && k < 16; k++)
@@ -62276,9 +62300,9 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
         if (!(r->hidden & (1u << k)))
             continue;
         tex = s >= PVK_MAX_COLOR_ATTACHMENTS ? NULL
-              : seed ? pvk_render_seed_depth(e, depth, width, height, samples, c->layers)
-                     : pvk_hidden_texture(e->device, k ? PVK_MTLPixelFormatR8Uint : PVK_MTLPixelFormatR32Float, width,
-                                          height, samples, c->layers, NULL, 0);
+              : seed ? pvk_render_seed_depth(e, depth, full_width, full_height, width, height, samples, c->layers)
+                     : pvk_hidden_texture(e->device, k ? PVK_MTLPixelFormatR8Uint : PVK_MTLPixelFormatR32Float,
+                                          full_width, full_height, samples, c->layers, NULL, 0);
         if (!tex) {
             static int warned;
             if (!warned) {
