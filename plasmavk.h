@@ -39975,6 +39975,7 @@ struct pvk_descriptor_set_layout {
     struct pvk_set_binding *bindings; /* by binding number */
     uint64_t size;           /* table bytes but the variable-count binding's descriptors, 16-aligned */
     uint32_t dynamic_count;  /* dynamic offsets that binding a set takes */
+    const uint32_t *dynamic_at; /* their descriptors' table offsets, in binding order */
     bool variable;           /* the last binding has a variable count */
     /* Binding numbers 0..max_binding (dense enough): pvk_layout_find's
      * answer for each; NULL: the binary search. */
@@ -40082,7 +40083,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
     struct pvk_binding_info *sorted = NULL;
     pvk_MTLResourceID *ids;
     struct pvk_ycbcr *ycbcr;
-    uint32_t *find;
+    uint32_t *find, *dynamic_at;
     uint64_t total;
 
     (void)pAllocator;
@@ -40090,16 +40091,19 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
         if (pCreateInfo->pBindings[i].pImmutableSamplers &&
             pvk_descriptor_has_sampler(pCreateInfo->pBindings[i].descriptorType))
             immutable += pCreateInfo->pBindings[i].descriptorCount;
+        if (pvk_descriptor_is_dynamic(pCreateInfo->pBindings[i].descriptorType))
+            dynamic += pCreateInfo->pBindings[i].descriptorCount;
         if (pCreateInfo->pBindings[i].binding > max_binding)
             max_binding = pCreateInfo->pBindings[i].binding;
     }
     finds = n && max_binding < 4 * n + 16 ? max_binding + 1 : 0; /* binding numbers dense enough for a map */
     /* After the bindings: the immutable samplers' ID pairs, their Y'CbCr
-     * conversions (room for one per immutable sampler), then `find`. */
+     * conversions (room for one per immutable sampler), `find`, then
+     * dynamic_at. */
     layout = pvk_alloc(alloc,
                        sizeof(*layout) + sizeof(struct pvk_set_binding) * n +
                            (2 * sizeof(pvk_MTLResourceID) + sizeof(struct pvk_ycbcr)) * immutable +
-                           sizeof(uint32_t) * finds,
+                           sizeof(uint32_t) * (finds + dynamic),
                        VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (n)
         sorted = pvk_alloc(alloc, sizeof(*sorted) * n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
@@ -40115,6 +40119,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
     ids = (pvk_MTLResourceID *)(layout->bindings + n);
     ycbcr = (struct pvk_ycbcr *)(ids + 2 * immutable);
     find = (uint32_t *)(ycbcr + immutable);
+    dynamic_at = find + finds;
     total = pvk_layout_bindings(pCreateInfo, sorted, layout->bindings);
     for (i = 0, j = 0; i < finds; i++) { /* the first binding numbered i or more */
         while (j < n && layout->bindings[j].binding < i)
@@ -40123,11 +40128,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
     }
     layout->find = finds ? find : NULL;
     layout->max_binding = max_binding;
+    layout->dynamic_count = dynamic;
+    layout->dynamic_at = dynamic_at;
     for (i = 0; i < n; i++) {
         const VkDescriptorSetLayoutBinding *b = sorted[i].b;
         struct pvk_set_binding *lb = &layout->bindings[i];
-        if (pvk_descriptor_is_dynamic(lb->type))
-            dynamic += lb->count;
+        for (j = 0; pvk_descriptor_is_dynamic(lb->type) && j < lb->count; j++)
+            *dynamic_at++ = lb->offset + j * lb->stride;
         if (b->pImmutableSamplers && pvk_descriptor_has_sampler(lb->type) && lb->count) {
             bool converts = false;
             lb->immutable = ids;
@@ -40146,7 +40153,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
             }
         }
     }
-    layout->dynamic_count = dynamic;
     layout->variable = n && (layout->bindings[n - 1].flags & VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT);
     layout->size = layout->variable ? layout->bindings[n - 1].offset : total;
     pvk_free(alloc, sorted);
@@ -54900,7 +54906,7 @@ static void pvk_cmd_bind_sets(struct pvk_command_buffer *cb, uint32_t bind_point
         const struct pvk_descriptor_set_layout *layout;
         struct pvk_dynamic_offset *d;
         struct pvk_cmd_bind_set *c;
-        uint32_t b, e, k = 0;
+        uint32_t k;
         if (!set) /* allowed with independent sets: leaves the binding alone */
             continue;
         layout = set->layout;
@@ -54916,12 +54922,9 @@ static void pvk_cmd_bind_sets(struct pvk_command_buffer *cb, uint32_t bind_point
         c->size = set->size;
         c->dynamic_count = layout->dynamic_count;
         d = (struct pvk_dynamic_offset *)(c + 1);
-        for (b = 0; b < layout->binding_count && k < layout->dynamic_count; b++) {
-            const struct pvk_set_binding *lb = &layout->bindings[b];
-            for (e = 0; pvk_descriptor_is_dynamic(lb->type) && e < lb->count; e++, k++) {
-                d[k].at = lb->offset + e * lb->stride;
-                d[k].offset = used + k < dynamic_count ? dynamic[used + k] : 0;
-            }
+        for (k = 0; k < layout->dynamic_count; k++) {
+            d[k].at = layout->dynamic_at[k];
+            d[k].offset = used + k < dynamic_count ? dynamic[used + k] : 0;
         }
         used += layout->dynamic_count;
     }
