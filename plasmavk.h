@@ -39977,6 +39977,7 @@ struct pvk_descriptor_set_layout {
     uint32_t dynamic_count;  /* dynamic offsets that binding a set takes */
     const uint32_t *dynamic_at; /* their descriptors' table offsets, in binding order */
     bool variable;           /* the last binding has a variable count */
+    bool has_immutable;      /* a binding has immutable samplers */
     /* Binding numbers 0..max_binding (dense enough): pvk_layout_find's
      * answer for each; NULL: the binary search. */
     const uint32_t *find;
@@ -40137,6 +40138,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
             *dynamic_at++ = lb->offset + j * lb->stride;
         if (b->pImmutableSamplers && pvk_descriptor_has_sampler(lb->type) && lb->count) {
             bool converts = false;
+            layout->has_immutable = true;
             lb->immutable = ids;
             for (j = 0; j < lb->count; j++) {
                 const struct pvk_sampler *s = (const struct pvk_sampler *)b->pImmutableSamplers[j];
@@ -40372,7 +40374,7 @@ static VkResult pvk_descriptor_pool_place(struct pvk_descriptor_pool *pool, stru
 static void pvk_table_init_samplers(const struct pvk_descriptor_set_layout *layout, char *table, uint32_t variable)
 {
     uint32_t i, e;
-    for (i = 0; i < layout->binding_count; i++) {
+    for (i = 0; layout->has_immutable && i < layout->binding_count; i++) {
         const struct pvk_set_binding *b = &layout->bindings[i];
         uint32_t n = pvk_binding_count(b, variable), at = b->type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ? 8 : 0;
         if (b->immutable)
