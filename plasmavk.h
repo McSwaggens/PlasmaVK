@@ -58217,11 +58217,13 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   (Metal 4 compute encoders also blit). All batches are encoded, and
  *   everything allocated, before anything reaches the queue, so a failure
  *   leaves no trace. Then, per batch: commit, signalEvent: for its signal
- *   semaphores; finally the queue's timeline event is signalled with the
- *   submission's serial. A fence is (timeline, serial). Semaphore waits are
- *   resolved when submitting (the queue's -waitForEvent:value: only for a
- *   signal another queue already has) or by the queue's thread (see
- *   "Semaphore waits" below for why). The batches
+ *   semaphores (an MTLSharedEvent the host can see and an MTLEvent twin for
+ *   queues; the last batch's binary semaphores only the twin: the timeline
+ *   shows them done, pvk_queue_signal); finally the queue's timeline event
+ *   is signalled with the submission's serial. A fence is (timeline,
+ *   serial). Semaphore waits are resolved when submitting (the queue's
+ *   -waitForEvent:value: only for a signal another queue already has) or by
+ *   the queue's thread (see "Semaphore waits" below for why). The batches
  *   of vkQueueBindSparse take the same path, their work being mapping
  *   updates instead of a command buffer (SPARSE BINDING).
  *
@@ -64681,12 +64683,13 @@ struct pvk_semaphore {
     /* Binary: the latest signal (value) comes in this queue's order (a
      * batch on it, or the release of an image it presented); NULL: from the
      * host or vkQueueBindSparse. It is done when source.event reaches
-     * source.value: event at value, or for an image not released at
-     * acquire, the presenting queue's timeline at the release (event then
-     * never gets that value). */
+     * source.value: event at value, or the queue's timeline at the end of
+     * the signalling submission for a lazy signal (pvk_queue_signal), or for
+     * an image not released at acquire, the presenting queue's timeline at
+     * the release (event then never gets that value). */
     struct pvk_queue *queue;
     struct pvk_event_value source;
-    uint64_t issued; /* atomic: the highest value a queue issued signalEvent: for, both events (pvk_semaphore_issue) */
+    uint64_t issued; /* atomic: the highest value a queue issued signalEvent: for, gpu_event (pvk_semaphore_issue) */
 };
 
 static bool pvk_device_lost(struct pvk_device *device)
@@ -64804,11 +64807,19 @@ static void pvk_semaphore_issue(struct pvk_semaphore *sem, uint64_t value)
         ;
 }
 
+/* The value of sem's MTLEvent twin that a wait for ev (pvk_wait_source)
+ * waits for: a timeline semaphore's ev's, a binary one's its latest signal
+ * (ev, which shows it done on the host, may be a queue's timeline). */
+static uint64_t pvk_wait_twin_value(const struct pvk_semaphore *sem, const struct pvk_event_value *ev)
+{
+    return sem->timeline ? ev->value : sem->value;
+}
+
 /* Whether a queue's -waitForEvent:value: can wait for ev, what a wait on
  * sem waits for (pvk_wait_source): a queue issued its signal. */
 static bool pvk_wait_issued(const struct pvk_semaphore *sem, const struct pvk_event_value *ev)
 {
-    return ev->event == sem->event && __atomic_load_n(&sem->issued, __ATOMIC_ACQUIRE) >= ev->value;
+    return __atomic_load_n(&sem->issued, __ATOMIC_ACQUIRE) >= pvk_wait_twin_value(sem, ev);
 }
 
 /* A wait for ev on the queue, reached or issued (pvk_wait_issued): for its
@@ -64820,13 +64831,23 @@ static void pvk_queue_wait_issued(struct pvk_queue *queue, const struct pvk_sema
                                   const struct pvk_event_value *ev)
 {
     if (pvk_MTLSharedEvent_signaledValue(ev->event) < ev->value)
-        pvk_MTL4CommandQueue_waitForEvent_value(queue->mtl_queue, sem->gpu_event, ev->value);
+        pvk_MTL4CommandQueue_waitForEvent_value(queue->mtl_queue, sem->gpu_event, pvk_wait_twin_value(sem, ev));
 }
 
-/* A queue's signal of sem to value (pvk_signal_value): both events. */
-static void pvk_queue_signal(struct pvk_queue *queue, struct pvk_semaphore *sem, uint64_t value)
+/* A queue's signal of sem to value (pvk_signal_value): both events, or
+ * lazily only the MTLEvent twin, for a binary semaphore in the last batch
+ * of a submission the queue commits at once: the queue's timeline,
+ * signalled right after, shows it done on the host (sem->source), and
+ * queues wait for the twin. A queue's signal of an MTLSharedEvent idles
+ * the GPU about 10 us more than its signal of an MTLEvent (M4 Max, macOS
+ * 27.2: Sascha Willems' multisampling, whose one semaphore per frame only
+ * the present on the same queue waits for: 51 -> 43 us between frames'
+ * command buffers, 99 -> 79 us from a frame's end to its fence wait's
+ * return, +14% frames). */
+static void pvk_queue_signal(struct pvk_queue *queue, struct pvk_semaphore *sem, uint64_t value, bool lazy)
 {
-    pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, sem->event, value);
+    if (!lazy || sem->timeline)
+        pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, sem->event, value);
     pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, sem->gpu_event, value);
     pvk_semaphore_issue(sem, value);
 }
@@ -65021,7 +65042,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
     struct pvk_submission *list = NULL, **tail = &list, *s;
     struct pvk_deferred *done, *deferred = NULL;
     VkResult result = VK_SUCCESS;
-    uint32_t i, j, first, notes;
+    uint32_t i, j, first, notes, lazy_batch;
     uint64_t serial;
     bool backlog;
     void *pool;
@@ -65105,7 +65126,9 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
     pvk_queue_publish_queries(queue, serial);
 
     /* Batches before `first`: their waits are resolved, by the queue's
-     * order, or reached, or another queue issued their signals. */
+     * order, or reached, or another queue issued their signals. The last
+     * batch signals binary semaphores lazily when the queue commits it. */
+    lazy_batch = !binds && first == count ? count - 1 : UINT32_MAX;
     for (s = list, i = 0; i < first; i++) {
         for (j = 0; j < submits[i].waitSemaphoreInfoCount; j++) {
             const VkSemaphoreSubmitInfo *w = &submits[i].pWaitSemaphoreInfos[j];
@@ -65123,15 +65146,16 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
         }
         for (j = 0; j < submits[i].signalSemaphoreInfoCount; j++)
             pvk_queue_signal(queue, (struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[j].semaphore,
-                             pvk_signal_value(submits, i, j));
+                             pvk_signal_value(submits, i, j), i == lazy_batch);
     }
     for (i = 0; i < count; i++) { /* binary semaphores count their signals */
         for (j = 0; j < submits[i].signalSemaphoreInfoCount; j++) {
             struct pvk_semaphore *sem = (struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[j].semaphore;
             if (!sem->timeline) {
                 sem->queue = binds ? NULL : queue; /* (mapping updates: not in the barriers' order) */
-                sem->source.event = sem->event;
-                sem->source.value = ++sem->value;
+                sem->source.event = i == lazy_batch ? queue->timeline : sem->event;
+                sem->source.value = i == lazy_batch ? serial : sem->value + 1;
+                sem->value++;
             }
         }
     }

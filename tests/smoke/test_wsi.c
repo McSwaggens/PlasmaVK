@@ -1015,6 +1015,212 @@ static void test_layer_configuration(void)
     vkDestroyFence(device, fence, NULL);
 }
 
+/* Lazy signals and presentation under threads (section 16's
+ * pvk_queue_signal): a render thread acquires from a headless swapchain,
+ * clears on queue 0 and signals the frame's binary semaphore lazily (its
+ * submission's last batch: the host sees it through queue 0's timeline); a
+ * present thread presents each frame waiting on it, from queue 0 (its
+ * order), from queue 1 (the GPU waits for the semaphore's twin), or from
+ * queue 1 held back by a timeline gate it opens after a random delay (the
+ * queue's thread waits on the host for queue 0's timeline); a third thread
+ * waits for every acquire's fence. Acquires of images not yet released make
+ * queue 0 wait for queue 1 on its thread too. A wait for a value a lazy
+ * signal never sets hangs here. */
+
+enum { LAZY_FRAMES = 120 };
+
+static struct {
+    pthread_mutex_t lock, swapchain_lock, queue0_lock;
+    pthread_cond_t cond;
+    int rendered, presented; /* the last frame rendered (submitted), presented */
+    VkSwapchainKHR swapchain;
+    VkImage images[4];
+    uint32_t index[LAZY_FRAMES];
+    VkSemaphore acquired[LAZY_FRAMES], rendered_sem[LAZY_FRAMES], gate;
+    VkFence fences[LAZY_FRAMES];
+    int errors[3]; /* render, present, waiter: test macros are not thread safe */
+} lz;
+
+static void lz_wait_for(int *counter, int value)
+{
+    pthread_mutex_lock(&lz.lock);
+    while (*counter < value)
+        pthread_cond_wait(&lz.cond, &lz.lock);
+    pthread_mutex_unlock(&lz.lock);
+}
+
+static void lz_post(int *counter, int value)
+{
+    pthread_mutex_lock(&lz.lock);
+    *counter = value;
+    pthread_cond_broadcast(&lz.cond);
+    pthread_mutex_unlock(&lz.lock);
+}
+
+static void *lz_render(void *arg)
+{
+    int k;
+    (void)arg;
+    for (k = 0; k < LAZY_FRAMES; k++) {
+        VkCommandBuffer cb;
+        VkResult r;
+        lz_wait_for(&lz.presented, k - 2); /* never holds every image */
+        pthread_mutex_lock(&lz.swapchain_lock);
+        r = vkAcquireNextImageKHR(device, lz.swapchain, UINT64_MAX, lz.acquired[k], lz.fences[k], &lz.index[k]);
+        pthread_mutex_unlock(&lz.swapchain_lock);
+        cb = begin(0);
+        if (r != VK_SUCCESS || !cb) {
+            lz.errors[0]++;
+            break;
+        }
+        record_clear(cb, lz.images[lz.index[k]], 0.0f, (float)k / LAZY_FRAMES, 1.0f, 1.0f);
+        pthread_mutex_lock(&lz.queue0_lock);
+        if (submit(0, cb, lz.acquired[k], lz.rendered_sem[k], VK_NULL_HANDLE) != VK_SUCCESS)
+            lz.errors[0]++;
+        pthread_mutex_unlock(&lz.queue0_lock);
+        lz_post(&lz.rendered, k);
+    }
+    lz_post(&lz.rendered, LAZY_FRAMES); /* (on failure: let the present thread go) */
+    return NULL;
+}
+
+static void *lz_present(void *arg)
+{
+    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    unsigned seed = 3;
+    uint64_t gate_value = 0;
+    int k;
+    (void)arg;
+    for (k = 0; k < LAZY_FRAMES && !lz.errors[0]; k++) {
+        uint32_t q = k % 3 == 0 ? 0 : 1;
+        bool gated = k % 3 == 2;
+        VkPresentInfoKHR info;
+        VkResult r;
+        lz_wait_for(&lz.rendered, k);
+        if (lz.errors[0])
+            break;
+        if (gated) {
+            VkTimelineSemaphoreSubmitInfo values;
+            VkSubmitInfo gate;
+            gate_value++;
+            memset(&values, 0, sizeof(values));
+            values.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+            values.waitSemaphoreValueCount = 1;
+            values.pWaitSemaphoreValues = &gate_value;
+            memset(&gate, 0, sizeof(gate));
+            gate.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            gate.pNext = &values;
+            gate.waitSemaphoreCount = 1;
+            gate.pWaitSemaphores = &lz.gate;
+            gate.pWaitDstStageMask = &stage;
+            if (vkQueueSubmit(queues[1], 1, &gate, VK_NULL_HANDLE) != VK_SUCCESS)
+                lz.errors[1]++;
+        }
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        info.waitSemaphoreCount = 1;
+        info.pWaitSemaphores = &lz.rendered_sem[k];
+        info.swapchainCount = 1;
+        info.pSwapchains = &lz.swapchain;
+        info.pImageIndices = &lz.index[k];
+        if (q == 0)
+            pthread_mutex_lock(&lz.queue0_lock);
+        pthread_mutex_lock(&lz.swapchain_lock);
+        r = vkQueuePresentKHR(queues[q], &info);
+        pthread_mutex_unlock(&lz.swapchain_lock);
+        if (q == 0)
+            pthread_mutex_unlock(&lz.queue0_lock);
+        if (r != VK_SUCCESS)
+            lz.errors[1]++;
+        if (gated) {
+            VkSemaphoreSignalInfo signal;
+            struct timespec ts;
+            ts.tv_sec = 0;
+            ts.tv_nsec = (long)(rand_r(&seed) % 500) * 1000;
+            nanosleep(&ts, NULL);
+            memset(&signal, 0, sizeof(signal));
+            signal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
+            signal.semaphore = lz.gate;
+            signal.value = gate_value;
+            vkSignalSemaphore(device, &signal);
+        }
+        lz_post(&lz.presented, k);
+    }
+    lz_post(&lz.presented, LAZY_FRAMES);
+    return NULL;
+}
+
+static void *lz_waiter(void *arg)
+{
+    int k;
+    (void)arg;
+    for (k = 0; k < LAZY_FRAMES; k++) {
+        lz_wait_for(&lz.rendered, k); /* (the acquire set the fence up) */
+        if (lz.errors[0])
+            break;
+        if (vkWaitForFences(device, 1, &lz.fences[k], VK_TRUE, 20000000000ull) != VK_SUCCESS) {
+            fprintf(stderr, "  frame %d: acquire fence not signalled\n", k);
+            lz.errors[2]++;
+            break;
+        }
+    }
+    return NULL;
+}
+
+static void test_lazy_present_threads(void)
+{
+    VkHeadlessSurfaceCreateInfoEXT hi;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    VkSwapchainCreateInfoKHR info;
+    pthread_t threads[3];
+    void *(*fns[3])(void *) = { lz_render, lz_present, lz_waiter };
+    uint32_t count = 4, families[2] = { 0, 1 };
+    int k, i;
+
+    memset(&lz, 0, sizeof(lz));
+    REQUIRE(pthread_mutex_init(&lz.lock, NULL) == 0 && pthread_cond_init(&lz.cond, NULL) == 0);
+    REQUIRE(pthread_mutex_init(&lz.swapchain_lock, NULL) == 0 && pthread_mutex_init(&lz.queue0_lock, NULL) == 0);
+    lz.rendered = lz.presented = -1;
+    memset(&hi, 0, sizeof(hi));
+    hi.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
+    REQUIRE_VK(vkCreateHeadlessSurfaceEXT(instance, &hi, NULL, &surface));
+    info = swapchain_info(surface, VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 64, 64, 3);
+    info.presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+    info.imageSharingMode = VK_SHARING_MODE_CONCURRENT; /* rendered on queue 0, presented from either */
+    info.queueFamilyIndexCount = 2;
+    info.pQueueFamilyIndices = families;
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &lz.swapchain));
+    REQUIRE_VK(vkGetSwapchainImagesKHR(device, lz.swapchain, &count, lz.images));
+    REQUIRE(count == 3);
+    lz.gate = make_semaphore(VK_SEMAPHORE_TYPE_TIMELINE);
+    for (k = 0; k < LAZY_FRAMES; k++) {
+        lz.acquired[k] = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
+        lz.rendered_sem[k] = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
+        lz.fences[k] = make_fence();
+        REQUIRE(lz.acquired[k] && lz.rendered_sem[k] && lz.fences[k]);
+    }
+    for (i = 0; i < 3; i++)
+        REQUIRE(pthread_create(&threads[i], NULL, fns[i], NULL) == 0);
+    for (i = 0; i < 3; i++)
+        pthread_join(threads[i], NULL);
+    CHECK(lz.errors[0] == 0 && lz.errors[1] == 0 && lz.errors[2] == 0);
+    CHECK_VK(vkDeviceWaitIdle(device), VK_SUCCESS);
+    for (k = 0; k < LAZY_FRAMES; k++) {
+        CHECK_VK(vkGetFenceStatus(device, lz.fences[k]), VK_SUCCESS);
+        vkDestroySemaphore(device, lz.acquired[k], NULL);
+        vkDestroySemaphore(device, lz.rendered_sem[k], NULL);
+        vkDestroyFence(device, lz.fences[k], NULL);
+    }
+    vkResetCommandPool(device, pools[0], 0);
+    vkDestroySemaphore(device, lz.gate, NULL);
+    vkDestroySwapchainKHR(device, lz.swapchain, NULL);
+    vkDestroySurfaceKHR(instance, surface, NULL);
+    pthread_cond_destroy(&lz.cond);
+    pthread_mutex_destroy(&lz.lock);
+    pthread_mutex_destroy(&lz.swapchain_lock);
+    pthread_mutex_destroy(&lz.queue0_lock);
+}
+
 int main(void)
 {
     void *pool = objc_autoreleasePoolPush();
@@ -1029,6 +1235,7 @@ int main(void)
     RUN(test_frame_loop);
     RUN(test_layer_configuration);
     RUN(test_headless);
+    RUN(test_lazy_present_threads);
     teardown();
     objc_autoreleasePoolPop(pool);
     return TEST_RESULT();

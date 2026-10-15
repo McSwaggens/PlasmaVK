@@ -1974,7 +1974,10 @@ static void copy_after(VkBuffer buffer, struct buf *host, VkSemaphore wait, uint
 /* Binds ordered by semaphores: a submission waits on a bind's binary
  * semaphore; a bind waits on a timeline value the host signals later (the
  * queue's thread waits), and work waits on the bind; two batches of one call
- * rebinding the same block in order. */
+ * rebinding the same block in order; a bind waits on long work's binary
+ * semaphore, which the work's submission signals lazily (section 16: the
+ * host sees it done through the queue's timeline, which the queue's thread
+ * waits for). */
 static void test_sparse_semaphores(void)
 {
     VkMemoryRequirements req;
@@ -1983,10 +1986,12 @@ static void test_sparse_semaphores(void)
     VkSparseMemoryBind binds[2];
     VkSparseBufferMemoryBindInfo bi[2];
     VkBindSparseInfo infos[2];
+    VkSubmitInfo work;
+    VkCommandBuffer cb;
     VkBuffer buffer;
     VkDeviceMemory a, b;
     VkSemaphore binary, timeline;
-    struct buf host;
+    struct buf host, busy;
     uint32_t *wa, *wb, *words, i;
     uint64_t wait_value = 1, signal_value = 2;
 
@@ -2066,6 +2071,31 @@ static void test_sparse_semaphores(void)
     CHECK_VK(vkQueueBindSparse(queue, 2, infos, VK_NULL_HANDLE), VK_SUCCESS);
     copy_after(buffer, &host, binary, 0);
     CHECK(words[0] == pattern(0, 31));
+
+    /* long work -> binary semaphore (lazy) -> bind (to a) -> copy */
+    busy = host_buf(64u << 20);
+    cb = begin();
+    REQUIRE(busy.data && cb);
+    vkCmdFillBuffer(cb, busy.buffer, 0, VK_WHOLE_SIZE, 0x5A5A5A5Au);
+    vkEndCommandBuffer(cb);
+    memset(&work, 0, sizeof(work));
+    work.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    work.commandBufferCount = 1;
+    work.pCommandBuffers = &cb;
+    work.signalSemaphoreCount = 1;
+    work.pSignalSemaphores = &binary;
+    CHECK_VK(vkQueueSubmit(queue, 1, &work, VK_NULL_HANDLE), VK_SUCCESS);
+    memset(infos, 0, sizeof(infos));
+    infos[0].sType = VK_STRUCTURE_TYPE_BIND_SPARSE_INFO;
+    infos[0].bufferBindCount = 1;
+    infos[0].pBufferBinds = &bi[0];
+    infos[0].waitSemaphoreCount = 1;
+    infos[0].pWaitSemaphores = &binary;
+    CHECK_VK(vkQueueBindSparse(queue, 1, infos, VK_NULL_HANDLE), VK_SUCCESS);
+    copy_after(buffer, &host, timeline, 2);
+    CHECK(words[0] == pattern(0, 30) && words[BLOCK / 4 - 1] == pattern(BLOCK / 4 - 1, 30));
+    vkFreeCommandBuffers(device, pool, 1, &cb);
+    free_buf(&busy);
 
     vkDestroySemaphore(device, binary, NULL);
     vkDestroySemaphore(device, timeline, NULL);

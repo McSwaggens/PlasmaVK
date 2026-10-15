@@ -792,6 +792,268 @@ static void test_submit2_chain(void)
     free_buf(&out);
 }
 
+/* ---- Lazy signals under threads ----
+ *
+ * A binary semaphore signalled by the last batch of a submission the queue
+ * commits at once shows on the host only through the queue's timeline
+ * (section 16, pvk_queue_signal). Two threads hand rounds back and forth on
+ * two queues through two binary semaphores: P fills round r's part of `a`
+ * after waiting T and signals S; C copies that part to `out` after waiting
+ * S, signals T and the round's fence. Rounds put either queue, or both,
+ * behind a timeline gate a third thread opens after a random delay, so the
+ * waits are resolved by the GPU (the other queue issued the signal) or by
+ * the queue's thread on the host (a lazy signal's timeline value, or an
+ * eager signal from the other queue's thread); a fourth thread waits for
+ * every round's fence and checks its part. A wait for a value a lazy signal
+ * never sets hangs here. */
+
+enum { LAZY_ROUNDS = 240, LAZY_PART = 65536 };
+
+static struct {
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    int signalled, waited;            /* rounds P signalled S for, C waited for S */
+    VkSemaphore gate_sem[16];         /* gate requests: opened in order */
+    uint64_t gate_value[16];
+    uint32_t gate_head, gate_tail;
+    bool done;
+    VkSemaphore s, t, gates[2];
+    uint64_t gate_next[2];
+    VkCommandBuffer fill[LAZY_ROUNDS], copy[LAZY_ROUNDS];
+    VkFence fences[LAZY_ROUNDS];
+    struct buf out;
+    int errors[3]; /* P, C, waiter: test macros are not thread safe */
+} lazy;
+
+static uint32_t lazy_value(int round)
+{
+    return 0xC0DE0000u + (uint32_t)round;
+}
+
+static void lazy_pause(unsigned *seed)
+{
+    struct timespec ts;
+    ts.tv_sec = 0;
+    ts.tv_nsec = (long)(rand_r(seed) % 300) * 1000;
+    if (ts.tv_nsec >= 100000)
+        nanosleep(&ts, NULL);
+}
+
+/* Puts queue q behind its gate (an empty batch waiting for the next value)
+ * and asks the gate thread to open it. */
+static VkResult lazy_gate(uint32_t q)
+{
+    VkTimelineSemaphoreSubmitInfo values;
+    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    VkSubmitInfo info;
+    uint64_t value = ++lazy.gate_next[q];
+    VkResult r;
+    memset(&values, 0, sizeof(values));
+    values.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+    values.waitSemaphoreValueCount = 1;
+    values.pWaitSemaphoreValues = &value;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    info.pNext = &values;
+    info.waitSemaphoreCount = 1;
+    info.pWaitSemaphores = &lazy.gates[q];
+    info.pWaitDstStageMask = &stage;
+    r = vkQueueSubmit(queues[q], 1, &info, VK_NULL_HANDLE);
+    pthread_mutex_lock(&lazy.lock);
+    while (lazy.gate_tail - lazy.gate_head == 16)
+        pthread_cond_wait(&lazy.cond, &lazy.lock);
+    lazy.gate_sem[lazy.gate_tail % 16] = lazy.gates[q];
+    lazy.gate_value[lazy.gate_tail % 16] = value;
+    lazy.gate_tail++;
+    pthread_cond_broadcast(&lazy.cond);
+    pthread_mutex_unlock(&lazy.lock);
+    return r;
+}
+
+static void *lazy_gate_thread(void *arg)
+{
+    unsigned seed = 7;
+    (void)arg;
+    pthread_mutex_lock(&lazy.lock);
+    for (;;) {
+        VkSemaphore sem;
+        uint64_t value;
+        while (lazy.gate_head == lazy.gate_tail && !lazy.done)
+            pthread_cond_wait(&lazy.cond, &lazy.lock);
+        if (lazy.gate_head == lazy.gate_tail)
+            break;
+        sem = lazy.gate_sem[lazy.gate_head % 16];
+        value = lazy.gate_value[lazy.gate_head % 16];
+        lazy.gate_head++;
+        pthread_cond_broadcast(&lazy.cond);
+        pthread_mutex_unlock(&lazy.lock);
+        lazy_pause(&seed);
+        signal_value(sem, value);
+        pthread_mutex_lock(&lazy.lock);
+    }
+    pthread_mutex_unlock(&lazy.lock);
+    return NULL;
+}
+
+static void *lazy_producer(void *arg)
+{
+    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    unsigned seed = 1;
+    int r;
+    (void)arg;
+    for (r = 0; r < LAZY_ROUNDS; r++) {
+        VkSubmitInfo info;
+        pthread_mutex_lock(&lazy.lock);
+        while (lazy.waited < r - 1) /* T's previous signal is waited for, and S's */
+            pthread_cond_wait(&lazy.cond, &lazy.lock);
+        pthread_mutex_unlock(&lazy.lock);
+        if ((r & 2) && lazy_gate(0) != VK_SUCCESS)
+            lazy.errors[0]++;
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        info.waitSemaphoreCount = r ? 1 : 0;
+        info.pWaitSemaphores = &lazy.t;
+        info.pWaitDstStageMask = &stage;
+        info.commandBufferCount = 1;
+        info.pCommandBuffers = &lazy.fill[r];
+        info.signalSemaphoreCount = 1;
+        info.pSignalSemaphores = &lazy.s;
+        if (vkQueueSubmit(queues[0], 1, &info, VK_NULL_HANDLE) != VK_SUCCESS)
+            lazy.errors[0]++;
+        pthread_mutex_lock(&lazy.lock);
+        lazy.signalled = r;
+        pthread_cond_broadcast(&lazy.cond);
+        pthread_mutex_unlock(&lazy.lock);
+        lazy_pause(&seed);
+    }
+    return NULL;
+}
+
+static void *lazy_consumer(void *arg)
+{
+    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    unsigned seed = 2;
+    int r;
+    (void)arg;
+    for (r = 0; r < LAZY_ROUNDS; r++) {
+        VkSubmitInfo info;
+        pthread_mutex_lock(&lazy.lock);
+        while (lazy.signalled < r)
+            pthread_cond_wait(&lazy.cond, &lazy.lock);
+        pthread_mutex_unlock(&lazy.lock);
+        if ((r & 1) && lazy_gate(1) != VK_SUCCESS)
+            lazy.errors[1]++;
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        info.waitSemaphoreCount = 1;
+        info.pWaitSemaphores = &lazy.s;
+        info.pWaitDstStageMask = &stage;
+        info.commandBufferCount = 1;
+        info.pCommandBuffers = &lazy.copy[r];
+        info.signalSemaphoreCount = 1;
+        info.pSignalSemaphores = &lazy.t;
+        if (vkQueueSubmit(queues[1], 1, &info, lazy.fences[r]) != VK_SUCCESS)
+            lazy.errors[1]++;
+        pthread_mutex_lock(&lazy.lock);
+        lazy.waited = r;
+        pthread_cond_broadcast(&lazy.cond);
+        pthread_mutex_unlock(&lazy.lock);
+        lazy_pause(&seed);
+    }
+    return NULL;
+}
+
+static void *lazy_fence_waiter(void *arg)
+{
+    int r;
+    (void)arg;
+    for (r = 0; r < LAZY_ROUNDS; r++) {
+        struct buf part = lazy.out;
+        if (vkWaitForFences(device, 1, &lazy.fences[r], VK_TRUE, 20000000000ull) != VK_SUCCESS) {
+            fprintf(stderr, "  round %d: fence not signalled\n", r);
+            lazy.errors[2]++;
+            break;
+        }
+        part.data = lazy.out.data + (size_t)r * LAZY_PART;
+        if (!all_words(&part, LAZY_PART, lazy_value(r)))
+            lazy.errors[2]++;
+    }
+    return NULL;
+}
+
+static void test_lazy_signal_threads(void)
+{
+    struct buf a = make_buf((VkDeviceSize)LAZY_ROUNDS * LAZY_PART, private_type);
+    pthread_t threads[4];
+    void *(*fns[4])(void *) = { lazy_gate_thread, lazy_producer, lazy_consumer, lazy_fence_waiter };
+    VkBufferCopy region;
+    VkMemoryBarrier b;
+    int r, i;
+
+    memset(&lazy, 0, sizeof(lazy));
+    lazy.out = make_buf((VkDeviceSize)LAZY_ROUNDS * LAZY_PART, shared_type);
+    REQUIRE(a.buffer && lazy.out.data);
+    REQUIRE(pthread_mutex_init(&lazy.lock, NULL) == 0 && pthread_cond_init(&lazy.cond, NULL) == 0);
+    lazy.signalled = lazy.waited = -1;
+    lazy.s = make_semaphore(false, 0);
+    lazy.t = make_semaphore(false, 0);
+    lazy.gates[0] = make_semaphore(true, 0);
+    lazy.gates[1] = make_semaphore(true, 0);
+    for (r = 0; r < LAZY_ROUNDS; r++) {
+        VkCommandBufferAllocateInfo alloc;
+        VkCommandBufferBeginInfo info;
+        memset(&alloc, 0, sizeof(alloc));
+        alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        alloc.commandPool = pool;
+        alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc.commandBufferCount = 1;
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        REQUIRE_VK(vkAllocateCommandBuffers(device, &alloc, &lazy.fill[r]));
+        vkBeginCommandBuffer(lazy.fill[r], &info);
+        vkCmdFillBuffer(lazy.fill[r], a.buffer, (VkDeviceSize)r * LAZY_PART, LAZY_PART, lazy_value(r));
+        vkEndCommandBuffer(lazy.fill[r]);
+        REQUIRE_VK(vkAllocateCommandBuffers(device, &alloc, &lazy.copy[r]));
+        vkBeginCommandBuffer(lazy.copy[r], &info);
+        memset(&region, 0, sizeof(region));
+        region.srcOffset = region.dstOffset = (VkDeviceSize)r * LAZY_PART;
+        region.size = LAZY_PART;
+        vkCmdCopyBuffer(lazy.copy[r], a.buffer, lazy.out.buffer, 1, &region);
+        memset(&b, 0, sizeof(b));
+        b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(lazy.copy[r], VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &b, 0, NULL,
+                             0, NULL);
+        vkEndCommandBuffer(lazy.copy[r]);
+        lazy.fences[r] = make_fence(false);
+    }
+    for (i = 0; i < 4; i++)
+        REQUIRE(pthread_create(&threads[i], NULL, fns[i], NULL) == 0);
+    for (i = 3; i > 0; i--)
+        pthread_join(threads[i], NULL);
+    pthread_mutex_lock(&lazy.lock);
+    lazy.done = true;
+    pthread_cond_broadcast(&lazy.cond);
+    pthread_mutex_unlock(&lazy.lock);
+    pthread_join(threads[0], NULL);
+    CHECK(lazy.errors[0] == 0 && lazy.errors[1] == 0 && lazy.errors[2] == 0);
+    CHECK_VK(vkDeviceWaitIdle(device), VK_SUCCESS);
+    for (r = 0; r < LAZY_ROUNDS; r++) {
+        vkFreeCommandBuffers(device, pool, 1, &lazy.fill[r]);
+        vkFreeCommandBuffers(device, pool, 1, &lazy.copy[r]);
+        vkDestroyFence(device, lazy.fences[r], NULL);
+    }
+    vkDestroySemaphore(device, lazy.s, NULL);
+    vkDestroySemaphore(device, lazy.t, NULL);
+    vkDestroySemaphore(device, lazy.gates[0], NULL);
+    vkDestroySemaphore(device, lazy.gates[1], NULL);
+    pthread_cond_destroy(&lazy.cond);
+    pthread_mutex_destroy(&lazy.lock);
+    free_buf(&a);
+    free_buf(&lazy.out);
+}
+
 /* Many submissions without fences, each filling its own 64 KiB, then idle
  * waits see all of them done. */
 static void test_wait_idle(void)
@@ -857,6 +1119,7 @@ int main(void)
     RUN(test_binary_semaphores);
     RUN(test_semaphore_same_submit);
     RUN(test_submit2_chain);
+    RUN(test_lazy_signal_threads);
     RUN(test_wait_idle);
     teardown();
     return TEST_RESULT();
