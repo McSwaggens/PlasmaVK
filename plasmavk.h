@@ -32428,6 +32428,7 @@ struct pvk_device {
     struct pvk_sampler_state *sampler_states; /* MTLSamplerStates shared by equal VkSamplers */
     id blit_library;                          /* internal blit/resolve shaders, made on first use */
     struct pvk_blit_pipeline *blit_pipelines; /* render pipelines made from it, by function and format */
+    id blit_kernels[18];                      /* compute pipelines made from it (pvk_blit_kernel), on first use */
     id host_queue, host_event;                /* MTL4CommandQueue, MTLSharedEvent: host copies' blits */
     uint64_t host_serial;
     /* Graphics (sections 15-17), made on first use */
@@ -55758,16 +55759,25 @@ struct pvk_cmd_blit {
     uint32_t src_3d, dst_3d;
     int32_t src0[3], src1[3], dst0[3], dst1[3]; /* resolves: src0 and dst0 are offsets, dst1 - dst0 the extent */
     uint32_t swizzle[4];                        /* source format's component swizzle (pvk_MTLTextureSwizzle) */
+    uint32_t compute;                           /* a dispatch instead (pvk_cmd_blit) */
 };
 
+/* How a clear writes: a render pass whose load action clears, or (storage
+ * images, pvk_image_storage) dispatches writing the components: floats,
+ * halves converted here (the passes' conversions round to nearest, shader
+ * writes of floats to 16-bit floats toward zero: M4 Max), uints, ints. */
+enum pvk_clear_kind { PVK_CLEAR_PASS, PVK_CLEAR_FLOAT, PVK_CLEAR_HALF, PVK_CLEAR_UINT, PVK_CLEAR_SINT };
+
 /* One subresource range of a clear: one layered render pass per level (its
- * layers, or a 3D level's slice planes). */
+ * layers, or a 3D level's slice planes), or of a storage image, dispatches. */
 struct pvk_cmd_clear {
     struct pvk_cmd hdr;
     id texture;
     uint32_t level, levels, layer, layers;
+    uint32_t width, height; /* level 0 */
     uint32_t depth; /* 3D: level 0 depth; 0 otherwise */
     uint32_t color; /* a color image (else depth/stencil) */
+    uint32_t compute, dim; /* enum pvk_clear_kind; dispatches into a 2D, array or 3D texture (0-2) */
     uint32_t clear_depth, clear_stencil, has_depth, has_stencil;
     pvk_MTLClearColor value;
     double depth_value;
@@ -56018,6 +56028,18 @@ static void pvk_blit_swizzle(const struct pvk_format *f, uint32_t out[4])
     }
 }
 
+/* Whether blits and clears write an image with dispatches (section 16): a
+ * single-sampled storage image (its texture shader-writable), its format
+ * with STORAGE_IMAGE (section 7). Other images keep the passes: their
+ * textures would need shader-write usage, which Metal may store without
+ * lossless compression. */
+static bool pvk_image_storage(const struct pvk_image *image)
+{
+    const struct pvk_format *f = image->fmt;
+    return (image->mtl_usage & PVK_MTLTextureUsageShaderWrite) && image->samples <= 1 && f && (f->caps & PVK_FC_WRITE) &&
+           !(f->flags & (PVK_FF_SRGB | PVK_FF_SWIZZLE));
+}
+
 static void pvk_cmd_blit(struct pvk_command_buffer *cb, const struct pvk_image *src, const struct pvk_image *dst,
                          const VkImageBlit2 *r, VkFilter filter)
 {
@@ -56066,6 +56088,12 @@ static void pvk_cmd_blit(struct pvk_command_buffer *cb, const struct pvk_image *
         c->function = PVK_BLIT_I_2D + dim;
     else
         c->function = (filter == VK_FILTER_LINEAR ? PVK_BLIT_FL_2D : PVK_BLIT_F_2D) + dim;
+    /* Float values into a storage image of the source's texture type: a
+     * dispatch in the batch's compute encoder, with the transfers and
+     * barriers around it (a mip chain: one encoder), not a render pass that
+     * loads and stores the destination. */
+    c->compute = f->kind != PVK_FK_UINT && f->kind != PVK_FK_SINT && dst->mtl_type == src->mtl_type &&
+                 pvk_image_storage(dst);
     c->src_level = r->srcSubresource.mipLevel;
     c->dst_level = r->dstSubresource.mipLevel;
     c->src_layer = r->srcSubresource.baseArrayLayer;
@@ -56251,6 +56279,8 @@ static struct pvk_cmd_clear *pvk_cmd_clear_range(struct pvk_command_buffer *cb, 
     c->levels = range->levelCount == VK_REMAINING_MIP_LEVELS ? image->levels - range->baseMipLevel : range->levelCount;
     c->layer = range->baseArrayLayer;
     c->layers = range->layerCount == VK_REMAINING_ARRAY_LAYERS ? image->layers - range->baseArrayLayer : range->layerCount;
+    c->width = image->extent.width;
+    c->height = image->extent.height;
     c->depth = image->type == VK_IMAGE_TYPE_3D ? image->extent.depth : 0;
     c->has_depth = pvk_format_has_depth(image->fmt);
     c->has_stencil = pvk_format_has_stencil(image->fmt);
@@ -56272,6 +56302,16 @@ VKAPI_ATTR void VKAPI_CALL vkCmdClearColorImage(VkCommandBuffer commandBuffer, V
             break;
         c->color = 1;
         c->value = pvk_clear_color(image->fmt, pColor);
+        if (pvk_image_storage(image)) { /* dispatches, in the compute encoder with what comes before and after */
+            const struct pvk_format *f = image->fmt;
+            c->compute = f->kind == PVK_FK_UINT   ? PVK_CLEAR_UINT
+                         : f->kind == PVK_FK_SINT ? PVK_CLEAR_SINT
+                         : f->mtl == PVK_MTLPixelFormatR16Float || f->mtl == PVK_MTLPixelFormatRG16Float ||
+                                 f->mtl == PVK_MTLPixelFormatRGBA16Float
+                             ? PVK_CLEAR_HALF
+                             : PVK_CLEAR_FLOAT;
+            c->dim = image->mtl_type == PVK_MTLTextureType3D ? 2 : image->mtl_type == PVK_MTLTextureType2DArray ? 1 : 0;
+        }
     }
     pvk_cmd_group_end(cb, group);
 }
@@ -59641,7 +59681,10 @@ static id pvk_encode_compute_state(struct pvk_encoder *e, const uint32_t base[3]
  * a sampler, resolves average the samples (float) or take sample 0.
  * Consecutive blits into the same layers share their render encoder
  * (pvk_blit_encoder). Render pipelines are made on first use per function,
- * destination format and layering. */
+ * destination format and layering. Color clears and float blits into
+ * storage images (pvk_image_storage) are dispatches of the compute encoder
+ * instead, writing what the passes would (pvk_blit_kernel): with the
+ * transfers and dispatches around them, and intra-encoder barriers. */
 
 /* Arguments of the internal draws, at buffer index 0 (pvk_blit_args in
  * pvk_blit_msl). */
@@ -59695,6 +59738,33 @@ struct pvk_blit_args {
     PVK_MSL_BLIT_FRAGMENT("float4", "pvk_blit_fl_2darray_l", "texture2d_array<float>", PVK_MSL_LINEAR_2DARRAY("l"), \
                           PVK_MSL_LAYER_ARG)                                                                    \
     PVK_MSL_BLIT_FRAGMENT("float4", "pvk_blit_fl_3d_l", "texture3d<float>", PVK_MSL_LINEAR_3D("l"), PVK_MSL_LAYER_ARG)
+/* Blits into storage images (pvk_blit_kernel): a thread per destination
+ * texel, at the draws' pixel centers, of destination layer gid.z; into layer
+ * or plane offset.z + gid.z of level offset.w; arguments at the push-constant
+ * index. */
+#define PVK_MSL_BLIT_KERNEL(NAME, TEX, VALUE, AT)                                                               \
+    "kernel void " NAME "(constant pvk_blit_args &a [[buffer(30)]], " TEX "<float> t [[texture(0)]],\n"        \
+    "    " TEX "<float, access::write> d [[texture(1)]], uint3 gid [[thread_position_in_grid]])\n"            \
+    "{\n"                                                                                                       \
+    "    float4 pos = float4(min(a.dst.xy, a.dst.zw) + float2(gid.xy) + 0.5, 0.0, 1.0);\n"                     \
+    "    if (any(pos.xy >= max(a.dst.xy, a.dst.zw)))\n"                                                        \
+    "        return;\n"                                                                                         \
+    "    d.write(" VALUE ", " AT ", uint(a.offset.w));\n"                                                       \
+    "}\n"
+/* Clears of storage images (pvk_encode_clear): a thread per texel below
+ * at.xy, of layer or plane at.z + gid.z of level at.w; the value's bits as
+ * T components (halves: the first 8 bytes). */
+#define PVK_MSL_CLEAR_KERNEL(NAME, T, TEX, VALUE, AT)                                                           \
+    "kernel void " NAME "(constant pvk_cclear_args &a [[buffer(30)]], " TEX "<" T ", access::write> d [[texture(0)]],\n" \
+    "    uint3 gid [[thread_position_in_grid]])\n"                                                              \
+    "{\n"                                                                                                       \
+    "    if (all(gid.xy < a.at.xy))\n"                                                                          \
+    "        d.write(" VALUE ", " AT ", a.at.w);\n"                                                             \
+    "}\n"
+#define PVK_MSL_CLEAR_KERNELS(T, P, VALUE)                                                                      \
+    PVK_MSL_CLEAR_KERNEL("pvk_cclear_" P "_2d", T, "texture2d", VALUE, "gid.xy")                                \
+    PVK_MSL_CLEAR_KERNEL("pvk_cclear_" P "_2darray", T, "texture2d_array", VALUE, "gid.xy, a.at.z + gid.z")     \
+    PVK_MSL_CLEAR_KERNEL("pvk_cclear_" P "_3d", T, "texture3d", VALUE, "uint3(gid.xy, a.at.z + gid.z)")
 #define PVK_MSL_RESOLVE_LAYERS(T, P, SUM, S, L, ARG)                                                            \
     "fragment vec<" T ", 4> pvk_resolve_" P "_msarray" S "(float4 pos [[position]]," ARG                        \
     " constant pvk_blit_args &a [[buffer(0)]], texture2d_ms_array<" T "> t [[texture(0)]])\n"                   \
@@ -59763,6 +59833,36 @@ static const char *const pvk_blit_msl[] = {
     PVK_MSL_RESOLVE("float", "f", PVK_MSL_AVERAGE),
     PVK_MSL_RESOLVE("uint", "u", PVK_MSL_SAMPLE0),
     PVK_MSL_RESOLVE("int", "i", PVK_MSL_SAMPLE0),
+    PVK_MSL_BLIT_KERNEL("pvk_cblit_f_2d", "texture2d", PVK_MSL_NEAREST_2D, "uint2(pos.xy)")
+    PVK_MSL_BLIT_KERNEL("pvk_cblit_f_2darray", "texture2d_array", PVK_MSL_NEAREST_2DARRAY("gid.z"),
+                        "uint2(pos.xy), uint(a.offset.z) + gid.z")
+    PVK_MSL_BLIT_KERNEL("pvk_cblit_f_3d", "texture3d", PVK_MSL_NEAREST_3D("gid.z"),
+                        "uint3(uint2(pos.xy), uint(a.offset.z) + gid.z)"),
+    PVK_MSL_BLIT_KERNEL("pvk_cblit_fl_2d", "texture2d", PVK_MSL_LINEAR_2D, "uint2(pos.xy)")
+    PVK_MSL_BLIT_KERNEL("pvk_cblit_fl_2darray", "texture2d_array", PVK_MSL_LINEAR_2DARRAY("gid.z"),
+                        "uint2(pos.xy), uint(a.offset.z) + gid.z")
+    PVK_MSL_BLIT_KERNEL("pvk_cblit_fl_3d", "texture3d", PVK_MSL_LINEAR_3D("gid.z"),
+                        "uint3(uint2(pos.xy), uint(a.offset.z) + gid.z)"),
+    "struct pvk_cclear_args { uint4 value; uint4 at; };\n"
+    PVK_MSL_CLEAR_KERNELS("float", "f", "as_type<float4>(a.value)")
+    PVK_MSL_CLEAR_KERNELS("half", "h", "as_type<half4>(a.value.xy)"),
+    PVK_MSL_CLEAR_KERNELS("uint", "u", "a.value") PVK_MSL_CLEAR_KERNELS("int", "i", "as_type<int4>(a.value)"),
+};
+
+/* Arguments of the clear kernels (pvk_cclear_args in pvk_blit_msl). */
+struct pvk_cclear_args {
+    uint32_t value[4]; /* the clear color as the format's float, half, uint or int components */
+    uint32_t at[4];    /* level width, height; first layer or plane; level */
+};
+
+/* The kernels of image transfers into storage images (pvk_blit_kernel):
+ * blits by the function they stand in for (nearest, then linear), then
+ * clears by component type (enum pvk_clear_kind); 2D, array, 3D each. */
+static const char *const pvk_blit_kernel_names[18] = {
+    "pvk_cblit_f_2d",       "pvk_cblit_f_2darray",  "pvk_cblit_f_3d",    "pvk_cblit_fl_2d",      "pvk_cblit_fl_2darray",
+    "pvk_cblit_fl_3d",      "pvk_cclear_f_2d",      "pvk_cclear_f_2darray", "pvk_cclear_f_3d",   "pvk_cclear_h_2d",
+    "pvk_cclear_h_2darray", "pvk_cclear_h_3d",      "pvk_cclear_u_2d",   "pvk_cclear_u_2darray", "pvk_cclear_u_3d",
+    "pvk_cclear_i_2d",      "pvk_cclear_i_2darray", "pvk_cclear_i_3d",
 };
 
 static const char *const pvk_blit_function_names[PVK_BLIT_FUNCTION_COUNT] = {
@@ -59878,16 +59978,47 @@ static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MT
     return pso;
 }
 
+static id pvk_library_compute(struct pvk_device *device, id library, const char *entry, unsigned long max_threads,
+                              const char *label, char *error, size_t error_size);
+
+/* The compute pipeline of kernel k of pvk_blit_kernel_names (made on first
+ * use; NULL on failure): threadgroups of up to 256 threads (16x16). */
+static id pvk_blit_kernel(struct pvk_device *device, uint32_t k)
+{
+    char error[256] = "out of memory", label[96];
+    id pso, library;
+    void *pool;
+    pthread_mutex_lock(&pvk_blit_lock);
+    if (!device->blit_kernels[k] && (library = pvk_blit_library(device))) {
+        pool = objc_autoreleasePoolPush();
+        snprintf(label, sizeof(label), "PlasmaVK %s", pvk_blit_kernel_names[k]);
+        device->blit_kernels[k] =
+            pvk_library_compute(device, library, pvk_blit_kernel_names[k], 256, label, error, sizeof(error));
+        objc_autoreleasePoolPop(pool);
+        if (!device->blit_kernels[k])
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
+                     "internal blit kernel %s: %s", pvk_blit_kernel_names[k], error);
+    }
+    pso = device->blit_kernels[k];
+    pthread_mutex_unlock(&pvk_blit_lock);
+    return pso;
+}
+
 /* At vkDestroyDevice (pvk_device_finish), after the GPU is done. */
 static void pvk_device_finish_images(struct pvk_device *device)
 {
     struct pvk_blit_pipeline *p = device->blit_pipelines, *next;
+    unsigned k;
     for (; p; p = next) {
         next = p->next;
         pvk_release(p->pso);
         pvk_free(pvk_device_alloc(device), p);
     }
     device->blit_pipelines = NULL;
+    for (k = 0; k < PVK_ARRAY_SIZE(device->blit_kernels); k++) {
+        pvk_release(device->blit_kernels[k]);
+        device->blit_kernels[k] = NULL;
+    }
     pvk_release(device->blit_library);
     device->blit_library = NULL;
     pvk_device_free_sampler_states(device);
@@ -60131,6 +60262,31 @@ static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
     for (i = 0; i < 4; i++)
         a.swizzle[i] = c->swizzle[i];
 
+    if (c->compute) { /* a dispatch of 16x16 threadgroups per layer */
+        pvk_MTLSize groups, threads;
+        if (!(pso = pvk_blit_kernel(e->device, (c->function >= PVK_BLIT_FL_2D ? 3 : 0) + c->function % 3))) {
+            e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+            return;
+        }
+        if (!(enc = pvk_encoder_get(e)) || !(args = pvk_upload(e, sizeof(a), 16, NULL, NULL, &address)))
+            return;
+        a.offset[2] = c->dst_3d ? z0 : (int32_t)c->dst_layer;
+        a.offset[3] = (int32_t)c->dst_level;
+        memcpy(args, &a, sizeof(a));
+        pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, pso);
+        e->pipeline_dirty = true;
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+        e->push_bound = 0;
+        pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->argument_table, pvk_MTLTexture_gpuResourceID(c->src), 0);
+        pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->argument_table, pvk_MTLTexture_gpuResourceID(c->dst), 1);
+        groups.width = ((unsigned long)vp.width + 15) / 16;
+        groups.height = ((unsigned long)vp.height + 15) / 16;
+        groups.depth = layers;
+        threads.width = threads.height = 16;
+        threads.depth = 1;
+        pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(enc, groups, threads);
+        return;
+    }
     if (!(pso = pvk_blit_pipeline(e->device, c->function, c->dst_format, layers > 1))) {
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
         return;
@@ -60152,9 +60308,76 @@ static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
     objc_autoreleasePoolPop(pool);
 }
 
+/* A clear of a storage image (pvk_cmd_clear.compute): a dispatch per level,
+ * of 16x16 threadgroups per layer or plane (8x8 ones wrote 1080p RGBA16F
+ * images slower than the passes' clears; M4 Max). */
+static void pvk_encode_clear_compute(struct pvk_encoder *e, const struct pvk_cmd_clear *c)
+{
+    const double v[4] = { c->value.red, c->value.green, c->value.blue, c->value.alpha };
+    struct pvk_cclear_args a;
+    id pso = pvk_blit_kernel(e->device, 6 + 3 * (c->compute - PVK_CLEAR_FLOAT) + c->dim), enc;
+    uint32_t l, i;
+
+    if (!pso) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return;
+    }
+    if (!(enc = pvk_encoder_get(e)))
+        return;
+    memset(&a, 0, sizeof(a));
+    for (i = 0; i < 4; i++) { /* (exact: floats from float32, integers in range: pvk_clear_color) */
+        float f = (float)v[i];
+        uint32_t bits;
+        int32_t s;
+        switch ((enum pvk_clear_kind)c->compute) {
+        case PVK_CLEAR_FLOAT:
+            memcpy(&a.value[i], &f, 4);
+            break;
+        case PVK_CLEAR_HALF:
+            memcpy(&bits, &f, 4);
+            a.value[i / 2] |= pvk_spv_f32_to_f16(bits, false) << (i % 2 * 16);
+            break;
+        case PVK_CLEAR_UINT:
+            a.value[i] = (uint32_t)v[i];
+            break;
+        default:
+            s = (int32_t)v[i];
+            memcpy(&a.value[i], &s, 4);
+            break;
+        }
+    }
+    pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, pso);
+    e->pipeline_dirty = true;
+    e->push_bound = 0;
+    pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->argument_table, pvk_MTLTexture_gpuResourceID(c->texture), 0);
+    for (l = c->level; l < c->level + c->levels; l++) {
+        pvk_MTLGPUAddress address;
+        pvk_MTLSize groups, threads;
+        void *args = pvk_upload(e, sizeof(a), 16, NULL, NULL, &address);
+        if (!args)
+            return;
+        a.at[0] = pvk_mip_extent(c->width, l);
+        a.at[1] = pvk_mip_extent(c->height, l);
+        a.at[2] = c->depth ? 0 : c->layer;
+        a.at[3] = l;
+        memcpy(args, &a, sizeof(a));
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+        groups.width = (a.at[0] + 15) / 16;
+        groups.height = (a.at[1] + 15) / 16;
+        groups.depth = c->depth ? pvk_mip_extent(c->depth, l) : c->layers;
+        threads.width = threads.height = 16;
+        threads.depth = 1;
+        pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(enc, groups, threads);
+    }
+}
+
 static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *c)
 {
     uint32_t l;
+    if (c->compute) {
+        pvk_encode_clear_compute(e, c);
+        return;
+    }
     for (l = c->level; l < c->level + c->levels && e->result == VK_SUCCESS; l++) {
         /* the layers, or a 3D level's slice planes (from depth plane 0), as
          * the pass's layers */
@@ -66383,13 +66606,20 @@ static bool pvk_library_get2(struct pvk_device *device, const char *vs_msl, bool
 static id pvk_compile_compute_labeled(struct pvk_device *device, const char *msl, const char *entry,
                                       unsigned long max_threads, const char *label, char *error, size_t error_size)
 {
-    id mtl = device->physical_device->mtl_device, library = pvk_library_get(device, msl, false, error, error_size);
-    id function = NULL, desc = NULL, pso = NULL, err = NULL;
-    void *pool;
-
+    id library = pvk_library_get(device, msl, false, error, error_size), pso;
     if (!library)
         return NULL;
-    pool = objc_autoreleasePoolPush(); /* strings, NSErrors */
+    pso = pvk_library_compute(device, library, entry, max_threads, label, error, error_size);
+    pvk_release(library);
+    return pso;
+}
+
+/* The same, of a function of a library. */
+static id pvk_library_compute(struct pvk_device *device, id library, const char *entry, unsigned long max_threads,
+                              const char *label, char *error, size_t error_size)
+{
+    id mtl = device->physical_device->mtl_device, function = NULL, desc = NULL, pso = NULL, err = NULL;
+    void *pool = objc_autoreleasePoolPush(); /* strings, NSErrors */
     function = pvk_MTLLibrary_newFunctionWithName(library, pvk_NSString_stringWithUTF8String(entry));
     if (function)
         desc = pvk_MTLComputePipelineDescriptor_new();
@@ -66411,7 +66641,6 @@ static id pvk_compile_compute_labeled(struct pvk_device *device, const char *msl
     }
     pvk_release(desc);
     pvk_release(function);
-    pvk_release(library);
     objc_autoreleasePoolPop(pool);
     return pso;
 }

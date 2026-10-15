@@ -1024,6 +1024,33 @@ static int all_texels(const unsigned char *p, size_t count, const void *texel, s
     return 1;
 }
 
+/* A clear of a storage image (dispatches) and of one without storage usage
+ * (a pass): the same texels, bit for bit. */
+static void clear_both_ways(VkFormat format, const VkClearColorValue *color, size_t bytes, const char *what)
+{
+    VkImageUsageFlags xfer = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    VkBufferImageCopy r = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, 4, 4, 1);
+    VkImageSubresourceRange range;
+    struct buf out[2];
+    unsigned k;
+    clear_range(&range, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1);
+    for (k = 0; k < 2; k++) {
+        VkImageCreateInfo info = image_info(VK_IMAGE_TYPE_2D, format, 4, 4, 1, 1, 1,
+                                            xfer | (k ? VK_IMAGE_USAGE_STORAGE_BIT : 0));
+        struct img m = make_image(&info);
+        VkCommandBuffer cb = begin();
+        out[k] = make_buf(16 * bytes, shared_type, 0);
+        vkCmdClearColorImage(cb, m.image, VK_IMAGE_LAYOUT_GENERAL, color, 1, &range);
+        CHECK_VK(finish(cb), VK_SUCCESS);
+        download(m.image, &r, &out[k]);
+        free_image(&m);
+    }
+    if (memcmp(out[0].data, out[1].data, 16 * bytes))
+        PVK_TEST_FAIL("%s: the dispatch's texels differ from the pass's", what);
+    free_buf(&out[0]);
+    free_buf(&out[1]);
+}
+
 static void test_clear_color(void)
 {
     VkImageUsageFlags xfer = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
@@ -1153,6 +1180,101 @@ static void test_clear_color(void)
     download(m.image, &r, &dst);
     CHECK(all_texels(dst.data, 8, &color.float32[0], 4));
     free_image(&m);
+
+    /* storage images: dispatches, the passes' values. unorm: levels 1-2 of
+     * layers 1-2 of an array */
+    info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 16, 16, 1, 3, 3, xfer | VK_IMAGE_USAGE_STORAGE_BIT);
+    m = make_image(&info);
+    memset(&color, 0, sizeof(color));
+    clear_range(&ranges[0], VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS);
+    clear_range(&ranges[1], VK_IMAGE_ASPECT_COLOR_BIT, 1, 2, 1, 2);
+    cb = begin();
+    vkCmdClearColorImage(cb, m.image, VK_IMAGE_LAYOUT_GENERAL, &color, 1, &ranges[0]);
+    barrier(cb, m.image);
+    color.float32[0] = 1.0f;
+    color.float32[1] = 0.25f;
+    color.float32[2] = 2.0f; /* clamped */
+    color.float32[3] = 0.0f;
+    vkCmdClearColorImage(cb, m.image, VK_IMAGE_LAYOUT_GENERAL, &color, 1, &ranges[1]);
+    CHECK_VK(finish(cb), VK_SUCCESS);
+    want[0] = 0xff;
+    want[1] = 0x40;
+    want[2] = 0xff;
+    want[3] = 0;
+    r = region(VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 3, 0, 0, 0, 8, 8, 1);
+    download(m.image, &r, &dst);
+    CHECK(all_texels(dst.data + 64 * 4, 2 * 64, want, 4));
+    r = region(VK_IMAGE_ASPECT_COLOR_BIT, 2, 0, 3, 0, 0, 0, 4, 4, 1);
+    download(m.image, &r, &dst);
+    CHECK(all_texels(dst.data + 16 * 4, 2 * 16, want, 4));
+    memset(want, 0, 4);
+    CHECK(all_texels(dst.data, 16, want, 4));
+    r = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 3, 0, 0, 0, 16, 16, 1);
+    download(m.image, &r, &dst);
+    CHECK(all_texels(dst.data, 3 * 256, want, 4));
+    free_image(&m);
+    /* integers (vkQuake clears a 2x2 R32_UINT one every frame), 3D */
+    info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R32_UINT, 2, 2, 1, 1, 1, xfer | VK_IMAGE_USAGE_STORAGE_BIT);
+    m = make_image(&info);
+    color.uint32[0] = 0xdeadbeefu;
+    clear_range(&ranges[0], VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1);
+    cb = begin();
+    vkCmdClearColorImage(cb, m.image, VK_IMAGE_LAYOUT_GENERAL, &color, 1, &ranges[0]);
+    CHECK_VK(finish(cb), VK_SUCCESS);
+    r = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, 2, 2, 1);
+    download(m.image, &r, &dst);
+    CHECK(all_texels(dst.data, 4, &color.uint32[0], 4));
+    free_image(&m);
+    info = image_info(VK_IMAGE_TYPE_3D, VK_FORMAT_R16G16B16A16_SINT, 4, 4, 4, 2, 1, xfer | VK_IMAGE_USAGE_STORAGE_BIT);
+    m = make_image(&info);
+    color.int32[0] = -1;
+    color.int32[1] = 0x12345;
+    color.int32[2] = -32768;
+    color.int32[3] = 70000;
+    clear_range(&ranges[0], VK_IMAGE_ASPECT_COLOR_BIT, 0, 2, 0, 1);
+    cb = begin();
+    vkCmdClearColorImage(cb, m.image, VK_IMAGE_LAYOUT_GENERAL, &color, 1, &ranges[0]);
+    CHECK_VK(finish(cb), VK_SUCCESS);
+    {
+        int16_t w[4];
+        w[0] = -1;
+        w[1] = 0x2345;
+        w[2] = -32768;
+        w[3] = (int16_t)(70000 - 65536);
+        r = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, 4, 4, 4);
+        download(m.image, &r, &dst);
+        CHECK(all_texels(dst.data, 64, w, 8));
+        r = region(VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1, 0, 0, 0, 2, 2, 2);
+        download(m.image, &r, &dst);
+        CHECK(all_texels(dst.data, 8, w, 8));
+    }
+    free_image(&m);
+    /* values the formats round, clamp or flush */
+    {
+        static const struct {
+            VkFormat format;
+            uint32_t bytes;
+            const char *name;
+        } formats[] = {
+            { VK_FORMAT_R8G8B8A8_UNORM, 4, "R8G8B8A8_UNORM" },
+            { VK_FORMAT_R8G8B8A8_SNORM, 4, "R8G8B8A8_SNORM" },
+            { VK_FORMAT_A2B10G10R10_UNORM_PACK32, 4, "A2B10G10R10_UNORM" },
+            { VK_FORMAT_R16_UNORM, 2, "R16_UNORM" },
+            { VK_FORMAT_R16G16B16A16_SFLOAT, 8, "R16G16B16A16_SFLOAT" },
+            { VK_FORMAT_B10G11R11_UFLOAT_PACK32, 4, "B10G11R11_UFLOAT" },
+            { VK_FORMAT_E5B9G9R9_UFLOAT_PACK32, 4, "E5B9G9R9_UFLOAT" },
+            { VK_FORMAT_R32G32B32A32_SFLOAT, 16, "R32G32B32A32_SFLOAT" },
+        };
+        static const float values[3][4] = {
+            { 0.3f, 0.7f, 1.0f / 3.0f, 0.55f }, { 100.0f, -0.3f, 2.0e-5f, 1.0f }, { 0.50196f, 65504.0f, 1.0e-9f, -2.0f },
+        };
+        unsigned f, v;
+        for (f = 0; f < PVK_ARRAY_SIZE(formats); f++)
+            for (v = 0; v < 3; v++) {
+                memcpy(color.float32, values[v], sizeof(values[v]));
+                clear_both_ways(formats[f].format, &color, formats[f].bytes, formats[f].name);
+            }
+    }
     free_buf(&dst);
 }
 
@@ -1463,9 +1585,47 @@ static void test_blit(void)
     free_buf(&out);
 }
 
+/* The same blits into a storage image (dispatches) and into one without
+ * storage usage (draws): the same texels, bit for bit. */
+static void blit_both_ways(VkImageType type, VkFormat format, uint32_t w, uint32_t h, uint32_t d, uint32_t levels,
+                           uint32_t layers, const void *texels, size_t size, const VkImageBlit *b, uint32_t count,
+                           VkFilter filter, const VkBufferImageCopy *dl, size_t bytes, const char *what)
+{
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                              VK_IMAGE_USAGE_SAMPLED_BIT;
+    struct buf out[2];
+    unsigned k, i;
+    for (k = 0; k < 2; k++) {
+        VkImageCreateInfo info = image_info(type, format, w, h, d, levels, layers,
+                                            usage | (k ? VK_IMAGE_USAGE_STORAGE_BIT : 0));
+        struct img m = make_image(&info);
+        struct buf src = make_buf(size, shared_type, 0);
+        VkBufferImageCopy r = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, layers, 0, 0, 0, w, h, d);
+        VkCommandBuffer cb;
+        out[k] = make_buf(bytes, shared_type, 0);
+        memcpy(src.data, texels, size);
+        upload(m.image, &r, &src);
+        free_buf(&src);
+        cb = begin();
+        for (i = 0; i < count; i++) { /* level by level */
+            vkCmdBlitImage(cb, m.image, VK_IMAGE_LAYOUT_GENERAL, m.image, VK_IMAGE_LAYOUT_GENERAL, 1, &b[i], filter);
+            barrier(cb, m.image);
+        }
+        CHECK_VK(finish(cb), VK_SUCCESS);
+        CHECK(!k || ((struct pvk_image *)m.image)->mtl_usage & PVK_MTLTextureUsageShaderWrite);
+        download(m.image, dl, &out[k]);
+        free_image(&m);
+    }
+    if (memcmp(out[0].data, out[1].data, bytes))
+        PVK_TEST_FAIL("%s: the dispatches' texels differ from the draws'", what);
+    free_buf(&out[0]);
+    free_buf(&out[1]);
+}
+
 /* Blits as they are batched (pvk_encode_blit): consecutive blits into one
  * destination in one render pass, then a barrier before one reading what
- * they wrote; all layers or slice planes in one layered draw. */
+ * they wrote; all layers or slice planes in one layered draw; blits into
+ * storage images as dispatches. */
 static void test_blit_batched(void)
 {
     struct buf out = make_buf(1 << 16, shared_type, 0);
@@ -1589,6 +1749,74 @@ static void test_blit_batched(void)
             }
         free_image(&a[0]);
         free_image(&b);
+    }
+
+    /* storage images: mip chains (2D, array, 3D), and scaled and flipped */
+    {
+        uint8_t px[16 * 16 * 2 * 4];
+        uint16_t hx[8 * 8 * 8 * 4];
+        VkImageBlit chain[3];
+        fill_pattern(px, sizeof(px), 5);
+        for (l = 0; l < 3; l++)
+            chain[l] = blit_region(l, 0, 0, 0, 0, 16 >> l, 16 >> l, 1, l + 1, 0, 0, 0, 0, 8 >> l, 8 >> l, 1, 2);
+        dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 2, 0, 0, 0, 8, 8, 1);
+        blit_both_ways(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 16, 16, 1, 4, 2, px, sizeof(px), chain, 3,
+                       VK_FILTER_LINEAR, &dl, 8 * 8 * 2 * 4, "array mip chain");
+        dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 3, 0, 2, 0, 0, 0, 2, 2, 1);
+        blit_both_ways(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 16, 16, 1, 4, 2, px, sizeof(px), chain, 3,
+                       VK_FILTER_LINEAR, &dl, 2 * 2 * 2 * 4, "array mip chain, level 3");
+        chain[0] = blit_region(0, 0, 1, 2, 0, 15, 13, 1, 1, 0, 7, 1, 0, 0, 6, 1, 1);
+        dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1, 0, 0, 0, 8, 8, 1);
+        blit_both_ways(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 16, 16, 1, 2, 1, px, sizeof(px), chain, 1,
+                       VK_FILTER_LINEAR, &dl, 8 * 8 * 4, "scaled and flipped, linear");
+        blit_both_ways(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 16, 16, 1, 2, 1, px, sizeof(px), chain, 1,
+                       VK_FILTER_NEAREST, &dl, 8 * 8 * 4, "scaled and flipped, nearest");
+        for (x = 0; x < PVK_ARRAY_SIZE(hx); x++)
+            hx[x] = (uint16_t)(0x3800 + (x * 37) % 1024); /* halves in [0.5, 1) */
+        chain[0] = blit_region(0, 0, 0, 0, 0, 8, 8, 8, 1, 0, 0, 0, 0, 4, 4, 4, 1);
+        chain[1] = blit_region(1, 0, 0, 0, 0, 4, 4, 4, 2, 0, 0, 0, 3, 2, 2, 1, 1); /* flipped in z */
+        dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1, 0, 0, 0, 4, 4, 4);
+        blit_both_ways(VK_IMAGE_TYPE_3D, VK_FORMAT_R16G16B16A16_SFLOAT, 8, 8, 8, 3, 1, hx, sizeof(hx), chain, 2,
+                       VK_FILTER_LINEAR, &dl, 4 * 4 * 4 * 8, "3D mip chain");
+        dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 2, 0, 1, 0, 0, 0, 2, 2, 2);
+        blit_both_ways(VK_IMAGE_TYPE_3D, VK_FORMAT_R16G16B16A16_SFLOAT, 8, 8, 8, 3, 1, hx, sizeof(hx), chain, 2,
+                       VK_FILTER_NEAREST, &dl, 2 * 2 * 2 * 8, "3D, nearest");
+    }
+    /* storage formats whose conversions round: packed floats, 10-bit, snorm, 16-bit unorm, 32-bit float */
+    {
+        static const struct {
+            VkFormat format;
+            uint32_t bytes;
+            const char *name;
+        } formats[] = {
+            { VK_FORMAT_B10G11R11_UFLOAT_PACK32, 4, "B10G11R11_UFLOAT" },
+            { VK_FORMAT_E5B9G9R9_UFLOAT_PACK32, 4, "E5B9G9R9_UFLOAT" },
+            { VK_FORMAT_A2B10G10R10_UNORM_PACK32, 4, "A2B10G10R10_UNORM" },
+            { VK_FORMAT_R8G8B8A8_SNORM, 4, "R8G8B8A8_SNORM" },
+            { VK_FORMAT_R16_UNORM, 2, "R16_UNORM" },
+            { VK_FORMAT_R32G32B32A32_SFLOAT, 16, "R32G32B32A32_SFLOAT" },
+        };
+        uint32_t px[16 * 16 * 4], i, f;
+        VkImageBlit chain[2];
+        chain[0] = blit_region(0, 0, 0, 0, 0, 16, 16, 1, 1, 0, 0, 0, 0, 8, 8, 1, 1);
+        chain[1] = blit_region(1, 0, 0, 0, 0, 8, 8, 1, 2, 0, 3, 0, 0, 0, 4, 1, 1); /* flipped, 3 of 4 wide */
+        for (f = 0; f < PVK_ARRAY_SIZE(formats); f++) {
+            for (i = 0; i < PVK_ARRAY_SIZE(px); i++) {
+                float v = (float)((i * 37u) % 101u) / 25.0f; /* [0, 4] */
+                uint32_t bits = i * 2654435761u;
+                if (formats[f].format == VK_FORMAT_B10G11R11_UFLOAT_PACK32)
+                    bits &= ~((1u << 10) | (1u << 21) | (1u << 31)); /* finite: no exponent all ones */
+                if (formats[f].format == VK_FORMAT_R32G32B32A32_SFLOAT)
+                    memcpy(&bits, &v, 4);
+                px[i] = bits;
+            }
+            dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1, 0, 0, 0, 8, 8, 1);
+            blit_both_ways(VK_IMAGE_TYPE_2D, formats[f].format, 16, 16, 1, 3, 1, px, 16 * 16 * formats[f].bytes, chain,
+                           2, VK_FILTER_LINEAR, &dl, 8 * 8 * formats[f].bytes, formats[f].name);
+            dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 2, 0, 1, 0, 0, 0, 4, 4, 1);
+            blit_both_ways(VK_IMAGE_TYPE_2D, formats[f].format, 16, 16, 1, 3, 1, px, 16 * 16 * formats[f].bytes, chain,
+                           2, VK_FILTER_LINEAR, &dl, 4 * 4 * formats[f].bytes, formats[f].name);
+        }
     }
     free_buf(&out);
 }
