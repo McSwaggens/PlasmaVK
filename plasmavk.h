@@ -54561,11 +54561,12 @@ struct pvk_pipeline {
 };
 
 /* What a render pass instance's scan (pvk_prepass_scan, section 16) looks
- * for, in struct pvk_command_buffer.scan: the bits of what the command
- * buffer recorded, and of the secondaries it executes. A pass whose command
- * buffer has none of them (nor PVK_SCAN_STRIP and PVK_SCAN_U16 together)
- * is not scanned: its draws need no preprocessing and its pipelines nothing
- * of the Metal pass. */
+ * for: the bits of what a command buffer recorded, and of the secondaries it
+ * executes (struct pvk_command_buffer.scan), also kept for each pass it
+ * begins (struct pvk_cmd_begin_pass.scan). A pass that recorded none of
+ * them (nor PVK_SCAN_STRIP and PVK_SCAN_U16 together), and began with no
+ * such state, is not scanned: its draws need no preprocessing and its
+ * pipelines nothing of the Metal pass. */
 #define PVK_SCAN_PIPELINE 1u /* a graphics pipeline the pass must know of (pvk_gfx_scan) */
 #define PVK_SCAN_DRAW 2u     /* triangle fans, 8-bit indices or indirect draw counts (pvk_draw_conv) */
 #define PVK_SCAN_STRIP 4u    /* strips (with 16-bit indices they may be widened) */
@@ -54653,7 +54654,11 @@ struct pvk_command_buffer {
     bool submitted;
     const void *debug_pipeline[2];
     bool render_group; /* a debug group of the render pass instance is open */
-    uint32_t scan;     /* PVK_SCAN_* of what it recorded */
+    /* PVK_SCAN_* of what it recorded; in a render pass instance, of what the
+     * instance recorded so far (its BEGIN_PASS packet scan_pass gets them
+     * when it ends), scan_outer of the rest */
+    uint32_t scan, scan_outer;
+    struct pvk_cmd_begin_pass *scan_pass;
 };
 
 static const VkAllocationCallbacks *pvk_pool_alloc(const struct pvk_command_pool *pool)
@@ -54703,7 +54708,8 @@ static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release
     cb->submitted = false;
     cb->debug_pipeline[0] = cb->debug_pipeline[1] = NULL;
     cb->render_group = false;
-    cb->scan = 0;
+    cb->scan = cb->scan_outer = 0;
+    cb->scan_pass = NULL;
     if (release) {
         pvk_labels_free(&cb->labels, pvk_pool_alloc(pool));
         pvk_cb_render_free(cb);
@@ -56700,6 +56706,7 @@ struct pvk_cmd_begin_pass {
     uint32_t resolve_clear_depth_bytes; /* 4: float, 2: 16-bit unorm */
     uint32_t resolve_clear_combined;    /* a depth/stencil format (else depth or stencil only) */
     VkClearDepthStencilValue resolve_clear_value;
+    uint32_t scan; /* PVK_SCAN_* of what it recorded until its END_PASS (struct pvk_command_buffer.scan) */
 };
 
 /* The subpass, or local-read mapping, of the draws that follow. */
@@ -57049,6 +57056,26 @@ static uint32_t pvk_rp_fresh_views(const struct pvk_render_pass *pass, uint32_t 
     return mp->view_mask & ~seen;
 }
 
+/* The END_PASS of the pass that cb->scan_pass begins: it gets the scan
+ * bits recorded since, and the command buffer has them too. */
+static void pvk_cmd_scan_end(struct pvk_command_buffer *cb)
+{
+    if (!cb->scan_pass)
+        return;
+    cb->scan_pass->scan = cb->scan;
+    cb->scan |= cb->scan_outer;
+    cb->scan_pass = NULL;
+}
+
+/* A BEGIN_PASS packet c: the scan bits recorded until its END_PASS are its. */
+static void pvk_cmd_scan_begin(struct pvk_command_buffer *cb, struct pvk_cmd_begin_pass *c)
+{
+    pvk_cmd_scan_end(cb); /* (the previous pass did not end: invalid) */
+    cb->scan_outer = cb->scan;
+    cb->scan = 0;
+    cb->scan_pass = c;
+}
+
 /* The BEGIN_PASS packet of Metal pass p of the render pass being recorded. */
 static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pvk_cb_render *r, uint32_t p)
 {
@@ -57060,6 +57087,7 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
     if (!c)
         return;
     pvk_cmd_zero(c, sizeof(*c));
+    pvk_cmd_scan_begin(cb, c);
     c->area = r->area;
     c->width = r->width;
     c->height = r->height;
@@ -57182,6 +57210,7 @@ static void pvk_cmd_end_pass(struct pvk_command_buffer *cb, uint32_t flags)
         c->flags = flags;
         c->pad = 0;
     }
+    pvk_cmd_scan_end(cb);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass2(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo *pRenderPassBegin,
@@ -57328,6 +57357,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
     if (!(r = pvk_cb_render_get(cb, 0)) || !(c = pvk_cmd_append(cb, PVK_CMD_BEGIN_PASS, sizeof(*c))))
         return;
     pvk_cmd_zero(c, sizeof(*c));
+    pvk_cmd_scan_begin(cb, c);
     r->pass = NULL;
     r->active = true;
     r->flags = info->flags;
@@ -58731,7 +58761,6 @@ struct pvk_encoder {
     /* A packet of a secondary command buffer being encoded (depth > 0): the
      * next packet in it, where a render pass it begins scans ahead from */
     uint32_t depth;
-    const struct pvk_command_buffer *sub_cb;
     const struct pvk_cmd_block *sub_block;
     size_t sub_at;
     struct pvk_pp_result *pp;   /* draw preprocessing results of the render pass, in draw order */
@@ -60054,11 +60083,11 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
  * count, so a count draw encodes min(maxDrawCount, maxDrawIndirectCount)
  * draws, those past the count drawing nothing. The scan also finds what
  * the Metal pass must be made with (Bresenham lines, framebuffer fetch,
- * SNORM rebinds, depth/stencil copies, occlusion queries). A pass whose
- * command buffer recorded none of what it looks for (struct
- * pvk_command_buffer.scan) is not scanned: walking the packets again cost
- * as much as making the Metal encoders, in a frame of a few thousand draws
- * and 18 passes. */
+ * SNORM rebinds, depth/stencil copies, occlusion queries). A render pass
+ * instance that recorded none of what it looks for (struct
+ * pvk_cmd_begin_pass.scan), and begins with no such state, is not scanned:
+ * walking the packets again cost as much as making the Metal encoders, in a
+ * frame of a few thousand draws and 18 passes. */
 
 static pthread_mutex_t pvk_graphics_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -62516,17 +62545,15 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
 }
 
 /* Whether the render pass instance that BEGIN_PASS packet c begins must be
- * scanned (struct pvk_command_buffer.scan): it is suspended or resumed (into
- * other command buffers), has no attachments (its sample count is the
- * first pipeline's), or its command buffer, or the state it begins with
- * (bound in an earlier one), has what the scan looks for. */
+ * scanned (PVK_SCAN_*): it is suspended or resumed (into other command
+ * buffers), has no attachments (its sample count is the first pipeline's),
+ * or it recorded, or begins with state (pipeline, topology, index buffer)
+ * that has, what the scan looks for. */
 static bool pvk_pass_scanned(const struct pvk_encoder *e, const struct pvk_cmd_begin_pass *c,
                              const struct pvk_draw_track *t)
 {
     const struct pvk_render *r = &e->render;
-    const struct pvk_command_buffer *cb =
-        e->depth ? e->sub_cb : (const struct pvk_command_buffer *)e->cursor.cbs[e->cursor.index].commandBuffer;
-    uint32_t scan = cb->scan | (r->pipeline ? r->pipeline->scan : 0u) | pvk_topology_scan(t->topology) |
+    uint32_t scan = c->scan | (r->pipeline ? r->pipeline->scan : 0u) | pvk_topology_scan(t->topology) |
                     (t->index_address ? pvk_index_scan(t->index_type) : 0u);
     uint32_t s;
     bool attachments = c->depth.texture || c->stencil.texture;
@@ -63905,7 +63932,6 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
                 e->cursor.block = b;
                 e->cursor.at = at;
             } else {
-                e->sub_cb = cb;
                 e->sub_block = b;
                 e->sub_at = at;
             }
