@@ -42827,7 +42827,9 @@ static void pvk_spv_oom(struct pvk_spv *ctx)
     longjmp(ctx->fail, 1);
 }
 
-/* Zeroed memory that lives until the translation ends. */
+/* Zeroed memory that lives until the translation ends, in 16 KB chunks:
+ * malloc keeps freed blocks that size for the next translation, where it
+ * returned 64 KB ones to the system (madvise) to fault them in again. */
 static void *pvk_spv_alloc(struct pvk_spv *ctx, size_t size)
 {
     struct pvk_spv_chunk *c = ctx->chunks;
@@ -42837,7 +42839,7 @@ static void *pvk_spv_alloc(struct pvk_spv *ctx, size_t size)
         pvk_spv_oom(ctx);
     size = (size + 15) & ~(size_t)15;
     if (!c || c->size - c->used < size) {
-        size_t n = size > 65536 ? size : 65536;
+        size_t n = size > 16384 ? size : 16384;
         c = calloc(1, sizeof(*c) + n);
         if (!c)
             pvk_spv_oom(ctx);
@@ -43059,7 +43061,7 @@ static void pvk_sb_insert(struct pvk_spv *ctx, struct pvk_sb *sb, size_t pos, co
 }
 
 /* printf into the arena: formatted where its next allocation starts, which
- * then takes the text when it fits (the common case: chunks are 64 KB). */
+ * then takes the text when it fits (the common case: chunks are 16 KB). */
 static const char *pvk_spv_fmt(struct pvk_spv *ctx, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 static const char *pvk_spv_fmt(struct pvk_spv *ctx, const char *fmt, ...)
 {
