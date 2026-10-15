@@ -3371,6 +3371,59 @@ static void test_sparse_pooled_memory(void)
     free_buf(&host);
 }
 
+/* A sparse buffer bound to memory whose heap of its own the device's heap
+ * cache kept from freed memory (section 10, HEAP CACHE), at an offset: the
+ * cache keeps heaps sparse resources can map onto for such memory. */
+static void test_sparse_cached_heap(void)
+{
+    const VkDeviceSize size = 16 * BLOCK;
+    const struct pvk_device_memory *m;
+    VkDeviceMemory mem;
+    VkMemoryRequirements req;
+    VkCommandBuffer cb;
+    VkBufferCopy copy;
+    VkBuffer buffer;
+    struct buf host;
+    id heap;
+    uint32_t *words, i;
+    unsigned char *w;
+
+    if (!has_sparse())
+        return;
+    mem = allocate(shared_type, size);
+    REQUIRE(mem);
+    m = (const struct pvk_device_memory *)mem;
+    REQUIRE(!m->chunk && m->sparse);
+    heap = m->mtl_heap;
+    vkFreeMemory(device, mem, NULL);
+    mem = allocate(shared_type, size);
+    REQUIRE(mem);
+    m = (const struct pvk_device_memory *)mem;
+    CHECK(m->mtl_heap == heap && m->sparse);
+    w = map(mem);
+    REQUIRE(w);
+    memset(w, 0xEE, (size_t)size);
+    host = host_buf(4 * BLOCK);
+    REQUIRE(host.data);
+    words = (uint32_t *)host.data;
+    for (i = 0; i < BLOCK; i++)
+        words[i] = pattern(i, 90);
+    buffer = sparse_buffer(4 * BLOCK, 0, &req);
+    REQUIRE(buffer);
+    bind_buffer(buffer, 0, 4 * BLOCK, mem, 5 * BLOCK);
+    cb = begin();
+    memset(&copy, 0, sizeof(copy));
+    copy.size = 4 * BLOCK;
+    vkCmdCopyBuffer(cb, host.buffer, buffer, 1, &copy);
+    barrier(cb);
+    submit(cb);
+    CHECK(memcmp(w + 5 * BLOCK, words, 4 * BLOCK) == 0);
+    CHECK(all_bytes(w, 0xEE, 5 * BLOCK) && all_bytes(w + 9 * BLOCK, 0xEE, 7 * BLOCK));
+    vkDestroyBuffer(device, buffer, NULL);
+    free_buf(&host);
+    vkFreeMemory(device, mem, NULL);
+}
+
 int main(void)
 {
     setup();
@@ -3397,6 +3450,7 @@ int main(void)
     RUN(test_sparse_depth_stencil);
     RUN(test_sparse_compressed_tail);
     RUN(test_sparse_pooled_memory);
+    RUN(test_sparse_cached_heap);
     teardown();
     return TEST_RESULT();
 }

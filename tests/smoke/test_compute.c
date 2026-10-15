@@ -811,6 +811,52 @@ static void test_push_constants(void)
     free_buf(&dst);
 }
 
+/* Internal kernels in the compute encoder (fills of patterns Metal cannot
+ * fill, section 16) between dispatches of one bound pipeline: the dispatches
+ * after them get the pipeline state and push constants back, also those
+ * vkCmdPushConstants changed only partly. */
+static void test_kernels_between(void)
+{
+    enum { N = 1000 };
+    struct buf src = make_buf(4 * N, shared_type), dst = make_buf(4 * 3 * N, shared_type),
+               junk = make_buf(1 << 16, shared_type);
+    VkPipeline p = make_pipeline(spv_scale, sizeof(spv_scale), 0);
+    VkDeviceAddress d1;
+    VkCommandBuffer cb;
+    uint32_t i, add = 9;
+    int ok = 1;
+
+    REQUIRE(p && src.data && dst.data && junk.data);
+    for (i = 0; i < N; i++)
+        memcpy(src.data + 4 * i, &i, 4);
+    cb = begin();
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+    push_scale(cb, src.address, dst.address, N, 2, 1);
+    vkCmdDispatch(cb, (N + 63) / 64, 1, 1);
+    vkCmdFillBuffer(cb, junk.buffer, 4, 4096, 0x01020304u);
+    d1 = dst.address + 4 * N;
+    vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_COMPUTE_BIT, offsetof(struct scale_push, dst), 8, &d1);
+    vkCmdDispatch(cb, (N + 63) / 64, 1, 1);
+    vkCmdFillBuffer(cb, junk.buffer, 8, 8192, 0x05060708u);
+    vkCmdUpdateBuffer(cb, junk.buffer, 16384, 4, &add);
+    d1 = dst.address + 8 * N;
+    vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_COMPUTE_BIT, offsetof(struct scale_push, dst), 8, &d1);
+    vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_COMPUTE_BIT, offsetof(struct scale_push, add), 4, &add);
+    vkCmdDispatch(cb, (N + 63) / 64, 1, 1);
+    host_barrier(cb);
+    REQUIRE_VK(finish(cb));
+    for (i = 0; i < N && ok; i++) {
+        ok = word(&dst, i) == 2 * i + 1 && word(&dst, N + i) == 2 * i + 1 && word(&dst, 2 * N + i) == 2 * i + 9;
+        if (!ok)
+            fprintf(stderr, "  element %u: %u %u %u\n", i, word(&dst, i), word(&dst, N + i), word(&dst, 2 * N + i));
+    }
+    CHECK(ok);
+    vkDestroyPipeline(device, p, NULL);
+    free_buf(&src);
+    free_buf(&dst);
+    free_buf(&junk);
+}
+
 /* Dependent dispatches ping-ponging between two buffers in private memory,
  * after a fill by the internal kernel and before a copy: each step needs
  * the barrier before it. */
@@ -1190,6 +1236,7 @@ int main(void)
     if (pvk_test_failures)
         return 1;
     RUN(test_push_constants);
+    RUN(test_kernels_between);
     RUN(test_dispatch_chain);
     RUN(test_dispatch_base);
     RUN(test_dispatch_indirect);
