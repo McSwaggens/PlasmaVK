@@ -39799,7 +39799,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  *   is copied to the upload ring, the offsets added to the copy's
  *   addresses, and the copy bound. Push descriptors are written into a table
  *   the command buffer keeps per bind point; each push copies it into the
- *   packet, uploaded at submit.
+ *   packet, uploaded at submit. Pool buffers and the upload ring are both
+ *   CPU-cached memory: Metal reads the tables a draw binds on the CPU when
+ *   it encodes the draw (section 16's UPLOAD RING).
  * ========================================================================== */
 
 /* Largest set table: the translator's limit (section 13). */
@@ -57071,10 +57073,15 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  * UPLOAD RING
  *   vkCmdUpdateBuffer data, push constants, push descriptor sets, copies of
  *   descriptor sets bound with dynamic offsets (section 12) and internal
- *   kernel arguments go into per-queue chunks of shared, write-combined
- *   memory in the device's residency set, written while encoding and bound
- *   by GPU address. An upload larger than a chunk gets a chunk of its own,
- *   freed once its submission is done.
+ *   kernel arguments go into per-queue chunks of shared, cached memory in
+ *   the device's residency set, written while encoding and bound by GPU
+ *   address. An upload larger than a chunk gets a chunk of its own, freed
+ *   once its submission is done. Cached, not write-combined: Metal reads
+ *   the buffers bound to a draw's arguments on the CPU when it encodes the
+ *   draw (in the driver's getDirtyArguments), and reads of write-combined
+ *   memory bypass the cache. In write-combined chunks a draw after new
+ *   push constants, vertex buffers or tables took 45 to 90 ns longer to
+ *   encode (M4 Max, macOS 27.2).
  *
  * BARRIERS
  *   Metal 4 does not track resources: commands in an encoder and across
@@ -57184,7 +57191,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
 
 struct pvk_upload_chunk {
     struct pvk_upload_chunk *next;
-    id buffer;     /* MTLBuffer: shared, write-combined, untracked, resident */
+    id buffer;     /* MTLBuffer: shared, cached, untracked, resident */
     char *contents;
     pvk_MTLGPUAddress address;
     size_t size;   /* PVK_UPLOAD_CHUNK_SIZE, or more for one large upload (freed when done) */
@@ -57702,7 +57709,7 @@ static struct pvk_upload_chunk *pvk_upload_chunk_new(struct pvk_encoder *e, size
     if (c)
         c->buffer = pvk_MTLDevice_newBufferWithLength_options(
             device->physical_device->mtl_device, size,
-            PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeWriteCombined |
+            PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeDefaultCache |
                 PVK_MTLResourceHazardTrackingModeUntracked);
     if (!c || !c->buffer) {
         pvk_free(pvk_device_alloc(device), c);
@@ -58259,7 +58266,7 @@ static void pvk_encode_bind_set(struct pvk_encoder *e, const struct pvk_cmd_bind
         memcpy(copy, c->contents, (size_t)c->size);
         for (i = 0; i < c->dynamic_count; i++) {
             uint64_t a;
-            memcpy(&a, c->contents + d[i].at, 8); /* the copy is write-combined: read the source */
+            memcpy(&a, c->contents + d[i].at, 8);
             a += d[i].offset;
             memcpy(copy + d[i].at, &a, 8);
         }
