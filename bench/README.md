@@ -22,7 +22,7 @@ reports an error instead of fast-but-wrong numbers.
 | `bench_compute` | Chains of 100 or 1000 small dispatches with a barrier between each, 1000 independent dispatches without barriers, and a multi-pass inclusive prefix sum of 1M and 16M `uint`s (reports `gelements_per_s`). |
 | `bench_render_passes` | A deferred frame with dynamic rendering: a G-buffer (RGBA8 + 2x RGBA16F + D32, ~2000 objects) and then 32-light shading. The variants change what leaves tile memory: G-buffer `CLEAR`/`LOAD`/`DONT_CARE`; 4x MSAA with resolve, with the MSAA images transient (memoryless) or stored; and a single-pass version that reads the G-buffer as input attachments (dynamic rendering local read) and never stores it. 1080p and 4K. GPU time is the number to watch. |
 | `bench_render_area` | Render areas smaller than the attachments: a shadow atlas updated tile by tile (16 depth-only passes per frame, each into a 1024² tile of an 8192² D32 atlas) and dynamic resolution (a scene pass into the top-left 70% of a 4K RGBA16F + D32 target, depth `DONT_CARE`). Each next to the same passes into images of exactly the area's size. GPU time is the number to watch. The check also reads back what lies outside the area, which must survive. |
-| `bench_pipeline_compile` | The time to create each of 256 graphics and 128 compute pipelines (distinct shaders, specialization constants and fixed-function state), one call per pipeline. The spread is the stutter: watch p99 and max. Phases: `cold`, `warm_cache` (a fresh device given the cold run's `vkGetPipelineCacheData`), `no_cache`, and `cold_parallel4` (4 threads). |
+| `bench_pipeline_compile` | The time to create each of 256 graphics and 128 compute pipelines (distinct shaders, specialization constants and fixed-function state), one call per pipeline. The spread is the stutter: watch p99 and max. Phases: `cold`, `warm_cache` (a fresh device given the cold run's `vkGetPipelineCacheData`), `no_cache`, `cold_parallel4` (4 threads), and `batch_cold` (one call per kind). Then a textured material shader the way engines use it, one call per pipeline and no `VkPipelineCache`: `permutations_cold` (16 shader pairs x 32 blend/cull/depth/format/write-mask states; each pipeline is counted in the first bucket that applies: `new_fragment` (a fragment variant not seen before), `new_vertex`, `new_state` (blend, color format, write mask or depth format not yet seen with that fragment variant, which Apple GPUs build into the fragment binary), `new_pair` (known shaders paired anew) or `repeat`. Each bucket has per-pipeline statistics and a total in ms; where a driver recompiles only some of a bucket's pipelines its median hides them, so compare totals), `permutations_recreate` (all destroyed and created again on the same device), `permutations_warm` (a fresh device, same shaders), and `spec_variants_cold` (16 pipelines that differ only in specialization constants). |
 | `bench_frame` | One engine-like deferred frame, the mix a game submits instead of one pattern at a time: streamed object constants, UI geometry and texture tiles; a per-frame descriptor pool; 4 shadow cascades (a depth-only pipeline, 1000 draws each); a G-buffer (3000 draws, 4 pipelines, 64 materials, a dynamic offset per draw); tiled light culling in compute; tiled lighting with shadow lookups; 11 bloom passes; tonemap and 600 scissored UI draws. 7613 draws in 18 rendering instances. Configs: one thread; 4 threads recording secondaries (`mt4_secondary`); 4 threads recording primaries submitted together (`mt4_primary`); timestamps around every pass, read a frame later like an engine's GPU profiler (`st_profiled`); a thread compiling pipelines meanwhile (`st_bgcompile`); 3840x2160; and a device with depth bounds enabled and made dynamic (and off), as translation layers do (`st_dynamic_depth_bounds`). |
 | `bench_upload_streaming` | Per-frame uploads: 256 x 4 KB buffer updates through a staging ring, one 32 MB bulk copy, 64 texture tiles into an atlas, a full 2048² mip chain, the same updates written directly into host-visible device-local memory, and map / flush / unmap per frame. CPU time includes writing the data. |
 | `bench_transfers` | Transfers and clears the way frames and level loads record them: a 128³ 3D image cleared every frame; `vkCmdBlitImage` mip chains of 2048² RGBA8 textures (with and without `STORAGE` usage), of a 512² RGBA16F cube map, and of four 512² warp textures level by level (vkQuake); 64 scaled blits into an atlas without barriers between them; streaming 16 sRGB textures (a copy into level 0, then 9 blitted mips each); and 128 `vkCmdFillBuffer` back to back into one buffer. GPU time is the number to watch. |
@@ -114,7 +114,7 @@ to stderr.
     flight. This is throughput, whichever of CPU or GPU is the bottleneck.
 - `startup` reports `wall_us` per iteration. `pipeline_compile` reports
   `create_us` per pipeline plus `total_ms` (and `wall_ms` for the threaded
-  phase).
+  phase; batch phases report only `total_ms`, the call).
 - `frame`'s `cpu_us` is the main thread's critical path, including waiting
   for its workers. The multithreaded configurations add `worker_cpu_us`
   (the CPU time of all workers in a frame) and `record_wall_us`;
@@ -190,13 +190,19 @@ its other configurations have run:
 - Workloads are deterministic: fixed seeds, fixed scenes, and CPU references
   that are exact wherever possible. The exceptions use tolerances: float
   lighting in `render_passes`, the 5-way texture product in
-  `descriptor_churn` (±1 per channel), and `frame`'s final image, lit,
-  bloomed and tonemapped in float (±2; its G-buffer, light lists and UI
-  glyphs are exact).
-- `pipeline_compile` mixes a per-run salt into a specialization constant,
-  which changes the shader code. That way no earlier run's driver or OS
-  shader cache can serve the "cold" pipelines. The CPU reference uses the
-  same salt.
+  `descriptor_churn` and the material shader in `pipeline_compile` (±1 per
+  channel), and `frame`'s final image, lit, bloomed and tonemapped in float
+  (±2; its G-buffer, light lists and UI glyphs are exact).
+- `pipeline_compile` mixes a per-run salt into the shader code: into
+  specialization constants of the fragment and compute shaders, and in the
+  material phases into a constant of the vertex shaders' SPIR-V (the
+  original phases' vertex shaders vary per pipeline but not per run). That
+  way no earlier run's driver or OS cache of the specialized code can serve
+  the "cold" pipelines. The CPU reference uses the same salt. A driver that
+  keeps specialization constants as Metal function constants (MoltenVK)
+  compiles the same MSL for those shaders in every run, so their front-end
+  compile (MSL to AIR) can still be served from an earlier run; what stays
+  cold for it is the specialization and the back end.
 - `gpu_us` is only as good as the implementation's timestamps. MoltenVK
   sometimes reports implausible minimums, such as a few µs for a 22 MB
   `image_mips_2048` copy or for `chain_100`, whose median is about 2 ms.
