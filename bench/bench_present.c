@@ -85,7 +85,7 @@ struct instance {
     float color[4];
 };
 
-/* Commands that bench_vk.h does not load. */
+/* Instance commands, which bench_vk.h does not load. */
 static struct {
     PFN_vkGetPhysicalDeviceSurfaceSupportKHR GetPhysicalDeviceSurfaceSupportKHR;
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR GetPhysicalDeviceSurfaceCapabilitiesKHR;
@@ -93,86 +93,35 @@ static struct {
     PFN_vkCreateMetalSurfaceEXT CreateMetalSurfaceEXT;
     PFN_vkCreateHeadlessSurfaceEXT CreateHeadlessSurfaceEXT;
     PFN_vkDestroySurfaceKHR DestroySurfaceKHR;
-    PFN_vkCreateSwapchainKHR CreateSwapchainKHR;
-    PFN_vkDestroySwapchainKHR DestroySwapchainKHR;
-    PFN_vkGetSwapchainImagesKHR GetSwapchainImagesKHR;
-    PFN_vkAcquireNextImageKHR AcquireNextImageKHR;
-    PFN_vkQueuePresentKHR QueuePresentKHR;
-    PFN_vkCreateSemaphore CreateSemaphore;
-    PFN_vkDestroySemaphore DestroySemaphore;
 } vkx;
 
 static int have_headless; /* VK_EXT_headless_surface enabled */
 
 /* ---- Instance and device ---- */
 
-/* bench_vk_init without surfaces: the same device setup on an instance with
- * the surface extensions and a device with VK_KHR_swapchain. */
+/* bench_vk_init with the surface extensions on the instance and
+ * VK_KHR_swapchain on the device. */
 static void init(struct bench_vk *vk)
 {
-    const char *instance_exts[4], *device_exts[2];
-    uint32_t n_instance_exts = 0, n_device_exts = 0, count = 0, i;
-    VkExtensionProperties *exts;
-    VkApplicationInfo app = {
-        .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-        .pApplicationName = "plasmavk-bench",
-        .pEngineName = "plasmavk-bench",
-        .apiVersion = VK_API_VERSION_1_4,
-    };
-    VkInstanceCreateInfo instance_info = {
-        .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-        .pApplicationInfo = &app,
-        .ppEnabledExtensionNames = instance_exts,
-    };
-    VkPhysicalDeviceVulkan13Features have13 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
-    VkPhysicalDeviceFeatures2 have = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &have13 };
-    VkPhysicalDeviceVulkan13Features want13 = {
-        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
-        .synchronization2 = VK_TRUE,
-        .dynamicRendering = VK_TRUE,
-    };
-    VkQueueFamilyProperties families[16];
-    float priority = 1.0f;
-    VkDeviceQueueCreateInfo queue_info = {
-        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .queueCount = 1,
-        .pQueuePriorities = &priority,
-    };
-    VkDeviceCreateInfo device_info = {
-        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .pNext = &want13,
-        .queueCreateInfoCount = 1,
-        .pQueueCreateInfos = &queue_info,
-        .ppEnabledExtensionNames = device_exts,
-    };
-    VkCommandPoolCreateInfo pool_info = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-        .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
-    };
-    VkFenceCreateInfo fence_info = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+    struct bench_vk_wants wants;
 
-    memset(vk, 0, sizeof(*vk));
-    if (vkEnumerateInstanceExtensionProperties(NULL, &count, NULL) < 0)
-        count = 0;
-    exts = bench_alloc(sizeof(*exts) * (count + 1));
-    if (count && vkEnumerateInstanceExtensionProperties(NULL, &count, exts) < 0)
-        count = 0;
-    if (!bench_has_extension(exts, count, VK_KHR_SURFACE_EXTENSION_NAME) ||
-        !bench_has_extension(exts, count, VK_EXT_METAL_SURFACE_EXTENSION_NAME))
+    memset(&wants, 0, sizeof(wants));
+    wants.instance_extensions[0] = VK_KHR_SURFACE_EXTENSION_NAME;
+    wants.instance_extensions[1] = VK_EXT_METAL_SURFACE_EXTENSION_NAME;
+    wants.instance_extensions[2] = VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME;
+    wants.device_extensions[0] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+    bench_vk_init_with(vk, BENCH_NEED_DYNAMIC_RENDERING | BENCH_NEED_SYNC2, &wants);
+    if (!bench_vk_extension(vk, VK_KHR_SURFACE_EXTENSION_NAME) ||
+        !bench_vk_extension(vk, VK_EXT_METAL_SURFACE_EXTENSION_NAME))
         bench_fatal("VK_KHR_surface or VK_EXT_metal_surface not supported");
-    instance_exts[n_instance_exts++] = VK_KHR_SURFACE_EXTENSION_NAME;
-    instance_exts[n_instance_exts++] = VK_EXT_METAL_SURFACE_EXTENSION_NAME;
-    if (bench_has_extension(exts, count, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME)) {
-        instance_exts[n_instance_exts++] = VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME;
-        have_headless = 1;
-    }
-    if (bench_has_extension(exts, count, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
-        instance_exts[n_instance_exts++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
-        instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
-    }
-    free(exts);
-    instance_info.enabledExtensionCount = n_instance_exts;
-    BENCH_VK(vkCreateInstance(&instance_info, NULL, &vk->instance));
+    if (!bench_vk_extension(vk, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
+        bench_fatal("VK_KHR_swapchain not supported");
+    if (!vkd.CreateSwapchainKHR || !vkd.DestroySwapchainKHR || !vkd.GetSwapchainImagesKHR ||
+        !vkd.AcquireNextImageKHR || !vkd.QueuePresentKHR)
+        bench_fatal("vkGetDeviceProcAddr returned NULL for a VK_KHR_swapchain command");
+    have_headless = bench_vk_extension(vk, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+    if (!vk->timestamp_bits)
+        bench_fatal("the queue has no timestamps");
 #define LOAD_INSTANCE(name)                                                                 \
     vkx.name = (PFN_vk##name)vkGetInstanceProcAddr(vk->instance, "vk" #name);               \
     if (!vkx.name)                                                                          \
@@ -186,67 +135,6 @@ static void init(struct bench_vk *vk)
         LOAD_INSTANCE(CreateHeadlessSurfaceEXT)
     }
 #undef LOAD_INSTANCE
-
-    count = 1;
-    if (vkEnumeratePhysicalDevices(vk->instance, &count, &vk->physical_device) < 0 || count == 0)
-        bench_fatal("no Vulkan physical device");
-    vkGetPhysicalDeviceProperties(vk->physical_device, &vk->props);
-    vkGetPhysicalDeviceMemoryProperties(vk->physical_device, &vk->mem);
-    bench_set_device(vk->props.deviceName);
-    if (VK_API_VERSION_MINOR(vk->props.apiVersion) < 3)
-        bench_fatal("device reports Vulkan 1.%u; the benchmarks need 1.3", VK_API_VERSION_MINOR(vk->props.apiVersion));
-    vkGetPhysicalDeviceFeatures2(vk->physical_device, &have);
-    if (!have13.dynamicRendering || !have13.synchronization2)
-        bench_fatal("Vulkan 1.3 features not supported: dynamicRendering synchronization2");
-
-    count = 16;
-    vkGetPhysicalDeviceQueueFamilyProperties(vk->physical_device, &count, families);
-    for (i = 0; i < count; i++)
-        if ((families[i].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) ==
-            (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))
-            break;
-    if (i == count)
-        bench_fatal("no queue family with graphics and compute");
-    vk->queue_family = queue_info.queueFamilyIndex = pool_info.queueFamilyIndex = i;
-    vk->timestamp_bits = families[i].timestampValidBits;
-    vk->timestamp_period = vk->props.limits.timestampPeriod;
-    if (!vk->timestamp_bits || vk->timestamp_period <= 0.0)
-        bench_fatal("the queue has no timestamps");
-
-    count = 0;
-    if (vkEnumerateDeviceExtensionProperties(vk->physical_device, NULL, &count, NULL) < 0)
-        count = 0;
-    exts = bench_alloc(sizeof(*exts) * (count + 1));
-    if (count && vkEnumerateDeviceExtensionProperties(vk->physical_device, NULL, &count, exts) < 0)
-        count = 0;
-    if (!bench_has_extension(exts, count, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
-        bench_fatal("VK_KHR_swapchain not supported");
-    device_exts[n_device_exts++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
-    if (bench_has_extension(exts, count, "VK_KHR_portability_subset")) {
-        device_exts[n_device_exts++] = "VK_KHR_portability_subset";
-        vk->portability_subset = 1;
-    }
-    free(exts);
-    device_info.enabledExtensionCount = n_device_exts;
-    BENCH_VK(vkCreateDevice(vk->physical_device, &device_info, NULL, &vk->device));
-#define LOAD(table, name)                                                                   \
-    table.name = (PFN_vk##name)vkGetDeviceProcAddr(vk->device, "vk" #name);                 \
-    if (!table.name)                                                                        \
-        bench_fatal("vkGetDeviceProcAddr(vk" #name ") returned NULL");
-#define LOAD_VKD(name) LOAD(vkd, name)
-    BENCH_DEVICE_COMMANDS(LOAD_VKD)
-    LOAD(vkx, CreateSwapchainKHR)
-    LOAD(vkx, DestroySwapchainKHR)
-    LOAD(vkx, GetSwapchainImagesKHR)
-    LOAD(vkx, AcquireNextImageKHR)
-    LOAD(vkx, QueuePresentKHR)
-    LOAD(vkx, CreateSemaphore)
-    LOAD(vkx, DestroySemaphore)
-#undef LOAD_VKD
-#undef LOAD
-    vkd.GetDeviceQueue(vk->device, vk->queue_family, 0, &vk->queue);
-    BENCH_VK(vkd.CreateCommandPool(vk->device, &pool_info, NULL, &vk->pool));
-    BENCH_VK(vkd.CreateFence(vk->device, &fence_info, NULL, &vk->fence));
 }
 
 /* ---- The layer ---- */
@@ -533,9 +421,9 @@ static int config_begin(struct scene *s)
                               ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
                               : (VkCompositeAlphaFlagBitsKHR)(caps.supportedCompositeAlpha &
                                                                (~caps.supportedCompositeAlpha + 1));
-    BENCH_VK(vkx.CreateSwapchainKHR(vk->device, &info, NULL, &s->swapchain));
+    BENCH_VK(vkd.CreateSwapchainKHR(vk->device, &info, NULL, &s->swapchain));
     s->image_count = 8;
-    BENCH_VK(vkx.GetSwapchainImagesKHR(vk->device, s->swapchain, &s->image_count, s->images));
+    BENCH_VK(vkd.GetSwapchainImagesKHR(vk->device, s->swapchain, &s->image_count, s->images));
     for (i = 0; i < s->image_count; i++) {
         VkImageViewCreateInfo view = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -545,7 +433,7 @@ static int config_begin(struct scene *s)
             .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
         };
         BENCH_VK(vkd.CreateImageView(vk->device, &view, NULL, &s->views[i]));
-        BENCH_VK(vkx.CreateSemaphore(vk->device, &semaphore_info, NULL, &s->rendered[i]));
+        BENCH_VK(vkd.CreateSemaphore(vk->device, &semaphore_info, NULL, &s->rendered[i]));
     }
 
     /* The scene at this resolution: HDR colors in [0, 4), exact in half floats. */
@@ -577,9 +465,9 @@ static void config_end(struct scene *s)
     vkd.DeviceWaitIdle(vk->device);
     for (i = 0; i < s->image_count; i++) {
         vkd.DestroyImageView(vk->device, s->views[i], NULL);
-        vkx.DestroySemaphore(vk->device, s->rendered[i], NULL);
+        vkd.DestroySemaphore(vk->device, s->rendered[i], NULL);
     }
-    vkx.DestroySwapchainKHR(vk->device, s->swapchain, NULL);
+    vkd.DestroySwapchainKHR(vk->device, s->swapchain, NULL);
     surface_destroy(s);
     bench_image_destroy(vk, &s->target);
     bench_buffer_destroy(vk, &s->instances);
@@ -679,7 +567,7 @@ static void run(struct scene *s)
         }
 
         t0 = bench_now_us();
-        r = vkx.AcquireNextImageKHR(vk->device, s->swapchain, UINT64_MAX, s->acquired[slot], VK_NULL_HANDLE, &index);
+        r = vkd.AcquireNextImageKHR(vk->device, s->swapchain, UINT64_MAX, s->acquired[slot], VK_NULL_HANDLE, &index);
         if (r < 0)
             bench_vk_fail(r, "vkAcquireNextImageKHR");
         t1 = bench_now_us();
@@ -690,7 +578,7 @@ static void run(struct scene *s)
         BENCH_VK(vkd.QueueSubmit(vk->queue, 1, &submit, s->frame_fences[slot]));
         t3 = bench_now_us();
         present.pWaitSemaphores = &s->rendered[index];
-        r = vkx.QueuePresentKHR(vk->queue, &present);
+        r = vkd.QueuePresentKHR(vk->queue, &present);
         if (r < 0)
             bench_vk_fail(r, "vkQueuePresentKHR");
         t4 = bench_now_us();
@@ -813,7 +701,7 @@ static void setup(struct scene *s)
         BENCH_VK(vkd.AllocateCommandBuffers(vk->device, &alloc, &s->marker_cmds[i]));
         BENCH_VK(vkd.CreateFence(vk->device, &fence_info, NULL, &s->frame_fences[i]));
         BENCH_VK(vkd.CreateFence(vk->device, &fence_info, NULL, &s->marker_fences[i]));
-        BENCH_VK(vkx.CreateSemaphore(vk->device, &semaphore_info, NULL, &s->acquired[i]));
+        BENCH_VK(vkd.CreateSemaphore(vk->device, &semaphore_info, NULL, &s->acquired[i]));
     }
 
     rect_vs = BENCH_SHADER(vk, rect_instanced_vert);
@@ -854,7 +742,7 @@ static void teardown(struct scene *s)
     for (i = 0; i < SLOTS; i++) {
         vkd.DestroyFence(vk->device, s->frame_fences[i], NULL);
         vkd.DestroyFence(vk->device, s->marker_fences[i], NULL);
-        vkx.DestroySemaphore(vk->device, s->acquired[i], NULL);
+        vkd.DestroySemaphore(vk->device, s->acquired[i], NULL);
         vkd.DestroyCommandPool(vk->device, s->pools[i], NULL);
     }
     vkd.DestroyQueryPool(vk->device, s->queries, NULL);

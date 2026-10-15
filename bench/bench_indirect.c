@@ -52,14 +52,6 @@ struct instance {
     uint32_t rgba;
 };
 
-/* The vkCmdDraw(Indexed)IndirectCount commands, which bench_vk.h does not load. */
-static struct {
-    PFN_vkCmdDrawIndirect CmdDrawIndirect;
-    PFN_vkCmdDrawIndexedIndirect CmdDrawIndexedIndirect;
-    PFN_vkCmdDrawIndirectCount CmdDrawIndirectCount;
-    PFN_vkCmdDrawIndexedIndirectCount CmdDrawIndexedIndirectCount;
-} vkx;
-
 static int draw_indirect_count; /* drawIndirectCount enabled */
 
 struct scene {
@@ -85,79 +77,6 @@ static int record_visible(uint32_t r)
     return r * 1000u / CULLED_DRAWS != (r + 1) * 1000u / CULLED_DRAWS;
 }
 
-/* bench_vk_init enables only what every benchmark needs: recreate the device
- * with multiDrawIndirect and drawIndirectFirstInstance, and drawIndirectCount
- * where the device has it. */
-static void enable_indirect_features(struct bench_vk *vk)
-{
-    VkPhysicalDeviceVulkan12Features have12 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
-    VkPhysicalDeviceFeatures2 have = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &have12 };
-    VkPhysicalDeviceVulkan13Features want13 = {
-        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
-        .synchronization2 = VK_TRUE,
-        .dynamicRendering = VK_TRUE,
-    };
-    VkPhysicalDeviceVulkan12Features want12 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
-                                                .pNext = &want13 };
-    VkPhysicalDeviceFeatures2 want = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &want12 };
-    const char *extensions[1] = { "VK_KHR_portability_subset" };
-    float priority = 1.0f;
-    VkDeviceQueueCreateInfo queue_info = {
-        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .queueFamilyIndex = vk->queue_family,
-        .queueCount = 1,
-        .pQueuePriorities = &priority,
-    };
-    VkDeviceCreateInfo device_info = {
-        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .pNext = &want,
-        .queueCreateInfoCount = 1,
-        .pQueueCreateInfos = &queue_info,
-        .enabledExtensionCount = vk->portability_subset ? 1 : 0,
-        .ppEnabledExtensionNames = extensions,
-    };
-    VkCommandPoolCreateInfo pool_info = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-        .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
-        .queueFamilyIndex = vk->queue_family,
-    };
-    VkFenceCreateInfo fence_info = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-
-    vkGetPhysicalDeviceFeatures2(vk->physical_device, &have);
-    if (!have.features.multiDrawIndirect || !have.features.drawIndirectFirstInstance)
-        bench_fatal("multiDrawIndirect and drawIndirectFirstInstance are not supported");
-    want.features.multiDrawIndirect = VK_TRUE;
-    want.features.drawIndirectFirstInstance = VK_TRUE;
-    want12.drawIndirectCount = have12.drawIndirectCount;
-    draw_indirect_count = have12.drawIndirectCount != VK_FALSE;
-
-    vkd.DestroyFence(vk->device, vk->fence, NULL);
-    vkd.DestroyCommandPool(vk->device, vk->pool, NULL);
-    vkd.DestroyDevice(vk->device, NULL);
-    vk->device = VK_NULL_HANDLE;
-    BENCH_VK(vkCreateDevice(vk->physical_device, &device_info, NULL, &vk->device));
-#define LOAD(table, name)                                                                   \
-    table.name = (PFN_vk##name)vkGetDeviceProcAddr(vk->device, "vk" #name);                 \
-    if (!table.name)                                                                        \
-        bench_fatal("vkGetDeviceProcAddr(vk" #name ") returned NULL");
-#define LOAD_VKD(name) LOAD(vkd, name)
-#define LOAD_OPTIONAL(name) vkd.name = (PFN_vk##name)vkGetDeviceProcAddr(vk->device, "vk" #name);
-    BENCH_DEVICE_COMMANDS(LOAD_VKD)
-    BENCH_DEVICE_COMMANDS_OPTIONAL(LOAD_OPTIONAL)
-    LOAD(vkx, CmdDrawIndirect)
-    LOAD(vkx, CmdDrawIndexedIndirect)
-    if (draw_indirect_count) {
-        LOAD(vkx, CmdDrawIndirectCount)
-        LOAD(vkx, CmdDrawIndexedIndirectCount)
-    }
-#undef LOAD_OPTIONAL
-#undef LOAD_VKD
-#undef LOAD
-    vkd.GetDeviceQueue(vk->device, vk->queue_family, 0, &vk->queue);
-    BENCH_VK(vkd.CreateCommandPool(vk->device, &pool_info, NULL, &vk->pool));
-    BENCH_VK(vkd.CreateFence(vk->device, &fence_info, NULL, &vk->fence));
-}
-
 static void record(void *user, const struct bench_frame *f)
 {
     struct scene *s = user;
@@ -177,17 +96,17 @@ static void record(void *user, const struct bench_frame *f)
         vkd.CmdBindIndexBuffer(cmd, s->indices.buffer, 0, VK_INDEX_TYPE_UINT16);
     switch (cfg->mode) {
     case MODE_MDI:
-        vkx.CmdDrawIndirect(cmd, s->records.buffer, 0, cfg->count, sizeof(VkDrawIndirectCommand));
+        vkd.CmdDrawIndirect(cmd, s->records.buffer, 0, cfg->count, sizeof(VkDrawIndirectCommand));
         break;
     case MODE_MDI_CULLED:
-        vkx.CmdDrawIndirect(cmd, s->culled_records.buffer, 0, cfg->max_draws, sizeof(VkDrawIndirectCommand));
+        vkd.CmdDrawIndirect(cmd, s->culled_records.buffer, 0, cfg->max_draws, sizeof(VkDrawIndirectCommand));
         break;
     case MODE_COUNT:
         if (cfg->indexed)
-            vkx.CmdDrawIndexedIndirectCount(cmd, s->indexed_records.buffer, 0, s->counts.buffer, count_offset,
+            vkd.CmdDrawIndexedIndirectCount(cmd, s->indexed_records.buffer, 0, s->counts.buffer, count_offset,
                                             cfg->max_draws, sizeof(VkDrawIndexedIndirectCommand));
         else
-            vkx.CmdDrawIndirectCount(cmd, s->records.buffer, 0, s->counts.buffer, count_offset, cfg->max_draws,
+            vkd.CmdDrawIndirectCount(cmd, s->records.buffer, 0, s->counts.buffer, count_offset, cfg->max_draws,
                                      sizeof(VkDrawIndirectCommand));
         break;
     }
@@ -320,13 +239,22 @@ static void teardown(struct scene *s)
 int main(void)
 {
     struct bench_vk vk;
+    struct bench_vk_wants wants;
     struct bench_loop loop;
     struct scene *s;
     size_t c;
 
     bench_begin("indirect");
-    bench_vk_init(&vk, BENCH_NEED_DYNAMIC_RENDERING | BENCH_NEED_SYNC2);
-    enable_indirect_features(&vk);
+    memset(&wants, 0, sizeof(wants));
+    wants.features.core.features.multiDrawIndirect = VK_TRUE;
+    wants.features.core.features.drawIndirectFirstInstance = VK_TRUE;
+    wants.features.v12.drawIndirectCount = VK_TRUE;
+    bench_vk_init_with(&vk, BENCH_NEED_DYNAMIC_RENDERING | BENCH_NEED_SYNC2, &wants);
+    if (!vk.enabled.core.features.multiDrawIndirect || !vk.enabled.core.features.drawIndirectFirstInstance)
+        bench_fatal("multiDrawIndirect and drawIndirectFirstInstance are not supported");
+    draw_indirect_count = vk.enabled.v12.drawIndirectCount != VK_FALSE;
+    if (draw_indirect_count && (!vkd.CmdDrawIndirectCount || !vkd.CmdDrawIndexedIndirectCount))
+        bench_fatal("vkGetDeviceProcAddr returned NULL for vkCmdDraw(Indexed)IndirectCount");
     s = bench_alloc(sizeof(*s));
     s->vk = &vk;
     setup(s);
