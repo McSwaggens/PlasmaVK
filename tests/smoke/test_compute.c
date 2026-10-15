@@ -199,6 +199,65 @@ static const uint32_t spv_args[] = {
  * #version 450
  * #extension GL_EXT_buffer_reference : require
  * layout(local_size_x_id = 0) in;
+ * layout(constant_id = 1) const uint SHARED_SCALE = 2u;
+ * layout(constant_id = 2) const int SHARED_BIAS = -1;
+ * layout(buffer_reference, std430, buffer_reference_align = 4) buffer Words { uint data[]; };
+ * layout(push_constant) uniform Push { Words dst; } pc;
+ * void main()
+ * {
+ *     pc.dst.data[gl_GlobalInvocationID.x] = gl_LocalInvocationIndex * SHARED_SCALE + uint(SHARED_BIAS) +
+ *                                            gl_WorkGroupID.x * 100000u;
+ * }
+ */
+static const uint32_t spv_spec_shared[] = {
+    0x07230203, 0x00010300, 0x0008000b, 0x0000002b, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x000014e3, 0x0009000a, 0x5f565053, 0x5f52484b, 0x73796870, 0x6c616369, 0x6f74735f, 0x65676172,
+    0x6675625f, 0x00726566, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000,
+    0x0003000e, 0x000014e4, 0x00000001, 0x0008000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000,
+    0x00000014, 0x00000019, 0x00000020, 0x00060010, 0x00000004, 0x00000011, 0x00000001, 0x00000001,
+    0x00000001, 0x00030003, 0x00000002, 0x000001c2, 0x00070004, 0x455f4c47, 0x625f5458, 0x65666675,
+    0x65725f72, 0x65726566, 0x0065636e, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00040005,
+    0x00000007, 0x68737550, 0x00000000, 0x00040006, 0x00000007, 0x00000000, 0x00747364, 0x00040005,
+    0x0000000a, 0x64726f57, 0x00000073, 0x00050006, 0x0000000a, 0x00000000, 0x61746164, 0x00000000,
+    0x00030005, 0x0000000c, 0x00006370, 0x00080005, 0x00000014, 0x475f6c67, 0x61626f6c, 0x766e496c,
+    0x7461636f, 0x496e6f69, 0x00000044, 0x00080005, 0x00000019, 0x4c5f6c67, 0x6c61636f, 0x6f766e49,
+    0x69746163, 0x6e496e6f, 0x00786564, 0x00060005, 0x0000001b, 0x52414853, 0x535f4445, 0x454c4143,
+    0x00000000, 0x00050005, 0x0000001d, 0x52414853, 0x425f4445, 0x00534149, 0x00060005, 0x00000020,
+    0x575f6c67, 0x476b726f, 0x70756f72, 0x00004449, 0x00030047, 0x00000007, 0x00000002, 0x00050048,
+    0x00000007, 0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x00000009, 0x00000006, 0x00000004,
+    0x00030047, 0x0000000a, 0x00000002, 0x00050048, 0x0000000a, 0x00000000, 0x00000023, 0x00000000,
+    0x00040047, 0x00000014, 0x0000000b, 0x0000001c, 0x00040047, 0x00000019, 0x0000000b, 0x0000001d,
+    0x00040047, 0x0000001b, 0x00000001, 0x00000001, 0x00040047, 0x0000001d, 0x00000001, 0x00000002,
+    0x00040047, 0x00000020, 0x0000000b, 0x0000001a, 0x00040047, 0x00000028, 0x00000001, 0x00000000,
+    0x00040047, 0x0000002a, 0x0000000b, 0x00000019, 0x00020013, 0x00000002, 0x00030021, 0x00000003,
+    0x00000002, 0x00030027, 0x00000006, 0x000014e5, 0x0003001e, 0x00000007, 0x00000006, 0x00040015,
+    0x00000008, 0x00000020, 0x00000000, 0x0003001d, 0x00000009, 0x00000008, 0x0003001e, 0x0000000a,
+    0x00000009, 0x00040020, 0x00000006, 0x000014e5, 0x0000000a, 0x00040020, 0x0000000b, 0x00000009,
+    0x00000007, 0x0004003b, 0x0000000b, 0x0000000c, 0x00000009, 0x00040015, 0x0000000d, 0x00000020,
+    0x00000001, 0x0004002b, 0x0000000d, 0x0000000e, 0x00000000, 0x00040020, 0x0000000f, 0x00000009,
+    0x00000006, 0x00040017, 0x00000012, 0x00000008, 0x00000003, 0x00040020, 0x00000013, 0x00000001,
+    0x00000012, 0x0004003b, 0x00000013, 0x00000014, 0x00000001, 0x0004002b, 0x00000008, 0x00000015,
+    0x00000000, 0x00040020, 0x00000016, 0x00000001, 0x00000008, 0x0004003b, 0x00000016, 0x00000019,
+    0x00000001, 0x00040032, 0x00000008, 0x0000001b, 0x00000002, 0x00040032, 0x0000000d, 0x0000001d,
+    0xffffffff, 0x00060034, 0x00000008, 0x0000001e, 0x00000080, 0x0000001d, 0x00000015, 0x0004003b,
+    0x00000013, 0x00000020, 0x00000001, 0x0004002b, 0x00000008, 0x00000023, 0x000186a0, 0x00040020,
+    0x00000026, 0x000014e5, 0x00000008, 0x00040032, 0x00000008, 0x00000028, 0x00000001, 0x0004002b,
+    0x00000008, 0x00000029, 0x00000001, 0x00060033, 0x00000012, 0x0000002a, 0x00000028, 0x00000029,
+    0x00000029, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005,
+    0x00050041, 0x0000000f, 0x00000010, 0x0000000c, 0x0000000e, 0x0004003d, 0x00000006, 0x00000011,
+    0x00000010, 0x00050041, 0x00000016, 0x00000017, 0x00000014, 0x00000015, 0x0004003d, 0x00000008,
+    0x00000018, 0x00000017, 0x0004003d, 0x00000008, 0x0000001a, 0x00000019, 0x00050084, 0x00000008,
+    0x0000001c, 0x0000001a, 0x0000001b, 0x00050080, 0x00000008, 0x0000001f, 0x0000001c, 0x0000001e,
+    0x00050041, 0x00000016, 0x00000021, 0x00000020, 0x00000015, 0x0004003d, 0x00000008, 0x00000022,
+    0x00000021, 0x00050084, 0x00000008, 0x00000024, 0x00000022, 0x00000023, 0x00050080, 0x00000008,
+    0x00000025, 0x0000001f, 0x00000024, 0x00060041, 0x00000026, 0x00000027, 0x00000011, 0x0000000e,
+    0x00000018, 0x0005003e, 0x00000027, 0x00000025, 0x00000002, 0x00000004, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 450
+ * #extension GL_EXT_buffer_reference : require
+ * layout(local_size_x_id = 0) in;
  * layout(constant_id = 1) const uint SCALE = 2u;
  * layout(buffer_reference, std430, buffer_reference_align = 4) buffer Words { uint data[]; };
  * layout(push_constant) uniform Push { Words dst; } pc;
@@ -1083,6 +1142,123 @@ static void test_specialization(void)
     free_buf(&dst);
 }
 
+/* The device's shader cache: its translations whose MSL names `name`, and
+ * how many of those have their library there; its plans. */
+static uint32_t count_translations(const char *name, uint32_t *libraries, uint32_t *plans)
+{
+    struct pvk_shader_cache *sc = ((struct pvk_device *)device)->shaders;
+    struct pvk_shader_entry *e, *x;
+    uint32_t n = 0;
+    *libraries = *plans = 0;
+    pthread_mutex_lock(&sc->lock);
+    for (e = sc->newest; e; e = e->older) {
+        struct pvk_key key;
+        *plans += e->plan != NULL;
+        if (!e->res.msl || !strstr(e->res.msl, name))
+            continue;
+        n++;
+        key = pvk_library_key(e->res.msl, strlen(e->res.msl), false);
+        for (x = sc->newest; x; x = x->older)
+            if (x->library && x->key.a == key.a && x->key.b == key.b) {
+                ++*libraries;
+                break;
+            }
+    }
+    pthread_mutex_unlock(&sc->lock);
+    return n;
+}
+
+/* Pipelines of a shader that differ only in specialization constants
+ * share its translation and library (section 17, Shader cache): they are
+ * function constants, which each pipeline sets as it makes its Metal
+ * pipeline. The workgroup size (LocalSizeId) is baked: a pipeline with
+ * another gets its own, through the plan the first translation left.
+ * Through a pipeline cache's data too. */
+static void test_specialization_shared(void)
+{
+    static const VkSpecializationMapEntry entries[3] = { { 0, 0, 4 }, { 1, 4, 4 }, { 2, 8, 4 } };
+    static const uint32_t data[5][3] = { { 128, 3, 0 }, { 128, 5, 0xffffffffu }, { 128, 0x10000, 7 },
+                                         { 64, 7, 0x80000000u }, { 128, 9, 1 } };
+    VkPipelineCacheCreateInfo ci;
+    VkPipelineCache cache = VK_NULL_HANDLE, loaded = VK_NULL_HANDLE;
+    VkSpecializationInfo spec[5];
+    VkShaderModuleCreateInfo module_info;
+    VkComputePipelineCreateInfo info;
+    VkPipeline p[7];
+    struct buf dst = make_buf(4 * 512, shared_type);
+    void *blob = NULL;
+    size_t size = 0;
+    uint32_t i, k, libraries, plans, plans0;
+    int ok = 1;
+
+    REQUIRE(dst.data);
+    memset(p, 0, sizeof(p));
+    memset(&module_info, 0, sizeof(module_info));
+    module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    module_info.codeSize = sizeof(spv_spec_shared);
+    module_info.pCode = spv_spec_shared;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    info.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    info.stage.pNext = &module_info;
+    info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    info.stage.pName = "main";
+    info.layout = layout;
+    memset(&ci, 0, sizeof(ci));
+    ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    REQUIRE_VK(vkCreatePipelineCache(device, &ci, NULL, &cache));
+    CHECK(count_translations("SHARED_SCALE", &libraries, &plans0) == 0);
+    for (k = 0; k < 5; k++) {
+        spec[k].mapEntryCount = 3;
+        spec[k].pMapEntries = entries;
+        spec[k].dataSize = sizeof(data[k]);
+        spec[k].pData = data[k];
+    }
+    for (k = 0; k < 4; k++) {
+        info.stage.pSpecializationInfo = &spec[k];
+        REQUIRE_VK(vkCreateComputePipelines(device, k ? VK_NULL_HANDLE : cache, 1, &info, NULL, &p[k]));
+        if (k == 2) /* one translation and library, and the plan that bakes the workgroup size */
+            CHECK(count_translations("SHARED_SCALE", &libraries, &plans) == 1 && libraries == 1 && plans == plans0 + 1);
+    }
+    CHECK(count_translations("SHARED_SCALE", &libraries, &plans) == 2 && libraries == 2 && plans == plans0 + 1);
+    /* the cache's data: the same pipeline (its MSL compiled again, specialized), and another */
+    CHECK_VK(vkGetPipelineCacheData(device, cache, &size, NULL), VK_SUCCESS);
+    blob = malloc(size);
+    REQUIRE(blob);
+    CHECK_VK(vkGetPipelineCacheData(device, cache, &size, blob), VK_SUCCESS);
+    ci.initialDataSize = size;
+    ci.pInitialData = blob;
+    REQUIRE_VK(vkCreatePipelineCache(device, &ci, NULL, &loaded));
+    info.stage.pSpecializationInfo = &spec[0];
+    REQUIRE_VK(vkCreateComputePipelines(device, loaded, 1, &info, NULL, &p[4]));
+    info.stage.pSpecializationInfo = &spec[4];
+    REQUIRE_VK(vkCreateComputePipelines(device, loaded, 1, &info, NULL, &p[5]));
+    for (k = 0; k < 6; k++) {
+        const uint32_t *d = data[k < 4 ? k : k == 4 ? 0 : 4];
+        VkDeviceAddress address = dst.address;
+        VkCommandBuffer cb = begin();
+        memset(dst.data, 0, 4 * 512);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p[k]);
+        vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(address), &address);
+        vkCmdDispatch(cb, 512 / d[0], 1, 1);
+        host_barrier(cb);
+        REQUIRE_VK(finish(cb));
+        for (i = 0; i < 512 && ok; i++) {
+            uint32_t want = (i % d[0]) * d[1] + d[2] + (i / d[0]) * 100000u;
+            ok = word(&dst, i) == want;
+            if (!ok)
+                fprintf(stderr, "  pipeline %u, element %u: %u, want %u\n", k, i, word(&dst, i), want);
+        }
+    }
+    CHECK(ok);
+    for (k = 0; k < 6; k++)
+        vkDestroyPipeline(device, p[k], NULL);
+    vkDestroyPipelineCache(device, cache, NULL);
+    vkDestroyPipelineCache(device, loaded, NULL);
+    free(blob);
+    free_buf(&dst);
+}
+
 /* The largest workgroup (maxComputeWorkGroupInvocations = 1024), sharing
  * workgroup memory across a barrier. */
 static void test_wide_workgroup(void)
@@ -1241,6 +1417,7 @@ int main(void)
     RUN(test_dispatch_base);
     RUN(test_dispatch_indirect);
     RUN(test_specialization);
+    RUN(test_specialization_shared);
     RUN(test_wide_workgroup);
     RUN(test_resubmit);
     RUN(test_shared_message_passing);

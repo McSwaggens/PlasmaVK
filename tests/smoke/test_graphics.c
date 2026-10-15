@@ -1114,6 +1114,38 @@ static const uint32_t spv_int_fs[] = {
 };
 /*
  * #version 450
+ * layout(constant_id = 0) const uint SPEC_RED = 0u;
+ * layout(constant_id = 1) const float SPEC_GREEN = 0.0;
+ * layout(constant_id = 2) const bool SPEC_BLUE = false;
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = vec4(float(SPEC_RED) / 255.0, SPEC_GREEN, SPEC_BLUE ? 1.0 : 0.0, 1.0);
+ * }
+ */
+static const uint32_t spv_spec_share_fs[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x00000016, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0006000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x00030010, 0x00000004,
+    0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000,
+    0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c, 0x00050005, 0x0000000b, 0x43455053, 0x4445525f,
+    0x00000000, 0x00050005, 0x0000000f, 0x43455053, 0x4552475f, 0x00004e45, 0x00050005, 0x00000011,
+    0x43455053, 0x554c425f, 0x00000045, 0x00040047, 0x00000009, 0x0000001e, 0x00000000, 0x00040047,
+    0x0000000b, 0x00000001, 0x00000000, 0x00040047, 0x0000000f, 0x00000001, 0x00000001, 0x00040047,
+    0x00000011, 0x00000001, 0x00000002, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002,
+    0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040020,
+    0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008, 0x00000009, 0x00000003, 0x00040015,
+    0x0000000a, 0x00000020, 0x00000000, 0x00040032, 0x0000000a, 0x0000000b, 0x00000000, 0x0004002b,
+    0x00000006, 0x0000000d, 0x437f0000, 0x00040032, 0x00000006, 0x0000000f, 0x00000000, 0x00020014,
+    0x00000010, 0x00030031, 0x00000010, 0x00000011, 0x0004002b, 0x00000006, 0x00000012, 0x3f800000,
+    0x0004002b, 0x00000006, 0x00000013, 0x00000000, 0x00070034, 0x00000006, 0x00000014, 0x000000a9,
+    0x00000011, 0x00000012, 0x00000013, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
+    0x000200f8, 0x00000005, 0x00040070, 0x00000006, 0x0000000c, 0x0000000b, 0x00050088, 0x00000006,
+    0x0000000e, 0x0000000c, 0x0000000d, 0x00070050, 0x00000007, 0x00000015, 0x0000000e, 0x0000000f,
+    0x00000014, 0x00000012, 0x0003003e, 0x00000009, 0x00000015, 0x000100fd, 0x00010038,
+};
+/*
+ * #version 450
  * #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
  * layout(constant_id = 0) const bool B = false;
  * layout(constant_id = 1) const float F = 0.25;
@@ -11023,6 +11055,137 @@ static void test_spec_fragment(void)
     free_img(&target);
 }
 
+/* The fragment shader translations in the device's shader cache whose MSL
+ * names `name`, and how many of those have their library there. */
+static uint32_t count_translations(const char *name, uint32_t *libraries)
+{
+    struct pvk_shader_cache *sc = ((struct pvk_device *)device)->shaders;
+    struct pvk_shader_entry *e, *x;
+    uint32_t n = 0;
+    *libraries = 0;
+    pthread_mutex_lock(&sc->lock);
+    for (e = sc->newest; e; e = e->older) {
+        struct pvk_key key;
+        if (!e->res.msl || !strstr(e->res.msl, name))
+            continue;
+        n++;
+        key = pvk_library_key(e->res.msl, strlen(e->res.msl), false);
+        for (x = sc->newest; x; x = x->older)
+            if (x->library && x->key.a == key.a && x->key.b == key.b) {
+                ++*libraries;
+                break;
+            }
+    }
+    pthread_mutex_unlock(&sc->lock);
+    return n;
+}
+
+/* Pipelines whose fragment shaders differ only in specialization
+ * constants share its translation and library (section 17, Shader cache):
+ * they are function constants, which each pipeline sets as it makes its
+ * Metal pipeline; each quadrant has its own pipeline's colour. */
+static void test_spec_shared(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    static const VkSpecializationMapEntry entries[3] = { { 0, 0, 4 }, { 1, 4, 4 }, { 2, 8, 4 } };
+    static const struct {
+        uint32_t red;
+        float green;
+        VkBool32 blue;
+    } data[4] = { { 0, 0.0f, VK_FALSE }, { 255, 0.5f, VK_FALSE }, { 128, 1.0f, VK_TRUE }, { 64, 0.25f, 7 } };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkSpecializationInfo spec[4];
+    VkPipeline pipes[4];
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t k, libraries;
+
+    CHECK(count_translations("SPEC_RED", &libraries) == 0);
+    for (k = 0; k < 4; k++) {
+        spec[k].mapEntryCount = 3;
+        spec[k].pMapEntries = entries;
+        spec[k].dataSize = sizeof(data[k]);
+        spec[k].pData = &data[k];
+        pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_spec_share_fs, sizeof(spv_spec_share_fs));
+        p.fs_spec = &spec[k];
+        pipes[k] = make_pipe(&p);
+        REQUIRE(pipes[k]);
+    }
+    CHECK(count_translations("SPEC_RED", &libraries) == 1 && libraries == 1);
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, black, NULL);
+    for (k = 0; k < 4; k++) {
+        float x = k & 1 ? 0.0f : -1.0f, y = k & 2 ? 0.0f : -1.0f;
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[k]);
+        rect(cb, x, y, x + 1.0f, y + 1.0f, 0, 0, 0, 0, 0);
+        quad_want[k] = RGBA(data[k].red, (uint32_t)(data[k].green * 255.0f + 0.5f), data[k].blue ? 255 : 0, 255);
+    }
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    CHECK(count_far(&out, expect_quads, 1, "specialization constants as function constants") == 0);
+    for (k = 0; k < 4; k++)
+        vkDestroyPipeline(device, pipes[k], NULL);
+    free_buf(&out);
+    free_img(&target);
+}
+
+/* A pipeline's depth copy variants (section 17) specialize their fragment
+ * functions as the pipeline does: with a static depth bounds test, the
+ * left half, where an earlier draw stored 0.5, takes the specialized
+ * colour, and the right half (depth 1) is discarded. */
+static void test_spec_depth_variant(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    static const VkSpecializationMapEntry entries[3] = { { 0, 0, 4 }, { 1, 4, 4 }, { 2, 8, 4 } };
+    static const struct {
+        uint32_t red;
+        float green;
+        VkBool32 blue;
+    } data = { 200, 0.25f, VK_TRUE };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img ds = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkSpecializationInfo spec = { 3, entries, sizeof(data), &data };
+    VkPipeline plain, bounded;
+    struct pipe p;
+    VkCommandBuffer cb;
+
+    REQUIRE(features.depthBounds);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.depth_format = VK_FORMAT_D32_SFLOAT;
+    p.has_ds = true;
+    p.ds.depthTestEnable = p.ds.depthWriteEnable = VK_TRUE;
+    p.ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    plain = make_pipe(&p);
+    p.fs = spv_spec_share_fs;
+    p.fs_size = sizeof(spv_spec_share_fs);
+    p.fs_spec = &spec;
+    p.ds.depthBoundsTestEnable = VK_TRUE;
+    p.ds.minDepthBounds = 0.4f;
+    p.ds.maxDepthBounds = 0.6f;
+    bounded = make_pipe(&p);
+    REQUIRE(plain && bounded);
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, black, &ds); /* depth cleared to 1 */
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plain);
+    rect(cb, -1, -1, 0, 1, 1, 0, 0, 1, 0.5f);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, bounded);
+    rect(cb, -1, -1, 1, 1, 0, 0, 0, 0, 0.9f);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    quad_want[0] = quad_want[2] = RGBA(200, 64, 255, 255);
+    quad_want[1] = quad_want[3] = RGBA(0, 0, 0, 255);
+    CHECK(count_far(&out, expect_quads, 1, "specialized depth bounds variant") == 0);
+    vkDestroyPipeline(device, plain, NULL);
+    vkDestroyPipeline(device, bounded, NULL);
+    free_buf(&out);
+    free_img(&target);
+    free_img(&ds);
+}
+
 /* Pipeline caches: a second creation from the same cache needs no compiler
  * (FAIL_ON_PIPELINE_COMPILE_REQUIRED succeeds, feedback reports a hit), the
  * data round-trips into a new cache (valid header, a hit), merging works,
@@ -11274,6 +11437,36 @@ static void test_shader_cache_key(void)
     SC_DIFFERS(o.samples = 4);
     SC_DIFFERS(o.ycbcr_bindings = yb2);
     SC_DIFFERS(o.ycbcr_binding_count = 0);
+    SC_DIFFERS(o.spec_function_constants = true);
+
+    /* With function constants, of the specialization only the values of
+     * the SpecIds spec_baked lists (and which those are) */
+    {
+        static const uint32_t ids0[1] = { 0 }, ids1[1] = { 1 }, ids01[2] = { 0, 1 };
+        base.spec_function_constants = true;
+        k0 = pvk_stage_key(hash, 100, "main", &base);
+        o = base;
+        o.specialization = &spec2; /* (constant 1 differs) */
+        k = pvk_stage_key(hash, 100, "main", &o);
+        CHECK(k.a == k0.a && k.b == k0.b);
+        o.specialization = NULL;
+        k = pvk_stage_key(hash, 100, "main", &o);
+        CHECK(k.a == k0.a && k.b == k0.b);
+        base.spec_baked = ids0;
+        base.spec_baked_count = 1;
+        k0 = pvk_stage_key(hash, 100, "main", &base);
+        o = base;
+        o.specialization = &spec2; /* (constant 0 is the same) */
+        k = pvk_stage_key(hash, 100, "main", &o);
+        CHECK(k.a == k0.a && k.b == k0.b);
+        SC_DIFFERS(o.spec_baked = ids1);
+        SC_DIFFERS(o.spec_baked = ids01; o.spec_baked_count = 2);
+        SC_DIFFERS(o.spec_baked_count = 0);
+        SC_DIFFERS(o.specialization = NULL);
+        base.spec_baked = ids1;
+        k0 = pvk_stage_key(hash, 100, "main", &base);
+        SC_DIFFERS(o.specialization = &spec2);
+    }
 #undef SC_DIFFERS
 }
 
@@ -11848,6 +12041,8 @@ int main(void)
     RUN(test_logic_op_msaa);
     RUN(test_logic_op_snorm_exact);
     RUN(test_spec_fragment);
+    RUN(test_spec_shared);
+    RUN(test_spec_depth_variant);
     RUN(test_pipeline_cache);
     RUN(test_shader_cache_key);
     RUN(test_shader_cache);

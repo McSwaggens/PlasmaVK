@@ -31536,6 +31536,9 @@ static inline void pvk_MTLCompileOptions_setMathMode(id self, pvk_MTLMathMode ma
 static inline void pvk_MTLCompileOptions_setMathFloatingPointFunctions(id self, pvk_MTLMathFloatingPointFunctions mathFloatingPointFunctions) { PVK_SEL_CACHE("setMathFloatingPointFunctions:"); PVK_MSG(void, (id, SEL, pvk_MTLMathFloatingPointFunctions))(self, pvk_sel_, mathFloatingPointFunctions); }
 static inline void pvk_MTLCompileOptions_setLanguageVersion(id self, pvk_MTLLanguageVersion languageVersion) { PVK_SEL_CACHE("setLanguageVersion:"); PVK_MSG(void, (id, SEL, pvk_MTLLanguageVersion))(self, pvk_sel_, languageVersion); }
 static inline id pvk_MTLLibrary_newFunctionWithName(id self, id functionName) { PVK_SEL_CACHE("newFunctionWithName:"); return PVK_MSG(id, (id, SEL, id))(self, pvk_sel_, functionName); }
+static inline id pvk_MTLLibrary_newFunctionWithName_constantValues_error(id self, id name, id constantValues, id * error) { PVK_SEL_CACHE("newFunctionWithName:constantValues:error:"); return PVK_MSG(id, (id, SEL, id, id, id *))(self, pvk_sel_, name, constantValues, error); }
+static inline id pvk_MTLFunctionConstantValues_new(void) { PVK_CLASS_CACHE("MTLFunctionConstantValues"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTLFunctionConstantValues_setConstantValue_type_atIndex(id self, const void * value, pvk_MTLDataType type, unsigned long index) { PVK_SEL_CACHE("setConstantValue:type:atIndex:"); PVK_MSG(void, (id, SEL, const void *, pvk_MTLDataType, unsigned long))(self, pvk_sel_, value, type, index); }
 static inline id pvk_MTLComputePipelineDescriptor_new(void) { PVK_CLASS_CACHE("MTLComputePipelineDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
 static inline void pvk_MTLComputePipelineDescriptor_setComputeFunction(id self, id computeFunction) { PVK_SEL_CACHE("setComputeFunction:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, computeFunction); }
 static inline void pvk_MTLComputePipelineDescriptor_setMaxTotalThreadsPerThreadgroup(id self, unsigned long maxTotalThreadsPerThreadgroup) { PVK_SEL_CACHE("setMaxTotalThreadsPerThreadgroup:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, maxTotalThreadsPerThreadgroup); }
@@ -31657,6 +31660,9 @@ static inline id pvk_MTL4Compiler_newRenderPipelineStateWithDescriptor_compilerT
 static inline id pvk_MTL4LibraryFunctionDescriptor_new(void) { PVK_CLASS_CACHE("MTL4LibraryFunctionDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
 static inline void pvk_MTL4LibraryFunctionDescriptor_setName(id self, id name) { PVK_SEL_CACHE("setName:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, name); }
 static inline void pvk_MTL4LibraryFunctionDescriptor_setLibrary(id self, id library) { PVK_SEL_CACHE("setLibrary:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, library); }
+static inline id pvk_MTL4SpecializedFunctionDescriptor_new(void) { PVK_CLASS_CACHE("MTL4SpecializedFunctionDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTL4SpecializedFunctionDescriptor_setFunctionDescriptor(id self, id functionDescriptor) { PVK_SEL_CACHE("setFunctionDescriptor:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, functionDescriptor); }
+static inline void pvk_MTL4SpecializedFunctionDescriptor_setConstantValues(id self, id constantValues) { PVK_SEL_CACHE("setConstantValues:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, constantValues); }
 static inline id pvk_MTL4RenderPipelineDescriptor_new(void) { PVK_CLASS_CACHE("MTL4RenderPipelineDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
 static inline void pvk_MTL4RenderPipelineDescriptor_setVertexFunctionDescriptor(id self, id vertexFunctionDescriptor) { PVK_SEL_CACHE("setVertexFunctionDescriptor:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, vertexFunctionDescriptor); }
 static inline void pvk_MTL4RenderPipelineDescriptor_setFragmentFunctionDescriptor(id self, id fragmentFunctionDescriptor) { PVK_SEL_CACHE("setFragmentFunctionDescriptor:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, fragmentFunctionDescriptor); }
@@ -41617,6 +41623,24 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   VkSpecializationInfo) are applied while translating, so the MSL and the
  *   workgroup size in the result are final. result->spec_constants lists
  *   them with their default and final values.
+ *   With options->spec_function_constants they become Metal function
+ *   constants instead, so that one MSL (and one library) serves every
+ *   value: SpecId N of a bool, 8- to 32-bit integer or 16/32-bit float
+ *   constant (N < 65536) is `constant uint pvk_fcN [[function_constant(N)]]`,
+ *   its raw bits (MTLDataTypeUInt; the pipeline sets the map entry's
+ *   bytes), and the constant is that, converted to its type, when it is
+ *   defined, else its default. Spec constants made from them
+ *   (OpSpecConstantComposite, OpSpecConstantOp's integer, boolean, Select
+ *   and composite operations) are program-scope expressions of them, with
+ *   the folding's semantics (wrapping, x / 0 = 0, shifts past the width
+ *   0 or the sign). Where the translation needs a value - array sizes,
+ *   the workgroup size, gather components, constant indices, float
+ *   conversions - the constants it comes from are applied as without the
+ *   option: the translation starts again with them added to
+ *   options->spec_baked (those listed there are applied from the start),
+ *   as are 64-bit constants. result->spec_constants says which are
+ *   function constants (value: the default); every other one's value is
+ *   in the MSL.
  *
  *   Buffer indices: set N at N, the vertex buffer table at 29
  *   (PVK_MSL_VERTEX_TABLE_BUFFER, options->vertex_table_buffer), push
@@ -42196,6 +42220,11 @@ struct pvk_msl_varying {
 
 struct pvk_msl_options {
     const VkSpecializationInfo *specialization;
+    /* Specialization constants as function constants (BINDING MODEL, at
+     * the end), but the SpecIds spec_baked lists. */
+    bool spec_function_constants;
+    const uint32_t *spec_baked;
+    uint32_t spec_baked_count;
     /* Descriptor set layouts indexed by set number (the pipeline layout's);
      * NULL: the default layout (see BINDING MODEL) for every set. */
     const struct pvk_msl_set_layout *set_layouts;
@@ -42321,6 +42350,7 @@ struct pvk_msl_spec_constant {
     uint32_t width;         /* bits */
     uint64_t default_value; /* raw bits, zero-extended */
     uint64_t value;         /* after options->specialization */
+    bool function_constant; /* options->spec_function_constants: pvk_fc<id> (value: the default) */
 };
 
 /* pvk_msl_result.builtins: the built-ins a stage reads or writes. */
@@ -42985,6 +43015,14 @@ struct pvk_spv_const {
     uint32_t nparts;
     bool null;            /* OpConstantNull / OpUndef */
     bool spec;
+    /* Function constants (options->spec_function_constants): bit k, it
+     * depends on function constant k (ctx->fc_ids); value is then what
+     * the defaults give, and a scalar's MSL is pvk_spv_fc_text's: sop 0,
+     * function constant args[0] itself; PVK_SPV_OpCopyObject, constant
+     * args[0]; else OpSpecConstantOp sop of the scalar constants args. */
+    uint64_t deps;
+    uint32_t sop, nargs;
+    uint32_t args[3];
 };
 
 /* Storage of a value whose layout differs from its MSL value type: matrices
@@ -43205,6 +43243,14 @@ struct pvk_spv {
     bool types_ready;           /* structs are declared: buffer descriptor types may follow */
     bool inline_consts;         /* pvk_spv_const_expr writes constants out (program-scope initializers) */
     uint32_t const_budget;      /* constituents left to write out that way */
+    /* Function constants (options->spec_function_constants): SpecId of
+     * pvk_fc k, the ones whose values the translation read (it starts
+     * again with them baked), and the SpecIds baked beyond the options' */
+    uint32_t fc_ids[64];
+    uint32_t nfc;
+    uint64_t fc_read;
+    const uint32_t *fc_baked;
+    uint32_t fc_baked_count;
     bool use_psb;               /* PhysicalStorageBuffer pointers: declare structs up front */
     const char *dev;            /* address space of buffer memory: "device", or "device coherent(device)" (COHERENCE) */
     bool image_1d_as_2d;        /* options->image_1d_as_2d */
@@ -43824,19 +43870,41 @@ static struct pvk_spv_const *pvk_spv_make_const(struct pvk_spv *ctx, struct pvk_
     return x->c;
 }
 
-/* A constant that exists in no instruction (spec-constant folding results). */
+/* A constant that exists in no instruction (spec-constant folding results;
+ * a composite depends on the function constants its parts do). */
 static uint32_t pvk_spv_synthetic(struct pvk_spv *ctx, uint32_t type, uint64_t value, const uint32_t *parts,
                                   uint32_t nparts, bool null)
 {
     struct pvk_spv_id *x = pvk_spv_alloc(ctx, sizeof(*x));
     struct pvk_spv_const *c = pvk_spv_make_const(ctx, x, type);
+    uint32_t i;
     c->value = value;
     c->parts = parts;
     c->nparts = nparts;
     c->null = null;
+    for (i = 0; parts && i < nparts; i++)
+        c->deps |= pvk_spv_get(ctx, parts[i])->kind == PVK_SPV_K_CONST ? pvk_spv_get(ctx, parts[i])->c->deps : 0;
     PVK_SPV_PUSH(ctx, ctx->extra, ctx->nextra, ctx->cap_extra, x);
     ctx->nids = ctx->bound + ctx->nextra;
     return ctx->nids - 1;
+}
+
+/* A scalar of function constants (struct pvk_spv_const): OpSpecConstantOp
+ * sop of the constants args, value its folding of their defaults. A
+ * named program-scope constant too (pvk_spv_emit_constants), which the
+ * constants made from it read. */
+static uint32_t pvk_spv_synthetic_fc(struct pvk_spv *ctx, uint32_t type, uint64_t value, uint64_t deps, uint32_t sop,
+                                     const uint32_t *args, uint32_t nargs)
+{
+    uint32_t id = pvk_spv_synthetic(ctx, type, value, NULL, 0, false), i;
+    struct pvk_spv_const *c = pvk_spv_get(ctx, id)->c;
+    c->deps = deps;
+    c->sop = sop;
+    c->nargs = nargs;
+    for (i = 0; i < nargs; i++)
+        c->args[i] = args[i];
+    PVK_SPV_PUSH(ctx, ctx->const_order, ctx->nconsts, ctx->cap_consts, id);
+    return id;
 }
 
 static struct pvk_spv_const *pvk_spv_const(struct pvk_spv *ctx, uint32_t cid)
@@ -43859,13 +43927,23 @@ static uint32_t pvk_spv_const_part(struct pvk_spv *ctx, uint32_t cid, uint32_t i
     return c->parts[i];
 }
 
-/* Value of a scalar (bool, int, float) constant. */
-static uint64_t pvk_spv_const_value(struct pvk_spv *ctx, uint32_t cid)
+/* Bits of a scalar (bool, int, float) constant; of a function constant's,
+ * what its defaults give (pvk_spv_const_value). */
+static uint64_t pvk_spv_const_bits(struct pvk_spv *ctx, uint32_t cid)
 {
     struct pvk_spv_const *c = pvk_spv_const(ctx, cid);
     if (!pvk_spv_is_scalar(pvk_spv_type(ctx, pvk_spv_get(ctx, cid)->type)))
         pvk_spv_fail(ctx, "constant %u is not a scalar", cid);
     return c->null ? 0 : c->value;
+}
+
+/* Value of a scalar (bool, int, float) constant, which the translation
+ * then depends on: one of function constants must be baked instead
+ * (ctx->fc_read). */
+static uint64_t pvk_spv_const_value(struct pvk_spv *ctx, uint32_t cid)
+{
+    ctx->fc_read |= pvk_spv_const(ctx, cid)->deps;
+    return pvk_spv_const_bits(ctx, cid);
 }
 
 /* An integer constant's value as an unsigned number (sign-extended for signed types). */
@@ -44051,6 +44129,17 @@ static uint32_t pvk_spv_const_insert(struct pvk_spv *ctx, uint32_t comp, const u
     return pvk_spv_synthetic(ctx, pvk_spv_get(ctx, comp)->type, 0, parts, count, false);
 }
 
+/* After *c became a copy of constant src: a scalar of function constants
+ * reads src (struct pvk_spv_const; composites have their parts). */
+static void pvk_spv_fc_copy(struct pvk_spv_const *c, uint32_t src)
+{
+    if (c->deps && !c->parts) {
+        c->sop = PVK_SPV_OpCopyObject;
+        c->nargs = 1;
+        c->args[0] = src;
+    }
+}
+
 static void pvk_spv_spec_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in, struct pvk_spv_const *c, uint32_t rtype)
 {
     struct pvk_spv_type *r = pvk_spv_type(ctx, rtype);
@@ -44064,6 +44153,7 @@ static void pvk_spv_spec_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in, 
         if (pvk_spv_get(ctx, src)->type != rtype)
             pvk_spv_fail(ctx, "OpSpecConstantOp CompositeExtract type mismatch");
         *c = *pvk_spv_const(ctx, src);
+        pvk_spv_fc_copy(c, src);
         return;
     }
     if (op == PVK_SPV_OpCompositeInsert) {
@@ -44073,6 +44163,7 @@ static void pvk_spv_spec_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in, 
             pvk_spv_fail(ctx, "OpSpecConstantOp CompositeInsert type mismatch");
         src = pvk_spv_const_insert(ctx, comp, in->w + 6, in->wc > 6 ? in->wc - 6 : 0, obj, 0);
         *c = *pvk_spv_const(ctx, src);
+        pvk_spv_fc_copy(c, src);
         return;
     }
     if (op == PVK_SPV_OpVectorShuffle) {
@@ -44092,6 +44183,7 @@ static void pvk_spv_spec_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in, 
             if (sel >= n1 + n2)
                 pvk_spv_fail(ctx, "VectorShuffle component out of range");
             parts[i] = sel < n1 ? pvk_spv_const_part(ctx, v1, sel) : pvk_spv_const_part(ctx, v2, sel - n1);
+            c->deps |= pvk_spv_const(ctx, parts[i])->deps;
         }
         c->parts = parts;
         c->nparts = r->count;
@@ -44100,12 +44192,45 @@ static void pvk_spv_spec_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in, 
     if (op == PVK_SPV_OpSelect && in->wc == 7 &&
         pvk_spv_type(ctx, pvk_spv_get(ctx, pvk_spv_arg(ctx, in, 4))->type)->op == PVK_SPV_OpTypeBool) {
         /* a scalar condition selects one whole object, of any type */
-        uint32_t a = pvk_spv_arg(ctx, in, 5), b = pvk_spv_arg(ctx, in, 6);
+        uint32_t cond = pvk_spv_arg(ctx, in, 4), a = pvk_spv_arg(ctx, in, 5), b = pvk_spv_arg(ctx, in, 6), args[3];
+        uint64_t cd = pvk_spv_const(ctx, cond)->deps;
         pvk_spv_const(ctx, a);
         pvk_spv_const(ctx, b);
         if (pvk_spv_get(ctx, a)->type != rtype || pvk_spv_get(ctx, b)->type != rtype)
             pvk_spv_fail(ctx, "OpSpecConstantOp Select type mismatch");
-        *c = *pvk_spv_const(ctx, pvk_spv_const_value(ctx, pvk_spv_arg(ctx, in, 4)) ? a : b);
+        if (cd && (pvk_spv_is_scalar(r) || r->op == PVK_SPV_OpTypeVector)) {
+            /* by function constants: a selection of each component (other
+             * types read the condition, which is then baked) */
+            bool cv = pvk_spv_const_bits(ctx, cond) != 0;
+            uint32_t *parts = NULL;
+            n = pvk_spv_components(r);
+            if (n > 1)
+                parts = pvk_spv_alloc(ctx, sizeof(uint32_t) * n);
+            for (k = 0; k < n; k++) {
+                uint64_t d;
+                args[0] = cond;
+                args[1] = n > 1 ? pvk_spv_const_part(ctx, a, k) : a;
+                args[2] = n > 1 ? pvk_spv_const_part(ctx, b, k) : b;
+                d = cd | pvk_spv_const(ctx, args[1])->deps | pvk_spv_const(ctx, args[2])->deps;
+                if (n == 1) {
+                    c->value = pvk_spv_const_bits(ctx, cv ? a : b);
+                    c->deps = d;
+                    c->sop = PVK_SPV_OpSelect;
+                    c->nargs = 3;
+                    memcpy(c->args, args, sizeof(args));
+                } else {
+                    parts[k] = pvk_spv_synthetic_fc(ctx, r->elem, pvk_spv_const_bits(ctx, cv ? args[1] : args[2]), d,
+                                                    PVK_SPV_OpSelect, args, 3);
+                    c->deps |= d;
+                }
+            }
+            c->parts = parts;
+            c->nparts = parts ? n : 0;
+            return;
+        }
+        src = pvk_spv_const_value(ctx, cond) ? a : b;
+        *c = *pvk_spv_const(ctx, src);
+        pvk_spv_fc_copy(c, src);
         return;
     }
 
@@ -44114,8 +44239,8 @@ static void pvk_spv_spec_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in, 
      * Kernel capability) have no other floating-point OpSpecConstantOp. */
     {
         const struct pvk_spv_type *ts[3];
-        uint64_t vals[3];
-        uint32_t ops[3], nops = in->wc - 4;
+        uint64_t vals[3], d;
+        uint32_t ops[3], parts_k[3], nops = in->wc - 4;
         struct pvk_spv_type *rs = pvk_spv_scalar_of(ctx, r);
         uint32_t *parts = NULL;
         bool fconv = op == PVK_SPV_OpFConvert || op == PVK_SPV_OpQuantizeToF16;
@@ -44133,6 +44258,8 @@ static void pvk_spv_spec_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in, 
         if (n > 1)
             parts = pvk_spv_alloc(ctx, sizeof(uint32_t) * n);
         for (k = 0; k < n; k++) {
+            uint64_t value;
+            d = 0;
             for (i = 0; i < nops; i++) {
                 struct pvk_spv_type *t = pvk_spv_type(ctx, pvk_spv_get(ctx, ops[i])->type);
                 uint32_t part = ops[i];
@@ -44146,13 +44273,27 @@ static void pvk_spv_spec_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in, 
                     (t->op == PVK_SPV_OpTypeFloat) != (fconv || (op == PVK_SPV_OpSelect && i > 0 && rs->op == PVK_SPV_OpTypeFloat)))
                     pvk_spv_fail(ctx, "unsupported OpSpecConstantOp operand");
                 ts[i] = t;
-                vals[i] = pvk_spv_const_value(ctx, part);
+                vals[i] = pvk_spv_const_bits(ctx, part);
+                d |= pvk_spv_const(ctx, part)->deps;
+                parts_k[i] = part;
             }
-            if (n == 1)
-                c->value = pvk_spv_fold(ctx, op, rs, ts, vals, nops, rtz);
-            else
-                parts[k] = pvk_spv_synthetic(ctx, r->elem, pvk_spv_fold(ctx, op, rs, ts, vals, nops, rtz), NULL, 0,
-                                             false);
+            if (d && fconv) { /* float conversions of function constants: baked */
+                ctx->fc_read |= d;
+                d = 0;
+            }
+            value = pvk_spv_fold(ctx, op, rs, ts, vals, nops, rtz);
+            if (n == 1) {
+                c->value = value;
+                if ((c->deps = d)) {
+                    c->sop = op;
+                    c->nargs = nops;
+                    memcpy(c->args, parts_k, sizeof(uint32_t) * nops);
+                }
+            } else {
+                parts[k] = d ? pvk_spv_synthetic_fc(ctx, r->elem, value, d, op, parts_k, nops)
+                             : pvk_spv_synthetic(ctx, r->elem, value, NULL, 0, false);
+                c->deps |= d;
+            }
         }
         if (n > 1) {
             c->parts = parts;
@@ -44183,6 +44324,30 @@ static bool pvk_spv_specialization(struct pvk_spv *ctx, uint32_t spec_id, uint64
         return true;
     }
     return false;
+}
+
+/* Whether SpecId spec_id of a constant of type t is a function constant
+ * (options->spec_function_constants), *slot its index in ctx->fc_ids. */
+static bool pvk_spv_fc_slot(struct pvk_spv *ctx, uint32_t spec_id, const struct pvk_spv_type *t, uint32_t *slot)
+{
+    const struct pvk_msl_options *o = ctx->options;
+    uint32_t i;
+    if (!o || !o->spec_function_constants || spec_id > 0xffffu || (t->op != PVK_SPV_OpTypeBool && t->width > 32))
+        return false; /* (Metal's indices end at 65535; 64-bit values do not fit its uint) */
+    for (i = 0; i < o->spec_baked_count; i++)
+        if (o->spec_baked[i] == spec_id)
+            return false;
+    for (i = 0; i < ctx->fc_baked_count; i++)
+        if (ctx->fc_baked[i] == spec_id)
+            return false;
+    for (i = 0; i < ctx->nfc && ctx->fc_ids[i] != spec_id; i++)
+        ;
+    if (i == PVK_ARRAY_SIZE(ctx->fc_ids))
+        return false;
+    if (i == ctx->nfc)
+        ctx->fc_ids[ctx->nfc++] = spec_id;
+    *slot = i;
+    return true;
 }
 
 static void pvk_spv_parse_constant(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
@@ -44228,7 +44393,7 @@ static void pvk_spv_parse_constant(struct pvk_spv *ctx, const struct pvk_spv_ins
             pvk_spv_fail(ctx, "composite constant of non-composite type");
         }
         for (i = 0; i < n; i++) {
-            pvk_spv_const(ctx, in->w[3 + i]);
+            c->deps |= pvk_spv_const(ctx, in->w[3 + i])->deps;
             if (pvk_spv_get(ctx, in->w[3 + i])->type != pvk_spv_part_type(ctx, t, i))
                 pvk_spv_fail(ctx, "composite constant %u: constituent %u has the wrong type", rid, i);
         }
@@ -44255,11 +44420,21 @@ static void pvk_spv_parse_constant(struct pvk_spv *ctx, const struct pvk_spv_ins
          in->op == PVK_SPV_OpSpecConstantFalse) && (x->flags & PVK_SPV_F_SPEC_ID)) {
         struct pvk_msl_result *res = ctx->result;
         uint64_t def = c->value, v;
-        if (pvk_spv_specialization(ctx, x->spec_id, &v))
+        uint32_t slot;
+        bool fc = pvk_spv_fc_slot(ctx, x->spec_id, t, &slot);
+        if (fc) {
+            c->deps = (uint64_t)1 << slot;
+            c->sop = 0;
+            c->nargs = 1;
+            c->args[0] = slot;
+        } else if (pvk_spv_specialization(ctx, x->spec_id, &v)) {
             c->value = t->op == PVK_SPV_OpTypeBool ? (v != 0) : (v & pvk_spv_mask(t->width));
+        }
         for (i = 0; i < res->spec_constant_count; i++)
             if (res->spec_constants[i].id == x->spec_id)
                 break;
+        if (i < res->spec_constant_count && !fc) /* (constants of one SpecId: baked if one is) */
+            res->spec_constants[i].function_constant = false;
         if (i == res->spec_constant_count) {
             struct pvk_msl_spec_constant *sc;
             if ((res->spec_constant_count & (res->spec_constant_count - 1)) == 0) {
@@ -44278,6 +44453,7 @@ static void pvk_spv_parse_constant(struct pvk_spv *ctx, const struct pvk_spv_ins
             sc->width = t->op == PVK_SPV_OpTypeBool ? 32 : t->width;
             sc->default_value = def;
             sc->value = c->value;
+            sc->function_constant = fc;
         }
     }
     PVK_SPV_PUSH(ctx, ctx->const_order, ctx->nconsts, ctx->cap_consts, rid);
@@ -46098,15 +46274,136 @@ static const char *pvk_spv_const_text(struct pvk_spv *ctx, uint32_t cid, uint32_
 
 /* The expression for a constant operand: its name when declared, else its
  * text. Program-scope initializers inline other constants (ctx->
- * inline_consts): MSL before 4.1 would need global constructors for them. */
+ * inline_consts): MSL before 4.1 would need global constructors for them.
+ * Scalars of function constants they read by name (they have no value to
+ * write out, and each is declared). */
 static const char *pvk_spv_const_expr(struct pvk_spv *ctx, uint32_t cid, uint32_t depth)
 {
     struct pvk_spv_id *x = pvk_spv_get(ctx, cid);
-    if (x->msl && !ctx->inline_consts)
+    if (x->msl && (!ctx->inline_consts || (x->c->deps && pvk_spv_is_scalar(pvk_spv_type(ctx, x->type)))))
         return x->msl;
     if (ctx->inline_consts && ctx->const_budget-- == 0)
         pvk_spv_fail(ctx, "constants are too large");
     return pvk_spv_const_text(ctx, cid, depth);
+}
+
+static const char *pvk_spv_binary_op(uint32_t op);
+
+/* The MSL integer type of t's width, unsigned or signed (sg). */
+static const char *pvk_spv_fc_int_type(const struct pvk_spv_type *t, bool sg)
+{
+    return pvk_spv_scalar_msl(PVK_SPV_OpTypeInt, t->width, sg);
+}
+
+/* Integer constant cid as an operand of a function constant expression:
+ * its bits as unsigned (sg false) or signed, promoted to 32 bits at least
+ * (as C++ would, to int). */
+static const char *pvk_spv_fc_int(struct pvk_spv *ctx, uint32_t cid, bool sg)
+{
+    struct pvk_spv_type *t = pvk_spv_type(ctx, pvk_spv_get(ctx, cid)->type);
+    const char *e = pvk_spv_const_expr(ctx, cid, 0);
+    if (t->is_signed != sg)
+        e = pvk_spv_fmt(ctx, "as_type<%s>(%s)", pvk_spv_fc_int_type(t, sg), e);
+    return t->width < 32 ? pvk_spv_fmt(ctx, "%s(%s)", sg ? "int" : "uint", e) : e;
+}
+
+/* An integer expression as integer type t, modulo 2^width. */
+static const char *pvk_spv_fc_wrap(struct pvk_spv *ctx, const struct pvk_spv_type *t, const char *e)
+{
+    e = pvk_spv_fmt(ctx, "%s(%s)", pvk_spv_fc_int_type(t, false), e);
+    return t->is_signed ? pvk_spv_fmt(ctx, "as_type<%s>(%s)", t->msl, e) : e;
+}
+
+/* The MSL of a scalar of function constants (struct pvk_spv_const): an
+ * expression of its type with pvk_spv_fold's results (wrapping; x / 0,
+ * x % 0 and logical shifts past the width 0, arithmetic ones the sign),
+ * which the defaults give c->value. */
+static const char *pvk_spv_fc_text(struct pvk_spv *ctx, uint32_t cid)
+{
+    struct pvk_spv_const *c = pvk_spv_const(ctx, cid);
+    struct pvk_spv_type *t = pvk_spv_type(ctx, pvk_spv_get(ctx, cid)->type), *at;
+    const char *a, *b, *e, *z = t->op == PVK_SPV_OpTypeInt && t->width == 64 ? "0ul" : "0u";
+    uint32_t op = c->sop, w;
+
+    if (op == 0) { /* the function constant (uint bits), else the default */
+        uint32_t id = ctx->fc_ids[c->args[0]];
+        e = pvk_spv_fmt(ctx, "pvk_fc%u", id);
+        if (t->op == PVK_SPV_OpTypeBool)
+            return pvk_spv_fmt(ctx, "is_function_constant_defined(pvk_fc%u) ? %s != 0u : %s", id, e,
+                               pvk_spv_literal(ctx, t, c->value));
+        if (t->width < 32)
+            e = pvk_spv_fmt(ctx, "%s(%s)", t->width == 8 ? "uchar" : "ushort", e);
+        if (t->op == PVK_SPV_OpTypeFloat || t->is_signed)
+            e = pvk_spv_fmt(ctx, "as_type<%s>(%s)", t->msl, e);
+        return pvk_spv_fmt(ctx, "is_function_constant_defined(pvk_fc%u) ? %s : %s", id, e,
+                           pvk_spv_literal(ctx, t, c->value));
+    }
+    if (op == PVK_SPV_OpCopyObject)
+        return pvk_spv_const_expr(ctx, c->args[0], 0);
+    at = pvk_spv_type(ctx, pvk_spv_get(ctx, c->args[0])->type);
+    w = at->op == PVK_SPV_OpTypeInt ? at->width : 32;
+    switch (op) {
+    case PVK_SPV_OpLogicalOr: case PVK_SPV_OpLogicalAnd: case PVK_SPV_OpLogicalEqual: case PVK_SPV_OpLogicalNotEqual:
+        return pvk_spv_fmt(ctx, "(%s %s %s)", pvk_spv_const_expr(ctx, c->args[0], 0), pvk_spv_binary_op(op),
+                           pvk_spv_const_expr(ctx, c->args[1], 0));
+    case PVK_SPV_OpLogicalNot:
+        return pvk_spv_fmt(ctx, "(!%s)", pvk_spv_const_expr(ctx, c->args[0], 0));
+    case PVK_SPV_OpSelect:
+        return pvk_spv_fmt(ctx, "(%s ? %s : %s)", pvk_spv_const_expr(ctx, c->args[0], 0),
+                           pvk_spv_const_expr(ctx, c->args[1], 0), pvk_spv_const_expr(ctx, c->args[2], 0));
+    case PVK_SPV_OpIEqual: case PVK_SPV_OpINotEqual: case PVK_SPV_OpUGreaterThan: case PVK_SPV_OpUGreaterThanEqual:
+    case PVK_SPV_OpULessThan: case PVK_SPV_OpULessThanEqual:
+        return pvk_spv_fmt(ctx, "(%s %s %s)", pvk_spv_fc_int(ctx, c->args[0], false), pvk_spv_binary_op(op),
+                           pvk_spv_fc_int(ctx, c->args[1], false));
+    case PVK_SPV_OpSGreaterThan: case PVK_SPV_OpSGreaterThanEqual: case PVK_SPV_OpSLessThan:
+    case PVK_SPV_OpSLessThanEqual:
+        return pvk_spv_fmt(ctx, "(%s %s %s)", pvk_spv_fc_int(ctx, c->args[0], true), pvk_spv_binary_op(op),
+                           pvk_spv_fc_int(ctx, c->args[1], true));
+    case PVK_SPV_OpIAdd: case PVK_SPV_OpISub: case PVK_SPV_OpIMul: case PVK_SPV_OpBitwiseOr: case PVK_SPV_OpBitwiseXor:
+    case PVK_SPV_OpBitwiseAnd:
+        e = pvk_spv_fmt(ctx, "%s %s %s", pvk_spv_fc_int(ctx, c->args[0], false), pvk_spv_binary_op(op),
+                        pvk_spv_fc_int(ctx, c->args[1], false));
+        break;
+    case PVK_SPV_OpUDiv: case PVK_SPV_OpUMod:
+        b = pvk_spv_fc_int(ctx, c->args[1], false);
+        e = pvk_spv_fmt(ctx, "%s == 0 ? %s : %s %s %s", b, z, pvk_spv_fc_int(ctx, c->args[0], false),
+                        pvk_spv_binary_op(op), b);
+        break;
+    case PVK_SPV_OpSDiv: /* (of the most negative value by -1: itself) */
+        a = pvk_spv_fc_int(ctx, c->args[0], true);
+        b = pvk_spv_fc_int(ctx, c->args[1], true);
+        e = pvk_spv_fmt(ctx, "%s == 0 ? %s : %s == -1 ? %s - as_type<%s>(%s) : %s(%s / %s)", b, z, b, z,
+                        w == 64 ? "ulong" : "uint", a, w == 64 ? "ulong" : "uint", a, b);
+        break;
+    case PVK_SPV_OpSRem: case PVK_SPV_OpSMod: /* (of x by -1: 0) */
+        a = pvk_spv_fc_int(ctx, c->args[0], true);
+        b = pvk_spv_fc_int(ctx, c->args[1], true);
+        e = pvk_spv_fmt(ctx, "(%s == 0 || %s == -1 ? %s : %s %% %s)", b, b, w == 64 ? "0l" : "0", a, b);
+        if (op == PVK_SPV_OpSMod) /* the sign of b */
+            e = pvk_spv_fmt(ctx, "%s != 0 && (%s < 0) != (%s < 0) ? %s + %s : %s", e, a, b, e, b, e);
+        break;
+    case PVK_SPV_OpShiftLeftLogical: case PVK_SPV_OpShiftRightLogical:
+        b = pvk_spv_fc_int(ctx, c->args[1], false);
+        e = pvk_spv_fmt(ctx, "%s >= %uu ? %s : %s %s %s", b, w, z, pvk_spv_fc_int(ctx, c->args[0], false),
+                        pvk_spv_binary_op(op), b);
+        break;
+    case PVK_SPV_OpShiftRightArithmetic:
+        b = pvk_spv_fc_int(ctx, c->args[1], false);
+        e = pvk_spv_fmt(ctx, "%s >> (%s >= %uu ? %uu : %s)", pvk_spv_fc_int(ctx, c->args[0], true), b, w, w - 1, b);
+        break;
+    case PVK_SPV_OpNot:
+        e = pvk_spv_fmt(ctx, "~%s", pvk_spv_fc_int(ctx, c->args[0], false));
+        break;
+    case PVK_SPV_OpSNegate:
+        e = pvk_spv_fmt(ctx, "%s - %s", z, pvk_spv_fc_int(ctx, c->args[0], false));
+        break;
+    case PVK_SPV_OpSConvert: case PVK_SPV_OpUConvert:
+        e = pvk_spv_fc_int(ctx, c->args[0], op == PVK_SPV_OpSConvert);
+        break;
+    default:
+        pvk_spv_fail(ctx, "unsupported OpSpecConstantOp of function constants (opcode %u)", op);
+    }
+    return pvk_spv_fc_wrap(ctx, t, e);
 }
 
 static const char *pvk_spv_const_text(struct pvk_spv *ctx, uint32_t cid, uint32_t depth)
@@ -46123,7 +46420,7 @@ static const char *pvk_spv_const_text(struct pvk_spv *ctx, uint32_t cid, uint32_
     if (c->null)
         return pvk_spv_zero(ctx, x->type);
     if (pvk_spv_is_scalar(t))
-        return pvk_spv_literal(ctx, t, c->value);
+        return c->deps ? pvk_spv_fc_text(ctx, cid) : pvk_spv_literal(ctx, t, c->value);
     n = pvk_spv_type_parts(ctx, t);
     if (c->nparts != n)
         pvk_spv_fail(ctx, "malformed composite constant %u", cid);
@@ -46145,18 +46442,22 @@ static const char *pvk_spv_const_text(struct pvk_spv *ctx, uint32_t cid, uint32_
 }
 
 /* Spec constants and array/struct constants become named program-scope
- * constants; other constants are written inline where used. */
+ * constants; other constants are written inline where used. Function
+ * constants come first. */
 static void pvk_spv_emit_constants(struct pvk_spv *ctx)
 {
     uint32_t i;
+    for (i = 0; i < ctx->nfc; i++)
+        pvk_sb_printf(ctx, &ctx->consts, "constant uint pvk_fc%u [[function_constant(%u)]];\n", ctx->fc_ids[i],
+                      ctx->fc_ids[i]);
     for (i = 0; i < ctx->nconsts; i++) {
         uint32_t cid = ctx->const_order[i];
-        struct pvk_spv_id *x = &ctx->ids[cid];
+        struct pvk_spv_id *x = pvk_spv_get(ctx, cid);
         struct pvk_spv_type *t = pvk_spv_type(ctx, x->type);
         const char *text;
         if (x->kind != PVK_SPV_K_CONST || x->c->null)
             continue;
-        if (!x->c->spec && t->op != PVK_SPV_OpTypeArray && t->op != PVK_SPV_OpTypeStruct)
+        if (!x->c->spec && !x->c->deps && t->op != PVK_SPV_OpTypeArray && t->op != PVK_SPV_OpTypeStruct)
             continue;
         ctx->inline_consts = true;
         text = pvk_spv_const_text(ctx, cid, 0);
@@ -54054,7 +54355,7 @@ static void pvk_spv_workgroup_size(struct pvk_spv *ctx)
     /* A WorkgroupSize built-in constant overrides the execution mode. */
     for (i = 0; i < ctx->nconsts; i++) {
         uint32_t cid = ctx->const_order[i], k;
-        struct pvk_spv_id *x = &ctx->ids[cid];
+        struct pvk_spv_id *x = pvk_spv_get(ctx, cid);
         if (!(x->flags & PVK_SPV_F_BUILTIN) || x->builtin != PVK_SPV_BuiltInWorkgroupSize || x->kind != PVK_SPV_K_CONST)
             continue;
         if (pvk_spv_type(ctx, x->type)->op != PVK_SPV_OpTypeVector || pvk_spv_type(ctx, x->type)->count != 3)
@@ -54320,12 +54621,17 @@ static void pvk_msl_result_free(struct pvk_msl_result *result)
     result->output_count = 0;
 }
 
-static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const char *entry_point,
-                                 const struct pvk_msl_options *options, struct pvk_msl_result *result)
+/* One translation, with the SpecIds baked[] baked too; *read gets the
+ * SpecIds of the function constants whose values it read (*nread). */
+static VkResult pvk_spv_run(const uint32_t *words, size_t word_count, const char *entry_point,
+                            const struct pvk_msl_options *options, struct pvk_msl_result *result,
+                            const uint32_t *baked, uint32_t nbaked, uint32_t *read, uint32_t *nread)
 {
     struct pvk_spv *ctx;
     VkResult code = VK_SUCCESS;
+    uint32_t k;
 
+    *nread = 0;
     memset(result, 0, sizeof(*result));
     result->push_constant_buffer =
         options && options->push_constant_buffer ? options->push_constant_buffer : PVK_MSL_PUSH_CONSTANT_BUFFER;
@@ -54338,10 +54644,15 @@ static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const
     ctx->options = options;
     ctx->want_entry = entry_point;
     ctx->image_1d_as_2d = options && options->image_1d_as_2d;
+    ctx->fc_baked = baked;
+    ctx->fc_baked_count = nbaked;
     if (setjmp(ctx->fail) == 0)
         pvk_spv_translate(ctx, words, word_count);
     else
         code = ctx->code;
+    for (k = 0; k < ctx->nfc; k++)
+        if (ctx->fc_read >> k & 1u)
+            read[(*nread)++] = ctx->fc_ids[k];
 
     while (ctx->chunks) {
         struct pvk_spv_chunk *next = ctx->chunks->next;
@@ -54364,6 +54675,32 @@ static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const
         pvk_msl_result_free(result);
         memcpy(result->error, error, sizeof(error));
     }
+    return code;
+}
+
+static VkResult pvk_spirv_to_msl(const uint32_t *words, size_t word_count, const char *entry_point,
+                                 const struct pvk_msl_options *options, struct pvk_msl_result *result)
+{
+    uint32_t *baked = NULL, nbaked = 0, read[64], nread;
+    VkResult code;
+    for (;;) {
+        void *p;
+        code = pvk_spv_run(words, word_count, entry_point, options, result, baked, nbaked, read, &nread);
+        if (!nread || code == VK_ERROR_OUT_OF_HOST_MEMORY)
+            break;
+        /* it needed the values of function constants: again, with them baked */
+        pvk_msl_result_free(result);
+        p = realloc(baked, sizeof(*baked) * (nbaked + nread));
+        if (!p) {
+            snprintf(result->error, sizeof(result->error), "out of memory");
+            code = VK_ERROR_OUT_OF_HOST_MEMORY;
+            break;
+        }
+        baked = p;
+        memcpy(baked + nbaked, read, sizeof(*baked) * nread);
+        nbaked += nread;
+    }
+    free(baked);
     return code;
 }
 
@@ -60505,8 +60842,8 @@ static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MT
     return pso;
 }
 
-static id pvk_library_compute(struct pvk_device *device, id library, const char *entry, unsigned long max_threads,
-                              const char *label, char *error, size_t error_size);
+static id pvk_library_compute(struct pvk_device *device, id library, const char *entry, id values,
+                              unsigned long max_threads, const char *label, char *error, size_t error_size);
 
 /* The library of kernel k of pvk_blit_kernel_names (the 6 blits, then the
  * clears). */
@@ -60529,7 +60866,7 @@ static id pvk_blit_kernel(struct pvk_device *device, uint32_t k)
         return pso;
     pool = objc_autoreleasePoolPush();
     snprintf(label, sizeof(label), "PlasmaVK %s", pvk_blit_kernel_names[k]);
-    pso = pvk_library_compute(device, library, pvk_blit_kernel_names[k], 256, label, error, sizeof(error));
+    pso = pvk_library_compute(device, library, pvk_blit_kernel_names[k], NULL, 256, label, error, sizeof(error));
     objc_autoreleasePoolPop(pool);
     if (!pso) {
         pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
@@ -66929,7 +67266,15 @@ static void pvk_key_add_code(struct pvk_key *k, const uint64_t hash[2], size_t w
  * used first, within PVK_SHADER_CACHE_BYTES of MSL. System memory: entries
  * outlive the commands that made them, and libraries are also made while
  * encoding and on the device's own thread (pvk_device_warm). Its hits are
- * not application pipeline cache hits (creation feedback). */
+ * not application pipeline cache hits (creation feedback).
+ *
+ * Pipelines translate specialization constants into function constants
+ * (section 13), which they set when they make their Metal pipelines
+ * (pvk_spec_constant_values): stages whose specializations differ share
+ * their translation and library, unless the translation bakes the values
+ * that differ. Which it bakes is only known once it is made, so such a
+ * translation is keyed with them (pvk_stage_key with spec_baked), and the
+ * key without them finds an entry that lists them (plan). */
 
 #define PVK_SHADER_CACHE_BYTES (64u << 20)
 
@@ -66941,6 +67286,8 @@ struct pvk_shader_entry {
     long refs;                 /* translations: the cache's, while it is in it, and pvk_stage_translate's */
     struct pvk_msl_result res; /* a translation (pvk_stage_translate) */
     id library;                /* a library (pvk_library_get), retained */
+    uint32_t *plan;            /* a plan: the SpecIds the translation bakes, ascending (plan_count) */
+    uint32_t plan_count;
 };
 
 struct pvk_shader_cache {
@@ -66971,6 +67318,7 @@ static void pvk_shader_entry_free(struct pvk_shader_entry *e)
 {
     pvk_msl_result_free(&e->res);
     pvk_release(e->library);
+    free(e->plan);
     free(e);
 }
 
@@ -67159,28 +67507,78 @@ static bool pvk_library_get2(struct pvk_device *device, const char *vs_msl, bool
     return false;
 }
 
+/* Whether MSL declares function constants (section 13: specialization
+ * constants as function constants): a function of its library must be
+ * specialized, if only with their defaults. */
+static bool pvk_msl_function_constants(const char *msl)
+{
+    return msl && strstr(msl, "[[function_constant(") != NULL;
+}
+
+/* The function constant values of a stage's specialization (retained), as
+ * section 13 declares function constants: each map entry's bits as the
+ * uint at index SpecId (a SpecId's first entry, as translation takes it;
+ * Metal ignores the indices a function does not declare). NULL: none. */
+static id pvk_spec_constant_values(const VkSpecializationInfo *spec)
+{
+    id values;
+    uint32_t i;
+    if (!spec || !spec->mapEntryCount || !spec->pMapEntries || !spec->pData)
+        return NULL;
+    values = pvk_MTLFunctionConstantValues_new();
+    for (i = spec->mapEntryCount; values && i-- > 0;) { /* (the first entry is set last) */
+        const VkSpecializationMapEntry *e = &spec->pMapEntries[i];
+        uint64_t v = 0;
+        uint32_t bits;
+        if (e->constantID > 0xffffu || e->size > 8 || e->offset > spec->dataSize || e->size > spec->dataSize - e->offset)
+            continue;
+        memcpy(&v, (const char *)spec->pData + e->offset, e->size); /* little-endian */
+        bits = (uint32_t)v;
+        pvk_MTLFunctionConstantValues_setConstantValue_type_atIndex(values, &bits, PVK_MTLDataTypeUInt, e->constantID);
+    }
+    return values;
+}
+
+/* The function constant values a function of msl is specialized with
+ * (retained): values (pvk_spec_constant_values; NULL: none, the defaults)
+ * if msl declares function constants, else NULL (not specialized). */
+static id pvk_msl_constant_values(const char *msl, id values)
+{
+    if (!pvk_msl_function_constants(msl))
+        return NULL;
+    return values ? pvk_retain(values) : pvk_MTLFunctionConstantValues_new();
+}
+
 /* Compiles MSL into a compute pipeline state (retained) labeled `label`
  * (Metal fixes a pipeline state's label at creation: section 16, DEBUG
- * LABELS), NULL with a message in error[] on failure. max_threads: the
- * threadgroup size it must run with. */
-static id pvk_compile_compute_labeled(struct pvk_device *device, const char *msl, const char *entry,
+ * LABELS), NULL with a message in error[] on failure. values: the stage's
+ * function constant values (pvk_spec_constant_values; NULL: none).
+ * max_threads: the threadgroup size it must run with. */
+static id pvk_compile_compute_labeled(struct pvk_device *device, const char *msl, const char *entry, id values,
                                       unsigned long max_threads, const char *label, char *error, size_t error_size)
 {
     id library = pvk_library_get(device, msl, false, error, error_size), pso;
     if (!library)
         return NULL;
-    pso = pvk_library_compute(device, library, entry, max_threads, label, error, error_size);
+    values = pvk_msl_constant_values(msl, values);
+    pso = pvk_library_compute(device, library, entry, values, max_threads, label, error, error_size);
+    pvk_release(values);
     pvk_release(library);
     return pso;
 }
 
-/* The same, of a function of a library. */
-static id pvk_library_compute(struct pvk_device *device, id library, const char *entry, unsigned long max_threads,
-                              const char *label, char *error, size_t error_size)
+/* The same, of a function of a library, specialized with values if not
+ * NULL. */
+static id pvk_library_compute(struct pvk_device *device, id library, const char *entry, id values,
+                              unsigned long max_threads, const char *label, char *error, size_t error_size)
 {
     id mtl = device->physical_device->mtl_device, function = NULL, desc = NULL, pso = NULL, err = NULL;
     void *pool = objc_autoreleasePoolPush(); /* strings, NSErrors */
-    function = pvk_MTLLibrary_newFunctionWithName(library, pvk_NSString_stringWithUTF8String(entry));
+    if (values)
+        function = pvk_MTLLibrary_newFunctionWithName_constantValues_error(
+            library, pvk_NSString_stringWithUTF8String(entry), values, &err);
+    else
+        function = pvk_MTLLibrary_newFunctionWithName(library, pvk_NSString_stringWithUTF8String(entry));
     if (function)
         desc = pvk_MTLComputePipelineDescriptor_new();
     if (desc) {
@@ -67211,7 +67609,7 @@ static id pvk_compile_compute(struct pvk_device *device, const char *msl, const 
 {
     char label[96];
     snprintf(label, sizeof(label), "PlasmaVK %s", entry);
-    return pvk_compile_compute_labeled(device, msl, entry, max_threads, label, error, error_size);
+    return pvk_compile_compute_labeled(device, msl, entry, NULL, max_threads, label, error, error_size);
 }
 
 /* The Metal label of a pipeline stage's code: "VkShaderModule '<name>'
@@ -67548,6 +67946,33 @@ static void pvk_key_add_spec(struct pvk_key *k, const VkSpecializationInfo *spec
     pvk_key_add(k, spec->pData, spec->pData ? spec->dataSize : 0);
 }
 
+/* The values of SpecIds ids[] in spec, as section 13 takes them (the first
+ * map entry of each): what a translation with function constants depends
+ * on of the specialization, if those are what it bakes. */
+static void pvk_key_add_spec_ids(struct pvk_key *k, const VkSpecializationInfo *spec, const uint32_t *ids, uint32_t n)
+{
+    uint32_t i, j;
+    pvk_key_add(k, &n, sizeof(n));
+    for (i = 0; i < n; i++) {
+        uint32_t v[2];
+        const void *bytes = NULL;
+        v[0] = ids[i];
+        v[1] = 0xffffffffu; /* (none) */
+        for (j = 0; spec && spec->pMapEntries && j < spec->mapEntryCount; j++) {
+            const VkSpecializationMapEntry *e = &spec->pMapEntries[j];
+            if (e->constantID != ids[i])
+                continue;
+            v[1] = (uint32_t)e->size;
+            if (spec->pData && e->size <= 8 && e->offset <= spec->dataSize && e->size <= spec->dataSize - e->offset)
+                bytes = (const char *)spec->pData + e->offset;
+            break;
+        }
+        pvk_key_add(k, v, sizeof(v));
+        if (bytes)
+            pvk_key_add(k, bytes, v[1]);
+    }
+}
+
 static void pvk_key_add_sets(struct pvk_key *k, const struct pvk_msl_set_layout *sets, uint32_t count)
 {
     uint32_t i, j;
@@ -67606,7 +68031,7 @@ static void pvk_key_add_ycbcr(struct pvk_key *k, const struct pvk_msl_options *o
  * field it misses would hand one pipeline another's MSL. A new field fails
  * this until it is added there (then update the size). */
 typedef struct pvk_msl_options pvk_msl_options_keyed;
-PVK_ASSERT_SIZE(pvk_msl_options_keyed, 280);
+PVK_ASSERT_SIZE(pvk_msl_options_keyed, 304);
 typedef struct pvk_msl_varying pvk_msl_varying_keyed;
 PVK_ASSERT_SIZE(pvk_msl_varying_keyed, 20);
 typedef struct pvk_msl_binding pvk_msl_binding_keyed;
@@ -67622,7 +68047,8 @@ PVK_ASSERT_SIZE(pvk_ycbcr_keyed, 32);
 
 /* The shader cache key of translating `entry` of SPIR-V (its hash and
  * size: pvk_stage_code) with options: every input of pvk_spirv_to_msl,
- * field by field, through the pointers. */
+ * field by field, through the pointers. With function constants, of the
+ * specialization only the values of spec_baked (Shader cache, above). */
 static struct pvk_key pvk_stage_key(const uint64_t hash[2], size_t words, const char *entry,
                                     const struct pvk_msl_options *o)
 {
@@ -67631,7 +68057,11 @@ static struct pvk_key pvk_stage_key(const uint64_t hash[2], size_t words, const 
     pvk_key_init(&k, 'T');
     pvk_key_add_code(&k, hash, words);
     pvk_key_add_string(&k, entry);
-    pvk_key_add_spec(&k, o->specialization);
+    if (o->spec_function_constants)
+        pvk_key_add_spec_ids(&k, o->specialization, o->spec_baked, o->spec_baked_count);
+    else
+        pvk_key_add_spec(&k, o->specialization);
+    v[n++] = o->spec_function_constants;
     v[n++] = o->set_layouts != NULL; /* (NULL: the default layout) */
     v[n++] = o->set_layout_count;
     v[n++] = o->push_constant_buffer;
@@ -67702,43 +68132,123 @@ static struct pvk_key pvk_stage_key(const uint64_t hash[2], size_t words, const 
     return k;
 }
 
+/* The SpecIds a translation bakes (pvk_msl_result.spec_constants that are
+ * no function constants), ascending, in *ids (malloc'd; NULL: none). false
+ * when out of memory. */
+static bool pvk_stage_baked(const struct pvk_msl_result *res, uint32_t **ids, uint32_t *count)
+{
+    uint32_t i, j, n = 0, *list = NULL;
+    for (i = 0; i < res->spec_constant_count; i++)
+        n += !res->spec_constants[i].function_constant;
+    if (n && !(list = malloc(sizeof(*list) * n)))
+        return false;
+    for (i = 0, n = 0; i < res->spec_constant_count; i++) {
+        uint32_t id = res->spec_constants[i].id;
+        if (res->spec_constants[i].function_constant)
+            continue;
+        for (j = n++; j > 0 && list[j - 1] > id; j--) /* (SpecIds are listed once) */
+            list[j] = list[j - 1];
+        list[j] = id;
+    }
+    *ids = list;
+    *count = n;
+    return true;
+}
+
 /* Translates (section 13) through the device's shader cache: *out is an
  * entry whose res is pvk_spirv_to_msl's for these inputs (release it with
- * pvk_stage_put). Failures are not kept: error[] says why. */
+ * pvk_stage_put). Failures are not kept: error[] says why. With function
+ * constants, the plans on the way lead to the translation's key (Shader
+ * cache, above). */
 static VkResult pvk_stage_translate(struct pvk_device *device, const uint32_t *code, size_t words, const uint64_t hash[2],
                                     const char *entry, const struct pvk_msl_options *options,
                                     struct pvk_shader_entry **out, char *error, size_t error_size)
 {
     struct pvk_shader_cache *c = device->shaders;
-    struct pvk_key key = pvk_stage_key(hash, words, entry, options);
+    struct pvk_msl_options o = *options;
     struct pvk_shader_entry *e;
+    struct pvk_key key;
+    uint32_t *baked = NULL, *plan = NULL, count = 0;
+    bool keep = true;
     VkResult r;
-    pthread_mutex_lock(&c->lock);
-    if ((e = pvk_shader_find_locked(c, &key)))
-        e->refs++;
-    pthread_mutex_unlock(&c->lock);
-    *out = e;
-    if (e)
+
+    o.spec_baked = NULL; /* (the plans say) */
+    o.spec_baked_count = 0;
+    for (;;) {
+        bool next = false;
+        key = pvk_stage_key(hash, words, entry, &o);
+        pthread_mutex_lock(&c->lock);
+        if ((e = pvk_shader_find_locked(c, &key)) && !e->plan) {
+            e->refs++;
+        } else if (e && (plan = malloc(sizeof(*plan) * e->plan_count))) {
+            memcpy(plan, e->plan, sizeof(*plan) * e->plan_count);
+            count = e->plan_count;
+            next = true;
+        } else {
+            e = NULL; /* (out of memory: translated again) */
+        }
+        pthread_mutex_unlock(&c->lock);
+        if (!next)
+            break;
+        free(baked);
+        o.spec_baked = baked = plan;
+        o.spec_baked_count = count;
+        plan = NULL;
+    }
+    if (e) {
+        free(baked);
+        *out = e;
         return VK_SUCCESS;
+    }
     e = calloc(1, sizeof(*e));
     if (!e) {
+        free(baked);
         snprintf(error, error_size, "out of memory");
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
-    r = pvk_spirv_to_msl(code, words, entry, options, &e->res);
+    r = pvk_spirv_to_msl(code, words, entry, &o, &e->res);
     if (r != VK_SUCCESS) {
         snprintf(error, error_size, "%s", e->res.error);
+        free(baked);
         free(e);
         return r;
     }
+    if (o.spec_function_constants && !pvk_stage_baked(&e->res, &plan, &count)) {
+        keep = false; /* (out of memory: its key is not known) */
+    } else if (count && (count != o.spec_baked_count || memcmp(plan, o.spec_baked, sizeof(*plan) * count) != 0)) {
+        /* it baked more: where it was looked for, a plan that says so; the
+         * translation under the key with those */
+        struct pvk_shader_entry *p = calloc(1, sizeof(*p));
+        if (p && (p->plan = malloc(sizeof(*plan) * count))) {
+            memcpy(p->plan, plan, sizeof(*plan) * count);
+            p->plan_count = count;
+            p->key = key;
+            p->bytes = sizeof(*p) + sizeof(*plan) * count;
+            pthread_mutex_lock(&c->lock);
+            if (!pvk_shader_find_locked(c, &key)) {
+                pvk_shader_insert_locked(c, p);
+                p = NULL;
+            }
+            pthread_mutex_unlock(&c->lock);
+        }
+        if (p)
+            pvk_shader_entry_free(p);
+        o.spec_baked = plan;
+        o.spec_baked_count = count;
+        key = pvk_stage_key(hash, words, entry, &o);
+    }
+    free(plan);
+    free(baked);
     e->key = key;
     e->bytes = e->res.msl_length;
     e->refs = 1;
     pthread_mutex_lock(&c->lock);
-    if ((*out = pvk_shader_find_locked(c, &key))) /* translated meanwhile: that one */
+    if (keep && (*out = pvk_shader_find_locked(c, &key)) && !(*out)->plan) /* translated meanwhile: that one */
         (*out)->refs++;
-    else
+    else if (keep && !*out)
         pvk_shader_insert_locked(c, *out = e);
+    else
+        *out = e; /* (a plan there: not kept) */
     pthread_mutex_unlock(&c->lock);
     if (*out != e)
         pvk_shader_entry_free(e);
@@ -68316,6 +68826,7 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
     pvk_stage_code(stage, &code, &words, hash);
     memset(&options, 0, sizeof(options));
     options.specialization = stage->pSpecializationInfo;
+    options.spec_function_constants = true;
     options.image_1d_as_2d = true; /* 1D image views are 2D textures of height 1 (section 11) */
     pvk_pipeline_robustness(device, info->pNext, stage->pNext, &options);
     if (flags & VK_PIPELINE_CREATE_2_DISPATCH_BASE_BIT) {
@@ -68392,10 +68903,12 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
     name = hit ? entry[0] : translated->res.entry_point;
     if (!pso) {
         char label[300];
+        id values = pvk_spec_constant_values(stage->pSpecializationInfo);
         pvk_stage_label(label, sizeof(label), stage);
-        pso = pvk_compile_compute_labeled(device, source, name,
+        pso = pvk_compile_compute_labeled(device, source, name, values,
                                           (unsigned long)ci.workgroup[0] * ci.workgroup[1] * ci.workgroup[2], label,
                                           error, sizeof(error));
+        pvk_release(values);
     }
     if (!pso) {
         pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-compilation", VK_OBJECT_TYPE_SHADER_MODULE,
@@ -69298,11 +69811,35 @@ static void pvk_stencil_face_state(struct pvk_stencil_face *f, const VkStencilOp
     f->reference = s->reference;
 }
 
+/* A function descriptor of a stage's function in its library (retained),
+ * specialized with the stage's function constant values (values:
+ * pvk_spec_constant_values; NULL: none) if its MSL declares function
+ * constants. */
+static id pvk_stage_function_descriptor(id library, const char *name, const char *msl, id values)
+{
+    id f = pvk_function_descriptor(library, name), s;
+    values = pvk_msl_constant_values(msl, values);
+    if (!f || !values) {
+        pvk_release(values);
+        return f;
+    }
+    s = pvk_MTL4SpecializedFunctionDescriptor_new();
+    if (s) {
+        pvk_MTL4SpecializedFunctionDescriptor_setFunctionDescriptor(s, f);
+        pvk_MTL4SpecializedFunctionDescriptor_setConstantValues(s, values);
+    }
+    pvk_release(values);
+    pvk_release(f);
+    return s;
+}
+
 /* A render pipeline state from translated shaders (retained), labeled
- * `label` (NULL: none), NULL with a message in error[]. */
+ * `label` (NULL: none), NULL with a message in error[]. vs_values,
+ * fs_values: the stages' function constant values (pvk_spec_constant_values;
+ * NULL: none). */
 static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *d, const char *vs_msl,
-                          const char *vs_entry, const char *fs_msl, const char *fs_entry, bool layered, bool invariant,
-                          const char *label, char *error, size_t error_size)
+                          const char *vs_entry, const char *fs_msl, const char *fs_entry, id vs_values, id fs_values,
+                          bool layered, bool invariant, const char *label, char *error, size_t error_size)
 {
     void *pool = objc_autoreleasePoolPush();
     id vs_lib = NULL, fs_lib = NULL, desc = NULL, vf = NULL;
@@ -69322,10 +69859,10 @@ static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *
         desc = pvk_MTL4RenderPipelineDescriptor_new();
     if (desc) {
         id atts = pvk_MTL4RenderPipelineDescriptor_colorAttachments(desc);
-        vf = pvk_function_descriptor(vs_lib, vs_entry);
+        vf = pvk_stage_function_descriptor(vs_lib, vs_entry, vs_msl, vs_values);
         pvk_MTL4RenderPipelineDescriptor_setVertexFunctionDescriptor(desc, vf);
         if (fs_lib) {
-            ff = pvk_function_descriptor(fs_lib, fs_entry);
+            ff = pvk_stage_function_descriptor(fs_lib, fs_entry, fs_msl, fs_values);
             pvk_MTL4RenderPipelineDescriptor_setFragmentFunctionDescriptor(desc, ff);
         }
         for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS; l++) {
@@ -69401,6 +69938,7 @@ struct pvk_gfx_variants {
     char *fs_entry;
     struct pvk_msl_options fo;
     void *inputs;                 /* (pvk_stage_inputs_copy) */
+    id values[2];                 /* the stages' function constant values (pvk_spec_constant_values) */
     uint32_t sample_mask;         /* without a fragment shader: pSampleMask (0: none) */
     id pso[PVK_VARIANT_COUNT];
     bool failed[PVK_VARIANT_COUNT];
@@ -69463,6 +70001,7 @@ struct pvk_gfx_groups {
     char entry[2][64];
     char *tex_msl[2]; /* NULL: none (struct pvk_gfx_pipeline, tex_variant) */
     char tex_entry[2][64];
+    id values[2]; /* the stages' function constant values (pvk_spec_constant_values) */
     uint32_t tex_inputs; /* the input attachments it reads from textures */
     uint32_t count;
     uint32_t masks[PVK_GFX_GROUP_VARIANTS]; /* the logical color indices each leaves out (bit 8: of tex_msl) */
@@ -69476,6 +70015,8 @@ static void pvk_gfx_groups_free(const VkAllocationCallbacks *alloc, struct pvk_g
         return;
     for (k = 0; k < g->count; k++)
         pvk_release(g->pso[k]);
+    pvk_release(g->values[0]);
+    pvk_release(g->values[1]);
     pvk_free(alloc, g->msl[0]);
     pvk_free(alloc, g->msl[1]);
     pvk_free(alloc, g->tex_msl[0]);
@@ -69517,8 +70058,8 @@ static id pvk_gfx_group_variant(struct pvk_device *device, struct pvk_pipeline *
             }
         if (tex)
             pso = pvk_gfx_compile(device, &d, g->tex_msl[0], g->tex_entry[0], g->tex_msl[1], g->tex_entry[1],
-                                  g->layered, g->invariant, "PlasmaVK tile memory texture input variant", error,
-                                  sizeof(error));
+                                  g->values[0], g->values[1], g->layered, g->invariant,
+                                  "PlasmaVK tile memory texture input variant", error, sizeof(error));
         else { /* (the colors it fetches there read 0: their outputs do not depend on them, fetch_split) */
             uint32_t drop = mask & p->gfx->fetched & 0xffu;
             size_t len = g->msl[1] ? strlen(g->msl[1]) : 0;
@@ -69529,7 +70070,7 @@ static id pvk_gfx_group_variant(struct pvk_device *device, struct pvk_pipeline *
             if (fs)
                 memcpy(at, g->msl[1], len + 1);
             pso = pvk_gfx_compile(device, &d, g->msl[0], g->entry[0], fs ? fs : g->msl[1],
-                                  g->msl[1] ? g->entry[1] : NULL, g->layered, g->invariant,
+                                  g->msl[1] ? g->entry[1] : NULL, g->values[0], g->values[1], g->layered, g->invariant,
                                   "PlasmaVK tile memory group variant", error, sizeof(error));
             free(fs);
         }
@@ -69577,6 +70118,8 @@ static void pvk_gfx_variants_free(struct pvk_device *device, const VkAllocationC
         return;
     for (k = 0; k < PVK_VARIANT_COUNT; k++)
         pvk_release(v->pso[k]);
+    pvk_release(v->values[0]);
+    pvk_release(v->values[1]);
     pvk_stage_put(device, v->vs);
     pvk_free(alloc, v->inputs);
     pthread_mutex_destroy(&v->lock);
@@ -69623,7 +70166,8 @@ static id pvk_gfx_variant(struct pvk_device *device, struct pvk_pipeline *p, uns
         }
         if (msl)
             v->pso[kind] = pvk_gfx_compile(device, &v->desc, v->vs->res.msl, v->vs->res.entry_point, msl, entry,
-                                           v->layered, v->invariant, "PlasmaVK depth copy variant", error, sizeof(error));
+                                           v->values[0], v->values[1], v->layered, v->invariant,
+                                           "PlasmaVK depth copy variant", error, sizeof(error));
         if (!v->pso[kind]) {
             v->failed[kind] = true;
             pvk_logd(device, PVK_LOG_ERROR, msl ? "PlasmaVK-shader-compilation" : "PlasmaVK-shader-translation",
@@ -69822,6 +70366,8 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
     if (!*pso) {
         struct pvk_gfx_desc dc = *d;
         char label[600], fs_label[300];
+        id vsv = pvk_spec_constant_values(vs->pSpecializationInfo);
+        id fsv = fs ? pvk_spec_constant_values(fs->pSpecializationInfo) : NULL;
         pvk_stage_label(label, sizeof(label), vs);
         if (fs) {
             pvk_stage_label(fs_label, sizeof(fs_label), fs);
@@ -69829,8 +70375,10 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
             strncat(label, fs_label, sizeof(label) - strlen(label) - 1);
         }
         pvk_gfx_hidden_formats(&dc, ci->workgroup[0]); /* the depth/stencil copies the shader reads */
-        *pso = pvk_gfx_compile(device, &dc, sources[0], names[0], sources[1], names[1], ci->dispatch_base != 0,
-                               ci->dispatch_base_offset != 0, label, error, sizeof(error));
+        *pso = pvk_gfx_compile(device, &dc, sources[0], names[0], sources[1], names[1], vsv, fsv,
+                               ci->dispatch_base != 0, ci->dispatch_base_offset != 0, label, error, sizeof(error));
+        pvk_release(vsv);
+        pvk_release(fsv);
     }
     if (!*pso) {
         pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-compilation", VK_OBJECT_TYPE_SHADER_MODULE,
@@ -70205,6 +70753,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         vo.set_layout_count = fo.set_layout_count = layout->set_count;
     }
     vo.specialization = vs->pSpecializationInfo;
+    vo.spec_function_constants = fo.spec_function_constants = true;
     vo.image_1d_as_2d = fo.image_1d_as_2d = true;
     pvk_pipeline_robustness(device, info->pNext, vs->pNext, &vo);
     pvk_pipeline_robustness(device, info->pNext, fs ? fs->pNext : NULL, &fo);
@@ -70326,6 +70875,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         snprintf(error, sizeof(error), "out of memory");
         if (v && pthread_mutex_init(&v->lock, NULL) == 0) {
             v->want = want;
+            v->values[0] = pvk_spec_constant_values(vs->pSpecializationInfo);
+            v->values[1] = fs ? pvk_spec_constant_values(fs->pSpecializationInfo) : NULL;
             v->sample_mask = d.sample_mask_enable ? d.sample_mask : 0;
             r = fs ? pvk_stage_inputs_copy(alloc, fs_code, fs_words, fs->pName, &fv, &v->fs_code, &v->fs_entry, &v->fo,
                                            &v->inputs)
@@ -70390,6 +70941,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
             g->msl[0] = kept.msl[0];
             g->msl[1] = kept.msl[1];
             memcpy(g->entry, kept.entry, sizeof(g->entry));
+            g->values[0] = pvk_spec_constant_values(vs->pSpecializationInfo);
+            g->values[1] = fs ? pvk_spec_constant_values(fs->pSpecializationInfo) : NULL;
             g->count = 0;
             kept.msl[0] = kept.msl[1] = NULL;
             if (tex_msl[0] && tex_msl[1]) {

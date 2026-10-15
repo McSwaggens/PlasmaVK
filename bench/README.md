@@ -459,10 +459,10 @@ its other configurations have run:
   original phases' vertex shaders vary per pipeline but not per run). That
   way no earlier run's driver or OS cache of the specialized code can serve
   the "cold" pipelines. The CPU reference uses the same salt. A driver that
-  keeps specialization constants as Metal function constants (MoltenVK)
-  compiles the same MSL for those shaders in every run, so their front-end
-  compile (MSL to AIR) can still be served from an earlier run; what stays
-  cold for it is the specialization and the back end.
+  keeps specialization constants as Metal function constants (MoltenVK,
+  PlasmaVK) compiles the same MSL for those shaders in every run, so their
+  front-end compile (MSL to AIR) can still be served from an earlier run;
+  what stays cold for it is the specialization and the back end.
 - `gpu_us` is only as good as the implementation's timestamps. MoltenVK
   sometimes reports implausible minimums, far below the median, most often
   in transfer-only frames. Compare medians, and cross-check with

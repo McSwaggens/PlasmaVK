@@ -2607,6 +2607,279 @@ static const uint32_t spv_spec_ops[] = {
 
 /*
  * #version 450
+ * #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+ * #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+ * #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+ * layout(local_size_x = 1) in;
+ * layout(constant_id = 0) const int A = -7;
+ * layout(constant_id = 1) const int B = 3;
+ * layout(constant_id = 2) const uint U = 0xfffffff0u;
+ * layout(constant_id = 3) const uint S = 4u;
+ * layout(constant_id = 4) const bool F = true;
+ * layout(constant_id = 5) const int16_t H = int16_t(-300);
+ * layout(constant_id = 6) const uint16_t UH = uint16_t(40000);
+ * layout(constant_id = 7) const int8_t C = int8_t(-5);
+ * layout(constant_id = 8) const float FL = 2.5;
+ * const int add = A + B, sub = A - B, mul = A * B, sdiv = A / B, smod = A % B;
+ * const uint udiv = U / S, umod = U % S, shl = U << S, shr = U >> S, bor = U | S, bxor = U ^ S, band = U & S;
+ * const int sar = A >> S, nota = ~A, nega = -A;
+ * const bool lt = A < B, le = A <= B, gt = A > B, ge = A >= B, ult = U < S, uge = U >= S, eq = A == B, ne = U != S;
+ * const bool land = F && A < 0, lor = F || B < 0, lnot = !F, leq = F == (A < B), lne = F != (U < S);
+ * const int sel = F ? A : B;
+ * const int16_t h2 = H * int16_t(3) + int16_t(S);
+ * const int16_t hsar = H >> S;
+ * const int hw = int(H);
+ * const uint16_t uh2 = uint16_t(U) + UH;
+ * const uint uhw = uint(UH) << 1;
+ * const int8_t c2 = C * int8_t(7) - int8_t(B);
+ * const int cw = int(C);
+ * const int64_t w = int64_t(A) * 3000000000l;
+ * const uint64_t uw = uint64_t(U) << 8;
+ * const ivec2 v = ivec2(A, B) * 2 + ivec2(1);
+ * const uvec3 sw = uvec3(U, S, uint(A)).zxy;
+ * const int ex = v.y;
+ * layout(set = 0, binding = 0, std430) buffer Out { int o[64]; };
+ * void main()
+ * {
+ *     o[0] = add; o[1] = sub; o[2] = mul; o[3] = sdiv; o[4] = smod;
+ *     o[5] = int(udiv); o[6] = int(umod); o[7] = int(shl); o[8] = int(shr); o[9] = int(bor); o[10] = int(bxor);
+ *     o[11] = int(band); o[12] = sar; o[13] = nota; o[14] = nega;
+ *     o[15] = (lt ? 1 : 0) | (le ? 2 : 0) | (gt ? 4 : 0) | (ge ? 8 : 0) | (ult ? 16 : 0) | (uge ? 32 : 0) |
+ *             (eq ? 64 : 0) | (ne ? 128 : 0) | (land ? 256 : 0) | (lor ? 512 : 0) | (lnot ? 1024 : 0) |
+ *             (leq ? 2048 : 0) | (lne ? 4096 : 0) | (F ? 8192 : 0);
+ *     o[16] = sel; o[17] = int(h2); o[18] = int(hsar); o[19] = hw; o[20] = int(uh2); o[21] = int(uhw);
+ *     o[22] = int(c2); o[23] = cw; o[24] = int(w); o[25] = int(w >> 32); o[26] = int(uw); o[27] = int(uw >> 32);
+ *     o[28] = v.x; o[29] = v.y; o[30] = int(sw.x); o[31] = int(sw.y); o[32] = int(sw.z); o[33] = ex;
+ *     o[34] = floatBitsToInt(FL); o[35] = int(H); o[36] = int(UH); o[37] = int(C); o[38] = A; o[39] = B;
+ *     o[40] = int(U); o[41] = int(S);
+ * }
+ */
+static const uint32_t spv_spec_int[] = {
+    0x07230203, 0x00010300, 0x0008000b, 0x000000ff, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x0000000b, 0x00020011, 0x00000016, 0x00020011, 0x00000027, 0x0006000b, 0x00000001, 0x4c534c47,
+    0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x0005000f, 0x00000005,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00060010, 0x00000004, 0x00000011, 0x00000001, 0x00000001,
+    0x00000001, 0x00030003, 0x00000002, 0x000001c2, 0x000d0004, 0x455f4c47, 0x735f5458, 0x65646168,
+    0x78655f72, 0x63696c70, 0x615f7469, 0x68746972, 0x6974656d, 0x79745f63, 0x5f736570, 0x31746e69,
+    0x00000036, 0x000d0004, 0x455f4c47, 0x735f5458, 0x65646168, 0x78655f72, 0x63696c70, 0x615f7469,
+    0x68746972, 0x6974656d, 0x79745f63, 0x5f736570, 0x36746e69, 0x00000034, 0x000d0004, 0x455f4c47,
+    0x735f5458, 0x65646168, 0x78655f72, 0x63696c70, 0x615f7469, 0x68746972, 0x6974656d, 0x79745f63,
+    0x5f736570, 0x38746e69, 0x00000000, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005,
+    0x0000000a, 0x0074754f, 0x00040006, 0x0000000a, 0x00000000, 0x0000006f, 0x00030005, 0x0000000c,
+    0x00000000, 0x00030005, 0x0000000e, 0x00000041, 0x00030005, 0x0000000f, 0x00000042, 0x00030005,
+    0x00000010, 0x00646461, 0x00030005, 0x00000014, 0x00627573, 0x00030005, 0x00000017, 0x006c756d,
+    0x00040005, 0x0000001a, 0x76696473, 0x00000000, 0x00040005, 0x0000001d, 0x646f6d73, 0x00000000,
+    0x00030005, 0x00000020, 0x00000055, 0x00030005, 0x00000021, 0x00000053, 0x00040005, 0x00000022,
+    0x76696475, 0x00000000, 0x00040005, 0x00000027, 0x646f6d75, 0x00000000, 0x00030005, 0x0000002b,
+    0x006c6873, 0x00030005, 0x0000002f, 0x00726873, 0x00030005, 0x00000033, 0x00726f62, 0x00040005,
+    0x00000037, 0x726f7862, 0x00000000, 0x00040005, 0x0000003b, 0x646e6162, 0x00000000, 0x00030005,
+    0x0000003f, 0x00726173, 0x00040005, 0x00000042, 0x61746f6e, 0x00000000, 0x00040005, 0x00000045,
+    0x6167656e, 0x00000000, 0x00030005, 0x00000049, 0x0000746c, 0x00030005, 0x0000004b, 0x0000656c,
+    0x00030005, 0x0000004e, 0x00007467, 0x00030005, 0x00000051, 0x00006567, 0x00030005, 0x00000054,
+    0x00746c75, 0x00030005, 0x00000058, 0x00656775, 0x00030005, 0x0000005c, 0x00007165, 0x00030005,
+    0x00000060, 0x0000656e, 0x00030005, 0x00000064, 0x00000046, 0x00040005, 0x00000066, 0x646e616c,
+    0x00000000, 0x00030005, 0x0000006b, 0x00726f6c, 0x00040005, 0x0000006f, 0x746f6e6c, 0x00000000,
+    0x00030005, 0x00000074, 0x0071656c, 0x00030005, 0x00000079, 0x00656e6c, 0x00030005, 0x00000081,
+    0x006c6573, 0x00030005, 0x00000085, 0x00000048, 0x00030005, 0x0000008c, 0x00003268, 0x00040005,
+    0x00000090, 0x72617368, 0x00000000, 0x00030005, 0x00000094, 0x00007768, 0x00030005, 0x00000098,
+    0x00004855, 0x00030005, 0x00000099, 0x00326875, 0x00030005, 0x0000009f, 0x00776875, 0x00030005,
+    0x000000a4, 0x00000043, 0x00030005, 0x000000a8, 0x00003263, 0x00030005, 0x000000ac, 0x00007763,
+    0x00030005, 0x000000b2, 0x00000077, 0x00030005, 0x000000bc, 0x00007775, 0x00030005, 0x000000cb,
+    0x00000076, 0x00030005, 0x000000d6, 0x00007773, 0x00030005, 0x000000e3, 0x00007865, 0x00030005,
+    0x000000e7, 0x00004c46, 0x00040047, 0x00000009, 0x00000006, 0x00000004, 0x00030047, 0x0000000a,
+    0x00000002, 0x00050048, 0x0000000a, 0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x0000000c,
+    0x00000021, 0x00000000, 0x00040047, 0x0000000c, 0x00000022, 0x00000000, 0x00040047, 0x0000000e,
+    0x00000001, 0x00000000, 0x00040047, 0x0000000f, 0x00000001, 0x00000001, 0x00040047, 0x00000020,
+    0x00000001, 0x00000002, 0x00040047, 0x00000021, 0x00000001, 0x00000003, 0x00040047, 0x00000064,
+    0x00000001, 0x00000004, 0x00040047, 0x00000085, 0x00000001, 0x00000005, 0x00040047, 0x00000098,
+    0x00000001, 0x00000006, 0x00040047, 0x000000a4, 0x00000001, 0x00000007, 0x00040047, 0x000000e7,
+    0x00000001, 0x00000008, 0x00040047, 0x000000fe, 0x0000000b, 0x00000019, 0x00020013, 0x00000002,
+    0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000001, 0x00040015,
+    0x00000007, 0x00000020, 0x00000000, 0x0004002b, 0x00000007, 0x00000008, 0x00000040, 0x0004001c,
+    0x00000009, 0x00000006, 0x00000008, 0x0003001e, 0x0000000a, 0x00000009, 0x00040020, 0x0000000b,
+    0x0000000c, 0x0000000a, 0x0004003b, 0x0000000b, 0x0000000c, 0x0000000c, 0x0004002b, 0x00000006,
+    0x0000000d, 0x00000000, 0x00040032, 0x00000006, 0x0000000e, 0xfffffff9, 0x00040032, 0x00000006,
+    0x0000000f, 0x00000003, 0x00060034, 0x00000006, 0x00000010, 0x00000080, 0x0000000e, 0x0000000f,
+    0x00040020, 0x00000011, 0x0000000c, 0x00000006, 0x0004002b, 0x00000006, 0x00000013, 0x00000001,
+    0x00060034, 0x00000006, 0x00000014, 0x00000082, 0x0000000e, 0x0000000f, 0x0004002b, 0x00000006,
+    0x00000016, 0x00000002, 0x00060034, 0x00000006, 0x00000017, 0x00000084, 0x0000000e, 0x0000000f,
+    0x0004002b, 0x00000006, 0x00000019, 0x00000003, 0x00060034, 0x00000006, 0x0000001a, 0x00000087,
+    0x0000000e, 0x0000000f, 0x0004002b, 0x00000006, 0x0000001c, 0x00000004, 0x00060034, 0x00000006,
+    0x0000001d, 0x0000008b, 0x0000000e, 0x0000000f, 0x0004002b, 0x00000006, 0x0000001f, 0x00000005,
+    0x00040032, 0x00000007, 0x00000020, 0xfffffff0, 0x00040032, 0x00000007, 0x00000021, 0x00000004,
+    0x00060034, 0x00000007, 0x00000022, 0x00000086, 0x00000020, 0x00000021, 0x0004002b, 0x00000007,
+    0x00000023, 0x00000000, 0x00060034, 0x00000006, 0x00000024, 0x00000080, 0x00000022, 0x00000023,
+    0x0004002b, 0x00000006, 0x00000026, 0x00000006, 0x00060034, 0x00000007, 0x00000027, 0x00000089,
+    0x00000020, 0x00000021, 0x00060034, 0x00000006, 0x00000028, 0x00000080, 0x00000027, 0x00000023,
+    0x0004002b, 0x00000006, 0x0000002a, 0x00000007, 0x00060034, 0x00000007, 0x0000002b, 0x000000c4,
+    0x00000020, 0x00000021, 0x00060034, 0x00000006, 0x0000002c, 0x00000080, 0x0000002b, 0x00000023,
+    0x0004002b, 0x00000006, 0x0000002e, 0x00000008, 0x00060034, 0x00000007, 0x0000002f, 0x000000c2,
+    0x00000020, 0x00000021, 0x00060034, 0x00000006, 0x00000030, 0x00000080, 0x0000002f, 0x00000023,
+    0x0004002b, 0x00000006, 0x00000032, 0x00000009, 0x00060034, 0x00000007, 0x00000033, 0x000000c5,
+    0x00000020, 0x00000021, 0x00060034, 0x00000006, 0x00000034, 0x00000080, 0x00000033, 0x00000023,
+    0x0004002b, 0x00000006, 0x00000036, 0x0000000a, 0x00060034, 0x00000007, 0x00000037, 0x000000c6,
+    0x00000020, 0x00000021, 0x00060034, 0x00000006, 0x00000038, 0x00000080, 0x00000037, 0x00000023,
+    0x0004002b, 0x00000006, 0x0000003a, 0x0000000b, 0x00060034, 0x00000007, 0x0000003b, 0x000000c7,
+    0x00000020, 0x00000021, 0x00060034, 0x00000006, 0x0000003c, 0x00000080, 0x0000003b, 0x00000023,
+    0x0004002b, 0x00000006, 0x0000003e, 0x0000000c, 0x00060034, 0x00000006, 0x0000003f, 0x000000c3,
+    0x0000000e, 0x00000021, 0x0004002b, 0x00000006, 0x00000041, 0x0000000d, 0x00050034, 0x00000006,
+    0x00000042, 0x000000c8, 0x0000000e, 0x0004002b, 0x00000006, 0x00000044, 0x0000000e, 0x00050034,
+    0x00000006, 0x00000045, 0x0000007e, 0x0000000e, 0x0004002b, 0x00000006, 0x00000047, 0x0000000f,
+    0x00020014, 0x00000048, 0x00060034, 0x00000048, 0x00000049, 0x000000b1, 0x0000000e, 0x0000000f,
+    0x00070034, 0x00000006, 0x0000004a, 0x000000a9, 0x00000049, 0x00000013, 0x0000000d, 0x00060034,
+    0x00000048, 0x0000004b, 0x000000b3, 0x0000000e, 0x0000000f, 0x00070034, 0x00000006, 0x0000004c,
+    0x000000a9, 0x0000004b, 0x00000016, 0x0000000d, 0x00060034, 0x00000006, 0x0000004d, 0x000000c5,
+    0x0000004a, 0x0000004c, 0x00060034, 0x00000048, 0x0000004e, 0x000000ad, 0x0000000e, 0x0000000f,
+    0x00070034, 0x00000006, 0x0000004f, 0x000000a9, 0x0000004e, 0x0000001c, 0x0000000d, 0x00060034,
+    0x00000006, 0x00000050, 0x000000c5, 0x0000004d, 0x0000004f, 0x00060034, 0x00000048, 0x00000051,
+    0x000000af, 0x0000000e, 0x0000000f, 0x00070034, 0x00000006, 0x00000052, 0x000000a9, 0x00000051,
+    0x0000002e, 0x0000000d, 0x00060034, 0x00000006, 0x00000053, 0x000000c5, 0x00000050, 0x00000052,
+    0x00060034, 0x00000048, 0x00000054, 0x000000b0, 0x00000020, 0x00000021, 0x0004002b, 0x00000006,
+    0x00000055, 0x00000010, 0x00070034, 0x00000006, 0x00000056, 0x000000a9, 0x00000054, 0x00000055,
+    0x0000000d, 0x00060034, 0x00000006, 0x00000057, 0x000000c5, 0x00000053, 0x00000056, 0x00060034,
+    0x00000048, 0x00000058, 0x000000ae, 0x00000020, 0x00000021, 0x0004002b, 0x00000006, 0x00000059,
+    0x00000020, 0x00070034, 0x00000006, 0x0000005a, 0x000000a9, 0x00000058, 0x00000059, 0x0000000d,
+    0x00060034, 0x00000006, 0x0000005b, 0x000000c5, 0x00000057, 0x0000005a, 0x00060034, 0x00000048,
+    0x0000005c, 0x000000aa, 0x0000000e, 0x0000000f, 0x0004002b, 0x00000006, 0x0000005d, 0x00000040,
+    0x00070034, 0x00000006, 0x0000005e, 0x000000a9, 0x0000005c, 0x0000005d, 0x0000000d, 0x00060034,
+    0x00000006, 0x0000005f, 0x000000c5, 0x0000005b, 0x0000005e, 0x00060034, 0x00000048, 0x00000060,
+    0x000000ab, 0x00000020, 0x00000021, 0x0004002b, 0x00000006, 0x00000061, 0x00000080, 0x00070034,
+    0x00000006, 0x00000062, 0x000000a9, 0x00000060, 0x00000061, 0x0000000d, 0x00060034, 0x00000006,
+    0x00000063, 0x000000c5, 0x0000005f, 0x00000062, 0x00030030, 0x00000048, 0x00000064, 0x00060034,
+    0x00000048, 0x00000065, 0x000000b1, 0x0000000e, 0x0000000d, 0x00060034, 0x00000048, 0x00000066,
+    0x000000a7, 0x00000064, 0x00000065, 0x0004002b, 0x00000006, 0x00000067, 0x00000100, 0x00070034,
+    0x00000006, 0x00000068, 0x000000a9, 0x00000066, 0x00000067, 0x0000000d, 0x00060034, 0x00000006,
+    0x00000069, 0x000000c5, 0x00000063, 0x00000068, 0x00060034, 0x00000048, 0x0000006a, 0x000000b1,
+    0x0000000f, 0x0000000d, 0x00060034, 0x00000048, 0x0000006b, 0x000000a6, 0x00000064, 0x0000006a,
+    0x0004002b, 0x00000006, 0x0000006c, 0x00000200, 0x00070034, 0x00000006, 0x0000006d, 0x000000a9,
+    0x0000006b, 0x0000006c, 0x0000000d, 0x00060034, 0x00000006, 0x0000006e, 0x000000c5, 0x00000069,
+    0x0000006d, 0x00050034, 0x00000048, 0x0000006f, 0x000000a8, 0x00000064, 0x0004002b, 0x00000006,
+    0x00000070, 0x00000400, 0x00070034, 0x00000006, 0x00000071, 0x000000a9, 0x0000006f, 0x00000070,
+    0x0000000d, 0x00060034, 0x00000006, 0x00000072, 0x000000c5, 0x0000006e, 0x00000071, 0x00060034,
+    0x00000048, 0x00000073, 0x000000b1, 0x0000000e, 0x0000000f, 0x00060034, 0x00000048, 0x00000074,
+    0x000000a4, 0x00000064, 0x00000073, 0x0004002b, 0x00000006, 0x00000075, 0x00000800, 0x00070034,
+    0x00000006, 0x00000076, 0x000000a9, 0x00000074, 0x00000075, 0x0000000d, 0x00060034, 0x00000006,
+    0x00000077, 0x000000c5, 0x00000072, 0x00000076, 0x00060034, 0x00000048, 0x00000078, 0x000000b0,
+    0x00000020, 0x00000021, 0x00060034, 0x00000048, 0x00000079, 0x000000a5, 0x00000064, 0x00000078,
+    0x0004002b, 0x00000006, 0x0000007a, 0x00001000, 0x00070034, 0x00000006, 0x0000007b, 0x000000a9,
+    0x00000079, 0x0000007a, 0x0000000d, 0x00060034, 0x00000006, 0x0000007c, 0x000000c5, 0x00000077,
+    0x0000007b, 0x0004002b, 0x00000006, 0x0000007d, 0x00002000, 0x00070034, 0x00000006, 0x0000007e,
+    0x000000a9, 0x00000064, 0x0000007d, 0x0000000d, 0x00060034, 0x00000006, 0x0000007f, 0x000000c5,
+    0x0000007c, 0x0000007e, 0x00070034, 0x00000006, 0x00000081, 0x000000a9, 0x00000064, 0x0000000e,
+    0x0000000f, 0x0004002b, 0x00000006, 0x00000083, 0x00000011, 0x00040015, 0x00000084, 0x00000010,
+    0x00000001, 0x00040032, 0x00000084, 0x00000085, 0xfffffed4, 0x0004002b, 0x00000084, 0x00000086,
+    0x00000003, 0x00060034, 0x00000084, 0x00000087, 0x00000084, 0x00000085, 0x00000086, 0x00040015,
+    0x00000088, 0x00000010, 0x00000000, 0x00050034, 0x00000088, 0x00000089, 0x00000071, 0x00000021,
+    0x0004002b, 0x00000088, 0x0000008a, 0x00000000, 0x00060034, 0x00000084, 0x0000008b, 0x00000080,
+    0x00000089, 0x0000008a, 0x00060034, 0x00000084, 0x0000008c, 0x00000080, 0x00000087, 0x0000008b,
+    0x00050034, 0x00000006, 0x0000008d, 0x00000072, 0x0000008c, 0x0004002b, 0x00000006, 0x0000008f,
+    0x00000012, 0x00060034, 0x00000084, 0x00000090, 0x000000c3, 0x00000085, 0x00000021, 0x00050034,
+    0x00000006, 0x00000091, 0x00000072, 0x00000090, 0x0004002b, 0x00000006, 0x00000093, 0x00000013,
+    0x00050034, 0x00000006, 0x00000094, 0x00000072, 0x00000085, 0x0004002b, 0x00000006, 0x00000096,
+    0x00000014, 0x00050034, 0x00000088, 0x00000097, 0x00000071, 0x00000020, 0x00040032, 0x00000088,
+    0x00000098, 0x00009c40, 0x00060034, 0x00000088, 0x00000099, 0x00000080, 0x00000097, 0x00000098,
+    0x00050034, 0x00000007, 0x0000009a, 0x00000071, 0x00000099, 0x00060034, 0x00000006, 0x0000009b,
+    0x00000080, 0x0000009a, 0x00000023, 0x0004002b, 0x00000006, 0x0000009d, 0x00000015, 0x00050034,
+    0x00000007, 0x0000009e, 0x00000071, 0x00000098, 0x00060034, 0x00000007, 0x0000009f, 0x000000c4,
+    0x0000009e, 0x00000013, 0x00060034, 0x00000006, 0x000000a0, 0x00000080, 0x0000009f, 0x00000023,
+    0x0004002b, 0x00000006, 0x000000a2, 0x00000016, 0x00040015, 0x000000a3, 0x00000008, 0x00000001,
+    0x00040032, 0x000000a3, 0x000000a4, 0xfffffffb, 0x0004002b, 0x000000a3, 0x000000a5, 0x00000007,
+    0x00060034, 0x000000a3, 0x000000a6, 0x00000084, 0x000000a4, 0x000000a5, 0x00050034, 0x000000a3,
+    0x000000a7, 0x00000072, 0x0000000f, 0x00060034, 0x000000a3, 0x000000a8, 0x00000082, 0x000000a6,
+    0x000000a7, 0x00050034, 0x00000006, 0x000000a9, 0x00000072, 0x000000a8, 0x0004002b, 0x00000006,
+    0x000000ab, 0x00000017, 0x00050034, 0x00000006, 0x000000ac, 0x00000072, 0x000000a4, 0x0004002b,
+    0x00000006, 0x000000ae, 0x00000018, 0x00040015, 0x000000af, 0x00000040, 0x00000001, 0x00050034,
+    0x000000af, 0x000000b0, 0x00000072, 0x0000000e, 0x0005002b, 0x000000af, 0x000000b1, 0xb2d05e00,
+    0x00000000, 0x00060034, 0x000000af, 0x000000b2, 0x00000084, 0x000000b0, 0x000000b1, 0x00050034,
+    0x00000006, 0x000000b3, 0x00000072, 0x000000b2, 0x0004002b, 0x00000006, 0x000000b5, 0x00000019,
+    0x00060034, 0x000000af, 0x000000b6, 0x000000c3, 0x000000b2, 0x00000059, 0x00050034, 0x00000006,
+    0x000000b7, 0x00000072, 0x000000b6, 0x0004002b, 0x00000006, 0x000000b9, 0x0000001a, 0x00040015,
+    0x000000ba, 0x00000040, 0x00000000, 0x00050034, 0x000000ba, 0x000000bb, 0x00000071, 0x00000020,
+    0x00060034, 0x000000ba, 0x000000bc, 0x000000c4, 0x000000bb, 0x0000002e, 0x00050034, 0x00000007,
+    0x000000bd, 0x00000071, 0x000000bc, 0x00060034, 0x00000006, 0x000000be, 0x00000080, 0x000000bd,
+    0x00000023, 0x0004002b, 0x00000006, 0x000000c0, 0x0000001b, 0x00060034, 0x000000ba, 0x000000c1,
+    0x000000c2, 0x000000bc, 0x00000059, 0x00050034, 0x00000007, 0x000000c2, 0x00000071, 0x000000c1,
+    0x00060034, 0x00000006, 0x000000c3, 0x00000080, 0x000000c2, 0x00000023, 0x0004002b, 0x00000006,
+    0x000000c5, 0x0000001c, 0x00040017, 0x000000c6, 0x00000006, 0x00000002, 0x00050033, 0x000000c6,
+    0x000000c7, 0x0000000e, 0x0000000f, 0x0005002c, 0x000000c6, 0x000000c8, 0x00000016, 0x00000016,
+    0x00060034, 0x000000c6, 0x000000c9, 0x00000084, 0x000000c7, 0x000000c8, 0x0005002c, 0x000000c6,
+    0x000000ca, 0x00000013, 0x00000013, 0x00060034, 0x000000c6, 0x000000cb, 0x00000080, 0x000000c9,
+    0x000000ca, 0x0004002b, 0x00000006, 0x000000ce, 0x0000001d, 0x0004002b, 0x00000007, 0x000000cf,
+    0x00000001, 0x0004002b, 0x00000006, 0x000000d2, 0x0000001e, 0x00060034, 0x00000007, 0x000000d3,
+    0x00000080, 0x0000000e, 0x00000023, 0x00040017, 0x000000d4, 0x00000007, 0x00000003, 0x00060033,
+    0x000000d4, 0x000000d5, 0x00000020, 0x00000021, 0x000000d3, 0x00090034, 0x000000d4, 0x000000d6,
+    0x0000004f, 0x000000d5, 0x000000d5, 0x00000002, 0x00000000, 0x00000001, 0x00060034, 0x00000007,
+    0x000000d7, 0x00000051, 0x000000d6, 0x00000000, 0x00060034, 0x00000006, 0x000000d8, 0x00000080,
+    0x000000d7, 0x00000023, 0x0004002b, 0x00000006, 0x000000da, 0x0000001f, 0x00060034, 0x00000007,
+    0x000000db, 0x00000051, 0x000000d6, 0x00000001, 0x00060034, 0x00000006, 0x000000dc, 0x00000080,
+    0x000000db, 0x00000023, 0x0004002b, 0x00000007, 0x000000de, 0x00000002, 0x00060034, 0x00000007,
+    0x000000df, 0x00000051, 0x000000d6, 0x00000002, 0x00060034, 0x00000006, 0x000000e0, 0x00000080,
+    0x000000df, 0x00000023, 0x0004002b, 0x00000006, 0x000000e2, 0x00000021, 0x00060034, 0x00000006,
+    0x000000e3, 0x00000051, 0x000000cb, 0x00000001, 0x0004002b, 0x00000006, 0x000000e5, 0x00000022,
+    0x00030016, 0x000000e6, 0x00000020, 0x00040032, 0x000000e6, 0x000000e7, 0x40200000, 0x0004002b,
+    0x00000006, 0x000000ea, 0x00000023, 0x00050034, 0x00000006, 0x000000eb, 0x00000072, 0x00000085,
+    0x0004002b, 0x00000006, 0x000000ed, 0x00000024, 0x00050034, 0x00000007, 0x000000ee, 0x00000071,
+    0x00000098, 0x00060034, 0x00000006, 0x000000ef, 0x00000080, 0x000000ee, 0x00000023, 0x0004002b,
+    0x00000006, 0x000000f1, 0x00000025, 0x00050034, 0x00000006, 0x000000f2, 0x00000072, 0x000000a4,
+    0x0004002b, 0x00000006, 0x000000f4, 0x00000026, 0x0004002b, 0x00000006, 0x000000f6, 0x00000027,
+    0x0004002b, 0x00000006, 0x000000f8, 0x00000028, 0x00060034, 0x00000006, 0x000000f9, 0x00000080,
+    0x00000020, 0x00000023, 0x0004002b, 0x00000006, 0x000000fb, 0x00000029, 0x00060034, 0x00000006,
+    0x000000fc, 0x00000080, 0x00000021, 0x00000023, 0x0006002c, 0x000000d4, 0x000000fe, 0x000000cf,
+    0x000000cf, 0x000000cf, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8,
+    0x00000005, 0x00060041, 0x00000011, 0x00000012, 0x0000000c, 0x0000000d, 0x0000000d, 0x0003003e,
+    0x00000012, 0x00000010, 0x00060041, 0x00000011, 0x00000015, 0x0000000c, 0x0000000d, 0x00000013,
+    0x0003003e, 0x00000015, 0x00000014, 0x00060041, 0x00000011, 0x00000018, 0x0000000c, 0x0000000d,
+    0x00000016, 0x0003003e, 0x00000018, 0x00000017, 0x00060041, 0x00000011, 0x0000001b, 0x0000000c,
+    0x0000000d, 0x00000019, 0x0003003e, 0x0000001b, 0x0000001a, 0x00060041, 0x00000011, 0x0000001e,
+    0x0000000c, 0x0000000d, 0x0000001c, 0x0003003e, 0x0000001e, 0x0000001d, 0x00060041, 0x00000011,
+    0x00000025, 0x0000000c, 0x0000000d, 0x0000001f, 0x0003003e, 0x00000025, 0x00000024, 0x00060041,
+    0x00000011, 0x00000029, 0x0000000c, 0x0000000d, 0x00000026, 0x0003003e, 0x00000029, 0x00000028,
+    0x00060041, 0x00000011, 0x0000002d, 0x0000000c, 0x0000000d, 0x0000002a, 0x0003003e, 0x0000002d,
+    0x0000002c, 0x00060041, 0x00000011, 0x00000031, 0x0000000c, 0x0000000d, 0x0000002e, 0x0003003e,
+    0x00000031, 0x00000030, 0x00060041, 0x00000011, 0x00000035, 0x0000000c, 0x0000000d, 0x00000032,
+    0x0003003e, 0x00000035, 0x00000034, 0x00060041, 0x00000011, 0x00000039, 0x0000000c, 0x0000000d,
+    0x00000036, 0x0003003e, 0x00000039, 0x00000038, 0x00060041, 0x00000011, 0x0000003d, 0x0000000c,
+    0x0000000d, 0x0000003a, 0x0003003e, 0x0000003d, 0x0000003c, 0x00060041, 0x00000011, 0x00000040,
+    0x0000000c, 0x0000000d, 0x0000003e, 0x0003003e, 0x00000040, 0x0000003f, 0x00060041, 0x00000011,
+    0x00000043, 0x0000000c, 0x0000000d, 0x00000041, 0x0003003e, 0x00000043, 0x00000042, 0x00060041,
+    0x00000011, 0x00000046, 0x0000000c, 0x0000000d, 0x00000044, 0x0003003e, 0x00000046, 0x00000045,
+    0x00060041, 0x00000011, 0x00000080, 0x0000000c, 0x0000000d, 0x00000047, 0x0003003e, 0x00000080,
+    0x0000007f, 0x00060041, 0x00000011, 0x00000082, 0x0000000c, 0x0000000d, 0x00000055, 0x0003003e,
+    0x00000082, 0x00000081, 0x00060041, 0x00000011, 0x0000008e, 0x0000000c, 0x0000000d, 0x00000083,
+    0x0003003e, 0x0000008e, 0x0000008d, 0x00060041, 0x00000011, 0x00000092, 0x0000000c, 0x0000000d,
+    0x0000008f, 0x0003003e, 0x00000092, 0x00000091, 0x00060041, 0x00000011, 0x00000095, 0x0000000c,
+    0x0000000d, 0x00000093, 0x0003003e, 0x00000095, 0x00000094, 0x00060041, 0x00000011, 0x0000009c,
+    0x0000000c, 0x0000000d, 0x00000096, 0x0003003e, 0x0000009c, 0x0000009b, 0x00060041, 0x00000011,
+    0x000000a1, 0x0000000c, 0x0000000d, 0x0000009d, 0x0003003e, 0x000000a1, 0x000000a0, 0x00060041,
+    0x00000011, 0x000000aa, 0x0000000c, 0x0000000d, 0x000000a2, 0x0003003e, 0x000000aa, 0x000000a9,
+    0x00060041, 0x00000011, 0x000000ad, 0x0000000c, 0x0000000d, 0x000000ab, 0x0003003e, 0x000000ad,
+    0x000000ac, 0x00060041, 0x00000011, 0x000000b4, 0x0000000c, 0x0000000d, 0x000000ae, 0x0003003e,
+    0x000000b4, 0x000000b3, 0x00060041, 0x00000011, 0x000000b8, 0x0000000c, 0x0000000d, 0x000000b5,
+    0x0003003e, 0x000000b8, 0x000000b7, 0x00060041, 0x00000011, 0x000000bf, 0x0000000c, 0x0000000d,
+    0x000000b9, 0x0003003e, 0x000000bf, 0x000000be, 0x00060041, 0x00000011, 0x000000c4, 0x0000000c,
+    0x0000000d, 0x000000c0, 0x0003003e, 0x000000c4, 0x000000c3, 0x00050051, 0x00000006, 0x000000cc,
+    0x000000cb, 0x00000000, 0x00060041, 0x00000011, 0x000000cd, 0x0000000c, 0x0000000d, 0x000000c5,
+    0x0003003e, 0x000000cd, 0x000000cc, 0x00050051, 0x00000006, 0x000000d0, 0x000000cb, 0x00000001,
+    0x00060041, 0x00000011, 0x000000d1, 0x0000000c, 0x0000000d, 0x000000ce, 0x0003003e, 0x000000d1,
+    0x000000d0, 0x00060041, 0x00000011, 0x000000d9, 0x0000000c, 0x0000000d, 0x000000d2, 0x0003003e,
+    0x000000d9, 0x000000d8, 0x00060041, 0x00000011, 0x000000dd, 0x0000000c, 0x0000000d, 0x000000da,
+    0x0003003e, 0x000000dd, 0x000000dc, 0x00060041, 0x00000011, 0x000000e1, 0x0000000c, 0x0000000d,
+    0x00000059, 0x0003003e, 0x000000e1, 0x000000e0, 0x00060041, 0x00000011, 0x000000e4, 0x0000000c,
+    0x0000000d, 0x000000e2, 0x0003003e, 0x000000e4, 0x000000e3, 0x0004007c, 0x00000006, 0x000000e8,
+    0x000000e7, 0x00060041, 0x00000011, 0x000000e9, 0x0000000c, 0x0000000d, 0x000000e5, 0x0003003e,
+    0x000000e9, 0x000000e8, 0x00060041, 0x00000011, 0x000000ec, 0x0000000c, 0x0000000d, 0x000000ea,
+    0x0003003e, 0x000000ec, 0x000000eb, 0x00060041, 0x00000011, 0x000000f0, 0x0000000c, 0x0000000d,
+    0x000000ed, 0x0003003e, 0x000000f0, 0x000000ef, 0x00060041, 0x00000011, 0x000000f3, 0x0000000c,
+    0x0000000d, 0x000000f1, 0x0003003e, 0x000000f3, 0x000000f2, 0x00060041, 0x00000011, 0x000000f5,
+    0x0000000c, 0x0000000d, 0x000000f4, 0x0003003e, 0x000000f5, 0x0000000e, 0x00060041, 0x00000011,
+    0x000000f7, 0x0000000c, 0x0000000d, 0x000000f6, 0x0003003e, 0x000000f7, 0x0000000f, 0x00060041,
+    0x00000011, 0x000000fa, 0x0000000c, 0x0000000d, 0x000000f8, 0x0003003e, 0x000000fa, 0x000000f9,
+    0x00060041, 0x00000011, 0x000000fd, 0x0000000c, 0x0000000d, 0x000000fb, 0x0003003e, 0x000000fd,
+    0x000000fc, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 450
  * #extension GL_ARB_gpu_shader_int64 : require
  * layout(local_size_x = 32) in;
  * layout(std430, binding = 0) readonly buffer In { uint64_t a[]; } inb;
@@ -8176,9 +8449,14 @@ static void test_push_constants(void)
     pvk_msl_result_free(&res);
 }
 
-static void run_spec(const struct pvk_msl_options *options, uint32_t wg, int scale, bool negate, float bias,
+/* spv_spec with options (NULL: none) and as function constants (fc): the
+ * workgroup size (LocalSizeId) and the shared array it sizes are baked
+ * then, the other constants are function constants (values: their
+ * defaults) that the pipeline sets. */
+static void run_spec(const struct pvk_msl_options *options, bool fc, uint32_t wg, int scale, bool negate, float bias,
                      uint32_t count)
 {
+    struct pvk_msl_options o;
     struct pvk_msl_result res;
     struct mt_buffer data;
     struct mt_binding b;
@@ -8186,37 +8464,43 @@ static void run_spec(const struct pvk_msl_options *options, uint32_t wg, int sca
     uint32_t i, n = 128;
     id pso;
 
-    REQUIRE(mt_translate(spv_spec, PVK_ARRAY_SIZE(spv_spec), options, &res));
+    memset(&o, 0, sizeof(o));
+    if (options)
+        o = *options;
+    o.spec_function_constants = fc;
+    REQUIRE(mt_translate(spv_spec, PVK_ARRAY_SIZE(spv_spec), &o, &res));
     CHECK(res.workgroup_size[0] == wg && res.workgroup_size[1] == 1 && res.workgroup_size[2] == 1);
     CHECK(res.threadgroup_memory_size == 4 * wg);
     CHECK(res.spec_constant_count == 5);
     for (i = 0; i < res.spec_constant_count && i < 5; i++) {
         const struct pvk_msl_spec_constant *sc = &res.spec_constants[i];
+        CHECK(sc->function_constant == (fc && sc->id != 0));
         switch (sc->id) {
         case 0:
             CHECK(sc->type == PVK_MSL_SCALAR_UINT && sc->default_value == 1 && sc->value == wg);
             break;
         case 1:
-            CHECK(sc->type == PVK_MSL_SCALAR_INT && sc->default_value == 3 && sc->value == (uint32_t)scale);
+            CHECK(sc->type == PVK_MSL_SCALAR_INT && sc->default_value == 3 && sc->value == (fc ? 3u : (uint32_t)scale));
             break;
         case 2:
-            CHECK(sc->type == PVK_MSL_SCALAR_BOOL && sc->default_value == 0 && sc->value == (negate ? 1u : 0u));
+            CHECK(sc->type == PVK_MSL_SCALAR_BOOL && sc->default_value == 0 && sc->value == (negate && !fc ? 1u : 0u));
             break;
         case 3: {
             float f;
             uint32_t bits = (uint32_t)sc->value;
             memcpy(&f, &bits, 4);
-            CHECK(sc->type == PVK_MSL_SCALAR_FLOAT && sc->width == 32 && f == bias);
+            CHECK(sc->type == PVK_MSL_SCALAR_FLOAT && sc->width == 32 && f == (fc ? 0.5f : bias));
             break;
         }
         case 4:
-            CHECK(sc->type == PVK_MSL_SCALAR_UINT && sc->default_value == 4 && sc->value == count);
+            CHECK(sc->type == PVK_MSL_SCALAR_UINT && sc->default_value == 4 && sc->value == (fc ? 4u : count));
             break;
         default:
             CHECK(!"unexpected spec constant id");
         }
     }
-    pso = mt_pipeline(&res);
+    CHECK(!fc || (strstr(res.msl, "[[function_constant(1)]]") && !strstr(res.msl, "[[function_constant(0)]]")));
+    pso = mt_pipeline_spec(&res, o.specialization);
     if (!pso)
         pvk_msl_result_free(&res);
     REQUIRE(pso);
@@ -8241,7 +8525,8 @@ static void run_spec(const struct pvk_msl_options *options, uint32_t wg, int sca
 
 static void test_spec_defaults(void)
 {
-    run_spec(NULL, 1, 3, false, 0.5f, 4);
+    run_spec(NULL, false, 1, 3, false, 0.5f, 4);
+    run_spec(NULL, true, 1, 3, false, 0.5f, 4);
 }
 
 /* Overrides every constant, including the workgroup size (LocalSizeId)
@@ -8265,7 +8550,8 @@ static void test_spec_overrides(void)
     info.pData = &data;
     memset(&options, 0, sizeof(options));
     options.specialization = &info;
-    run_spec(&options, 64, 5, true, 0.25f, 10);
+    run_spec(&options, false, 64, 5, true, 0.25f, 10);
+    run_spec(&options, true, 64, 5, true, 0.25f, 10);
 }
 
 static float f32_of(uint32_t bits)
@@ -8328,7 +8614,9 @@ static void test_spec_half_conversions(void)
 /* Floating-point and vector OpSpecConstantOp (spv_spec_ops: Select of floats
  * and vectors, FConvert both ways, CompositeExtract, VectorShuffle,
  * LogicalNot, SNegate, IMul, vector IAdd) folded with the defaults and with
- * three specializations (rounding, overflow, denormals). */
+ * three specializations (rounding, overflow, denormals); and as function
+ * constants, where the conversions bake F and HF and B and I stay function
+ * constants. */
 static void test_spec_float_ops(void)
 {
     struct spec_data {
@@ -8355,10 +8643,11 @@ static void test_spec_float_ops(void)
     uint32_t k, j;
 
     data[0].f = 1.0f / 3.0f;
-    for (k = 0; k < 4; k++) {
-        const struct spec_data *d = k ? &data[k - 1] : NULL;
+    for (k = 0; k < 8; k++) {
+        const struct spec_data *d = k % 4 ? &data[k % 4 - 1] : NULL;
+        bool fc = k >= 4;
         bool b = d ? d->b != 0 : true;
-        float F = d ? d->f : 1.5f, fh = f32_of(fhs[k]), back = f32_of(backs[k]);
+        float F = d ? d->f : 1.5f, fh = f32_of(fhs[k % 4]), back = f32_of(backs[k % 4]);
         int32_t I = d ? d->i : -7;
         float sel = b ? F : -2.0f;
         float want[12];
@@ -8392,8 +8681,12 @@ static void test_spec_float_ops(void)
             info.pData = d;
             options.specialization = &info;
         }
+        options.spec_function_constants = fc;
         REQUIRE(mt_translate(spv_spec_ops, PVK_ARRAY_SIZE(spv_spec_ops), &options, &res));
-        pso = mt_pipeline(&res);
+        for (j = 0; j < res.spec_constant_count; j++)
+            CHECK(res.spec_constants[j].function_constant == (fc && (res.spec_constants[j].id == 0 ||
+                                                                     res.spec_constants[j].id == 3)));
+        pso = mt_pipeline_spec(&res, options.specialization);
         if (!pso)
             pvk_msl_result_free(&res);
         REQUIRE(pso);
@@ -8415,6 +8708,95 @@ static void test_spec_float_ops(void)
         pvk_release(pso);
         pvk_msl_result_free(&res);
     }
+}
+
+/* Integer and boolean OpSpecConstantOp of function constants (spv_spec_int:
+ * every one glslang makes, on 8- to 64-bit integers, and vectors) compute
+ * what folding them computes: one translation, specialized by the
+ * pipeline, against a translation per specialization. The specializations
+ * divide by 0 and the most negative value by -1, and shift by 0, by the
+ * width and past it. */
+static void test_spec_int_ops(void)
+{
+    struct spec_data {
+        int32_t a, b;
+        uint32_t u, s, f;
+        int16_t h;
+        uint16_t uh;
+        int8_t c;
+        uint8_t pad[3];
+        float fl;
+    } data[4] = {
+        { INT32_MIN, -1, 0, 0, 0, INT16_MIN, 65535, INT8_MIN, { 0 }, -0.0f },
+        { 100, 0, 0xffffffffu, 40, 1, INT16_MAX, 1, INT8_MAX, { 0 }, 1e30f },
+        { -1, 7, 0x80000000u, 31, 1, -1, 0, -1, { 0 }, -2.0f },
+        { 12345, -100, 12, 32, 0, 300, 40000, 3, { 0 }, 0.5f },
+    };
+    static const VkSpecializationMapEntry entries[9] = {
+        { 0, offsetof(struct spec_data, a), 4 },  { 1, offsetof(struct spec_data, b), 4 },
+        { 2, offsetof(struct spec_data, u), 4 },  { 3, offsetof(struct spec_data, s), 4 },
+        { 4, offsetof(struct spec_data, f), 4 },  { 5, offsetof(struct spec_data, h), 2 },
+        { 6, offsetof(struct spec_data, uh), 2 }, { 7, offsetof(struct spec_data, c), 1 },
+        { 8, offsetof(struct spec_data, fl), 4 },
+    };
+    /* the defaults, worked out: A + B, A - B, A * B, A / B, A smod B, U / S, U % S, U << S, U >> S */
+    static const int32_t defaults[9] = { -4, -10, -21, -2, 2, 0x3ffffffc, 0, (int32_t)0xffffff00u, 0x0fffffff };
+    struct pvk_msl_options fo;
+    struct pvk_msl_result fres, other;
+    uint32_t k, j;
+
+    memset(&fo, 0, sizeof(fo));
+    fo.spec_function_constants = true;
+    REQUIRE(mt_translate(spv_spec_int, PVK_ARRAY_SIZE(spv_spec_int), &fo, &fres));
+    CHECK(fres.spec_constant_count == 9);
+    for (j = 0; j < fres.spec_constant_count; j++)
+        CHECK(fres.spec_constants[j].function_constant);
+    for (k = 0; k <= PVK_ARRAY_SIZE(data); k++) {
+        VkSpecializationInfo info;
+        struct pvk_msl_options options;
+        struct pvk_msl_result res;
+        struct mt_buffer out[2];
+        struct mt_binding bd;
+        id pso[2];
+
+        info.mapEntryCount = 9;
+        info.pMapEntries = entries;
+        info.dataSize = sizeof(data[0]);
+        info.pData = k ? &data[k - 1] : NULL;
+        memset(&options, 0, sizeof(options));
+        options.specialization = k ? &info : NULL;
+        if (k == 1) { /* the specialization changes nothing in the MSL */
+            fo.specialization = &info;
+            REQUIRE(mt_translate(spv_spec_int, PVK_ARRAY_SIZE(spv_spec_int), &fo, &other));
+            CHECK(strcmp(other.msl, fres.msl) == 0);
+            pvk_msl_result_free(&other);
+        }
+        MT_BUILD(spv_spec_int, &options, res, pso[0]);
+        pso[1] = mt_pipeline_spec(&fres, options.specialization);
+        CHECK(pso[1] != NULL);
+        for (j = 0; j < 2; j++) {
+            out[j] = mt_buffer(64 * 4, NULL, 0);
+            bd = bind(0, 0, &out[j]);
+            if (pso[j])
+                CHECK(mt_dispatch(pso[j], j ? &fres : &res, &bd, 1, NULL, 0, 1, 1, 1));
+        }
+        bad = 0;
+        for (j = 0; j < 42; j++) {
+            int32_t baked = ((const int32_t *)out[0].data)[j], fc = ((const int32_t *)out[1].data)[j];
+            EXPECT(baked == fc, "specialization %u: o[%u] = %d (0x%08x) from function constants, %d (0x%08x) baked", k,
+                   j, fc, (uint32_t)fc, baked, (uint32_t)baked);
+        }
+        for (j = 0; !k && j < 9; j++)
+            EXPECT(((const int32_t *)out[0].data)[j] == defaults[j], "o[%u] = %d, want %d", j,
+                   ((const int32_t *)out[0].data)[j], defaults[j]);
+        CHECK(bad == 0);
+        for (j = 0; j < 2; j++) {
+            mt_buffer_free(&out[j]);
+            pvk_release(pso[j]);
+        }
+        pvk_msl_result_free(&res);
+    }
+    pvk_msl_result_free(&fres);
 }
 
 /* ==========================================================================
@@ -13731,6 +14113,7 @@ int main(void)
     RUN(test_spec_overrides);
     RUN(test_spec_half_conversions);
     RUN(test_spec_float_ops);
+    RUN(test_spec_int_ops);
     RUN(test_int64);
     RUN(test_small_types);
     RUN(test_glsl_std450);

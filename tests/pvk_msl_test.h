@@ -67,11 +67,13 @@ static inline bool mt_translate(const uint32_t *words, size_t count, const struc
 
 /* Compiles the MSL as section 17 does (MSL 3.2, safe math) and builds a
  * compute pipeline (retained), NULL on failure after printing the compiler
- * error and the numbered source. */
-static inline id mt_pipeline(const struct pvk_msl_result *res)
+ * error and the numbered source. MSL with function constants
+ * (options->spec_function_constants) gets spec's values, as pipelines set
+ * them (NULL: the defaults). */
+static inline id mt_pipeline_spec(const struct pvk_msl_result *res, const VkSpecializationInfo *spec)
 {
     void *pool = objc_autoreleasePoolPush();
-    id options, library, function, pipeline = NULL, error = NULL;
+    id options, library, function, pipeline = NULL, error = NULL, values;
 
     options = PVK_MSG(id, (id, SEL))((id)objc_getClass("MTLCompileOptions"), sel_registerName("new"));
     PVK_MSG(void, (id, SEL, long))(options, sel_registerName("setMathMode:"), PVK_MTLMathModeSafe);
@@ -85,7 +87,19 @@ static inline id mt_pipeline(const struct pvk_msl_result *res)
         objc_autoreleasePoolPop(pool);
         return NULL;
     }
-    function = PVK_MSG(id, (id, SEL, id))(library, sel_registerName("newFunctionWithName:"), mt_string(res->entry_point));
+    values = pvk_spec_constant_values(spec);
+    if (pvk_msl_function_constants(res->msl)) {
+        id fc = pvk_msl_constant_values(res->msl, values);
+        function = pvk_MTLLibrary_newFunctionWithName_constantValues_error(library, mt_string(res->entry_point), fc,
+                                                                           &error);
+        if (!function)
+            fprintf(stderr, "specialization failed: %s\n", mt_error_text(error));
+        pvk_release(fc);
+    } else {
+        function = PVK_MSG(id, (id, SEL, id))(library, sel_registerName("newFunctionWithName:"),
+                                              mt_string(res->entry_point));
+    }
+    pvk_release(values);
     if (function) {
         error = NULL;
         pipeline = PVK_MSG(id, (id, SEL, id, id *))(mt_device, sel_registerName("newComputePipelineStateWithFunction:error:"),
@@ -99,6 +113,11 @@ static inline id mt_pipeline(const struct pvk_msl_result *res)
     pvk_release(library);
     objc_autoreleasePoolPop(pool);
     return pipeline;
+}
+
+static inline id mt_pipeline(const struct pvk_msl_result *res)
+{
+    return mt_pipeline_spec(res, NULL);
 }
 
 struct mt_buffer {
