@@ -8055,6 +8055,115 @@ static void test_derivatives_per_triangle(void)
 
 /*
  * #version 450
+ * layout(location = 0) flat out float v_tri;
+ * void main()
+ * {
+ *     int x = gl_VertexIndex % 16, y = gl_VertexIndex / 16;
+ *     gl_Position = vec4((float(x) + 0.5) / 8.0 - 1.0, (float(y) + 0.5) / 8.0 - 1.0, 0.0, 1.0);
+ *     gl_PointSize = 1.0;
+ *     v_tri = float(gl_VertexIndex);
+ * }
+ */
+static const uint32_t spv_point_grid_vs[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x00000031, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0008000f, 0x00000000, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000a, 0x00000018, 0x0000002e,
+    0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005,
+    0x00000008, 0x00000078, 0x00060005, 0x0000000a, 0x565f6c67, 0x65747265, 0x646e4978, 0x00007865,
+    0x00030005, 0x0000000e, 0x00000079, 0x00060005, 0x00000016, 0x505f6c67, 0x65567265, 0x78657472,
+    0x00000000, 0x00060006, 0x00000016, 0x00000000, 0x505f6c67, 0x7469736f, 0x006e6f69, 0x00070006,
+    0x00000016, 0x00000001, 0x505f6c67, 0x746e696f, 0x657a6953, 0x00000000, 0x00070006, 0x00000016,
+    0x00000002, 0x435f6c67, 0x4470696c, 0x61747369, 0x0065636e, 0x00070006, 0x00000016, 0x00000003,
+    0x435f6c67, 0x446c6c75, 0x61747369, 0x0065636e, 0x00030005, 0x00000018, 0x00000000, 0x00040005,
+    0x0000002e, 0x72745f76, 0x00000069, 0x00040047, 0x0000000a, 0x0000000b, 0x0000002a, 0x00030047,
+    0x00000016, 0x00000002, 0x00050048, 0x00000016, 0x00000000, 0x0000000b, 0x00000000, 0x00050048,
+    0x00000016, 0x00000001, 0x0000000b, 0x00000001, 0x00050048, 0x00000016, 0x00000002, 0x0000000b,
+    0x00000003, 0x00050048, 0x00000016, 0x00000003, 0x0000000b, 0x00000004, 0x00030047, 0x0000002e,
+    0x0000000e, 0x00040047, 0x0000002e, 0x0000001e, 0x00000000, 0x00020013, 0x00000002, 0x00030021,
+    0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000001, 0x00040020, 0x00000007,
+    0x00000007, 0x00000006, 0x00040020, 0x00000009, 0x00000001, 0x00000006, 0x0004003b, 0x00000009,
+    0x0000000a, 0x00000001, 0x0004002b, 0x00000006, 0x0000000c, 0x00000010, 0x00030016, 0x00000011,
+    0x00000020, 0x00040017, 0x00000012, 0x00000011, 0x00000004, 0x00040015, 0x00000013, 0x00000020,
+    0x00000000, 0x0004002b, 0x00000013, 0x00000014, 0x00000001, 0x0004001c, 0x00000015, 0x00000011,
+    0x00000014, 0x0006001e, 0x00000016, 0x00000012, 0x00000011, 0x00000015, 0x00000015, 0x00040020,
+    0x00000017, 0x00000003, 0x00000016, 0x0004003b, 0x00000017, 0x00000018, 0x00000003, 0x0004002b,
+    0x00000006, 0x00000019, 0x00000000, 0x0004002b, 0x00000011, 0x0000001c, 0x3f000000, 0x0004002b,
+    0x00000011, 0x0000001e, 0x41000000, 0x0004002b, 0x00000011, 0x00000020, 0x3f800000, 0x0004002b,
+    0x00000011, 0x00000027, 0x00000000, 0x00040020, 0x00000029, 0x00000003, 0x00000012, 0x0004002b,
+    0x00000006, 0x0000002b, 0x00000001, 0x00040020, 0x0000002c, 0x00000003, 0x00000011, 0x0004003b,
+    0x0000002c, 0x0000002e, 0x00000003, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
+    0x000200f8, 0x00000005, 0x0004003b, 0x00000007, 0x00000008, 0x00000007, 0x0004003b, 0x00000007,
+    0x0000000e, 0x00000007, 0x0004003d, 0x00000006, 0x0000000b, 0x0000000a, 0x0005008b, 0x00000006,
+    0x0000000d, 0x0000000b, 0x0000000c, 0x0003003e, 0x00000008, 0x0000000d, 0x0004003d, 0x00000006,
+    0x0000000f, 0x0000000a, 0x00050087, 0x00000006, 0x00000010, 0x0000000f, 0x0000000c, 0x0003003e,
+    0x0000000e, 0x00000010, 0x0004003d, 0x00000006, 0x0000001a, 0x00000008, 0x0004006f, 0x00000011,
+    0x0000001b, 0x0000001a, 0x00050081, 0x00000011, 0x0000001d, 0x0000001b, 0x0000001c, 0x00050088,
+    0x00000011, 0x0000001f, 0x0000001d, 0x0000001e, 0x00050083, 0x00000011, 0x00000021, 0x0000001f,
+    0x00000020, 0x0004003d, 0x00000006, 0x00000022, 0x0000000e, 0x0004006f, 0x00000011, 0x00000023,
+    0x00000022, 0x00050081, 0x00000011, 0x00000024, 0x00000023, 0x0000001c, 0x00050088, 0x00000011,
+    0x00000025, 0x00000024, 0x0000001e, 0x00050083, 0x00000011, 0x00000026, 0x00000025, 0x00000020,
+    0x00070050, 0x00000012, 0x00000028, 0x00000021, 0x00000026, 0x00000027, 0x00000020, 0x00050041,
+    0x00000029, 0x0000002a, 0x00000018, 0x00000019, 0x0003003e, 0x0000002a, 0x00000028, 0x00050041,
+    0x0000002c, 0x0000002d, 0x00000018, 0x0000002b, 0x0003003e, 0x0000002d, 0x00000020, 0x0004003d,
+    0x00000006, 0x0000002f, 0x0000000a, 0x0004006f, 0x00000011, 0x00000030, 0x0000002f, 0x0003003e,
+    0x0000002e, 0x00000030, 0x000100fd, 0x00010038,
+};
+
+/* Points never share a 2x2 quad, so a point pipeline's fragment shader
+ * leaves out the barycentric read that keeps triangles' quads apart
+ * (fragment option point_size): 1 px points on every pixel with a flat
+ * input of the point's index, whose derivatives are 0 in each point's quad. */
+static void test_derivatives_per_point(void)
+{
+    static const float clear[4] = { 0, 0, -1, 0 };
+    struct img target = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 16);
+    struct pvk_msl_options fo;
+    struct pvk_msl_result vs, fs;
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t i, bad = 0;
+
+    memset(&fo, 0, sizeof(fo));
+    fo.point_size = true;
+    REQUIRE(pvk_spirv_to_msl_graphics(spv_point_grid_vs, PVK_ARRAY_SIZE(spv_point_grid_vs), NULL, NULL,
+                                      spv_flat_derivs_fs, PVK_ARRAY_SIZE(spv_flat_derivs_fs), NULL, &fo, &vs,
+                                      &fs) == VK_SUCCESS);
+    CHECK(strstr(fs.msl, "dfdx") != NULL && strstr(fs.msl, "barycentric_coord") == NULL);
+    pvk_msl_result_free(&vs);
+    pvk_msl_result_free(&fs);
+    REQUIRE(pvk_spirv_to_msl_graphics(spv_quad_w_vs, PVK_ARRAY_SIZE(spv_quad_w_vs), NULL, NULL, spv_flat_derivs_fs,
+                                      PVK_ARRAY_SIZE(spv_flat_derivs_fs), NULL, NULL, &vs, &fs) == VK_SUCCESS);
+    CHECK(strstr(fs.msl, "barycentric_coord") != NULL);
+    pvk_msl_result_free(&vs);
+    pvk_msl_result_free(&fs);
+
+    pipe_init(&p, spv_point_grid_vs, sizeof(spv_point_grid_vs), spv_flat_derivs_fs, sizeof(spv_flat_derivs_fs));
+    p.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+    p.color_formats[0] = VK_FORMAT_R32G32B32A32_SFLOAT;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, clear, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdDraw(cb, W * H, 1, 0, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    for (i = 0; i < W * H; i++) {
+        const float *t = (const float *)out.data + 4 * i;
+        if ((t[0] != 0.0f || t[1] != 0.0f || t[2] != (float)i) && bad++ < 4)
+            fprintf(stderr, "derivatives per point: pixel (%u, %u) is %g %g %g\n", i % W, i / W, t[0], t[1], t[2]);
+    }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&target);
+}
+
+/*
+ * #version 450
  * layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInput i0;
  * layout(input_attachment_index = 1, set = 0, binding = 1) uniform subpassInput i1;
  * layout(input_attachment_index = 2, set = 0, binding = 2) uniform subpassInput i2;
@@ -9759,6 +9868,7 @@ int main(void)
     RUN(test_tile_overflow_secondary);
     RUN(test_local_read_tile_textures);
     RUN(test_derivatives_per_triangle);
+    RUN(test_derivatives_per_point);
     RUN(test_subpass_fetch_split);
     RUN(test_alpha_coverage);
     RUN(test_sample_mask);

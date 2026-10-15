@@ -41333,7 +41333,8 @@ struct pvk_msl_options {
     bool dynamic_vertex_strides; /* strides come from the vertex buffer table */
     bool robust_vertex_input;    /* attributes outside a binding's size read (0, 0, 0, 1) */
     uint32_t vertex_table_buffer; /* 0: PVK_MSL_VERTEX_TABLE_BUFFER */
-    bool point_size;             /* point topology: output a point size (1.0 unless the shader writes one) */
+    bool point_size;             /* point topology: output a point size (1.0 unless the shader writes one);
+                                  * fragment: the primitives are points (no quads to keep apart) */
     bool no_point_size;          /* line or triangle topology: PointSize is dropped (Vulkan ignores it, and
                                   * Metal rejects it with a primitive topology class) */
     /* Polygon mode POINT (POLYGON POINTS): a vertex function drawing each
@@ -52471,8 +52472,10 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
      * draw into one 2x2 quad, and derivatives (implicit LODs) mix the
      * triangles (M4 Max; the Khronos CTS's projected mipmaps). Kept by a use
      * no interpolation takes (NaN bits). PLASMAVK_QUAD_MERGING builds let
-     * the GPU pack quads as it likes (faster, not conformant). */
-    if (!PVK_QUAD_MERGING && !vertex && ctx->derivatives && outs->len) {
+     * the GPU pack quads as it likes (faster, not conformant). Points never
+     * share a quad (1 px points on every pixel, derivatives of a flat id:
+     * all 0), and the read cost an n-body's point sprites 3.5%. */
+    if (!PVK_QUAD_MERGING && !vertex && ctx->derivatives && outs->len && !(o && o->point_size)) {
         need |= PVK_SPV_NEED_BARYCENTRIC;
         pvk_spv_line(ctx, "if (as_type<uint>(pvk_barycentric.x) == 0xffffffffu)");
         pvk_spv_line(ctx, "    pvk_out = {};");
@@ -66778,7 +66781,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         vo.vertex_divisor_count = divisors->vertexBindingDivisorCount;
     }
     vo.dynamic_vertex_strides = d.dynamic_strides != 0;
-    vo.point_size = d.point_size != 0;
+    vo.point_size = fo.point_size = d.point_size != 0;
     vo.no_point_size = !vo.point_size || d.polygon_points; /* (polygon points are 1.0: polygonModePointSize) */
     vo.polygon_points = fo.polygon_points = d.polygon_points != 0;
     vo.view_mask = fo.view_mask = view_mask;
