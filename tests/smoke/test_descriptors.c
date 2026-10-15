@@ -1835,6 +1835,80 @@ static void test_layout_lifetime(void)
     free_buf(&dst);
 }
 
+/* A template is resolved against its layout when made: the layout may go
+ * before the template is used. An entry continuing from a fixed binding
+ * (past a gap in the binding numbers) into the variable-count one writes
+ * only the set's count there; the next set's table, right after it in the
+ * pool, keeps its zeros. Checked in the tables' bytes. */
+static void test_template_runs(void)
+{
+    VkDescriptorBindingFlags flags[3] = { 0, 0, VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT };
+    struct buf b = make_buf(4096);
+    VkDescriptorBufferInfo infos[7];
+    VkDescriptorUpdateTemplateEntry entry;
+    VkDescriptorUpdateTemplateCreateInfo tinfo;
+    VkDescriptorUpdateTemplate tmpl = VK_NULL_HANDLE;
+    VkDescriptorSetLayoutBinding bindings[3];
+    VkDescriptorPoolSize size = ps(SSBO, 2 * 11);
+    VkDescriptorSetLayout sls[2];
+    VkDescriptorPool pool;
+    VkDescriptorSet sets[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+    const struct pvk_descriptor_set *set, *next;
+    uint32_t variable[2] = { 3, 3 }, i;
+    uint64_t address, d[2];
+
+    bindings[0] = lb(0, SSBO, 1);
+    bindings[1] = lb(1, SSBO, 2);
+    bindings[2] = lb(3, SSBO, 8);
+    sls[0] = sls[1] = make_set_layout(bindings, 3, 0, flags);
+    pool = make_pool(2, &size, 1, 0, NULL);
+    REQUIRE(sls[0] && pool && b.data);
+    CHECK_VK(alloc_sets(pool, sls, 2, variable, sets), VK_SUCCESS);
+    REQUIRE(sets[0] && sets[1]);
+    memset(&entry, 0, sizeof(entry));
+    entry.dstBinding = 1;
+    entry.dstArrayElement = 1;
+    entry.descriptorCount = 7; /* binding 1's element 1, then binding 3's elements 0..5 */
+    entry.descriptorType = SSBO;
+    entry.stride = sizeof(VkDescriptorBufferInfo);
+    memset(&tinfo, 0, sizeof(tinfo));
+    tinfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO;
+    tinfo.descriptorUpdateEntryCount = 1;
+    tinfo.pDescriptorUpdateEntries = &entry;
+    tinfo.templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET;
+    tinfo.descriptorSetLayout = sls[0];
+    CHECK_VK(vkCreateDescriptorUpdateTemplate(device, &tinfo, NULL, &tmpl), VK_SUCCESS);
+    vkDestroyDescriptorSetLayout(device, sls[0], NULL);
+    REQUIRE(tmpl);
+    for (i = 0; i < 7; i++)
+        infos[i] = bi(&b, 256 * i, 16 + i);
+    vkUpdateDescriptorSetWithTemplate(device, sets[0], tmpl, infos);
+
+    set = (const struct pvk_descriptor_set *)sets[0];
+    next = (const struct pvk_descriptor_set *)sets[1];
+    REQUIRE(set->size == 48 + 3 * 16 && next->contents == set->contents + set->size);
+    address = ((const struct pvk_buffer *)b.buffer)->gpu_address;
+    for (i = 0; i < 6; i++) { /* binding 0, binding 1's elements, binding 3's 3 */
+        memcpy(d, set->contents + 16 * i, 16);
+        if (i < 2)
+            CHECK(d[0] == 0 && d[1] == 0);
+        else if (d[0] != address + 256 * (i - 2) || d[1] != 16 + i - 2) {
+            fprintf(stderr, "  descriptor %u: %llx %llu\n", i, (unsigned long long)(d[0] - address),
+                    (unsigned long long)d[1]);
+            CHECK(0);
+        }
+    }
+    for (i = 0; i < next->size; i++)
+        if (next->contents[i]) {
+            fprintf(stderr, "  next set, byte %u: %u\n", i, (unsigned)(unsigned char)next->contents[i]);
+            CHECK(0);
+            break;
+        }
+    vkDestroyDescriptorUpdateTemplate(device, tmpl, NULL);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    free_buf(&b);
+}
+
 /* ---- Images, samplers and texel buffers ---- */
 
 struct img {
@@ -2756,6 +2830,7 @@ int main(void)
     RUN(test_copies_and_templates);
     RUN(test_push_descriptors);
     RUN(test_layout_lifetime);
+    RUN(test_template_runs);
     RUN(test_images);
     RUN(test_variable_constant_index);
     RUN(test_cube_atomics);

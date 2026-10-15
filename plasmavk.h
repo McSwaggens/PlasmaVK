@@ -40651,13 +40651,74 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSets(VkDevice device, uint32_t desc
         pvk_descriptor_copy(&pDescriptorCopies[i]);
 }
 
-/* ---- Update templates ---- */
+/* ---- Update templates ----
+ *
+ * A template is resolved against its set layout when made: each entry
+ * becomes runs of descriptors within one binding (an entry continues into
+ * the next bindings as a write does), so applying it only writes. Layouts
+ * defined identically, which the specification requires of the sets a
+ * template is applied to, place their bindings alike; the template keeps
+ * its layout alive for the immutable samplers the runs point at. */
+
+/* `count` descriptors of `type` at table offset `offset` on, `stride`
+ * apart, from element `element` of their binding on; their infos at
+ * data_offset in the application's data, data_stride apart (an inline
+ * uniform block: `count` bytes at data_offset). */
+struct pvk_template_run {
+    uint32_t offset, stride, count, element;
+    VkDescriptorType type;
+    bool variable;                      /* in the variable-count binding: the set's count limits the run */
+    const pvk_MTLResourceID *immutable; /* the binding's immutable samplers from `element` on, or NULL */
+    size_t data_offset, data_stride;
+};
 
 struct pvk_descriptor_update_template {
-    VkPipelineBindPoint bind_point; /* push descriptor templates */
-    uint32_t entry_count;
-    VkDescriptorUpdateTemplateEntry entries[];
+    VkPipelineBindPoint bind_point;           /* push descriptor templates */
+    struct pvk_descriptor_set_layout *layout; /* referenced; NULL: none (no runs) */
+    uint32_t run_count;
+    struct pvk_template_run runs[];
 };
+
+/* Section 15: set `set` of a pipeline layout (NULL: none). */
+static struct pvk_descriptor_set_layout *pvk_pipeline_layout_set(VkPipelineLayout layout, uint32_t set);
+
+/* The runs of a template's entries in `layout`, written to runs unless it
+ * is NULL. Returns their number. */
+static uint32_t pvk_template_runs(const VkDescriptorUpdateTemplateCreateInfo *info,
+                                  const struct pvk_descriptor_set_layout *layout, struct pvk_template_run *runs)
+{
+    uint32_t i, b, n = 0;
+    for (i = 0; i < info->descriptorUpdateEntryCount; i++) {
+        const VkDescriptorUpdateTemplateEntry *e = &info->pDescriptorUpdateEntries[i];
+        uint32_t element = e->dstArrayElement, k = 0;
+        for (b = pvk_layout_find(layout, e->dstBinding); b < layout->binding_count && k < e->descriptorCount; b++) {
+            const struct pvk_set_binding *lb = &layout->bindings[b];
+            uint32_t c;
+            if (element >= lb->count) { /* past this binding (or an empty one) */
+                element -= lb->count;
+                continue;
+            }
+            c = lb->count - element < e->descriptorCount - k ? lb->count - element : e->descriptorCount - k;
+            if (runs) {
+                struct pvk_template_run *r = &runs[n];
+                bool block = e->descriptorType == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK;
+                r->offset = lb->offset + element * lb->stride;
+                r->stride = lb->stride;
+                r->count = c;
+                r->element = element;
+                r->type = e->descriptorType;
+                r->variable = (lb->flags & VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT) != 0;
+                r->immutable = lb->immutable ? &lb->immutable[2 * element] : NULL;
+                r->data_offset = e->offset + (block ? k : k * e->stride); /* (a block's bytes are consecutive) */
+                r->data_stride = e->stride;
+            }
+            n++;
+            k += c;
+            element = 0;
+        }
+    }
+    return n;
+}
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorUpdateTemplate(VkDevice device,
                                                                 const VkDescriptorUpdateTemplateCreateInfo *pCreateInfo,
@@ -40665,15 +40726,20 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorUpdateTemplate(VkDevice device,
                                                                 VkDescriptorUpdateTemplate *pDescriptorUpdateTemplate)
 {
     const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
-    uint32_t n = pCreateInfo->descriptorUpdateEntryCount;
+    struct pvk_descriptor_set_layout *layout =
+        pCreateInfo->templateType == VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS
+            ? pvk_pipeline_layout_set(pCreateInfo->pipelineLayout, pCreateInfo->set)
+            : (struct pvk_descriptor_set_layout *)pCreateInfo->descriptorSetLayout;
+    uint32_t n = layout ? pvk_template_runs(pCreateInfo, layout, NULL) : 0;
     struct pvk_descriptor_update_template *t =
-        pvk_alloc(alloc, sizeof(*t) + sizeof(t->entries[0]) * n, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+        pvk_alloc(alloc, sizeof(*t) + sizeof(t->runs[0]) * n, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (!t)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     t->bind_point = pCreateInfo->pipelineBindPoint;
-    t->entry_count = n;
+    t->layout = pvk_set_layout_ref(layout);
+    t->run_count = n;
     if (n)
-        memcpy(t->entries, pCreateInfo->pDescriptorUpdateEntries, sizeof(t->entries[0]) * n);
+        pvk_template_runs(pCreateInfo, layout, t->runs);
     *pDescriptorUpdateTemplate = (VkDescriptorUpdateTemplate)t;
     return VK_SUCCESS;
 }
@@ -40682,19 +40748,31 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorUpdateTemplate(VkDevice device,
                                                              VkDescriptorUpdateTemplate descriptorUpdateTemplate,
                                                              const VkAllocationCallbacks *pAllocator)
 {
-    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), descriptorUpdateTemplate);
+    struct pvk_descriptor_update_template *t = (struct pvk_descriptor_update_template *)descriptorUpdateTemplate;
+    if (!t)
+        return;
+    pvk_set_layout_unref(t->layout);
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), t);
 }
 
-/* Applies a template's entries to a table. An inline uniform block entry's
- * bytes are at its offset (its stride is unused). */
-static void pvk_table_write_template(char *table, const struct pvk_descriptor_set_layout *layout, uint32_t variable,
-                                     const struct pvk_descriptor_update_template *t, const void *data)
+/* Applies a template to the table of a set with variable count `variable`. */
+static void pvk_table_write_template(char *table, uint32_t variable, const struct pvk_descriptor_update_template *t,
+                                     const void *data)
 {
-    uint32_t i;
-    for (i = 0; i < t->entry_count; i++) {
-        const VkDescriptorUpdateTemplateEntry *e = &t->entries[i];
-        pvk_table_write(table, layout, variable, e->dstBinding, e->dstArrayElement, e->descriptorCount,
-                        e->descriptorType, (const char *)data + e->offset, e->stride);
+    uint32_t i, j;
+    for (i = 0; i < t->run_count; i++) {
+        const struct pvk_template_run *r = &t->runs[i];
+        const char *src = (const char *)data + r->data_offset;
+        char *dst = table + r->offset;
+        uint32_t n = r->count;
+        if (r->variable) /* (an inline uniform block counts bytes, in `variable` too) */
+            n = r->element >= variable ? 0 : variable - r->element < n ? variable - r->element : n;
+        if (r->type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
+            memcpy(dst, src, n);
+        else
+            for (j = 0; j < n; j++)
+                pvk_descriptor_write(dst + (size_t)j * r->stride, r->type, src + j * r->data_stride,
+                                     r->immutable ? &r->immutable[2 * j] : NULL, r->stride);
     }
 }
 
@@ -40704,7 +40782,7 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
 {
     const struct pvk_descriptor_set *set = (const struct pvk_descriptor_set *)descriptorSet;
     (void)device;
-    pvk_table_write_template(set->contents, set->layout, set->variable_count,
+    pvk_table_write_template(set->contents, set->variable_count,
                              (const struct pvk_descriptor_update_template *)descriptorUpdateTemplate, pData);
 }
 
@@ -54847,6 +54925,12 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBindDescriptorSets2(VkCommandBuffer commandBuffe
                       info->pDynamicOffsets);
 }
 
+static struct pvk_descriptor_set_layout *pvk_pipeline_layout_set(VkPipelineLayout layout, uint32_t set)
+{
+    const struct pvk_pipeline_layout *pl = (const struct pvk_pipeline_layout *)layout;
+    return pl && set < pl->set_count ? pl->sets[set] : NULL;
+}
+
 /* The push descriptor table of bind point bp (0, 1) for set `index` of
  * `layout`, started over if the layout or set changed. NULL without one. */
 static char *pvk_push_table(struct pvk_command_buffer *cb, uint32_t bp, uint32_t index,
@@ -54897,7 +54981,7 @@ static void pvk_cmd_push(struct pvk_command_buffer *cb, uint32_t bind_points, co
         if (!(bind_points & (1u << bp)) || !(table = pvk_push_table(cb, bp, set, layout)))
             continue;
         if (t)
-            pvk_table_write_template(table, layout, 0, t, data);
+            pvk_table_write_template(table, 0, t, data);
         for (i = 0; i < count; i++)
             pvk_table_write_set(table, layout, 0, &writes[i]);
         pvk_cmd_push_table(cb, bp);
