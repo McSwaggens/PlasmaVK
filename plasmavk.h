@@ -57724,6 +57724,7 @@ struct pvk_encoder {
      * those the argument table holds at indices 0.. (0: unknown). */
     pvk_MTLGPUAddress sets[2][PVK_MAX_BOUND_SETS];
     pvk_MTLGPUAddress sets_bound[PVK_MAX_BOUND_SETS];
+    pvk_MTLGPUAddress draw_indices; /* pvk_draw_indices, once a draw needed it (0: not yet) */
     /* Queries made available since the last pvk_encode_query_flush */
     struct pvk_query_range queries[16];
     uint32_t query_count;
@@ -59134,18 +59135,20 @@ static pvk_MTLGPUAddress pvk_draw_indices(struct pvk_device *device)
     return address;
 }
 
-/* Points buffer index 28 at DrawIndex d (< maxDrawIndirectCount). */
+/* Points buffer index 28 at DrawIndex d (< maxDrawIndirectCount). The
+ * buffer's address is looked up (under pvk_graphics_lock) once per
+ * submission, not for every draw of a multi-draw. */
 static bool pvk_render_draw_index(struct pvk_encoder *e, uint32_t d)
 {
     struct pvk_render *r = &e->render;
-    pvk_MTLGPUAddress base;
     if (r->draw_index == d)
         return true;
-    if (!(base = pvk_draw_indices(e->device))) {
+    if (!e->draw_indices && !(e->draw_indices = pvk_draw_indices(e->device))) {
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
         return false;
     }
-    pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, base + 4ull * d, PVK_MSL_DRAW_INDEX_BUFFER);
+    pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, e->draw_indices + 4ull * d,
+                                             PVK_MSL_DRAW_INDEX_BUFFER);
     r->draw_index = d;
     return true;
 }
