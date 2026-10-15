@@ -619,6 +619,121 @@ static void test_results_wait(void)
     vkDestroyQueryPool(device, p, NULL);
 }
 
+/* Whether query q of p is available within 2 s, polled without
+ * VK_QUERY_RESULT_WAIT_BIT. */
+static bool available_soon(VkQueryPool p, uint32_t q)
+{
+    uint64_t r[2];
+    int i;
+    for (i = 0; i < 2000; i++) {
+        struct timespec ts;
+        if (get64(p, q, 1, r, VK_QUERY_RESULT_WITH_AVAILABILITY_BIT) == VK_SUCCESS)
+            return r[1] == 1;
+        ts.tv_sec = 0;
+        ts.tv_nsec = 1000000;
+        nanosleep(&ts, NULL);
+    }
+    return false;
+}
+
+/* One submission, three batches writing a query each: the second and third
+ * wait for the host to signal 1 and 2. A batch's query is available once it
+ * is done, not the submission (section 14, TIMESTAMPS): a host waiting for
+ * it with VK_QUERY_RESULT_WAIT_BIT before releasing the later batches
+ * would wait forever. */
+static void test_results_batches(void)
+{
+    VkQueryPool p = make_pool(VK_QUERY_TYPE_TIMESTAMP, 3);
+    VkSemaphore gate = make_timeline();
+    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    VkTimelineSemaphoreSubmitInfo values[3];
+    VkSemaphoreSignalInfo signal;
+    VkCommandBuffer cb[3];
+    VkSubmitInfo info[3];
+    uint64_t wait[3] = { 0, 1, 2 }, r[6];
+    uint32_t i, k;
+
+    vkResetQueryPool(device, p, 0, 3);
+    for (i = 0; i < 3; i++) {
+        cb[i] = begin();
+        vkCmdWriteTimestamp2(cb[i], VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, p, i);
+        vkEndCommandBuffer(cb[i]);
+        memset(&values[i], 0, sizeof(values[i]));
+        values[i].sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+        values[i].waitSemaphoreValueCount = i ? 1 : 0;
+        values[i].pWaitSemaphoreValues = &wait[i];
+        memset(&info[i], 0, sizeof(info[i]));
+        info[i].sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        info[i].pNext = &values[i];
+        info[i].waitSemaphoreCount = i ? 1 : 0;
+        info[i].pWaitSemaphores = &gate;
+        info[i].pWaitDstStageMask = &stage;
+        info[i].commandBufferCount = 1;
+        info[i].pCommandBuffers = &cb[i];
+    }
+    REQUIRE_VK(vkQueueSubmit(queue, 3, info, VK_NULL_HANDLE));
+    for (i = 0; i < 3; i++) { /* batches up to i released */
+        bool ready = available_soon(p, i);
+        CHECK(ready);
+        CHECK_VK(get64(p, 0, 3, r, VK_QUERY_RESULT_WITH_AVAILABILITY_BIT), i < 2 ? VK_NOT_READY : VK_SUCCESS);
+        for (k = 0; k < 3; k++)
+            CHECK(r[2 * k + 1] == (k <= i));
+        if (ready) /* (else it would not return) */
+            CHECK_VK(get64(p, i, 1, r, VK_QUERY_RESULT_WAIT_BIT), VK_SUCCESS);
+        memset(&signal, 0, sizeof(signal));
+        signal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
+        signal.semaphore = gate;
+        signal.value = i + 1;
+        if (i < 2)
+            CHECK_VK(vkSignalSemaphore(device, &signal), VK_SUCCESS);
+    }
+    CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+    vkDestroySemaphore(device, gate, NULL);
+    vkDestroyQueryPool(device, p, NULL);
+}
+
+struct late_write {
+    VkCommandBuffer cb;
+    unsigned ms;
+    VkResult result;
+};
+
+static void *submit_later(void *arg)
+{
+    struct late_write *w = arg;
+    struct timespec ts;
+    ts.tv_sec = 0;
+    ts.tv_nsec = (long)w->ms * 1000000;
+    nanosleep(&ts, NULL);
+    w->result = submit_on(queue, w->cb, VK_NULL_HANDLE, 0, VK_NULL_HANDLE);
+    return NULL;
+}
+
+/* VK_QUERY_RESULT_WAIT_BIT on queries reset on the host whose write another
+ * thread submits only later: the call returns once they are written. */
+static void test_results_wait_reset(void)
+{
+    VkQueryPool p = make_pool(VK_QUERY_TYPE_TIMESTAMP, 2);
+    struct late_write w;
+    pthread_t thread;
+    uint64_t r[4], t0;
+
+    vkResetQueryPool(device, p, 0, 2);
+    w.cb = begin();
+    vkCmdWriteTimestamp2(w.cb, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, p, 0);
+    vkCmdWriteTimestamp2(w.cb, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, p, 1);
+    w.ms = 50;
+    t0 = now_ns();
+    REQUIRE(pthread_create(&thread, NULL, submit_later, &w) == 0);
+    CHECK_VK(get64(p, 0, 2, r, VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT), VK_SUCCESS);
+    CHECK(now_ns() - t0 >= 40000000);
+    CHECK(r[1] == 1 && r[3] == 1 && r[0] != 0 && r[0] <= r[2]);
+    pthread_join(thread, NULL);
+    CHECK_VK(w.result, VK_SUCCESS);
+    CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+    vkDestroyQueryPool(device, p, NULL);
+}
+
 /* Occlusion pools (no queries run without render passes): an unavailable
  * query with PARTIAL reads 0 and is reported unavailable. */
 static void test_results_occlusion_partial(void)
@@ -725,6 +840,54 @@ static void test_copy_results(void)
     vkDestroyQueryPool(device, p, NULL);
 }
 
+/* Copies see the queries as of their place in submission order: written,
+ * then reset (by the same command buffer, or one of an earlier submission
+ * still running), then written again; an earlier submission's write behind
+ * long work. */
+static void test_copy_order(void)
+{
+    VkQueryPool p = make_pool(VK_QUERY_TYPE_TIMESTAMP, 3);
+    struct buf a = make_buf(16u << 20, private_type), b = make_buf(16u << 20, private_type);
+    struct buf out = make_buf(4 * 48, shared_type);
+    VkCommandBuffer cb = begin(), cb2;
+    uint64_t v[4][6], ts[3];
+
+    REQUIRE(out.data);
+    memset(out.data, SENTINEL, (size_t)out.size);
+    vkCmdResetQueryPool(cb, p, 0, 3);
+    vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, p, 0);
+    vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, p, 1);
+    vkCmdCopyQueryPoolResults(cb, p, 0, 3, out.buffer, 0, 16,
+                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    vkCmdResetQueryPool(cb, p, 1, 1);
+    vkCmdCopyQueryPoolResults(cb, p, 0, 3, out.buffer, 48, 16,
+                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    record_work(cb, &a, &b, 16u << 20, 4);
+    vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, p, 2);
+    REQUIRE_VK(submit_on(queue, cb, VK_NULL_HANDLE, 0, VK_NULL_HANDLE));
+    cb2 = begin(); /* submitted while the first may still run */
+    vkCmdCopyQueryPoolResults(cb2, p, 0, 3, out.buffer, 96, 16,
+                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    vkCmdResetQueryPool(cb2, p, 0, 1);
+    vkCmdWriteTimestamp2(cb2, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, p, 1);
+    vkCmdCopyQueryPoolResults(cb2, p, 0, 3, out.buffer, 144, 16,
+                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    host_barrier(cb2);
+    run(cb2);
+    memcpy(v, out.data, sizeof(v));
+    CHECK(v[0][1] == 1 && v[0][3] == 1 && v[0][5] == 0 && v[0][4] == 0xababababababababull);
+    CHECK(v[1][1] == 1 && v[1][3] == 0 && v[1][5] == 0 && v[1][0] == v[0][0]);
+    CHECK(v[1][2] == 0xababababababababull);
+    CHECK(v[2][1] == 1 && v[2][3] == 0 && v[2][5] == 1 && v[2][0] == v[0][0] && v[2][4] >= v[0][2]);
+    CHECK(v[3][1] == 0 && v[3][3] == 1 && v[3][5] == 1 && v[3][4] == v[2][4] && v[3][2] >= v[2][4]);
+    CHECK_VK(get64(p, 1, 2, ts + 1, 0), VK_SUCCESS);
+    CHECK(ts[1] == v[3][2] && ts[2] == v[3][4]);
+    free_buf(&out);
+    free_buf(&a);
+    free_buf(&b);
+    vkDestroyQueryPool(device, p, NULL);
+}
+
 /* A copy on the compute family's queue, with results written there. */
 static void test_copy_compute_queue(void)
 {
@@ -763,8 +926,11 @@ int main(void)
     RUN(test_results_flags);
     RUN(test_results_resets);
     RUN(test_results_wait);
+    RUN(test_results_batches);
+    RUN(test_results_wait_reset);
     RUN(test_results_occlusion_partial);
     RUN(test_copy_results);
+    RUN(test_copy_order);
     RUN(test_copy_compute_queue);
     teardown();
     return TEST_RESULT();

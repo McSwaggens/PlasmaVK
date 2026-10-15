@@ -31664,6 +31664,9 @@ static inline id pvk_MTLDevice_newCounterHeapWithDescriptor_error(id self, id de
 static inline unsigned long pvk_MTLDevice_sizeOfCounterHeapEntry(id self, pvk_MTL4CounterHeapType type) { PVK_SEL_CACHE("sizeOfCounterHeapEntry:"); return PVK_MSG(unsigned long, (id, SEL, pvk_MTL4CounterHeapType))(self, pvk_sel_, type); }
 static inline void pvk_MTL4CommandBuffer_writeTimestampIntoHeap_atIndex(id self, id counterHeap, unsigned long index) { PVK_SEL_CACHE("writeTimestampIntoHeap:atIndex:"); PVK_MSG(void, (id, SEL, id, unsigned long))(self, pvk_sel_, counterHeap, index); }
 static inline void pvk_MTL4CommandBuffer_resolveCounterHeap_withRange_intoBuffer_waitFence_updateFence(id self, id counterHeap, pvk_NSRange range, pvk_MTL4BufferRange bufferRange, id fenceToWait, id fenceToUpdate) { PVK_SEL_CACHE("resolveCounterHeap:withRange:intoBuffer:waitFence:updateFence:"); PVK_MSG(void, (id, SEL, id, pvk_NSRange, pvk_MTL4BufferRange, id, id))(self, pvk_sel_, counterHeap, range, bufferRange, fenceToWait, fenceToUpdate); }
+static inline id pvk_MTL4CounterHeap_resolveCounterRange(id self, pvk_NSRange range) { PVK_SEL_CACHE("resolveCounterRange:"); return PVK_MSG(id, (id, SEL, pvk_NSRange))(self, pvk_sel_, range); }
+static inline const void * pvk_NSData_bytes(id self) { PVK_SEL_CACHE("bytes"); return PVK_MSG(const void *, (id, SEL))(self, pvk_sel_); }
+static inline unsigned long pvk_NSData_length(id self) { PVK_SEL_CACHE("length"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
 /* Graphics: invariant positions (section 17) */
 static inline void pvk_MTLCompileOptions_setPreserveInvariance(id self, bool preserveInvariance) { PVK_SEL_CACHE("setPreserveInvariance:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, preserveInvariance); }
 /* Sparse resources: placement sparse buffers and textures (sections 7, 10, 11, 16) */
@@ -31686,6 +31689,8 @@ static inline id pvk_MTLHeap_label(id self) { PVK_SEL_CACHE("label"); return PVK
 static inline void pvk_MTLHeap_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
 static inline id pvk_MTLEvent_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline void pvk_MTLEvent_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
+static inline id pvk_MTL4CounterHeap_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTL4CounterHeap_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
 static inline void pvk_MTLBuffer_addDebugMarker_range(id self, id marker, pvk_NSRange range) { PVK_SEL_CACHE("addDebugMarker:range:"); PVK_MSG(void, (id, SEL, id, pvk_NSRange))(self, pvk_sel_, marker, range); }
 static inline id pvk_MTL4CommandBuffer_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline void pvk_MTL4CommandBuffer_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
@@ -32219,6 +32224,11 @@ struct pvk_queue {
      * only it, vkQueueWaitIdle and vkDeviceWaitIdle touch these. */
     id timeline;          /* MTLSharedEvent: reaches N when submission N is done */
     uint64_t serial;      /* value of the last submission */
+    /* MTLSharedEvent: reaches N when the batch of submission value N is
+     * done, for timestamps written in batches before a submission's last
+     * (section 14, TIMESTAMPS) */
+    id batch_event;
+    uint64_t batch_value; /* the last one taken */
     id argument_table;    /* MTL4ArgumentTable the encoder binds (snapshotted per dispatch) */
     struct pvk_submission *pending, *pending_tail; /* in flight, oldest first */
     struct pvk_submission *free_submissions;
@@ -32229,6 +32239,10 @@ struct pvk_queue {
      * pending on their events once it is sure to go ahead (section 16, EVENTS) */
     const struct pvk_cmd_event **event_cmds;
     uint32_t event_cmd_count, event_cmd_capacity;
+    /* ... and its timestamp writes and resets, stored in their pools' states
+     * then (section 14, TIMESTAMPS; pvk_queue_publish_queries) */
+    struct pvk_ts_note *ts_notes;
+    uint32_t ts_note_count, ts_note_capacity;
     /* Batches whose semaphore waits the host resolves (section 16): the
      * queue's thread commits them in order. */
     pthread_mutex_t lock;
@@ -53263,7 +53277,8 @@ static VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_t vs_wo
  * are recorded in section 15 and encoded in section 16.
  *
  * STORAGE
- *   A pool is one MTLBuffer of shared memory, resident and untracked:
+ *   An occlusion pool is one MTLBuffer of shared memory, resident and
+ *   untracked:
  *       results    uint64_t[queryCount] at offset 0, query q's at 8 q
  *       available  uint64_t[queryCount] after them, non-zero: available
  *   The GPU writes both in submission order; resets zero both
@@ -53274,23 +53289,47 @@ static VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_t vs_wo
  *   earlier work of the queue, so after whatever wrote the result.
  *
  * TIMESTAMPS
- *   A timestamp pool also has an MTL4CounterHeap with one entry per query.
- *   vkCmdWriteTimestamp is -[MTL4CommandBuffer writeTimestampIntoHeap:
- *   atIndex:] between encoders; later in the batch (pvk_encode_query_flush)
- *   the entry is resolved into `results` (-resolveCounterHeap:withRange:
- *   intoBuffer:waitFence:updateFence:) and the query made available.
- *   Inside a render pass it is written once the pass ends (section 16).
- *   Measured on M4 Max, macOS 27.2:
+ *   A timestamp pool is an MTL4CounterHeap with one entry per query, and a
+ *   host word per query (`state`, PVK_TS_*) that says what the last write
+ *   or reset of the query in submission order did, in which batch of which
+ *   queue. vkCmdWriteTimestamp is -[MTL4CommandBuffer
+ *   writeTimestampIntoHeap:atIndex:] between encoders; inside a render pass
+ *   it is written once the pass ends (section 16). Nothing else of a query
+ *   runs on the GPU: a submission notes its writes and resets while it is
+ *   encoded, and stores them in the states once it is sure to go ahead
+ *   (pvk_queue_publish_queries). A written query is available once its
+ *   batch is done: its queue's timeline reaches the submission (section 16,
+ *   TIMELINE), or, for a batch before the submission's last (those after it
+ *   may wait for the host), the queue's batch_event reaches the batch's
+ *   value. vkGetQueryPoolResults then resolves its entry on the host
+ *   (-[MTL4CounterHeap resolveCounterRange:]; Metal wants the writes done
+ *   first, which a shared event signaled after them shows). A device reset
+ *   makes a query unavailable from its submission on, not from when it
+ *   runs: until a reset is known to have run, a read may return a stale
+ *   value (vkGetQueryPoolResults, the note on VK_QUERY_RESULT_WAIT_BIT),
+ *   or none. vkCmdCopyQueryPoolResults resolves the entries into memory of
+ *   its submission for its kernel (-[MTL4CommandBuffer resolveCounterHeap:
+ *   withRange:intoBuffer:waitFence:updateFence:]), with the queries'
+ *   availability as encoded before it: on its queue, and on others as far
+ *   as submitted by then. (A copy that waits for another queue's later
+ *   submission to write a query, a wait before its signal, sees the query
+ *   unavailable.) Measured on M4 Max, macOS 27.2:
  *   - The command buffer's timestamp is taken once all earlier work of the
  *     queue finished, also that of earlier command buffers: the execution
  *     dependency of a timestamp on everything earlier in submission order,
  *     whatever its stage. (The encoders' -writeTimestampWithGranularity:...
  *     writes nothing in an encoder without other work, so it is not used.)
  *   - A resolve encoded after it gets the value written (900 runs, also
- *     behind long dispatches and under MTL_DEBUG_LAYER).
+ *     behind long dispatches and under MTL_DEBUG_LAYER), also one in a
+ *     later command buffer (900 runs, behind 4 fills of 64 MB); the host's
+ *     resolve gets the same values.
  *   - Values are mach_absolute_time ticks, MTLDevice.queryTimestampFrequency
  *     a second (24 MHz): section 7 reports timestampPeriod = 1e9 / that and
  *     timestampValidBits = 64, and timestamps compare with the CPU's clock.
+ *   Resolving on the GPU in every batch that wrote timestamps, and setting
+ *   availability and resetting there behind barriers against all earlier
+ *   work, left the GPU idle 105-165 us between command buffers that each
+ *   reset and wrote two timestamps (now 15-30 us).
  *
  * OCCLUSION (for the render pass code)
  *   `buffer` is the visibility result buffer: MTL4RenderPassDescriptor's
@@ -53304,10 +53343,6 @@ static VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_t vs_wo
  *   (section 16) makes the query available. A render encoder has one
  *   visibility buffer: queries of different pools in one render pass need
  *   an encoder each (or a device-wide buffer that results are copied from).
- *   Timestamps inside a render pass: end the render encoder around
- *   pvk_encode_timestamp, or write with the render encoder's
- *   -writeTimestampWithGranularity:afterStage:intoHeap:atIndex: and call
- *   pvk_encoder_query_available after the encoder ends (heap resolved then).
  *
  * Pipeline statistics queries are not supported (pipelineStatisticsQuery
  * is not reported, section 7).
@@ -53316,12 +53351,58 @@ static VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_t vs_wo
 struct pvk_query_pool {
     VkQueryType type;
     uint32_t count;
+    /* Occlusion pools (STORAGE) */
     id buffer;                 /* MTLBuffer: results, then availability */
     uint64_t *results;         /* its contents */
     uint64_t *available;       /* results + count */
     pvk_MTLGPUAddress address; /* of results; availability at address + 8 count */
-    id heap;                   /* MTL4CounterHeap of a timestamp pool */
+    /* Timestamp pools (TIMESTAMPS) */
+    id heap;                   /* MTL4CounterHeap */
+    uint64_t *state;           /* per query, atomic: pvk_ts_state */
 };
+
+/* What the last write or reset of a timestamp query did (low 2 bits of its
+ * state), and what makes it available (the bits above): an event of
+ * device->queues[queue] reaching `value`, its timeline or, `batch`, its
+ * batch_event (pvk_ts_event). */
+enum pvk_ts_op {
+    PVK_TS_RESET, /* or never written: unavailable */
+    PVK_TS_WRITTEN,
+    PVK_TS_ZERO /* a multiview pass's query after its first: 0 (pvk_render_timestamp) */
+};
+
+#define PVK_TS_EVENTS (2 * PVK_MAX_QUEUES)
+
+static uint64_t pvk_ts_state(enum pvk_ts_op op, uint64_t value, uint32_t queue, bool batch)
+{
+    return op == PVK_TS_RESET ? 0 : (value * PVK_TS_EVENTS + 2 * queue + batch) << 2 | (uint64_t)op;
+}
+
+/* The event a written query in state s is available at, the value it
+ * reaches then, and its index in seen[] (pvk_ts_ready). */
+static id pvk_ts_event(const struct pvk_device *device, uint64_t s, uint64_t *value, uint32_t *slot)
+{
+    const struct pvk_queue *queue = &device->queues[(s >> 2) % PVK_TS_EVENTS / 2];
+    *value = (s >> 2) / PVK_TS_EVENTS;
+    *slot = (uint32_t)((s >> 2) % PVK_TS_EVENTS);
+    return *slot & 1 ? queue->batch_event : queue->timeline;
+}
+
+/* Whether a query in state s is available. seen[PVK_TS_EVENTS]: the
+ * queues' events as last read (0: not yet), so that a call reads each
+ * about once. */
+static bool pvk_ts_ready(const struct pvk_device *device, uint64_t s, uint64_t *seen)
+{
+    uint64_t value;
+    uint32_t slot;
+    id event;
+    if ((s & 3) == PVK_TS_RESET)
+        return false;
+    event = pvk_ts_event(device, s, &value, &slot);
+    if (seen[slot] < value)
+        seen[slot] = pvk_MTLSharedEvent_signaledValue(event);
+    return seen[slot] >= value;
+}
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateQueryPool(VkDevice _device, const VkQueryPoolCreateInfo *pCreateInfo,
                                                  const VkAllocationCallbacks *pAllocator, VkQueryPool *pQueryPool)
@@ -53336,28 +53417,40 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateQueryPool(VkDevice _device, const VkQuery
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     pool->type = pCreateInfo->queryType;
     pool->count = pCreateInfo->queryCount;
+    if (pool->type == VK_QUERY_TYPE_TIMESTAMP) {
+        void *ap;
+        id desc;
+        pool->state = pvk_alloc(alloc, sizeof(uint64_t) * pool->count, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+        if (!pool->state) {
+            pvk_free(alloc, pool);
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
+        /* Resolved entries are MTL4TimestampHeapEntry, 8 bytes: a query's result. */
+        if (pvk_MTLDevice_sizeOfCounterHeapEntry(mtl, PVK_MTL4CounterHeapTypeTimestamp) == sizeof(uint64_t)) {
+            ap = objc_autoreleasePoolPush(); /* the NSError, on failure */
+            if ((desc = pvk_MTL4CounterHeapDescriptor_new())) {
+                pvk_MTL4CounterHeapDescriptor_setType(desc, PVK_MTL4CounterHeapTypeTimestamp);
+                pvk_MTL4CounterHeapDescriptor_setCount(desc, pool->count);
+                pool->heap = pvk_MTLDevice_newCounterHeapWithDescriptor_error(mtl, desc, NULL);
+                pvk_release(desc);
+            }
+            objc_autoreleasePoolPop(ap);
+        }
+        if (!pool->heap) {
+            pvk_free_raw(alloc, pool->state);
+            pvk_free(alloc, pool);
+            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        }
+        *pQueryPool = (VkQueryPool)pool;
+        return VK_SUCCESS;
+    }
     size = 16ul * pool->count;
     if (size <= pvk_MTLDevice_maxBufferLength(mtl))
         pool->buffer = pvk_MTLDevice_newBufferWithLength_options(
             mtl, size,
             PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeDefaultCache |
                 PVK_MTLResourceHazardTrackingModeUntracked);
-    /* Resolved entries are MTL4TimestampHeapEntry, 8 bytes: a query's result. */
-    if (pool->buffer && pool->type == VK_QUERY_TYPE_TIMESTAMP &&
-        pvk_MTLDevice_sizeOfCounterHeapEntry(mtl, PVK_MTL4CounterHeapTypeTimestamp) == sizeof(uint64_t)) {
-        void *ap = objc_autoreleasePoolPush(); /* the NSError, on failure */
-        id desc = pvk_MTL4CounterHeapDescriptor_new();
-        if (desc) {
-            pvk_MTL4CounterHeapDescriptor_setType(desc, PVK_MTL4CounterHeapTypeTimestamp);
-            pvk_MTL4CounterHeapDescriptor_setCount(desc, pool->count);
-            pool->heap = pvk_MTLDevice_newCounterHeapWithDescriptor_error(mtl, desc, NULL);
-            pvk_release(desc);
-        }
-        objc_autoreleasePoolPop(ap);
-    }
-    if (!pool->buffer || (pool->type == VK_QUERY_TYPE_TIMESTAMP && !pool->heap)) {
-        pvk_release(pool->heap);
-        pvk_release(pool->buffer);
+    if (!pool->buffer) {
         pvk_free(alloc, pool);
         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     }
@@ -53375,12 +53468,15 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyQueryPool(VkDevice _device, VkQueryPool quer
 {
     struct pvk_device *device = (struct pvk_device *)_device;
     struct pvk_query_pool *pool = (struct pvk_query_pool *)queryPool;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
     if (!pool)
         return;
-    pvk_device_evict(device, pool->buffer);
+    if (pool->buffer)
+        pvk_device_evict(device, pool->buffer);
     pvk_release(pool->buffer);
     pvk_release(pool->heap);
-    pvk_free(pAllocator ? pAllocator : pvk_device_alloc(device), pool);
+    pvk_free_raw(alloc, pool->state);
+    pvk_free(alloc, pool);
 }
 
 /* Valid usage: the GPU is done with these queries. */
@@ -53388,7 +53484,13 @@ VKAPI_ATTR void VKAPI_CALL vkResetQueryPool(VkDevice device, VkQueryPool queryPo
                                             uint32_t queryCount)
 {
     struct pvk_query_pool *pool = (struct pvk_query_pool *)queryPool;
+    uint32_t i;
     (void)device;
+    if (pool->state) {
+        for (i = 0; i < queryCount; i++)
+            __atomic_store_n(&pool->state[firstQuery + i], pvk_ts_state(PVK_TS_RESET, 0, 0, false), __ATOMIC_RELEASE);
+        return;
+    }
     memset(pool->results + firstQuery, 0, sizeof(uint64_t) * queryCount);
     memset(pool->available + firstQuery, 0, sizeof(uint64_t) * queryCount);
 }
@@ -53423,6 +53525,97 @@ static VkResult pvk_query_wait(struct pvk_device *device, const struct pvk_query
     return VK_SUCCESS;
 }
 
+/* The same for a timestamp query: a written one's batch is waited for on
+ * its event (pvk_ts_event), a reset one polled for (another thread may
+ * still submit the write). */
+static VkResult pvk_ts_wait(struct pvk_device *device, const struct pvk_query_pool *pool, uint32_t q)
+{
+    long sleep_ns = 10000;
+    for (;;) {
+        uint64_t s = __atomic_load_n(&pool->state[q], __ATOMIC_ACQUIRE), seen[PVK_TS_EVENTS], value;
+        struct timespec ts;
+        uint32_t slot;
+        memset(seen, 0, sizeof(seen));
+        if (pvk_ts_ready(device, s, seen))
+            return VK_SUCCESS;
+        if (__atomic_load_n(&device->lost, __ATOMIC_ACQUIRE))
+            return VK_ERROR_DEVICE_LOST;
+        if ((s & 3) != PVK_TS_RESET) {
+            id event = pvk_ts_event(device, s, &value, &slot);
+            pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(event, value, 1000);
+            continue;
+        }
+        ts.tv_sec = 0;
+        ts.tv_nsec = sleep_ns;
+        nanosleep(&ts, NULL);
+        if (sleep_ns < 1000000)
+            sleep_ns *= 2;
+    }
+}
+
+/* Heap entries [first, first + count) of a timestamp pool, resolved on the
+ * host into values; their writes must be done. */
+static bool pvk_ts_resolve_host(const struct pvk_query_pool *pool, uint32_t first, uint32_t count, uint64_t *values)
+{
+    void *ap = objc_autoreleasePoolPush();
+    pvk_NSRange range;
+    id resolved;
+    bool ok;
+    range.location = first;
+    range.length = count;
+    resolved = pvk_MTL4CounterHeap_resolveCounterRange(pool->heap, range);
+    ok = resolved && pvk_NSData_length(resolved) >= sizeof(uint64_t) * count;
+    if (ok)
+        memcpy(values, pvk_NSData_bytes(resolved), sizeof(uint64_t) * count);
+    objc_autoreleasePoolPop(ap);
+    return ok;
+}
+
+/* vkGetQueryPoolResults of a timestamp pool (TIMESTAMPS). Queries go in
+ * groups of up to 64, which are seen available before their entries are
+ * resolved, a run of available written ones together (not those of
+ * unavailable ones between them, which the GPU may be writing). */
+static VkResult pvk_ts_results(struct pvk_device *device, const struct pvk_query_pool *pool, uint32_t first,
+                               uint32_t count, char *data, VkDeviceSize stride, VkQueryResultFlags flags)
+{
+    enum { RUN = 64 };
+    bool wide = (flags & VK_QUERY_RESULT_64_BIT) != 0;
+    uint64_t seen[PVK_TS_EVENTS], state[RUN], values[RUN];
+    VkResult result = VK_SUCCESS;
+    uint32_t i, k, run;
+
+    memset(seen, 0, sizeof(seen));
+    for (i = 0; (flags & VK_QUERY_RESULT_WAIT_BIT) && i < count; i++)
+        if (!pvk_ts_ready(device, __atomic_load_n(&pool->state[first + i], __ATOMIC_ACQUIRE), seen)) {
+            VkResult r = pvk_ts_wait(device, pool, first + i);
+            if (r != VK_SUCCESS)
+                return r;
+        }
+    for (i = 0; i < count; i += RUN) {
+        uint32_t n = count - i < RUN ? count - i : RUN;
+        for (k = 0; k < n; k++) { /* 0: unavailable */
+            uint64_t s = __atomic_load_n(&pool->state[first + i + k], __ATOMIC_ACQUIRE);
+            state[k] = pvk_ts_ready(device, s, seen) ? s : 0;
+        }
+        for (run = k = 0; k <= n; k++)
+            if (k == n || (state[k] & 3) != PVK_TS_WRITTEN) { /* the end of a run of written ones */
+                if (k > run && !pvk_ts_resolve_host(pool, first + i + run, k - run, values + run))
+                    return VK_ERROR_OUT_OF_HOST_MEMORY;
+                run = k + 1;
+            }
+        for (k = 0; k < n; k++) {
+            char *dst = data + stride * (i + k);
+            if (state[k]) /* unavailable: nothing (PARTIAL is not for timestamps) */
+                pvk_query_store(dst, 0, wide, (state[k] & 3) == PVK_TS_WRITTEN ? values[k] : 0);
+            if (flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT)
+                pvk_query_store(dst, 1, wide, state[k] ? 1 : 0);
+            if (!state[k])
+                result = VK_NOT_READY;
+        }
+    }
+    return result;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL vkGetQueryPoolResults(VkDevice _device, VkQueryPool queryPool, uint32_t firstQuery,
                                                      uint32_t queryCount, size_t dataSize, void *pData,
                                                      VkDeviceSize stride, VkQueryResultFlags flags)
@@ -53434,6 +53627,12 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetQueryPoolResults(VkDevice _device, VkQueryPo
     uint32_t i;
 
     (void)dataSize;
+    if (pool->state) {
+        result = pvk_ts_results(device, pool, firstQuery, queryCount, pData, stride, flags);
+        if (result != VK_SUCCESS && result != VK_NOT_READY)
+            return result;
+        return __atomic_load_n(&device->lost, __ATOMIC_ACQUIRE) ? VK_ERROR_DEVICE_LOST : result;
+    }
     for (i = 0; i < queryCount; i++) {
         uint32_t q = firstQuery + i;
         char *dst = (char *)pData + stride * i;
@@ -57207,15 +57406,15 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   (its heap and buffer), VkBuffer (a debug marker on its range of the
  *   memory's buffer; a sparse buffer's own buffer), VkImage, VkImageView and
  *   VkBufferView textures (a view that is its image's texture keeps the
- *   image's label), VkSemaphore events and VkQueryPool buffers; a
- *   resource named before it is bound is labeled when it is. Metal fixes the
- *   labels of command queues ("VkQueue <family>.<index>", section 9) and
- *   pipeline states at creation, before a name can come: a queue's name
- *   labels its command buffers instead; a pipeline state (shared by equal
- *   pipelines, section 17) is labeled after its shader modules, with their
- *   names of the time, and entry points ("VkShaderModule 'blur' main"), and
- *   a pipeline's name goes in the debug layer's groups of its draws and
- *   dispatches.
+ *   image's label), VkSemaphore events and VkQueryPool buffers (a timestamp
+ *   pool's counter heap); a resource named before it is bound is labeled
+ *   when it is. Metal fixes the labels of command queues ("VkQueue
+ *   <family>.<index>", section 9) and pipeline states at creation, before a
+ *   name can come: a queue's name labels its command buffers instead; a
+ *   pipeline state (shared by equal pipelines, section 17) is labeled after
+ *   its shader modules, with their names of the time, and entry points
+ *   ("VkShaderModule 'blur' main"), and a pipeline's name goes in the debug
+ *   layer's groups of its draws and dispatches.
  * ========================================================================== */
 
 #define PVK_UPLOAD_CHUNK_SIZE (256u * 1024u)
@@ -57233,7 +57432,8 @@ struct pvk_upload_chunk {
 struct pvk_submission {
     struct pvk_submission *next;
     uint64_t serial;
-    uint32_t batch; /* index of its VkSubmitInfo while submitting */
+    uint32_t batch;       /* index of its VkSubmitInfo while submitting */
+    uint64_t batch_value; /* queue->batch_event's value once it is done (0: none) */
     id allocator;   /* MTL4CommandAllocator */
     id cb;          /* MTL4CommandBuffer */
 };
@@ -57295,6 +57495,7 @@ static VkResult pvk_queue_init(struct pvk_queue *queue)
     id desc = pvk_MTL4ArgumentTableDescriptor_new();
 
     queue->timeline = pvk_MTLDevice_newSharedEvent(mtl);
+    queue->batch_event = pvk_MTLDevice_newSharedEvent(mtl);
     if (desc) {
         pvk_MTL4ArgumentTableDescriptor_setMaxBufferBindCount(desc, 31);
         pvk_MTL4ArgumentTableDescriptor_setMaxTextureBindCount(desc, 2 * PVK_MAX_INPUT_ATTACHMENTS); /* (section 16) */
@@ -57312,7 +57513,7 @@ static VkResult pvk_queue_init(struct pvk_queue *queue)
         else
             pthread_mutex_destroy(&queue->lock);
     }
-    return queue->timeline && queue->argument_table && queue->render_table && queue->lock_ready
+    return queue->timeline && queue->batch_event && queue->argument_table && queue->render_table && queue->lock_ready
                ? VK_SUCCESS
                : VK_ERROR_INITIALIZATION_FAILED;
 }
@@ -57365,18 +57566,22 @@ static void pvk_queue_finish(struct pvk_queue *queue)
     pvk_release(queue->argument_table);
     pvk_release(queue->render_table);
     pvk_release(queue->timeline);
+    pvk_release(queue->batch_event);
     pvk_deferred_free(device, queue->deferred);
     pvk_deferred_free(device, queue->done);
     pvk_free_raw(pvk_device_alloc(device), (void *)queue->event_cmds);
     queue->event_cmds = NULL;
     queue->event_cmd_count = queue->event_cmd_capacity = 0;
+    pvk_free_raw(pvk_device_alloc(device), queue->ts_notes);
+    queue->ts_notes = NULL;
+    queue->ts_note_count = queue->ts_note_capacity = 0;
     if (queue->lock_ready) {
         pthread_cond_destroy(&queue->cond);
         pthread_mutex_destroy(&queue->lock);
     }
     queue->pending = queue->pending_tail = queue->free_submissions = NULL;
     queue->upload = queue->retired = queue->retired_tail = queue->free_chunks = NULL;
-    queue->argument_table = queue->render_table = queue->timeline = NULL;
+    queue->argument_table = queue->render_table = queue->timeline = queue->batch_event = NULL;
     queue->deferred = queue->deferred_tail = queue->done = NULL;
     queue->lock_ready = false;
     objc_autoreleasePoolPop(pool);
@@ -57531,7 +57736,7 @@ struct pvk_draw_track {
 struct pvk_render_query {
     struct pvk_query_pool *pool;
     uint32_t first, count;
-    bool zero; /* pvk_encoder_query_available */
+    bool zero; /* timestamps not written, read as 0 (PVK_TS_ZERO) */
 };
 
 /* Tile memory a Metal pass's color attachments and depth/stencil copies take
@@ -57649,11 +57854,10 @@ struct pvk_cursor {
     size_t at; /* the next packet in block */
 };
 
-/* Queries to make available (see "Queries and events" below). */
+/* Occlusion queries to make available (see "Queries and events" below). */
 struct pvk_query_range {
     struct pvk_query_pool *pool;
     uint32_t first, count;
-    bool zero; /* timestamp pools: the results stay as reset (0), not resolved */
 };
 
 /* Tile memory overflow: a Metal pass whose color attachments take more tile
@@ -57725,7 +57929,7 @@ struct pvk_encoder {
     pvk_MTLGPUAddress sets[2][PVK_MAX_BOUND_SETS];
     pvk_MTLGPUAddress sets_bound[PVK_MAX_BOUND_SETS];
     pvk_MTLGPUAddress draw_indices; /* pvk_draw_indices, once a draw needed it (0: not yet) */
-    /* Queries made available since the last pvk_encode_query_flush */
+    /* Occlusion queries made available since the last pvk_encode_query_flush */
     struct pvk_query_range queries[16];
     uint32_t query_count;
     /* Debug labels (DEBUG LABELS): the open encoder, and how many of
@@ -60437,7 +60641,9 @@ static void pvk_render_rebuild_stencil(struct pvk_encoder *e)
 /* ---- Render passes ---- */
 
 static void pvk_encoder_query_available(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t first,
-                                        uint32_t count, bool zero);
+                                        uint32_t count);
+static void pvk_encode_ts_note(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t first, uint32_t count,
+                               enum pvk_ts_op op);
 
 static void pvk_render_resolve_ds(struct pvk_encoder *e);
 static void pvk_render_resolve_clear(struct pvk_encoder *e);
@@ -60467,12 +60673,16 @@ static void pvk_render_end(struct pvk_encoder *e)
     for (i = 0; i < r->pending_count; i++) { /* now that the pass's counts are written */
         const struct pvk_render_query *q = &e->pending[i];
         uint32_t k;
-        if (q->pool->heap && !q->zero) { /* its timestamps, after it (pvk_render_timestamp) */
+        if (!q->pool->heap) {
+            pvk_encoder_query_available(e, q->pool, q->first, q->count);
+            continue;
+        }
+        if (!q->zero) { /* its timestamps, after it (pvk_render_timestamp) */
             pvk_encoder_end(e);
             for (k = 0; k < q->count; k++)
                 pvk_MTL4CommandBuffer_writeTimestampIntoHeap_atIndex(e->cb, q->pool->heap, q->first + k);
         }
-        pvk_encoder_query_available(e, q->pool, q->first, q->count, q->zero);
+        pvk_encode_ts_note(e, q->pool, q->first, q->count, q->zero ? PVK_TS_ZERO : PVK_TS_WRITTEN);
     }
     r->pending_count = 0;
 }
@@ -60543,7 +60753,7 @@ static void pvk_encode_occlusion(struct pvk_encoder *e, const struct pvk_cmd_que
     if (r->enc)
         pvk_render_pending(e, c->pool, c->first, c->count, false);
     else
-        pvk_encoder_query_available(e, c->pool, c->first, c->count, false);
+        pvk_encoder_query_available(e, c->pool, c->first, c->count);
 }
 
 /* A timestamp inside a render pass: written after the pass ends, when it is
@@ -62216,17 +62426,20 @@ static void pvk_device_finish_graphics(struct pvk_device *device)
 /* ---- Queries and events ----
  *
  * The packets of section 15's query and event commands (sections 14 and 15
- * say what they do). The queries a batch makes available are collected and
- * flushed together (pvk_encode_query_flush): timestamp heap entries are
- * resolved into their pools, then one compute encoder, behind a barrier
- * against all earlier work of the queue (the resolves run in the blit stage,
- * occlusion counting render passes before them), sets the availability
- * words. Flushes come before what must see the queries available or must
- * not be undone by a late availability write: resets, result copies and the
- * end of a batch (event signals take effect after it, EVENTS).
+ * say what they do). The occlusion queries a batch makes available are
+ * collected and flushed together (pvk_encode_query_flush): one compute
+ * encoder, behind a barrier against all earlier work of the queue (the
+ * occlusion counting render passes), sets the availability words. Flushes
+ * come before what must see the queries available or must not be undone by
+ * a late availability write: resets, result copies and the end of a batch
+ * (event signals take effect after it, EVENTS). Resets and availability
+ * writes are compute encoders of their own, so that their barriers do not
+ * hold back the work around them.
  *
- * Resets and availability writes are compute encoders of their own, so that
- * their barriers do not hold back the work around them. Event signals and
+ * Timestamp writes and resets are noted (pvk_encode_ts_note) and stored in
+ * their pools' states once the submission is sure to go ahead
+ * (pvk_queue_publish_queries); a copy of timestamp results reads the states
+ * with the notes before it applied (pvk_ts_encoded). Event signals and
  * resets encode nothing. */
 
 static id pvk_encoder_alone(struct pvk_encoder *e)
@@ -62261,23 +62474,7 @@ static void pvk_encode_query_flush(struct pvk_encoder *e)
     id enc;
 
     e->query_count = 0;
-    if (!n || e->result != VK_SUCCESS)
-        return;
-    pvk_encoder_end(e);
-    for (i = 0; i < n; i++) {
-        const struct pvk_query_range *r = &e->queries[i];
-        pvk_NSRange range;
-        pvk_MTL4BufferRange dst;
-        if (!r->pool->heap || r->zero)
-            continue;
-        range.location = r->first;
-        range.length = r->count;
-        dst.bufferAddress = r->pool->address + 8ull * r->first;
-        dst.length = 8ull * r->count;
-        pvk_MTL4CommandBuffer_resolveCounterHeap_withRange_intoBuffer_waitFence_updateFence(e->cb, r->pool->heap, range,
-                                                                                            dst, NULL, NULL);
-    }
-    if (!(enc = pvk_encoder_alone(e)))
+    if (!n || !(enc = pvk_encoder_alone(e)))
         return;
     for (i = 0; i < n; i++)
         pvk_encode_fill_words(enc, e->queries[i].pool->buffer, (uint64_t)e->queries[i].pool->count + e->queries[i].first,
@@ -62285,15 +62482,14 @@ static void pvk_encode_query_flush(struct pvk_encoder *e)
     pvk_encoder_close(e, enc);
 }
 
-/* Queries [first, first + count) of a pool become available once the work
- * encoded so far is done (a timestamp pool's heap entries: written, to be
- * resolved; zero: not written, their results stay as reset, 0). No encoder
- * other than e->enc may be open. */
+/* Occlusion queries [first, first + count) of a pool become available once
+ * the work encoded so far is done. No encoder other than e->enc may be
+ * open. */
 static void pvk_encoder_query_available(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t first,
-                                        uint32_t count, bool zero)
+                                        uint32_t count)
 {
     struct pvk_query_range *r = e->query_count ? &e->queries[e->query_count - 1] : NULL;
-    if (r && r->pool == pool && r->first + r->count == first && r->zero == zero) {
+    if (r && r->pool == pool && r->first + r->count == first) {
         r->count += count;
         return;
     }
@@ -62303,7 +62499,79 @@ static void pvk_encoder_query_available(struct pvk_encoder *e, struct pvk_query_
     r->pool = pool;
     r->first = first;
     r->count = count;
-    r->zero = zero;
+}
+
+/* Timestamp queries [first, first + count) of a pool, written or reset by
+ * the submission being encoded. */
+struct pvk_ts_note {
+    struct pvk_query_pool *pool;
+    uint32_t first, count;
+    enum pvk_ts_op op;
+    uint64_t batch; /* its batch's batch_value (0: the batch being encoded, or the submission's last) */
+};
+
+static void pvk_encode_ts_note(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t first, uint32_t count,
+                               enum pvk_ts_op op)
+{
+    struct pvk_queue *q = e->queue;
+    struct pvk_ts_note *n = q->ts_note_count ? &q->ts_notes[q->ts_note_count - 1] : NULL;
+    if (n && n->pool == pool && n->op == op && n->first + n->count == first && !n->batch) {
+        n->count += count;
+        return;
+    }
+    if (q->ts_note_count == q->ts_note_capacity) {
+        uint32_t capacity = q->ts_note_capacity ? 2 * q->ts_note_capacity : 64;
+        n = pvk_alloc(pvk_device_alloc(e->device), sizeof(*n) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+        if (!n) {
+            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+            return;
+        }
+        if (q->ts_note_count)
+            memcpy(n, q->ts_notes, sizeof(*n) * q->ts_note_count);
+        pvk_free_raw(pvk_device_alloc(e->device), q->ts_notes);
+        q->ts_notes = n;
+        q->ts_note_capacity = capacity;
+    }
+    n = &q->ts_notes[q->ts_note_count++];
+    n->pool = pool;
+    n->first = first;
+    n->count = count;
+    n->op = op;
+    n->batch = 0;
+}
+
+/* The notes of submission `serial` go into their pools' states, in order:
+ * available when their batch is done, before the submission's last, else
+ * when the submission is. */
+static void pvk_queue_publish_queries(struct pvk_queue *queue, uint64_t serial)
+{
+    uint32_t index = (uint32_t)(queue - queue->device->queues), i, k;
+    for (i = 0; i < queue->ts_note_count; i++) {
+        const struct pvk_ts_note *n = &queue->ts_notes[i];
+        uint64_t s = pvk_ts_state(n->op, n->batch ? n->batch : serial, index, n->batch != 0);
+        for (k = 0; k < n->count; k++)
+            __atomic_store_n(&n->pool->state[n->first + k], s, __ATOMIC_RELEASE);
+    }
+    queue->ts_note_count = 0;
+}
+
+/* What the last writes or resets in submission order of timestamp queries
+ * [first, first + count) did, as encoded so far: the pool's states with the
+ * submission's notes over them. */
+static void pvk_ts_encoded(const struct pvk_encoder *e, const struct pvk_query_pool *pool, uint32_t first,
+                           uint32_t count, uint8_t *ops)
+{
+    const struct pvk_queue *queue = e->queue;
+    uint32_t i, k;
+    for (i = 0; i < count; i++)
+        ops[i] = (uint8_t)(__atomic_load_n(&pool->state[first + i], __ATOMIC_ACQUIRE) & 3);
+    for (k = 0; k < queue->ts_note_count; k++) {
+        const struct pvk_ts_note *n = &queue->ts_notes[k];
+        uint32_t from = n->first > first ? n->first : first;
+        uint32_t to = n->first + n->count < first + count ? n->first + n->count : first + count;
+        for (i = from; n->pool == pool && i < to; i++)
+            ops[i - first] = (uint8_t)n->op;
+    }
 }
 
 /* No encoder other than e->enc may be open. */
@@ -62313,12 +62581,16 @@ static void pvk_encode_timestamp(struct pvk_encoder *e, struct pvk_query_pool *p
         return;
     pvk_encoder_end(e);
     pvk_MTL4CommandBuffer_writeTimestampIntoHeap_atIndex(e->cb, pool->heap, query);
-    pvk_encoder_query_available(e, pool, query, 1, false);
+    pvk_encode_ts_note(e, pool, query, 1, PVK_TS_WRITTEN);
 }
 
 static void pvk_encode_query_reset(struct pvk_encoder *e, const struct pvk_cmd_query *c)
 {
     id enc;
+    if (c->pool->heap) {
+        pvk_encode_ts_note(e, c->pool, c->first, c->count, PVK_TS_RESET);
+        return;
+    }
     pvk_encode_query_flush(e);
     if (!(enc = pvk_encoder_alone(e)))
         return;
@@ -62326,31 +62598,87 @@ static void pvk_encode_query_reset(struct pvk_encoder *e, const struct pvk_cmd_q
     pvk_encode_fill_words(enc, c->pool->buffer, (uint64_t)c->pool->count + c->first, c->count, 0);
     pvk_encoder_close(e, enc);
     /* Render passes counting occlusion into the results must start after
-     * it, so later encoders wait for earlier work. Timestamps, availability
-     * writes and copies wait for earlier work anyway. */
-    if (c->pool->type != VK_QUERY_TYPE_TIMESTAMP)
-        pvk_queue_order(e, PVK_STAGES_COMPUTE, PVK_STAGES_RENDER);
+     * it, so later encoders wait for earlier work. Availability writes and
+     * copies wait for earlier work anyway. */
+    pvk_queue_order(e, PVK_STAGES_COMPUTE, PVK_STAGES_RENDER);
+}
+
+/* Resolves timestamp queries [first, first + count) of a pool into memory at
+ * `address`. No encoder may be open. */
+static void pvk_encode_ts_resolve(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t first, uint32_t count,
+                                  pvk_MTLGPUAddress address)
+{
+    pvk_NSRange range;
+    pvk_MTL4BufferRange dst;
+    if (!count)
+        return;
+    range.location = first;
+    range.length = count;
+    dst.bufferAddress = address;
+    dst.length = 8ull * count;
+    pvk_MTL4CommandBuffer_resolveCounterHeap_withRange_intoBuffer_waitFence_updateFence(e->cb, pool->heap, range, dst,
+                                                                                        NULL, NULL);
+}
+
+/* A timestamp pool's results and availability for a copy, in memory of the
+ * submission: per query a result (written ones' resolved, others 0, which
+ * the copy only writes for PVK_TS_ZERO), then the availability words, as
+ * encoded so far. */
+static bool pvk_encode_ts_copy_source(struct pvk_encoder *e, const struct pvk_cmd_query *c, pvk_MTLGPUAddress *results,
+                                      pvk_MTLGPUAddress *available)
+{
+    uint8_t ops[256];
+    uint64_t *words;
+    uint32_t i, k, run = 0;
+
+    if (!(words = pvk_upload(e, 16ull * c->count, 16, NULL, NULL, results)))
+        return false;
+    *available = *results + 8ull * c->count;
+    pvk_encoder_end(e);
+    for (i = 0; i < c->count; i += k) {
+        uint32_t n = c->count - i < PVK_ARRAY_SIZE(ops) ? c->count - i : (uint32_t)PVK_ARRAY_SIZE(ops);
+        pvk_ts_encoded(e, c->pool, c->first + i, n, ops);
+        for (k = 0; k < n; k++) {
+            words[i + k] = 0;
+            words[c->count + i + k] = ops[k] != PVK_TS_RESET;
+            if (ops[k] != PVK_TS_WRITTEN) { /* the end of a run of written ones */
+                pvk_encode_ts_resolve(e, c->pool, c->first + run, i + k - run, *results + 8ull * run);
+                run = i + k + 1;
+            }
+        }
+    }
+    pvk_encode_ts_resolve(e, c->pool, c->first + run, c->count - run, *results + 8ull * run);
+    return true;
 }
 
 static void pvk_encode_query_copy(struct pvk_encoder *e, const struct pvk_cmd_query *c)
 {
     struct pvk_query_copy_args *args;
-    pvk_MTLGPUAddress address;
+    pvk_MTLGPUAddress address, results, available;
     pvk_MTLSize groups, threads;
     id enc, pso;
 
-    pvk_encode_query_flush(e);
     if (!(pso = pvk_device_query_copy_pipeline(e->device))) {
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
         return;
     }
+    if (c->pool->heap) {
+        if (!pvk_encode_ts_copy_source(e, c, &results, &available))
+            return;
+    } else {
+        pvk_encode_query_flush(e);
+        results = c->pool->address + 8ull * c->first;
+        available = c->pool->address + 8ull * ((uint64_t)c->pool->count + c->first);
+    }
     if (!(enc = pvk_encoder_get(e)))
         return;
-    pvk_encoder_consume(e, PVK_STAGES_ALL, PVK_STAGES_COMPUTE); /* earlier encoders wrote the results and availability */
+    /* earlier encoders wrote the results and availability (a timestamp
+     * pool's: the resolve just before, in the blit stage) */
+    pvk_encoder_consume(e, PVK_STAGES_ALL, PVK_STAGES_COMPUTE);
     if (!(args = pvk_upload(e, sizeof(*args), 16, NULL, NULL, &address)))
         return;
-    args->results = c->pool->address + 8ull * c->first;
-    args->available = c->pool->address + 8ull * ((uint64_t)c->pool->count + c->first);
+    args->results = results;
+    args->available = available;
     args->dst = c->dst;
     args->stride = c->stride;
     args->count = c->count;
@@ -62988,12 +63316,15 @@ static struct pvk_deferred *pvk_deferred_make(struct pvk_queue *queue, uint32_t 
                                               uint32_t first, const struct pvk_submission *list, uint64_t serial,
                                               const struct pvk_sparse_binds *binds)
 {
+    const struct pvk_submission *s;
     struct pvk_deferred *d;
     uint32_t i, k, nops = 0, n;
     size_t size;
 
     for (i = first; i < count; i++)
         nops += submits[i].waitSemaphoreInfoCount + submits[i].signalSemaphoreInfoCount;
+    for (s = list; s; s = s->next)
+        nops += s->batch >= first && s->batch_value;
     size = sizeof(*d) + sizeof(*d->batches) * (count - first) + sizeof(*d->ops) * nops;
     d = pvk_alloc(pvk_device_alloc(queue->device), size, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
     if (!d)
@@ -63016,6 +63347,11 @@ static struct pvk_deferred *pvk_deferred_make(struct pvk_queue *queue, uint32_t 
                 db->nwaits++;
             }
         }
+        if (db->cb && list->batch_value) { /* (pvk_queue_submit) */
+            d->ops[n].event = queue->batch_event;
+            d->ops[n++].value = list->batch_value;
+            db->nsignals++;
+        }
         for (k = 0; k < submits[i].signalSemaphoreInfoCount; k++) {
             d->ops[n].event = ((struct pvk_semaphore *)submits[i].pSignalSemaphoreInfos[k].semaphore)->event;
             d->ops[n++].value = pvk_signal_value(submits, i, k);
@@ -63035,7 +63371,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
     struct pvk_submission *list = NULL, **tail = &list, *s;
     struct pvk_deferred *done, *deferred = NULL;
     VkResult result = VK_SUCCESS;
-    uint32_t i, j, first;
+    uint32_t i, j, first, notes;
     uint64_t serial;
     bool backlog;
     void *pool;
@@ -63055,6 +63391,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
     pvk_queue_recycle(queue);
     serial = queue->serial + 1;
     queue->event_cmd_count = 0;
+    queue->ts_note_count = 0;
 
     /* Encode every batch before the queue sees any of them. */
     for (i = 0; i < count && result == VK_SUCCESS; i++) {
@@ -63067,9 +63404,18 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
         }
         s->serial = serial;
         s->batch = i;
+        s->batch_value = 0;
         *tail = s;
         tail = &s->next;
+        notes = queue->ts_note_count;
         result = pvk_encode_batch(queue, s, &submits[i], serial);
+        if (queue->ts_note_count > notes && i + 1 < count) {
+            /* its timestamps are available once it is done, not once the
+             * batches after it are (they may wait for the host) */
+            s->batch_value = ++queue->batch_value;
+            for (j = notes; j < queue->ts_note_count; j++)
+                queue->ts_notes[j].batch = s->batch_value;
+        }
     }
 
     /* The first batch with a wait nothing resolves yet, and from there on
@@ -63106,6 +63452,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
         objc_autoreleasePoolPop(pool);
         return result;
     }
+    pvk_queue_publish_queries(queue, serial);
 
     /* Batches before `first`: their waits are resolved, by the queue's
      * order, or reached, or another queue issued their signals. */
@@ -63120,6 +63467,8 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
             pvk_sparse_execute(queue, binds, &binds->batches[i]);
         if (s && s->batch == i) {
             pvk_queue_commit(queue, s->cb);
+            if (s->batch_value)
+                pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, queue->batch_event, s->batch_value);
             s = s->next;
         }
         for (j = 0; j < submits[i].signalSemaphoreInfoCount; j++)
@@ -64211,6 +64560,8 @@ static void pvk_debug_label(struct pvk_device *device, VkObjectType type, uint64
     case VK_OBJECT_TYPE_QUERY_POOL:
         if (((struct pvk_query_pool *)(uintptr_t)handle)->buffer)
             pvk_MTLResource_setLabel(((struct pvk_query_pool *)(uintptr_t)handle)->buffer, label);
+        if (((struct pvk_query_pool *)(uintptr_t)handle)->heap)
+            pvk_MTL4CounterHeap_setLabel(((struct pvk_query_pool *)(uintptr_t)handle)->heap, label);
         break;
     default:
         break;

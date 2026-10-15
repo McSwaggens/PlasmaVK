@@ -2975,6 +2975,7 @@ static void test_multiview_timestamps(void)
     VkRenderingAttachmentInfo att;
     VkRenderingInfo info;
     VkCommandBuffer cb;
+    struct buf out;
     uint64_t r[8];
 
     memset(&qi, 0, sizeof(qi));
@@ -2996,10 +2997,16 @@ static void test_multiview_timestamps(void)
     info.viewMask = 0x5;
     info.colorAttachmentCount = 1;
     info.pColorAttachments = &att;
+    out = make_buf(sizeof(r));
+    REQUIRE(out.data);
+    memset(out.data, 0xab, sizeof(r));
     cb = begin_cmd();
     vkCmdBeginRendering(cb, &info);
     vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 1);
     vkCmdEndRendering(cb);
+    vkCmdCopyQueryPoolResults(cb, pool, 0, 4, out.buffer, 0, 16,
+                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    barrier(cb);
     submit(cb);
     memset(r, 0xab, sizeof(r));
     CHECK_VK(vkGetQueryPoolResults(device, pool, 0, 4, sizeof(r), r, 16,
@@ -3007,7 +3014,9 @@ static void test_multiview_timestamps(void)
              VK_NOT_READY);
     CHECK(r[1] == 0 && r[3] == 1 && r[5] == 1 && r[7] == 0);
     CHECK(r[2] != 0 && r[4] == 0);
+    CHECK(memcmp(out.data, r, sizeof(r)) == 0); /* the copy's are the same */
     vkDestroyQueryPool(device, pool, NULL);
+    free_buf(&out);
     free_img(&target);
 }
 

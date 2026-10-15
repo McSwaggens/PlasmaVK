@@ -294,7 +294,7 @@ static void test_names_metal_labels(void)
     VkSemaphoreCreateInfo si;
     VkSemaphore sem;
     VkQueryPoolCreateInfo qi;
-    VkQueryPool qp;
+    VkQueryPool qp, tsp;
     struct pvk_image_view *pview;
     uint32_t count = 1;
     void *pool = objc_autoreleasePoolPush();
@@ -376,6 +376,10 @@ static void test_names_metal_labels(void)
     REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &qp));
     set_name(device, VK_OBJECT_TYPE_QUERY_POOL, H(qp), "occlusion");
     CHECK(strcmp(label_of(pvk_MTLResource_label(((struct pvk_query_pool *)qp)->buffer)), "occlusion") == 0);
+    qi.queryType = VK_QUERY_TYPE_TIMESTAMP; /* a counter heap */
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &tsp));
+    set_name(device, VK_OBJECT_TYPE_QUERY_POOL, H(tsp), "pass times");
+    CHECK(strcmp(label_of(pvk_MTL4CounterHeap_label(((struct pvk_query_pool *)tsp)->heap)), "pass times") == 0);
 
     /* Pipeline states: labeled at creation after their shader modules */
     {
@@ -410,6 +414,7 @@ static void test_names_metal_labels(void)
     }
 
     vkDestroyQueryPool(device, qp, NULL);
+    vkDestroyQueryPool(device, tsp, NULL);
     vkDestroySemaphore(device, sem, NULL);
     vkDestroyImageView(device, view, NULL);
     vkDestroyImage(device, image, NULL);
