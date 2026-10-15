@@ -22,7 +22,9 @@
  *                      MoltenVK or KosmicKrisp (pick one with VK_DRIVER_FILES)
  *
  * Environment:
- *   BENCH_IMPL           the "impl" label in loader builds (default "loader")
+ *   BENCH_IMPL           the "impl" label (default "plasmavk", or "loader"
+ *                        in loader builds), so that two PlasmaVK builds or
+ *                        two drivers can be told apart in one file
  *   BENCH_FRAMES         measured frames (or iterations) per configuration
  *   BENCH_FILTER         only run configurations whose name contains this string
  *   BENCH_GPU_TIMING=0   no timestamps in the frame loop, so no gpu_us: the
@@ -73,9 +75,11 @@ static inline void bench_set_device(const char *device_name)
 
 static inline const char *bench_impl(void)
 {
-#ifdef BENCH_USE_LOADER
     const char *name = getenv("BENCH_IMPL");
-    return name ? name : "loader";
+    if (name && *name)
+        return name;
+#ifdef BENCH_USE_LOADER
+    return "loader";
 #else
     return "plasmavk";
 #endif
