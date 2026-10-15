@@ -32350,6 +32350,17 @@ struct pvk_properties_1x {
     VkPhysicalDeviceVulkan14Properties v14;
 };
 
+/* Memory requirements of optimally tiled textures by what their descriptors
+ * hold (section 11, pvk_texture_requirements), in a table indexed by hash. */
+#define PVK_TEXTURE_REQS 256
+struct pvk_texture_reqs {
+    pthread_mutex_t lock;
+    struct pvk_texture_req {
+        uint32_t key[10];
+        VkDeviceSize size, align; /* size 0: empty */
+    } entries[PVK_TEXTURE_REQS];
+};
+
 struct pvk_physical_device {
     struct pvk_instance *instance;
     id mtl_device;
@@ -32357,6 +32368,7 @@ struct pvk_physical_device {
     struct pvk_properties_1x properties_1x;
     struct pvk_features features; /* supported */
     VkPhysicalDeviceMemoryProperties memory_properties;
+    struct pvk_texture_reqs *texture_reqs;
     /* Texture capabilities that vary within the Metal 4 families (section 7) */
     bool bc_formats;      /* supportsBCTextureCompression */
     bool filter_32bit;    /* supports32BitFloatFiltering: filter and resolve 32-bit floats */
@@ -33575,7 +33587,13 @@ static VkResult pvk_physical_device_create(struct pvk_instance *instance)
     }
 
     pd = pvk_alloc(pvk_instance_alloc(instance), sizeof(*pd), VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
-    if (!pd) {
+    if (pd)
+        pd->texture_reqs = pvk_alloc(pvk_instance_alloc(instance), sizeof(*pd->texture_reqs),
+                                     VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+    if (!pd || !pd->texture_reqs || pthread_mutex_init(&pd->texture_reqs->lock, NULL) != 0) {
+        if (pd)
+            pvk_free(pvk_instance_alloc(instance), pd->texture_reqs);
+        pvk_free(pvk_instance_alloc(instance), pd);
         pvk_release(mtl);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -33591,6 +33609,8 @@ static void pvk_physical_device_destroy(struct pvk_physical_device *pd)
     if (!pd)
         return;
     pvk_release(pd->mtl_device);
+    pthread_mutex_destroy(&pd->texture_reqs->lock);
+    pvk_free(pvk_instance_alloc(pd->instance), pd->texture_reqs);
     pvk_free(pvk_instance_alloc(pd->instance), pd);
 }
 
@@ -38363,7 +38383,9 @@ static bool pvk_image_needs_shared(const struct pvk_image *image)
 /* Memory one texture of the image needs (the image, or one plane): size and
  * alignment from heapTextureSizeAndAlignWithDescriptor:, the largest over
  * the storage modes the image may be bound to; linear textures are rows of
- * row_pitch bytes, aligned for the pixel format. */
+ * row_pitch bytes, aligned for the pixel format. The two queries cost
+ * 1-1.6 us (M4 Max), so the physical device keeps their results by what
+ * pvk_texture_descriptor and the storage modes take from the image. */
 static void pvk_texture_requirements(const struct pvk_physical_device *pd, const struct pvk_image *image,
                                      pvk_MTLPixelFormat format, uint32_t width, uint32_t height, VkDeviceSize row_pitch,
                                      VkDeviceSize *size_out, VkDeviceSize *align_out)
@@ -38380,13 +38402,44 @@ static void pvk_texture_requirements(const struct pvk_physical_device *pd, const
             PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked,
             PVK_MTLResourceStorageModeShared | PVK_MTLResourceHazardTrackingModeUntracked,
         };
-        void *pool = objc_autoreleasePoolPush();
+        struct pvk_texture_reqs *reqs = pd->texture_reqs;
+        struct pvk_texture_req *e;
+        uint32_t key[PVK_ARRAY_SIZE(e->key)];
+        uint64_t h = 0;
+        bool keep = true;
+        void *pool;
         unsigned m;
+
+        key[0] = (uint32_t)format;
+        key[1] = (uint32_t)image->mtl_type;
+        key[2] = width;
+        key[3] = image->type == VK_IMAGE_TYPE_1D ? 1 : height;
+        key[4] = image->type == VK_IMAGE_TYPE_3D ? image->extent.depth : 1;
+        key[5] = image->levels;
+        key[6] = image->type == VK_IMAGE_TYPE_3D ? 1 : image->layers;
+        key[7] = image->samples;
+        key[8] = (uint32_t)image->mtl_usage;
+        key[9] = (pvk_image_needs_shared(image) ? 1u : 0u) | ((image->usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT) ? 2u : 0u);
+        for (m = 0; m < PVK_ARRAY_SIZE(key); m++)
+            h = (h ^ key[m]) * 0x9e3779b97f4a7c15ull;
+        e = &reqs->entries[(h >> 56) % PVK_TEXTURE_REQS];
+        pthread_mutex_lock(&reqs->lock);
+        if (e->size && memcmp(e->key, key, sizeof(key)) == 0) {
+            *size_out = e->size;
+            *align_out = e->align;
+            pthread_mutex_unlock(&reqs->lock);
+            return;
+        }
+        pthread_mutex_unlock(&reqs->lock);
+
+        pool = objc_autoreleasePoolPush();
         for (m = pvk_image_needs_shared(image) ? 1 : 0; m < PVK_ARRAY_SIZE(modes); m++) {
             id desc = pvk_texture_descriptor(image, format, width, height, modes[m]);
             pvk_MTLSizeAndAlign sa;
-            if (!desc)
+            if (!desc) {
+                keep = false;
                 continue;
+            }
             sa = pvk_MTLDevice_heapTextureSizeAndAlignWithDescriptor(pd->mtl_device, desc);
             pvk_release(desc);
             if (sa.size > size)
@@ -38395,6 +38448,13 @@ static void pvk_texture_requirements(const struct pvk_physical_device *pd, const
                 align = sa.align;
         }
         objc_autoreleasePoolPop(pool);
+        if (keep && size) {
+            pthread_mutex_lock(&reqs->lock);
+            memcpy(e->key, key, sizeof(key));
+            e->size = pvk_round_up(size, align);
+            e->align = align;
+            pthread_mutex_unlock(&reqs->lock);
+        }
     }
     *size_out = pvk_round_up(size, align);
     *align_out = align;

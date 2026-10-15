@@ -641,6 +641,79 @@ static void test_memory_types(void)
     free_image(&m);
 }
 
+/* Texture memory requirements come from the physical device's table once
+ * computed (section 11, pvk_texture_requirements): the same as computed,
+ * also with images that differ in one thing each in the table at once. */
+static void test_requirements_table(void)
+{
+    static const struct {
+        VkImageType type;
+        VkFormat format;
+        uint32_t w, h, d, levels, layers;
+        VkSampleCountFlagBits samples;
+        VkImageUsageFlags usage;
+    } kinds[] = {
+        { VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 256, 256, 1, 9, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT },
+        { VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 256, 256, 1, 9, 1, 1,
+          VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT },
+        { VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 256, 256, 1, 9, 1, 1,
+          VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT },
+        { VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 256, 256, 1, 9, 1, 1,
+          VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_HOST_TRANSFER_BIT },
+        { VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 256, 256, 1, 8, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT },
+        { VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 256, 256, 1, 9, 6, 1, VK_IMAGE_USAGE_SAMPLED_BIT },
+        { VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 256, 128, 1, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT },
+        { VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 256, 256, 1, 1, 1, 1, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT },
+        { VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 256, 256, 1, 1, 1, VK_SAMPLE_COUNT_4_BIT,
+          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT },
+        { VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16B16A16_SFLOAT, 256, 256, 1, 9, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT },
+        { VK_IMAGE_TYPE_2D, VK_FORMAT_E5B9G9R9_UFLOAT_PACK32, 256, 256, 1, 9, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT },
+        { VK_IMAGE_TYPE_2D, VK_FORMAT_D32_SFLOAT, 1280, 720, 1, 1, 1, 1,
+          VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT },
+        { VK_IMAGE_TYPE_1D, VK_FORMAT_R8G8B8A8_UNORM, 4096, 1, 1, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT },
+        { VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, 4096, 1, 1, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT },
+        { VK_IMAGE_TYPE_3D, VK_FORMAT_R8G8B8A8_UNORM, 64, 64, 16, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT },
+        { VK_IMAGE_TYPE_3D, VK_FORMAT_R8G8B8A8_UNORM, 64, 64, 32, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT },
+    };
+    struct pvk_texture_reqs *table = ((struct pvk_physical_device *)pd)->texture_reqs;
+    VkMemoryRequirements computed[PVK_ARRAY_SIZE(kinds)], req;
+    VkDeviceImageMemoryRequirements dinfo;
+    VkMemoryRequirements2 req2;
+    VkImageCreateInfo info;
+    VkImage image;
+    unsigned i, pass;
+
+    for (pass = 0; pass < 3; pass++) { /* computed alone; into a table holding the others; from it */
+        for (i = 0; i < PVK_ARRAY_SIZE(kinds); i++) {
+            info = image_info(kinds[i].type, kinds[i].format, kinds[i].w, kinds[i].h, kinds[i].d, kinds[i].levels,
+                              kinds[i].layers, kinds[i].usage | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            info.samples = kinds[i].samples;
+            if (pass == 0)
+                memset(table->entries, 0, sizeof(table->entries)); /* computed, then from the table */
+            REQUIRE_VK(vkCreateImage(device, &info, NULL, &image));
+            vkGetImageMemoryRequirements(device, image, &req);
+            if (pass == 0) {
+                computed[i] = req;
+                CHECK(req.size > 0);
+                vkGetImageMemoryRequirements(device, image, &req);
+            }
+            CHECK(req.size == computed[i].size && req.alignment == computed[i].alignment &&
+                  req.memoryTypeBits == computed[i].memoryTypeBits);
+            memset(&dinfo, 0, sizeof(dinfo));
+            dinfo.sType = VK_STRUCTURE_TYPE_DEVICE_IMAGE_MEMORY_REQUIREMENTS;
+            dinfo.pCreateInfo = &info;
+            memset(&req2, 0, sizeof(req2));
+            req2.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+            vkGetDeviceImageMemoryRequirements(device, &dinfo, &req2);
+            CHECK(req2.memoryRequirements.size == computed[i].size &&
+                  req2.memoryRequirements.alignment == computed[i].alignment);
+            vkDestroyImage(device, image, NULL);
+        }
+    }
+    CHECK(computed[5].size > computed[0].size && computed[8].size > computed[7].size &&
+          computed[15].size > computed[14].size);
+}
+
 /* ---- Buffer <-> image copies ---- */
 
 /* Uploads `up` from a buffer of patterned bytes, reads the region back
@@ -3063,6 +3136,7 @@ int main(void)
     RUN(test_all_formats_create);
     RUN(test_create_kinds);
     RUN(test_memory_types);
+    RUN(test_requirements_table);
     RUN(test_copy_buffer_image);
     RUN(test_copy_image);
     RUN(test_clear_color);
