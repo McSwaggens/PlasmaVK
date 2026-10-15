@@ -41620,10 +41620,11 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   Structured control flow is emitted recursively from the merge
  *   information: selections become if/else, OpSwitch a switch, loops
  *   for (;;) with the continue construct inlined at each continue edge, and
- *   phis become copies on the incoming edges. A vertex or fragment entry
- *   point is emitted like any helper, then wrapped by the stage function
- *   (STAGE INTERFACE). Errors longjmp out; all memory comes from an arena
- *   freed at the end.
+ *   phis become copies on the incoming edges. A helper's return from inside
+ *   a loop breaks out of it and returns after it (pvk_spv_return), so the
+ *   helper inlines. A vertex or fragment entry point is emitted like any
+ *   helper, then wrapped by the stage function (STAGE INTERFACE). Errors
+ *   longjmp out; all memory comes from an arena freed at the end.
  * ========================================================================== */
 
 #define PVK_MSL_PUSH_CONSTANT_BUFFER 30u
@@ -42680,6 +42681,7 @@ struct pvk_spv_func {
     uint32_t *globals; /* bitset over ctx->globals, transitive after analysis */
     uint32_t implicit; /* PVK_SPV_I_*: hidden parameters, transitive after analysis */
     uint32_t interp_locs; /* fragment input locations interpolateAt* reads (interpolant parameters) */
+    bool discards;     /* OpKill, OpTerminateInvocation or OpDemoteToHelperInvocation, transitive after analysis */
     uint32_t state;    /* call-graph walk */
     const char *msl;
 };
@@ -42690,6 +42692,7 @@ struct pvk_spv_frame {
     uint32_t header, merge, cont; /* labels */
     uint32_t next_case;           /* SWITCH: case reached by falling through */
     const char *flag;             /* SWITCH: set when a loop break crosses it */
+    bool ret;                     /* LOOP, SWITCH: a return breaks out of it (pvk_spv_return) */
 };
 
 struct pvk_sb {
@@ -42804,7 +42807,9 @@ struct pvk_spv {
     uint32_t hoist_indent;
     struct pvk_spv_func *fn; /* function being emitted */
     signed char shapes[512]; /* pvk_spv_shape of the opcodes below 512, + 2 (0: not asked yet) */
-    bool loop_return;        /* it has a return inside a loop (pvk_spv_ret) */
+    bool merge_returns;      /* returns inside its loops break out to one after them (pvk_spv_return) */
+    bool merged;             /* some did: declare pvk_ret, pvk_rv */
+    bool loop_return;        /* it has a return inside a loop, not merged */
 };
 
 /* ---- Errors and memory ---- */
@@ -45980,6 +45985,8 @@ static void pvk_spv_analyze(struct pvk_spv *ctx, uint32_t fidx)
                     fn->implicit |= PVK_SPV_I_LANE;
                 if (in.op == PVK_SPV_OpKill || in.op == PVK_SPV_OpTerminateInvocation)
                     fn->implicit |= PVK_SPV_I_KILL;
+                fn->discards |= in.op == PVK_SPV_OpKill || in.op == PVK_SPV_OpTerminateInvocation ||
+                                in.op == PVK_SPV_OpDemoteToHelperInvocation;
                 pvk_spv_id_range(&in, shape, &b, &e);
                 for (i = b; i < e; i++)
                     if (i != mask)
@@ -46053,6 +46060,7 @@ static void pvk_spv_call_graph(struct pvk_spv *ctx)
                 fn->globals[k] |= callee->globals[k];
             fn->implicit |= callee->implicit;
             fn->interp_locs |= callee->interp_locs;
+            fn->discards |= callee->discards;
         }
         fn->state = 2;
         ctx->order[ctx->norder++] = stack[n - 2];
@@ -48223,13 +48231,55 @@ static uint32_t pvk_spv_hidden(struct pvk_spv *ctx, const struct pvk_spv_func *f
     return n;
 }
 
-/* A return statement is emitted here: notes one inside a loop. */
-static void pvk_spv_ret(struct pvk_spv *ctx)
+/* The outermost loop being emitted (a frame index), else nframes. */
+static uint32_t pvk_spv_outer_loop(struct pvk_spv *ctx)
 {
     uint32_t i;
-    for (i = 0; i < ctx->nframes; i++)
-        if (ctx->frames[i].kind == PVK_SPV_FR_LOOP)
-            ctx->loop_return = true;
+    for (i = 0; i < ctx->nframes && ctx->frames[i].kind != PVK_SPV_FR_LOOP; i++)
+        ;
+    return i;
+}
+
+/* return value; (NULL: return;). Inside a loop, in a function whose returns
+ * merge (ctx->merge_returns), it is pvk_rv = value; pvk_ret = true; break;
+ * instead, and every loop and switch the break chain leaves tests pvk_ret
+ * after its end (pvk_spv_return_exit). Metal's compiler gave a wrong result
+ * for a function returning from inside a loop and after it, inlined where its
+ * argument is uniform (macOS 27.2: the Khronos CTS's control_flow
+ * mixed_return_break_continue_vertex); the merged form is right, and inlines. */
+static void pvk_spv_return(struct pvk_spv *ctx, const char *value)
+{
+    uint32_t i, outer = pvk_spv_outer_loop(ctx);
+    if (outer < ctx->nframes && ctx->merge_returns) {
+        for (i = outer; i < ctx->nframes; i++)
+            ctx->frames[i].ret = ctx->frames[i].kind == PVK_SPV_FR_LOOP || ctx->frames[i].kind == PVK_SPV_FR_SWITCH ||
+                                 ctx->frames[i].ret;
+        ctx->merged = true;
+        if (value)
+            pvk_spv_line(ctx, "pvk_rv = %s;", value);
+        pvk_spv_line(ctx, "pvk_ret = true;");
+        pvk_spv_line(ctx, "break;");
+        ctx->hoist = NULL; /* a jump: the loop's exit test (pvk_spv_hoist) */
+        return;
+    }
+    ctx->loop_return |= outer < ctx->nframes;
+    if (value)
+        pvk_spv_line(ctx, "return %s;", value);
+    else
+        pvk_spv_line(ctx, "return;");
+}
+
+/* After the end of a loop or switch a merge return breaks out of: on to the
+ * next one out, or the return. */
+static void pvk_spv_return_exit(struct pvk_spv *ctx)
+{
+    pvk_spv_line(ctx, "if (pvk_ret)");
+    if (pvk_spv_outer_loop(ctx) < ctx->nframes)
+        pvk_spv_line(ctx, "    break;");
+    else if (pvk_spv_type(ctx, ctx->fn->ret)->op == PVK_SPV_OpTypeVoid)
+        pvk_spv_line(ctx, "    return;");
+    else
+        pvk_spv_line(ctx, "    return pvk_rv;");
 }
 
 static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
@@ -48281,11 +48331,13 @@ static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s)", callee->msl, args));
     ctx->fn->interp_locs |= callee->interp_locs;
     if (callee->implicit & PVK_SPV_I_KILL) { /* the callee terminated the invocation: so does the caller */
-        pvk_spv_ret(ctx);
-        if (pvk_spv_type(ctx, ctx->fn->ret)->op == PVK_SPV_OpTypeVoid)
-            pvk_spv_line(ctx, "if (pvk_killed)\n%*s    return;", (int)ctx->indent * 4, "");
-        else
-            pvk_spv_line(ctx, "if (pvk_killed)\n%*s    return %s;", (int)ctx->indent * 4, "", pvk_spv_zero(ctx, ctx->fn->ret));
+        pvk_spv_line(ctx, "if (pvk_killed)");
+        pvk_spv_line(ctx, "{");
+        ctx->indent++;
+        pvk_spv_return(ctx, pvk_spv_type(ctx, ctx->fn->ret)->op == PVK_SPV_OpTypeVoid ? NULL
+                                                                                      : pvk_spv_zero(ctx, ctx->fn->ret));
+        ctx->indent--;
+        pvk_spv_line(ctx, "}");
     }
 }
 
@@ -50614,6 +50666,8 @@ static void pvk_spv_emit_switch(struct pvk_spv *ctx, uint32_t from, const struct
     flag = fr->flag;
     ladder_target = fr->cont;
     ctx->nframes--;
+    if (fr->ret)
+        pvk_spv_return_exit(ctx);
     if (flag) {
         /* a loop break crossed the switch: declare the flag before it, test it after */
         const char *decl = pvk_spv_fmt(ctx, "%*sbool %s = false;\n", (int)(indent * 4), "", flag);
@@ -50671,6 +50725,8 @@ static void pvk_spv_emit_chain(struct pvk_spv *ctx, uint32_t label, bool in_loop
                 pvk_spv_line(ctx, "}");
                 ctx->nframes--;
                 ctx->hoist = NULL;
+                if (ctx->frames[ctx->nframes].ret)
+                    pvk_spv_return_exit(ctx);
                 if (pvk_spv_classify(ctx, mlabel, &frame) != PVK_SPV_GO_BLOCK) {
                     pvk_spv_goto(ctx, mlabel);
                     break;
@@ -50687,12 +50743,10 @@ static void pvk_spv_emit_chain(struct pvk_spv *ctx, uint32_t label, bool in_loop
         term = pvk_spv_insn_at(ctx, blk.end);
         switch (term.op) {
         case PVK_SPV_OpReturn:
-            pvk_spv_ret(ctx);
-            pvk_spv_line(ctx, "return;");
+            pvk_spv_return(ctx, NULL);
             break;
         case PVK_SPV_OpReturnValue:
-            pvk_spv_ret(ctx);
-            pvk_spv_line(ctx, "return %s;", pvk_spv_val(ctx, pvk_spv_arg(ctx, &term, 1)));
+            pvk_spv_return(ctx, pvk_spv_val(ctx, pvk_spv_arg(ctx, &term, 1)));
             break;
         case PVK_SPV_OpUnreachable:
             break;
@@ -50707,11 +50761,9 @@ static void pvk_spv_emit_chain(struct pvk_spv *ctx, uint32_t label, bool in_loop
             ctx->result->discards = true;
             pvk_spv_line(ctx, "discard_fragment();");
             pvk_spv_line(ctx, "pvk_killed = true;");
-            pvk_spv_ret(ctx);
-            if (pvk_spv_type(ctx, ctx->fn->ret)->op == PVK_SPV_OpTypeVoid)
-                pvk_spv_line(ctx, "return;");
-            else
-                pvk_spv_line(ctx, "return %s;", pvk_spv_zero(ctx, ctx->fn->ret));
+            pvk_spv_return(ctx, pvk_spv_type(ctx, ctx->fn->ret)->op == PVK_SPV_OpTypeVoid
+                                    ? NULL
+                                    : pvk_spv_zero(ctx, ctx->fn->ret));
             break;
         case PVK_SPV_OpBranch:
             next = pvk_spv_arg(ctx, &term, 1);
@@ -50896,7 +50948,28 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
     ctx->indent = 1;
     ctx->nframes = 0;
     ctx->depth = 0;
-    ctx->loop_return = false;
+    /* Returns inside loops merge (pvk_spv_return) in helpers (a kernel isn't
+     * inlined) returning a type pvk_rv can hold, unless they discard: Metal's
+     * compiler dropped a discard_fragment() under a uniform condition in a
+     * loop when a break out of the loop followed it, where a return worked
+     * (macOS 27.2: the Khronos CTS's glsl.discard.static_loop_uniform with
+     * its return merged). */
+    switch (pvk_spv_type(ctx, fn->ret)->op) {
+    case PVK_SPV_OpTypeVoid:
+    case PVK_SPV_OpTypeBool:
+    case PVK_SPV_OpTypeInt:
+    case PVK_SPV_OpTypeFloat:
+    case PVK_SPV_OpTypeVector:
+    case PVK_SPV_OpTypeMatrix:
+    case PVK_SPV_OpTypeArray:
+    case PVK_SPV_OpTypeStruct:
+        ctx->merge_returns = !entry && !fn->discards;
+        break;
+    default:
+        ctx->merge_returns = false;
+        break;
+    }
+    ctx->merged = ctx->loop_return = false;
     pvk_spv_emit_chain(ctx, fn->blocks[0].label, false);
 
     /* Signature */
@@ -50962,12 +51035,9 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             for (h = 0; h < nh; h++)
                 PVK_SPV_PUSH(ctx, params, nparams, cap, hidden[h]);
         }
-        /* A loop it returns from as well as after it: not inlined. Metal's
-         * compiler returned 0 from such a function inlined where its argument
-         * is uniform (macOS 27.2: the Khronos CTS's control_flow
-         * mixed_return_break_continue_vertex; noinline was what helped).
-         * Returns only outside loops (an early out before a loop) inline:
-         * a call costs a full-screen pass up to 10%. */
+        /* A return inside a loop that is not merged, in a function that also
+         * returns elsewhere: not inlined, which also avoids the miscompile
+         * (pvk_spv_return). */
         uint32_t b, returns = 0;
         for (b = 0; b < fn->nblocks; b++) {
             uint32_t op = pvk_spv_insn_at(ctx, fn->blocks[b].end).op;
@@ -51062,6 +51132,11 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             pvk_spv_line(ctx, "%s %s = %s;", t, x->msl, pvk_spv_const_expr(ctx, in.w[4], 0));
         else
             pvk_spv_line(ctx, "%s %s;", t, x->msl);
+    }
+    if (ctx->merged) {
+        pvk_spv_line(ctx, "bool pvk_ret = false;");
+        if (pvk_spv_type(ctx, fn->ret)->op != PVK_SPV_OpTypeVoid)
+            pvk_spv_line(ctx, "%s pvk_rv;", pvk_spv_type(ctx, fn->ret)->msl);
     }
     for (bi = 0; bi < fn->nblocks; bi++) {
         uint32_t off = fn->blocks[bi].begin;
