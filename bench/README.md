@@ -13,7 +13,7 @@ reports an error instead of fast-but-wrong numbers.
 
 | Program | What it measures |
 |---|---|
-| `bench_startup` | Instance + device creation and teardown: the cost before the first frame. |
+| `bench_startup` | The cost before the first frame. `process_first`: a fresh process per iteration, timed from `posix_spawn` through instance, device, swapchain (headless surface) and one presented frame to its fence, phase by phase. `process_first_cg`: the same with CoreGraphics initialized first, as in any windowed application. `instance_device`: instance + device creation and teardown repeated in one process. |
 | `bench_present` | Presentation to a real `CAMetalLayer` through `VK_EXT_metal_surface`, the windowed path (drawables), with the layer in no window so nothing is shown; at 1080p, 4K and 5K, with a headless surface as the control. Each frame renders a scene, tonemaps it into the swapchain image and presents, at 60 frames per second. Reports the CPU time of acquire, submit and present, the frame's `gpu_us`, and `present_gpu_us`: GPU time from the end of the frame's command buffer to a timestamp submitted after the present, which is what presenting adds (such as a copy into the drawable). The pace leaves the GPU mostly idle, so its absolute times run higher than in a GPU-bound game: compare a layer configuration with its headless control. A configuration whose layer stops handing out drawables (the display asleep) is skipped. |
 | `bench_draw_calls` | CPU recording + submit cost and GPU time for thousands of small draws per frame (1k–50k), with push constants per draw. Configs: plain draws, indexed draws that bind a vertex buffer per draw, a pipeline switch every 8 draws, instanced batches of 64 or 1024, draws that each set their whole state again (`rebind`: viewport, scissor, the same pipeline, push constants, and their mesh's vertex and index buffers, one of 64), the same draws in secondary command buffers (4 large ones, or one per object as in Sascha's multithreading sample), and `vs_heavy`: 1000 draws of 6144 vertices, all but six of them clipped away, so `gpu_us` is vertex shading that reads per-draw data. Reports `cpu_ns_per_draw`. |
 | `bench_indirect` | One indirect call per frame, as a GPU-driven renderer makes it from a record buffer sized for all 65536 objects: `vkCmdDrawIndirect` of 1000 compacted records, or of 16384 records whose culled ones have `instanceCount` 0, and `vkCmdDraw(Indexed)IndirectCount` with 1000 or 10000 records counted and `maxDrawCount` up to 65536, the buffer's capacity. Needs `multiDrawIndirect`; the count configs need `drawIndirectCount` (MoltenVK skips them). |
@@ -112,9 +112,21 @@ to stderr.
     `timestampPeriod` is 0.
   - `frame_us`: the time between consecutive submits, with 2 frames in
     flight. This is throughput, whichever of CPU or GPU is the bottleneck.
-- `startup` reports `wall_us` per iteration. `pipeline_compile` reports
-  `create_us` per pipeline plus `total_ms` (and `wall_ms` for the threaded
-  phase; batch phases report only `total_ms`, the call).
+- `startup` reports `wall_us` per iteration for `instance_device`; the
+  `process_first` configurations report each phase (`exec_us`,
+  `coregraphics_us`, `instance_us`, `device_us`, `swapchain_us`,
+  `first_frame_us`, `teardown_us`), `first_submit_us` (the first frame
+  until `vkQueueSubmit` returns), `to_first_frame_us` from `posix_spawn` to
+  the first frame's fence, and `process_us` until the process exited.
+  The first `vkQueueSubmit` of a process waits for Metal's first commit,
+  which depends on the machine's state: the first frame took about 29 ms in
+  one session and 95-135 ms in others with the displays asleep. Compare
+  drivers within one session (in each that measured `first_submit_us`,
+  PlasmaVK's was 5-6 ms longer than MoltenVK's). The first of the two
+  unmeasured launches also checks a pixel of its frame.
+  `pipeline_compile` reports `create_us` per pipeline plus `total_ms` (and
+  `wall_ms` for the threaded phase; batch phases report only `total_ms`, the
+  call).
 - `frame`'s `cpu_us` is the main thread's critical path, including waiting
   for its workers. The multithreaded configurations add `worker_cpu_us`
   (the CPU time of all workers in a frame) and `record_wall_us`;
