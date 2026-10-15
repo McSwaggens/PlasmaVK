@@ -21,11 +21,20 @@ static uint32_t shared_type = UINT32_MAX;
 
 static Class test_layer_class; /* CAMetalLayer subclass recording nextDrawable */
 static id last_drawable;       /* retained */
+static double grow_next;       /* added to the drawableSize at the next nextDrawable: a view resizing meanwhile */
 
 static id test_next_drawable(id self, SEL cmd)
 {
     struct objc_super super_ = { self, (Class)objc_getClass("CAMetalLayer") };
-    id drawable = ((id(*)(struct objc_super *, SEL))objc_msgSendSuper)(&super_, cmd);
+    id drawable;
+    if (grow_next != 0) {
+        pvk_CGSize size = pvk_CAMetalLayer_drawableSize(self);
+        size.width += grow_next;
+        size.height += grow_next;
+        pvk_CAMetalLayer_setDrawableSize(self, size);
+        grow_next = 0;
+    }
+    drawable = ((id(*)(struct objc_super *, SEL))objc_msgSendSuper)(&super_, cmd);
     pvk_release(last_drawable);
     last_drawable = pvk_retain(drawable);
     return drawable;
@@ -453,7 +462,7 @@ static void test_present_cycles(void)
     CHECK(size.width == 32 && size.height == 32);
     CHECK(pvk_CAMetalLayer_pixelFormat(layer) == PVK_MTLPixelFormatBGRA8Unorm_sRGB);
     CHECK(PVK_MSG(unsigned long, (id, SEL))(layer, sel_registerName("maximumDrawableCount")) == 3);
-    CHECK(!PVK_MSG(bool, (id, SEL))(layer, sel_registerName("framebufferOnly")));
+    CHECK(PVK_MSG(bool, (id, SEL))(layer, sel_registerName("framebufferOnly"))); /* presents draw into them */
     CHECK(PVK_MSG(bool, (id, SEL))(layer, sel_registerName("displaySyncEnabled")));
 
     for (frame = 0; frame < 30; frame++) {
@@ -469,6 +478,9 @@ static void test_present_cycles(void)
         record_clear(cb, images[index], (float)frame / 30.0f, 0.5f, 0.25f, 1.0f);
         REQUIRE_VK(submit(0, cb, acquired, rendered, frame == 29 ? done : VK_NULL_HANDLE));
         CHECK_VK(present(0, swapchain, index, rendered), VK_SUCCESS);
+        /* The present's render pass keeps no drawable from the layer's pool. */
+        CHECK(!PVK_MSG(id, (id, SEL))(((struct pvk_swapchain *)swapchain)->present_attachment,
+                                      sel_registerName("texture")));
         n = 4;
         vkGetSwapchainImagesKHR(device, swapchain, &n, again);
         for (i = 0; i < count; i++)
@@ -551,11 +563,14 @@ static void test_headless(void)
     vkDestroySurfaceKHR(instance, other, NULL);
 }
 
-/* What reaches the drawable is the image: a buffer copied into the image,
- * presented, read back from the drawable's texture. */
-static void check_contents(VkFormat format, VkColorSpaceKHR space, uint32_t texel_bytes, uint32_t family)
+/* What reaches the drawable is the image, texel for texel (a present draws
+ * it, reading texels as floats): a buffer copied into the image, presented,
+ * read back from the drawable's texture. grow: the drawable is that much
+ * larger (or smaller) than the image, the layer resized after the present
+ * found it in date: the drawable's corner is the image's. */
+static void check_contents(VkFormat format, VkColorSpaceKHR space, uint32_t texel_bytes, uint32_t family, int grow)
 {
-    const uint32_t w = 40, h = 24;
+    const uint32_t w = 40, h = 24, rw = grow < 0 ? w - (uint32_t)-grow : w, rh = grow < 0 ? h - (uint32_t)-grow : h;
     id layer = make_layer(w, h, 1.0);
     VkSurfaceKHR surface = make_surface(layer);
     VkSwapchainCreateInfoKHR info = swapchain_info(surface, format, space, w, h, 2);
@@ -571,12 +586,15 @@ static void check_contents(VkFormat format, VkColorSpaceKHR space, uint32_t texe
     VkSemaphore rendered = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
     VkCommandBuffer cb;
     unsigned char *data = NULL, *readback;
-    uint32_t count = 3, index, i;
+    uint32_t count = 3, index, i, y;
     pvk_MTLRegion r;
 
     REQUIRE(surface);
     REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchain));
     REQUIRE_VK(vkGetSwapchainImagesKHR(device, swapchain, &count, images));
+    /* The swapchain's drawables are framebufferOnly, which the CPU cannot
+     * read; these may be (the present draws into either kind). */
+    PVK_MSG(void, (id, SEL, bool))(layer, sel_registerName("setFramebufferOnly:"), false);
     memset(&binfo, 0, sizeof(binfo));
     binfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     binfo.size = (VkDeviceSize)w * h * texel_bytes;
@@ -612,18 +630,21 @@ static void check_contents(VkFormat format, VkColorSpaceKHR space, uint32_t texe
     REQUIRE_VK(submit(family, cb, VK_NULL_HANDLE, rendered, VK_NULL_HANDLE));
     pvk_release(last_drawable);
     last_drawable = NULL;
+    grow_next = grow;
     CHECK_VK(present(family, swapchain, index, rendered), VK_SUCCESS);
     CHECK_VK(vkQueueWaitIdle(queues[family]), VK_SUCCESS);
     REQUIRE(last_drawable != NULL);
-    readback = calloc(1, w * h * texel_bytes);
+    CHECK(pvk_MTLTexture_width(pvk_CAMetalDrawable_texture(last_drawable)) == (unsigned long)((int)w + grow));
+    readback = calloc(1, rw * rh * texel_bytes);
     REQUIRE(readback);
     memset(&r, 0, sizeof(r));
-    r.size.width = w;
-    r.size.height = h;
+    r.size.width = rw;
+    r.size.height = rh;
     r.size.depth = 1;
     pvk_MTLTexture_getBytes_bytesPerRow_bytesPerImage_fromRegion_mipmapLevel_slice(
-        pvk_CAMetalDrawable_texture(last_drawable), readback, w * texel_bytes, w * h * texel_bytes, r, 0, 0);
-    CHECK(memcmp(readback, data, w * h * texel_bytes) == 0);
+        pvk_CAMetalDrawable_texture(last_drawable), readback, rw * texel_bytes, rw * rh * texel_bytes, r, 0, 0);
+    for (y = 0; y < rh; y++)
+        CHECK(memcmp(readback + y * rw * texel_bytes, data + y * w * texel_bytes, rw * texel_bytes) == 0);
     free(readback);
     pvk_release(last_drawable);
     last_drawable = NULL;
@@ -640,10 +661,15 @@ static void check_contents(VkFormat format, VkColorSpaceKHR space, uint32_t texe
 
 static void test_present_contents(void)
 {
-    check_contents(VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 4, 0);
-    check_contents(VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 4, 0);
-    check_contents(VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT, 8, 0);
-    check_contents(VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 4, 1); /* the compute family presents */
+    check_contents(VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 4, 0, 0);
+    check_contents(VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 4, 0, 0);
+    check_contents(VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 4, 0, 0);
+    check_contents(VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT, 8, 0, 0);
+    /* the compute family presents */
+    check_contents(VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 4, 1, 0);
+    /* drawables larger and smaller than the image */
+    check_contents(VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 4, 0, 8);
+    check_contents(VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 4, 0, -8);
 }
 
 /* Resizing: bounds -> suboptimal, drawableSize -> out of date; recreation
@@ -879,6 +905,7 @@ static void test_frame_loop(void)
     REQUIRE(surface);
     REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchain));
     REQUIRE_VK(vkGetSwapchainImagesKHR(device, swapchain, &count, images));
+    PVK_MSG(void, (id, SEL, bool))(layer, sel_registerName("setFramebufferOnly:"), false); /* read back */
     for (frame = 0; frame < FRAMES; frame++) {
         bool one_queue = frame < FRAMES / 2;
         uint32_t render = one_queue ? 0 : frame & 1, show = one_queue ? 0 : (frame >> 1) & 1;
