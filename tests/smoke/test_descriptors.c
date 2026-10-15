@@ -1066,6 +1066,47 @@ static void test_pools(void)
     vkDestroyDescriptorSetLayout(device, two, NULL);
 }
 
+/* A pool references the first PVK_POOL_LAYOUTS layouts of its sets once
+ * each, until it is reset or destroyed (sets of more layouts reference
+ * theirs themselves), so its sets' layouts outlive
+ * vkDestroyDescriptorSetLayout. */
+static void test_pool_layout_refs(void)
+{
+    enum { N = PVK_POOL_LAYOUTS + 2 };
+    VkDescriptorSetLayoutBinding b = lb(0, SSBO, 1);
+    VkDescriptorPoolSize size = ps(SSBO, 2 * N);
+    VkDescriptorSetLayout layouts[N];
+    struct pvk_descriptor_set_layout *l[N];
+    VkDescriptorSet sets[N][2];
+    VkDescriptorPool pool;
+    uint32_t i;
+
+    pool = make_pool(2 * N, &size, 1, VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT, NULL);
+    REQUIRE(pool);
+    for (i = 0; i < N; i++) {
+        layouts[i] = make_set_layout(&b, 1, 0, NULL);
+        REQUIRE(layouts[i]);
+        l[i] = (struct pvk_descriptor_set_layout *)layouts[i];
+        sets[i][0] = alloc_set(pool, layouts[i]);
+        sets[i][1] = alloc_set(pool, layouts[i]);
+    }
+    for (i = 0; i < N; i++) /* the application's and the pool's, or the application's and each set's */
+        CHECK(l[i]->refs == (i < PVK_POOL_LAYOUTS ? 2 : 3));
+    vkDestroyDescriptorSetLayout(device, layouts[0], NULL);
+    CHECK(l[0]->refs == 1 && ((struct pvk_descriptor_set *)sets[0][1])->layout == l[0]);
+    CHECK_VK(vkFreeDescriptorSets(device, pool, 2, sets[0]), VK_SUCCESS);
+    CHECK_VK(vkFreeDescriptorSets(device, pool, 2, sets[N - 1]), VK_SUCCESS);
+    CHECK(l[0]->refs == 1 && l[N - 1]->refs == 1);
+    CHECK_VK(vkResetDescriptorPool(device, pool, 0), VK_SUCCESS); /* the first layout goes */
+    CHECK(l[1]->refs == 1 && l[N - 2]->refs == 1);
+    sets[1][0] = alloc_set(pool, layouts[1]);
+    CHECK(l[1]->refs == 2);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    CHECK(l[1]->refs == 1);
+    for (i = 1; i < N; i++)
+        vkDestroyDescriptorSetLayout(device, layouts[i], NULL);
+}
+
 /* ---- Dispatches ---- */
 
 /* A uniform buffer at an offset, storage buffers with a range and with
@@ -2820,6 +2861,7 @@ int main(void)
     RUN(test_layout_offsets);
     RUN(test_layout_support);
     RUN(test_pools);
+    RUN(test_pool_layout_refs);
     RUN(test_buffers);
     RUN(test_pipeline_robustness);
     RUN(test_array_length);
