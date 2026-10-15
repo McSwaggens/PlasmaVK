@@ -3624,8 +3624,10 @@ static uint32_t expect_indices(uint32_t x, uint32_t y)
 }
 
 /* Index types (8-bit too), primitive restart on and off (dynamic), strips,
- * lists and triangle fans, indexed and not. */
-static void test_indices(void)
+ * lists and triangle fans, indexed and not; recorded in the primary, or in
+ * a secondary executed in the primary's render pass instance (whose scan
+ * then finds the draws to preprocess there). */
+static void indices(int secondary)
 {
     static const VkVertexInputBindingDescription binding = { 0, sizeof(struct vtx), VK_VERTEX_INPUT_RATE_VERTEX };
     static const VkVertexInputAttributeDescription attrs[2] = {
@@ -3645,7 +3647,7 @@ static void test_indices(void)
     struct vtx *v = (struct vtx *)vb.data;
     struct pipe p;
     VkPipeline pipeline;
-    VkCommandBuffer cb;
+    VkCommandBuffer cb, rec;
     VkDeviceSize zero_offset = 0;
 
     memset(&vi, 0, sizeof(vi));
@@ -3682,36 +3684,98 @@ static void test_indices(void)
     memcpy(ib.data + 96, fan32, sizeof(fan32));
     memcpy(ib.data + 160, list16, sizeof(list16));
     cb = begin_cmd();
-    begin_rendering(cb, &target, 1, black, NULL);
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdBindVertexBuffers(cb, 0, 1, &vb.buffer, &zero_offset);
-    vkCmdSetPrimitiveTopology(cb, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-    vkCmdSetPrimitiveRestartEnable(cb, VK_TRUE);
-    vkCmdBindIndexBuffer(cb, ib.buffer, 0, VK_INDEX_TYPE_UINT16);
-    vkCmdDrawIndexed(cb, 9, 1, 0, 0, 0);
-    vkCmdBindIndexBuffer(cb, ib.buffer, 32, VK_INDEX_TYPE_UINT8);
-    vkCmdDrawIndexed(cb, 9, 1, 0, 0, 0);
-    vkCmdSetPrimitiveRestartEnable(cb, VK_FALSE);
-    vkCmdBindIndexBuffer(cb, ib.buffer, 64, VK_INDEX_TYPE_UINT16);
-    vkCmdDrawIndexed(cb, 4, 1, 0, 100, 0);
-    vkCmdSetPrimitiveTopology(cb, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
-    vkCmdDraw(cb, 4, 1, 20, 0);
-    vkCmdSetPrimitiveRestartEnable(cb, VK_TRUE);
-    vkCmdBindIndexBuffer(cb, ib.buffer, 96, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(cb, 9, 1, 0, 0, 0);
-    vkCmdSetPrimitiveRestartEnable(cb, VK_FALSE);
-    vkCmdSetPrimitiveTopology(cb, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-    vkCmdBindIndexBuffer(cb, ib.buffer, 160, VK_INDEX_TYPE_UINT16);
-    vkCmdDrawIndexed(cb, 6, 1, 0, 0, 0);
+    rec = cb;
+    if (secondary) {
+        static const VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+        VkCommandBufferInheritanceRenderingInfo inh_rendering;
+        VkCommandBufferInheritanceInfo inh;
+        VkCommandBufferAllocateInfo alloc;
+        VkCommandBufferBeginInfo begin;
+        VkRenderingAttachmentInfo att;
+        VkRenderingInfo info;
+        memset(&att, 0, sizeof(att));
+        att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView = target.view;
+        att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        memcpy(att.clearValue.color.float32, black, 16);
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        info.flags = VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT;
+        info.renderArea.extent.width = W;
+        info.renderArea.extent.height = H;
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &att;
+        vkCmdBeginRendering(cb, &info);
+        memset(&inh_rendering, 0, sizeof(inh_rendering));
+        inh_rendering.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO;
+        inh_rendering.colorAttachmentCount = 1;
+        inh_rendering.pColorAttachmentFormats = &format;
+        inh_rendering.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        memset(&inh, 0, sizeof(inh));
+        inh.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+        inh.pNext = &inh_rendering;
+        memset(&alloc, 0, sizeof(alloc));
+        alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        alloc.commandPool = cmd_pool;
+        alloc.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+        alloc.commandBufferCount = 1;
+        memset(&begin, 0, sizeof(begin));
+        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT | VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        begin.pInheritanceInfo = &inh;
+        REQUIRE_VK(vkAllocateCommandBuffers(device, &alloc, &rec));
+        vkBeginCommandBuffer(rec, &begin);
+    } else {
+        begin_rendering(cb, &target, 1, black, NULL);
+    }
+    vkCmdBindPipeline(rec, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindVertexBuffers(rec, 0, 1, &vb.buffer, &zero_offset);
+    vkCmdSetPrimitiveTopology(rec, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
+    vkCmdSetPrimitiveRestartEnable(rec, VK_TRUE);
+    vkCmdBindIndexBuffer(rec, ib.buffer, 0, VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexed(rec, 9, 1, 0, 0, 0);
+    vkCmdBindIndexBuffer(rec, ib.buffer, 32, VK_INDEX_TYPE_UINT8);
+    vkCmdDrawIndexed(rec, 9, 1, 0, 0, 0);
+    vkCmdSetPrimitiveRestartEnable(rec, VK_FALSE);
+    vkCmdBindIndexBuffer(rec, ib.buffer, 64, VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexed(rec, 4, 1, 0, 100, 0);
+    vkCmdSetPrimitiveTopology(rec, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
+    vkCmdDraw(rec, 4, 1, 20, 0);
+    vkCmdSetPrimitiveRestartEnable(rec, VK_TRUE);
+    vkCmdBindIndexBuffer(rec, ib.buffer, 96, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexed(rec, 9, 1, 0, 0, 0);
+    vkCmdSetPrimitiveRestartEnable(rec, VK_FALSE);
+    vkCmdSetPrimitiveTopology(rec, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    vkCmdBindIndexBuffer(rec, ib.buffer, 160, VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexed(rec, 6, 1, 0, 0, 0);
+    if (secondary) {
+        vkEndCommandBuffer(rec);
+        vkCmdExecuteCommands(cb, 1, &rec);
+    }
     vkCmdEndRendering(cb);
     download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
     submit(cb);
-    CHECK(count_bad(&out, expect_indices, "indices") == 0);
+    if (secondary)
+        vkFreeCommandBuffers(device, cmd_pool, 1, &rec);
+    CHECK(count_bad(&out, expect_indices, secondary ? "indices (secondary)" : "indices") == 0);
     vkDestroyPipeline(device, pipeline, NULL);
     free_buf(&out);
     free_buf(&vb);
     free_buf(&ib);
     free_img(&target);
+}
+
+static void test_indices(void)
+{
+    indices(false);
+}
+
+static void test_indices_secondary(void)
+{
+    indices(true);
 }
 
 /* Polygon mode POINT: each triangle's vertices drawn as 1-pixel points
@@ -10685,6 +10749,7 @@ int main(void)
     RUN(test_output_signedness);
     RUN(test_multi_draw);
     RUN(test_indices);
+    RUN(test_indices_secondary);
     RUN(test_polygon_points);
     RUN(test_vertex_input);
     RUN(test_clear_attachments);

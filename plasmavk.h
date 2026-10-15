@@ -54557,7 +54557,42 @@ struct pvk_pipeline {
     uint32_t set_mask;             /* bit N: the shader reads descriptor set N */
     struct pvk_gfx_pipeline *gfx;  /* graphics pipelines: their state (Graphics, below) */
     id mtl_pipeline_snorm;         /* graphics with gfx->int_colors: the SNORM variant (section 17) */
+    uint32_t scan;                 /* graphics: PVK_SCAN_* binding it gives a command buffer */
 };
+
+/* What a render pass instance's scan (pvk_prepass_scan, section 16) looks
+ * for, in struct pvk_command_buffer.scan: the bits of what the command
+ * buffer recorded, and of the secondaries it executes. A pass whose command
+ * buffer has none of them (nor PVK_SCAN_STRIP and PVK_SCAN_U16 together)
+ * is not scanned: its draws need no preprocessing and its pipelines nothing
+ * of the Metal pass. */
+#define PVK_SCAN_PIPELINE 1u /* a graphics pipeline the pass must know of (pvk_gfx_scan) */
+#define PVK_SCAN_DRAW 2u     /* triangle fans, 8-bit indices or indirect draw counts (pvk_draw_conv) */
+#define PVK_SCAN_STRIP 4u    /* strips (with 16-bit indices they may be widened) */
+#define PVK_SCAN_U16 8u      /* 16-bit indices */
+#define PVK_SCAN_QUERY 16u   /* a query begins (occlusion queries: the pass's visibility buffer) */
+
+/* The PVK_SCAN_* bits of drawing with topology `topology`. */
+static uint32_t pvk_topology_scan(uint32_t topology)
+{
+    return topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN ? PVK_SCAN_DRAW
+           : topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP || topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP
+               ? PVK_SCAN_STRIP
+               : 0u;
+}
+
+/* The PVK_SCAN_* bits of binding an index buffer of type `type`. */
+static uint32_t pvk_index_scan(uint32_t type)
+{
+    return type == VK_INDEX_TYPE_UINT8 ? PVK_SCAN_DRAW : type == VK_INDEX_TYPE_UINT16 ? PVK_SCAN_U16 : 0u;
+}
+
+/* Whether a scan finds something in a command buffer of PVK_SCAN_* bits. */
+static bool pvk_scan_needed(uint32_t scan)
+{
+    return (scan & (PVK_SCAN_PIPELINE | PVK_SCAN_DRAW | PVK_SCAN_QUERY)) ||
+           (scan & (PVK_SCAN_STRIP | PVK_SCAN_U16)) == (PVK_SCAN_STRIP | PVK_SCAN_U16);
+}
 
 /* The encoder tracks PVK_MAX_PUSH_CONSTANTS_SIZE (section 7) bytes of push
  * constants, the base workgroup of vkCmdDispatchBase after them. */
@@ -54618,6 +54653,7 @@ struct pvk_command_buffer {
     bool submitted;
     const void *debug_pipeline[2];
     bool render_group; /* a debug group of the render pass instance is open */
+    uint32_t scan;     /* PVK_SCAN_* of what it recorded */
 };
 
 static const VkAllocationCallbacks *pvk_pool_alloc(const struct pvk_command_pool *pool)
@@ -54667,6 +54703,7 @@ static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release
     cb->submitted = false;
     cb->debug_pipeline[0] = cb->debug_pipeline[1] = NULL;
     cb->render_group = false;
+    cb->scan = 0;
     if (release) {
         pvk_labels_free(&cb->labels, pvk_pool_alloc(pool));
         pvk_cb_render_free(cb);
@@ -55332,6 +55369,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBindPipeline(VkCommandBuffer commandBuffer, VkPi
     c = pvk_cmd_append(cb, PVK_CMD_BIND_PIPELINE, sizeof(*c));
     if (c)
         c->pipeline = (struct pvk_pipeline *)pipeline;
+    if (c && pipeline)
+        cb->scan |= ((struct pvk_pipeline *)pipeline)->scan;
 }
 
 static void pvk_cmd_push_constants(struct pvk_command_buffer *cb, uint32_t offset, uint32_t size, const void *data)
@@ -55416,14 +55455,17 @@ VKAPI_ATTR void VKAPI_CALL vkCmdExecuteCommands(VkCommandBuffer commandBuffer, u
                                                 const VkCommandBuffer *pCommandBuffers)
 {
     struct pvk_cmd_execute *c;
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    uint32_t i;
     if (!commandBufferCount)
         return;
-    c = pvk_cmd_append((struct pvk_command_buffer *)commandBuffer, PVK_CMD_EXECUTE_COMMANDS,
-                       sizeof(*c) + sizeof(VkCommandBuffer) * (size_t)commandBufferCount);
+    c = pvk_cmd_append(cb, PVK_CMD_EXECUTE_COMMANDS, sizeof(*c) + sizeof(VkCommandBuffer) * (size_t)commandBufferCount);
     if (!c)
         return;
     c->count = commandBufferCount;
     memcpy(c + 1, pCommandBuffers, sizeof(VkCommandBuffer) * (size_t)commandBufferCount);
+    for (i = 0; i < commandBufferCount; i++)
+        cb->scan |= ((const struct pvk_command_buffer *)pCommandBuffers[i])->scan;
 }
 
 /* ---- Descriptor sets ----
@@ -56603,6 +56645,20 @@ struct pvk_gfx_pipeline {
     uint32_t int_colors;
 };
 
+/* The PVK_SCAN_* bits of binding a graphics pipeline: those whose draws a
+ * render pass's Metal pass must know of (pvk_track_pipeline, pvk_scan_draw:
+ * Bresenham lines, polygon points, framebuffer fetch, SNORM rebinds, depth
+ * and stencil copies), and its topology's. */
+static uint32_t pvk_gfx_scan(const struct pvk_gfx_pipeline *g)
+{
+    uint32_t scan = g->bresenham || g->points || g->fetches || g->fetched || g->int_colors || g->reads || g->bounds
+                        ? PVK_SCAN_PIPELINE
+                        : 0u;
+    if (!(g->dynamic & PVK_DYN_BIT(PRIMITIVE_TOPOLOGY)))
+        scan |= pvk_topology_scan(g->state.topology);
+    return scan;
+}
+
 /* ---- Packets ---- */
 
 /* One attachment of a Metal render pass. */
@@ -57520,6 +57576,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetFrontFace(VkCommandBuffer commandBuffer, VkFr
 VKAPI_ATTR void VKAPI_CALL vkCmdSetPrimitiveTopology(VkCommandBuffer commandBuffer, VkPrimitiveTopology primitiveTopology)
 {
     pvk_cmd_dynamic_u32(commandBuffer, PVK_DYN_PRIMITIVE_TOPOLOGY, 0, (uint32_t)primitiveTopology);
+    ((struct pvk_command_buffer *)commandBuffer)->scan |= pvk_topology_scan((uint32_t)primitiveTopology);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthTestEnable(VkCommandBuffer commandBuffer, VkBool32 depthTestEnable)
@@ -57670,6 +57727,7 @@ static void pvk_cmd_bind_index_buffer(VkCommandBuffer commandBuffer, VkBuffer bu
     }
     c->type = (uint32_t)indexType;
     c->pad = 0;
+    cb->scan |= pvk_index_scan(c->type);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer2(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
@@ -57763,6 +57821,8 @@ static void pvk_cmd_draw_indirect(VkCommandBuffer commandBuffer, VkBuffer buffer
         c->stride = stride ? stride : (indexed ? 20u : 16u); /* drawCount 1 may pass stride 0 */
         c->indexed = indexed;
         c->pad = 0;
+        if (cnt)
+            cb->scan |= PVK_SCAN_DRAW;
     }
     pvk_cmd_group_end(cb, group);
 }
@@ -57894,6 +57954,8 @@ static struct pvk_cmd_query *pvk_cmd_query(VkCommandBuffer cb, enum pvk_query_op
     c->first = first;
     c->count = count;
     c->pool = (struct pvk_query_pool *)pool;
+    if (op == PVK_QUERY_BEGIN)
+        ((struct pvk_command_buffer *)cb)->scan |= PVK_SCAN_QUERY;
     return c;
 }
 
@@ -58669,6 +58731,7 @@ struct pvk_encoder {
     /* A packet of a secondary command buffer being encoded (depth > 0): the
      * next packet in it, where a render pass it begins scans ahead from */
     uint32_t depth;
+    const struct pvk_command_buffer *sub_cb;
     const struct pvk_cmd_block *sub_block;
     size_t sub_at;
     struct pvk_pp_result *pp;   /* draw preprocessing results of the render pass, in draw order */
@@ -59989,7 +60052,13 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
  * widened. Metal draws records one by one ("Draw indices" below): at most
  * maxDrawIndirectCount per command, which Vulkan also requires of the
  * count, so a count draw encodes min(maxDrawCount, maxDrawIndirectCount)
- * draws, those past the count drawing nothing. */
+ * draws, those past the count drawing nothing. The scan also finds what
+ * the Metal pass must be made with (Bresenham lines, framebuffer fetch,
+ * SNORM rebinds, depth/stencil copies, occlusion queries). A pass whose
+ * command buffer recorded none of what it looks for (struct
+ * pvk_command_buffer.scan) is not scanned: walking the packets again cost
+ * as much as making the Metal encoders, in a frame of a few thousand draws
+ * and 18 passes. */
 
 static pthread_mutex_t pvk_graphics_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -62446,6 +62515,27 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
     r->tex_slots = 0;
 }
 
+/* Whether the render pass instance that BEGIN_PASS packet c begins must be
+ * scanned (struct pvk_command_buffer.scan): it is suspended or resumed (into
+ * other command buffers), has no attachments (its sample count is the
+ * first pipeline's), or its command buffer, or the state it begins with
+ * (bound in an earlier one), has what the scan looks for. */
+static bool pvk_pass_scanned(const struct pvk_encoder *e, const struct pvk_cmd_begin_pass *c,
+                             const struct pvk_draw_track *t)
+{
+    const struct pvk_render *r = &e->render;
+    const struct pvk_command_buffer *cb =
+        e->depth ? e->sub_cb : (const struct pvk_command_buffer *)e->cursor.cbs[e->cursor.index].commandBuffer;
+    uint32_t scan = cb->scan | (r->pipeline ? r->pipeline->scan : 0u) | pvk_topology_scan(t->topology) |
+                    (t->index_address ? pvk_index_scan(t->index_type) : 0u);
+    uint32_t s;
+    bool attachments = c->depth.texture || c->stencil.texture;
+    for (s = 0; s < c->color_count && !attachments; s++)
+        attachments = c->colors[s].texture != NULL;
+    return (c->flags & (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT)) || !attachments ||
+           pvk_scan_needed(scan);
+}
+
 static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_begin_pass *c)
 {
     struct pvk_render *r = &e->render;
@@ -62478,7 +62568,8 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     track.hidden = r->pipeline && r->pipeline->gfx /* the depth/stencil copies its pipelines need */
                        ? r->pipeline->gfx->reads | (r->pipeline->gfx->bounds ? PVK_HIDDEN_DEPTH : 0u)
                        : 0;
-    pvk_prepass_scan(e, &track);
+    if (pvk_pass_scanned(e, c, &track))
+        pvk_prepass_scan(e, &track);
     pvk_encoder_end(e);
     if (e->result != VK_SUCCESS)
         return;
@@ -63814,6 +63905,7 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
                 e->cursor.block = b;
                 e->cursor.at = at;
             } else {
+                e->sub_cb = cb;
                 e->sub_block = b;
                 e->sub_at = at;
             }
@@ -69174,6 +69266,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     gfx.reads = reads;
     gfx.bounds = gfx.variants && (gfx.variants->want & (1u << PVK_VARIANT_BOUNDS));
     *pipeline->gfx = gfx;
+    pipeline->scan = pvk_gfx_scan(&gfx);
     for (k = 0; k < PVK_VARIANT_COUNT; k++) /* variants that will be needed: now */
         if (eager & (1u << k))
             pvk_gfx_variant(device, pipeline, k);
