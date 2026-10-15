@@ -44,6 +44,8 @@ The benchmarks read these environment variables:
 | `BENCH_FRAMES=n` | Measured frames (or `startup` iterations) per configuration, at most 1000. Each benchmark has its own defaults, sized for a run of a few seconds. `pipeline_compile` always creates its fixed set. |
 | `BENCH_FILTER=s` | Run only the configurations whose name contains `s` (for example `push_`, `msaa`, `cold`). |
 | `BENCH_IMPL=name` | Sets the `impl` label in loader builds. |
+| `BENCH_GPU_TIMING=0` | The frame loop writes no timestamps, so lines have no `gpu_us`. The two timestamps and their query reset can cost an implementation GPU time of their own, so use this when `frame_us` should be the application's frame alone. Lines say `"gpu_timing":false`. |
+| `BENCH_ALL_FEATURES=1` | Create the device with every core feature it supports, as DXVK, vkd3d-proton and Zink do, instead of only what the benchmark uses. Some features change an implementation's paths: `sparseBinding` its allocations, `depthBounds` and `dynamicRenderingLocalRead` its depth-writing pipelines, `robustBufferAccess` its shaders. Lines say `"all_features":true`. `startup` creates its own device and ignores this. |
 
 While working on a benchmark, run it under the validation layers with sync
 validation turned on (they are found through the same loader):
@@ -88,7 +90,8 @@ to stderr.
 
 (Shown wrapped here; the real output is one line.)
 
-- Always present: `bench`, `impl`, `device` (when known), `config`.
+- Always present: `bench`, `impl`, `device` (when known), `config`. Also
+  `gpu_timing` and `all_features` when the benchmark applied those options.
 - Parameters such as `draws`, `width` or `bytes_per_frame` are plain fields
   that vary by benchmark.
 - Timings are statistics objects in microseconds with `min`, `median`, `p99`,
@@ -147,6 +150,11 @@ its other configurations have run:
 - Device-level commands are called through pointers from
   `vkGetDeviceProcAddr` (`vkd.CmdDraw(...)`), as engines do. Loader builds
   therefore measure the driver, not the loader's trampolines.
+- Optional features and extensions go through `bench_vk_init_with`: each one
+  the device supports is enabled, and `bench_vk.enabled` says which were.
+  The frame loop records one primary command buffer per frame, or (after
+  `bench_loop_primaries`) several, recorded on separate threads and
+  submitted together.
 - Workloads are deterministic: fixed seeds, fixed scenes, and CPU references
   that are exact wherever possible. The exceptions use tolerances: float
   lighting in `render_passes`, and the 5-way texture product in

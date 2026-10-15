@@ -22,9 +22,15 @@
  *                      MoltenVK or KosmicKrisp (pick one with VK_DRIVER_FILES)
  *
  * Environment:
- *   BENCH_IMPL    the "impl" label in loader builds (default "loader")
- *   BENCH_FRAMES  measured frames (or iterations) per configuration
- *   BENCH_FILTER  only run configurations whose name contains this string
+ *   BENCH_IMPL           the "impl" label in loader builds (default "loader")
+ *   BENCH_FRAMES         measured frames (or iterations) per configuration
+ *   BENCH_FILTER         only run configurations whose name contains this string
+ *   BENCH_GPU_TIMING=0   no timestamps in the frame loop, so no gpu_us: the
+ *                        frame as the application recorded it, for frame_us
+ *                        (lines say "gpu_timing":false)
+ *   BENCH_ALL_FEATURES=1 create the device with every core feature it
+ *                        supports, as DXVK, vkd3d-proton and Zink do (lines
+ *                        say "all_features":true)
  */
 #ifndef PVK_BENCH_H
 #define PVK_BENCH_H
@@ -47,6 +53,13 @@
 static const char *bench_name = "bench";
 static char bench_device[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE];
 static int bench_status; /* exit code: 1 once any configuration failed verification */
+
+/* The options a benchmark applied (bench_vk.h sets these where it applies
+ * them; a benchmark that never reads an option is not marked with it). */
+static struct {
+    int no_gpu_timing; /* BENCH_GPU_TIMING=0 in the frame loop */
+    int all_features;  /* BENCH_ALL_FEATURES=1 at device creation */
+} bench_applied;
 
 static inline void bench_begin(const char *name)
 {
@@ -97,6 +110,26 @@ static inline int bench_selected(const char *config)
 {
     const char *filter = getenv("BENCH_FILTER");
     return !filter || !*filter || strstr(config, filter) != NULL;
+}
+
+/* An environment variable as a flag: unset or empty gives fallback, "0"
+ * gives 0, anything else 1. */
+static inline int bench_env_flag(const char *name, int fallback)
+{
+    const char *env = getenv(name);
+    if (!env || !*env)
+        return fallback;
+    return strcmp(env, "0") != 0;
+}
+
+static inline int bench_gpu_timing(void)
+{
+    return bench_env_flag("BENCH_GPU_TIMING", 1);
+}
+
+static inline int bench_all_features(void)
+{
+    return bench_env_flag("BENCH_ALL_FEATURES", 0);
 }
 
 /* ---- Deterministic random numbers (splitmix64) ---- */
@@ -235,7 +268,8 @@ static inline void bench_json_stats(struct bench_json *j, const char *key, doubl
                       key, s.min, s.median, s.p99, s.max, s.mean);
 }
 
-/* {"bench":..,"impl":..[,"device":..][,"config":..] */
+/* {"bench":..,"impl":..[,"device":..][,"config":..], plus the options that
+ * change what is measured when the benchmark applied them. */
 static inline void bench_json_begin(struct bench_json *j, const char *config)
 {
     j->len = 0;
@@ -246,6 +280,10 @@ static inline void bench_json_begin(struct bench_json *j, const char *config)
         bench_json_str(j, "device", bench_device);
     if (config)
         bench_json_str(j, "config", config);
+    if (bench_applied.no_gpu_timing)
+        bench_json_bool(j, "gpu_timing", 0);
+    if (bench_applied.all_features)
+        bench_json_bool(j, "all_features", 1);
 }
 
 static inline void bench_json_end(struct bench_json *j)

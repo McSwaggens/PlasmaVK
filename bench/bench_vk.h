@@ -113,12 +113,17 @@ static inline void *bench_alloc(size_t size)
  * Device commands
  * ========================================================================== */
 
+/* Vulkan 1.3 core: every device the benchmarks run on has them. */
 #define BENCH_DEVICE_COMMANDS(X)                                                    \
     X(DestroyDevice) X(GetDeviceQueue) X(DeviceWaitIdle) X(QueueSubmit)             \
+    X(QueueSubmit2) X(QueueWaitIdle)                                                \
     X(CreateCommandPool) X(DestroyCommandPool) X(ResetCommandPool)                  \
     X(AllocateCommandBuffers) X(FreeCommandBuffers) X(BeginCommandBuffer)           \
-    X(EndCommandBuffer) X(CreateFence) X(DestroyFence) X(WaitForFences)             \
-    X(ResetFences) X(CreateBuffer) X(DestroyBuffer) X(GetBufferMemoryRequirements)  \
+    X(EndCommandBuffer) X(ResetCommandBuffer) X(CreateFence) X(DestroyFence)        \
+    X(WaitForFences) X(ResetFences) X(CreateSemaphore) X(DestroySemaphore)          \
+    X(WaitSemaphores) X(SignalSemaphore) X(GetSemaphoreCounterValue)                \
+    X(CreateBuffer) X(DestroyBuffer) X(GetBufferMemoryRequirements)                 \
+    X(GetBufferDeviceAddress) X(CreateBufferView) X(DestroyBufferView)              \
     X(AllocateMemory) X(FreeMemory) X(BindBufferMemory) X(MapMemory)                \
     X(UnmapMemory) X(FlushMappedMemoryRanges)                                       \
     X(CreateImage) X(DestroyImage) X(GetImageMemoryRequirements) X(BindImageMemory) \
@@ -128,25 +133,44 @@ static inline void *bench_alloc(size_t size)
     X(DestroyPipeline) X(CreatePipelineCache) X(DestroyPipelineCache)               \
     X(GetPipelineCacheData) X(CreateDescriptorSetLayout)                            \
     X(DestroyDescriptorSetLayout) X(CreateDescriptorPool) X(DestroyDescriptorPool)  \
-    X(ResetDescriptorPool) X(AllocateDescriptorSets) X(UpdateDescriptorSets)        \
-    X(CreateDescriptorUpdateTemplate) X(DestroyDescriptorUpdateTemplate)            \
-    X(UpdateDescriptorSetWithTemplate) X(CreateQueryPool) X(DestroyQueryPool)       \
-    X(GetQueryPoolResults) X(CmdBeginRendering) X(CmdEndRendering)                  \
-    X(CmdBindPipeline) X(CmdSetViewport) X(CmdSetScissor) X(CmdPushConstants)       \
-    X(CmdDraw) X(CmdDrawIndexed) X(CmdBindVertexBuffers) X(CmdBindIndexBuffer)      \
-    X(CmdBindDescriptorSets) X(CmdDispatch) X(CmdPipelineBarrier2)                  \
-    X(CmdCopyBuffer) X(CmdCopyBufferToImage) X(CmdCopyImageToBuffer)                \
-    X(CmdResetQueryPool) X(CmdWriteTimestamp2)
+    X(ResetDescriptorPool) X(AllocateDescriptorSets) X(FreeDescriptorSets)          \
+    X(UpdateDescriptorSets) X(CreateDescriptorUpdateTemplate)                       \
+    X(DestroyDescriptorUpdateTemplate) X(UpdateDescriptorSetWithTemplate)           \
+    X(CreateQueryPool) X(DestroyQueryPool) X(GetQueryPoolResults) X(ResetQueryPool) \
+    X(CreateRenderPass2) X(DestroyRenderPass) X(CreateFramebuffer)                  \
+    X(DestroyFramebuffer) X(CmdBeginRenderPass2) X(CmdNextSubpass2)                 \
+    X(CmdEndRenderPass2) X(CmdBeginRendering) X(CmdEndRendering)                    \
+    X(CmdExecuteCommands) X(CmdBindPipeline) X(CmdSetViewport) X(CmdSetScissor)     \
+    X(CmdSetViewportWithCount) X(CmdSetScissorWithCount) X(CmdSetDepthBias)         \
+    X(CmdSetDepthBounds) X(CmdSetBlendConstants) X(CmdSetStencilReference)          \
+    X(CmdSetCullMode) X(CmdSetFrontFace) X(CmdSetPrimitiveTopology)                 \
+    X(CmdSetDepthTestEnable) X(CmdSetDepthWriteEnable) X(CmdSetDepthCompareOp)      \
+    X(CmdSetDepthBoundsTestEnable) X(CmdSetStencilTestEnable) X(CmdSetStencilOp)    \
+    X(CmdSetDepthBiasEnable) X(CmdSetRasterizerDiscardEnable)                       \
+    X(CmdSetPrimitiveRestartEnable) X(CmdPushConstants) X(CmdBindDescriptorSets)    \
+    X(CmdBindVertexBuffers) X(CmdBindVertexBuffers2) X(CmdBindIndexBuffer)          \
+    X(CmdDraw) X(CmdDrawIndexed) X(CmdDrawIndirect) X(CmdDrawIndexedIndirect)       \
+    X(CmdDispatch) X(CmdDispatchIndirect) X(CmdPipelineBarrier2)                    \
+    X(CmdCopyBuffer) X(CmdCopyImage) X(CmdBlitImage) X(CmdResolveImage)             \
+    X(CmdCopyBufferToImage) X(CmdCopyImageToBuffer) X(CmdFillBuffer)                \
+    X(CmdUpdateBuffer) X(CmdClearColorImage) X(CmdClearDepthStencilImage)           \
+    X(CmdClearAttachments) X(CmdResetQueryPool) X(CmdBeginQuery) X(CmdEndQuery)     \
+    X(CmdCopyQueryPoolResults) X(CmdWriteTimestamp2)
 
-/* Vulkan 1.4 commands: NULL on older devices; benchmarks check before use. */
-#define BENCH_DEVICE_COMMANDS_1_4(X)                                                \
+/* NULL when the device lacks them; benchmarks check before use. Vulkan 1.4,
+ * the indirect-count draws (some 1.3 portability drivers leave them out) and
+ * VK_KHR_swapchain (when enabled, see struct bench_vk_wants). */
+#define BENCH_DEVICE_COMMANDS_OPTIONAL(X)                                           \
     X(CmdPushDescriptorSet) X(CmdPushDescriptorSetWithTemplate)                     \
-    X(CmdSetRenderingAttachmentLocations) X(CmdSetRenderingInputAttachmentIndices)
+    X(CmdSetRenderingAttachmentLocations) X(CmdSetRenderingInputAttachmentIndices)  \
+    X(CmdDrawIndirectCount) X(CmdDrawIndexedIndirectCount)                          \
+    X(CreateSwapchainKHR) X(DestroySwapchainKHR) X(GetSwapchainImagesKHR)           \
+    X(AcquireNextImageKHR) X(QueuePresentKHR)
 
 static struct bench_device_commands {
 #define BENCH_DECLARE(name) PFN_vk##name name;
     BENCH_DEVICE_COMMANDS(BENCH_DECLARE)
-    BENCH_DEVICE_COMMANDS_1_4(BENCH_DECLARE)
+    BENCH_DEVICE_COMMANDS_OPTIONAL(BENCH_DECLARE)
 #undef BENCH_DECLARE
 } vkd;
 
@@ -161,6 +185,76 @@ enum {
     BENCH_WANT_PUSH_DESCRIPTOR = 1 << 3, /* optional: see bench_vk.push_descriptor */
     BENCH_WANT_LOCAL_READ = 1 << 4       /* optional: see bench_vk.local_read */
 };
+
+/* The core features of Vulkan 1.0 to 1.4. */
+struct bench_features {
+    VkPhysicalDeviceFeatures2 core;
+    VkPhysicalDeviceVulkan11Features v11;
+    VkPhysicalDeviceVulkan12Features v12;
+    VkPhysicalDeviceVulkan13Features v13;
+    VkPhysicalDeviceVulkan14Features v14;
+};
+
+/* Sets the sTypes and chains core -> v11 -> v12 -> v13 (-> v14 on a 1.4
+ * device) for vkGetPhysicalDeviceFeatures2 or VkDeviceCreateInfo. The
+ * struct then points into itself: it must not be copied while chained. */
+static inline void bench_features_chain(struct bench_features *f, uint32_t minor)
+{
+    f->core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    f->v11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    f->v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    f->v13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    f->v14.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
+    f->core.pNext = &f->v11;
+    f->v11.pNext = &f->v12;
+    f->v12.pNext = &f->v13;
+    f->v13.pNext = minor >= 4 ? &f->v14 : NULL;
+    f->v14.pNext = NULL;
+}
+
+static inline void bench_features_unchain(struct bench_features *f)
+{
+    f->core.pNext = f->v11.pNext = f->v12.pNext = f->v13.pNext = f->v14.pNext = NULL;
+}
+
+/* Every VkBool32 of the five structs, as runs: first member and count. */
+#define BENCH_FEATURE_RUNS 5
+static inline void bench_features_runs(struct bench_features *f, VkBool32 *first[BENCH_FEATURE_RUNS],
+                                       size_t count[BENCH_FEATURE_RUNS])
+{
+#define BENCH_RUN(i, member, type, from, to)                                                     \
+    first[i] = &f->member.from;                                                                  \
+    count[i] = (offsetof(type, to) - offsetof(type, from)) / sizeof(VkBool32) + 1;
+    BENCH_RUN(0, core.features, VkPhysicalDeviceFeatures, robustBufferAccess, inheritedQueries)
+    BENCH_RUN(1, v11, VkPhysicalDeviceVulkan11Features, storageBuffer16BitAccess, shaderDrawParameters)
+    BENCH_RUN(2, v12, VkPhysicalDeviceVulkan12Features, samplerMirrorClampToEdge, subgroupBroadcastDynamicId)
+    BENCH_RUN(3, v13, VkPhysicalDeviceVulkan13Features, robustImageAccess, maintenance4)
+    BENCH_RUN(4, v14, VkPhysicalDeviceVulkan14Features, globalPriorityQuery, pushDescriptor)
+#undef BENCH_RUN
+}
+
+/* dst &= mask, feature by feature. */
+static inline void bench_features_and(struct bench_features *dst, struct bench_features *mask)
+{
+    VkBool32 *d[BENCH_FEATURE_RUNS], *m[BENCH_FEATURE_RUNS];
+    size_t n[BENCH_FEATURE_RUNS], i, k;
+    bench_features_runs(dst, d, n);
+    bench_features_runs(mask, m, n);
+    for (i = 0; i < BENCH_FEATURE_RUNS; i++)
+        for (k = 0; k < n[i]; k++)
+            d[i][k] = d[i][k] && m[i][k] ? VK_TRUE : VK_FALSE;
+}
+
+/* What a benchmark can use if the implementation has it (bench_vk_init_with).
+ * Each wanted feature and extension it supports is enabled; check
+ * bench_vk.enabled and bench_vk_extension before use. */
+struct bench_vk_wants {
+    struct bench_features features;     /* VK_TRUE: wanted */
+    const char *instance_extensions[8]; /* unused entries NULL */
+    const char *device_extensions[8];
+};
+
+#define BENCH_MAX_EXTENSIONS 17 /* 8 + 8 wanted, VK_KHR_portability_subset */
 
 struct bench_vk {
     VkInstance instance;
@@ -178,6 +272,10 @@ struct bench_vk {
     int push_descriptor;  /* pushDescriptor enabled */
     int local_read;       /* dynamicRenderingLocalRead enabled */
     int local_read_depth; /* ... and depth can be read as an input attachment */
+    int all_features;     /* BENCH_ALL_FEATURES: enabled is everything supported */
+    struct bench_features supported, enabled; /* not chained */
+    const char *extensions[BENCH_MAX_EXTENSIONS]; /* enabled instance and device extensions */
+    uint32_t extension_count;
 };
 
 static inline int bench_has_extension(const VkExtensionProperties *exts, uint32_t count, const char *name)
@@ -189,9 +287,35 @@ static inline int bench_has_extension(const VkExtensionProperties *exts, uint32_
     return 0;
 }
 
-static inline void bench_vk_create_instance(struct bench_vk *vk)
+/* Whether an instance or device extension was enabled. */
+static inline int bench_vk_extension(const struct bench_vk *vk, const char *name)
 {
-    const char *exts[1];
+    uint32_t i;
+    for (i = 0; i < vk->extension_count; i++)
+        if (strcmp(vk->extensions[i], name) == 0)
+            return 1;
+    return 0;
+}
+
+/* Adds the wanted extensions that avail has to names (and vk->extensions). */
+static inline uint32_t bench_vk_pick_extensions(struct bench_vk *vk, const VkExtensionProperties *avail,
+                                                uint32_t count, const char *const *wanted, size_t n_wanted,
+                                                const char **names, uint32_t n)
+{
+    size_t i;
+    for (i = 0; i < n_wanted; i++) {
+        if (!wanted[i] || !bench_has_extension(avail, count, wanted[i]) ||
+            vk->extension_count == BENCH_MAX_EXTENSIONS)
+            continue;
+        names[n++] = wanted[i];
+        vk->extensions[vk->extension_count++] = wanted[i];
+    }
+    return n;
+}
+
+static inline void bench_vk_create_instance(struct bench_vk *vk, const struct bench_vk_wants *wants)
+{
+    const char *exts[9];
     VkExtensionProperties *avail;
     uint32_t count = 0, n_exts = 0;
     VkApplicationInfo app = {
@@ -216,24 +340,24 @@ static inline void bench_vk_create_instance(struct bench_vk *vk)
         exts[n_exts++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
         info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
     }
+    if (wants)
+        n_exts = bench_vk_pick_extensions(vk, avail, count, wants->instance_extensions, 8, exts, n_exts);
     free(avail);
     info.enabledExtensionCount = n_exts;
     BENCH_VK(vkCreateInstance(&info, NULL, &vk->instance));
 }
 
-/* Creates everything a benchmark needs, or prints "skipped" and exits. */
-static inline void bench_vk_init(struct bench_vk *vk, unsigned needs)
+/* Creates everything a benchmark needs, or prints "skipped" and exits.
+ * needs: BENCH_NEED_* (required) and BENCH_WANT_* (optional) flags; wants
+ * (may be NULL): further optional features and extensions. With
+ * BENCH_ALL_FEATURES set, every supported feature is enabled instead. */
+static inline void bench_vk_init_with(struct bench_vk *vk, unsigned needs, const struct bench_vk_wants *wants)
 {
-    VkPhysicalDeviceVulkan13Features have13 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
-    VkPhysicalDeviceVulkan14Features have14 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES };
-    VkPhysicalDeviceFeatures2 have = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &have13 };
-    VkPhysicalDeviceVulkan13Features want13 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
-    VkPhysicalDeviceVulkan14Features want14 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES };
-    VkPhysicalDeviceFeatures2 want = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &want13 };
+    struct bench_features have, want;
     VkQueueFamilyProperties families[16];
     VkExtensionProperties *exts;
-    const char *device_exts[1];
-    uint32_t count = 0, i, n_device_exts = 0, api;
+    const char *device_exts[9];
+    uint32_t count = 0, i, n_device_exts = 0, api, minor;
     float priority = 1.0f;
     VkDeviceQueueCreateInfo queue_info = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -242,14 +366,14 @@ static inline void bench_vk_init(struct bench_vk *vk, unsigned needs)
     };
     VkDeviceCreateInfo device_info = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .pNext = &want,
+        .pNext = &want.core,
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = &queue_info,
         .ppEnabledExtensionNames = device_exts,
     };
 
     memset(vk, 0, sizeof(*vk));
-    bench_vk_create_instance(vk);
+    bench_vk_create_instance(vk, wants);
 
     count = 1;
     if (vkEnumeratePhysicalDevices(vk->instance, &count, &vk->physical_device) < 0 || count == 0)
@@ -261,38 +385,57 @@ static inline void bench_vk_init(struct bench_vk *vk, unsigned needs)
     api = vk->props.apiVersion;
     if (VK_API_VERSION_MAJOR(api) == 1 && VK_API_VERSION_MINOR(api) < 3)
         bench_fatal("device reports Vulkan 1.%u; the benchmarks need 1.3", VK_API_VERSION_MINOR(api));
-    if (VK_API_VERSION_MINOR(api) >= 4)
-        have13.pNext = &have14;
-    vkGetPhysicalDeviceFeatures2(vk->physical_device, &have);
+    minor = VK_API_VERSION_MINOR(api);
+    memset(&have, 0, sizeof(have));
+    bench_features_chain(&have, minor);
+    vkGetPhysicalDeviceFeatures2(vk->physical_device, &have.core);
+    bench_features_unchain(&have);
 
     {
         char missing[256] = "";
-        if ((needs & BENCH_NEED_DYNAMIC_RENDERING) && !have13.dynamicRendering)
+        if ((needs & BENCH_NEED_DYNAMIC_RENDERING) && !have.v13.dynamicRendering)
             strcat(missing, " dynamicRendering");
-        if ((needs & BENCH_NEED_SYNC2) && !have13.synchronization2)
+        if ((needs & BENCH_NEED_SYNC2) && !have.v13.synchronization2)
             strcat(missing, " synchronization2");
-        if ((needs & BENCH_NEED_MAINTENANCE4) && !have13.maintenance4)
+        if ((needs & BENCH_NEED_MAINTENANCE4) && !have.v13.maintenance4)
             strcat(missing, " maintenance4");
         if (missing[0])
             bench_fatal("Vulkan 1.3 features not supported:%s", missing);
     }
-    want13.dynamicRendering = (needs & BENCH_NEED_DYNAMIC_RENDERING) ? VK_TRUE : VK_FALSE;
-    want13.synchronization2 = (needs & BENCH_NEED_SYNC2) ? VK_TRUE : VK_FALSE;
-    want13.maintenance4 = (needs & BENCH_NEED_MAINTENANCE4) ? VK_TRUE : VK_FALSE;
-    if ((needs & BENCH_WANT_PUSH_DESCRIPTOR) && have14.pushDescriptor) {
-        want14.pushDescriptor = VK_TRUE;
-        vk->push_descriptor = 1;
+    /* Everything, or what was asked for and is there. */
+    vk->all_features = bench_applied.all_features = bench_all_features();
+    if (vk->all_features) {
+        want = have;
+    } else {
+        if (wants)
+            want = wants->features;
+        else
+            memset(&want, 0, sizeof(want));
+        if (needs & BENCH_NEED_DYNAMIC_RENDERING)
+            want.v13.dynamicRendering = VK_TRUE;
+        if (needs & BENCH_NEED_SYNC2)
+            want.v13.synchronization2 = VK_TRUE;
+        if (needs & BENCH_NEED_MAINTENANCE4)
+            want.v13.maintenance4 = VK_TRUE;
+        if (needs & BENCH_WANT_PUSH_DESCRIPTOR)
+            want.v14.pushDescriptor = VK_TRUE;
+        if (needs & BENCH_WANT_LOCAL_READ)
+            want.v14.dynamicRenderingLocalRead = VK_TRUE;
+        bench_features_and(&want, &have);
     }
-    if ((needs & BENCH_WANT_LOCAL_READ) && have14.dynamicRenderingLocalRead) {
+    if (minor < 4)
+        memset(&want.v14, 0, sizeof(want.v14));
+    vk->push_descriptor = (needs & BENCH_WANT_PUSH_DESCRIPTOR) && want.v14.pushDescriptor;
+    vk->local_read = (needs & BENCH_WANT_LOCAL_READ) && want.v14.dynamicRenderingLocalRead;
+    if (vk->local_read) {
         VkPhysicalDeviceVulkan14Properties props14 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES };
         VkPhysicalDeviceProperties2 props2 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &props14 };
         vkGetPhysicalDeviceProperties2(vk->physical_device, &props2);
-        want14.dynamicRenderingLocalRead = VK_TRUE;
-        vk->local_read = 1;
         vk->local_read_depth = props14.dynamicRenderingLocalReadDepthStencilAttachments != VK_FALSE;
     }
-    if (VK_API_VERSION_MINOR(api) >= 4)
-        want13.pNext = &want14;
+    vk->supported = have;
+    vk->enabled = want;
+    bench_features_chain(&want, minor);
 
     /* One queue that does everything. */
     count = 16;
@@ -319,8 +462,12 @@ static inline void bench_vk_init(struct bench_vk *vk, unsigned needs)
         count = 0;
     if (bench_has_extension(exts, count, "VK_KHR_portability_subset")) {
         device_exts[n_device_exts++] = "VK_KHR_portability_subset";
+        vk->extensions[vk->extension_count++] = "VK_KHR_portability_subset";
         vk->portability_subset = 1;
     }
+    if (wants)
+        n_device_exts = bench_vk_pick_extensions(vk, exts, count, wants->device_extensions, 8, device_exts,
+                                                 n_device_exts);
     free(exts);
     device_info.enabledExtensionCount = n_device_exts;
     BENCH_VK(vkCreateDevice(vk->physical_device, &device_info, NULL, &vk->device));
@@ -332,7 +479,7 @@ static inline void bench_vk_init(struct bench_vk *vk, unsigned needs)
     BENCH_DEVICE_COMMANDS(BENCH_LOAD)
 #undef BENCH_LOAD
 #define BENCH_LOAD_OPTIONAL(name) vkd.name = (PFN_vk##name)vkGetDeviceProcAddr(vk->device, "vk" #name);
-    BENCH_DEVICE_COMMANDS_1_4(BENCH_LOAD_OPTIONAL)
+    BENCH_DEVICE_COMMANDS_OPTIONAL(BENCH_LOAD_OPTIONAL)
 #undef BENCH_LOAD_OPTIONAL
 
     vkd.GetDeviceQueue(vk->device, vk->queue_family, 0, &vk->queue);
@@ -348,6 +495,11 @@ static inline void bench_vk_init(struct bench_vk *vk, unsigned needs)
         BENCH_VK(vkd.CreateCommandPool(vk->device, &pool_info, NULL, &vk->pool));
         BENCH_VK(vkd.CreateFence(vk->device, &fence_info, NULL, &vk->fence));
     }
+}
+
+static inline void bench_vk_init(struct bench_vk *vk, unsigned needs)
+{
+    bench_vk_init_with(vk, needs, NULL);
 }
 
 static inline void bench_vk_destroy(struct bench_vk *vk)
@@ -761,7 +913,8 @@ static inline VkPipelineLayout bench_pipeline_layout(struct bench_vk *vk, uint32
 }
 
 /* What varies between the graphics pipelines the benchmarks build. Viewport
- * and scissor are always dynamic; rendering is always dynamic rendering. */
+ * and scissor are always dynamic, plus any in dynamic[]; rendering is always
+ * dynamic rendering. */
 struct bench_gfx_desc {
     VkShaderModule vs, fs;
     const VkSpecializationInfo *vs_spec, *fs_spec;
@@ -779,6 +932,8 @@ struct bench_gfx_desc {
     uint32_t binding_count, attribute_count;
     VkVertexInputBindingDescription bindings[4];
     VkVertexInputAttributeDescription attributes[8];
+    uint32_t dynamic_count;
+    VkDynamicState dynamic[16];        /* more dynamic states */
     const void *rendering_next;        /* chained after VkPipelineRenderingCreateInfo */
 };
 
@@ -795,7 +950,7 @@ struct bench_gfx_state {
     VkPipelineDepthStencilStateCreateInfo depth;
     VkPipelineColorBlendAttachmentState attachments[8];
     VkPipelineColorBlendStateCreateInfo blend;
-    VkDynamicState dynamic_states[2];
+    VkDynamicState dynamic_states[18];
     VkPipelineDynamicStateCreateInfo dynamic;
     VkPipelineRenderingCreateInfo rendering;
     VkGraphicsPipelineCreateInfo info;
@@ -868,8 +1023,10 @@ static inline void bench_gfx_state_init(struct bench_gfx_state *s, const struct 
 
     s->dynamic_states[0] = VK_DYNAMIC_STATE_VIEWPORT;
     s->dynamic_states[1] = VK_DYNAMIC_STATE_SCISSOR;
+    for (i = 0; i < d->dynamic_count && i < 16; i++)
+        s->dynamic_states[2 + i] = d->dynamic[i];
     s->dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    s->dynamic.dynamicStateCount = 2;
+    s->dynamic.dynamicStateCount = 2 + i;
     s->dynamic.pDynamicStates = s->dynamic_states;
 
     s->rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
@@ -971,23 +1128,64 @@ static inline void bench_cmd_begin_color(VkCommandBuffer cmd, const struct bench
  * frames in flight, like a renderer. Per measured frame:
  *   cpu_us     reset + record + end + submit (not the wait for a free slot)
  *   submit_us  vkQueueSubmit alone
- *   gpu_us     timestamps at the start and end of the command buffer
+ *   gpu_us     timestamps at the start and end of the frame (none with
+ *              BENCH_GPU_TIMING=0)
  *   frame_us   time between consecutive submits: throughput, CPU or GPU bound
+ *
+ * A frame is one primary command buffer, which the loop begins and ends
+ * around the benchmark's record function. After bench_loop_primaries(loop,
+ * n) it is n primaries that one vkQueueSubmit submits in order, the way
+ * D3D12-style renderers submit command lists recorded on several threads.
+ * Each has its own command pool, and the record function begins and ends
+ * each one (bench_frame_begin, bench_frame_end) on the thread that records
+ * it, all before it returns.
  * ========================================================================== */
 
+#define BENCH_MAX_PRIMARIES 8
+
 struct bench_frame {
-    VkCommandBuffer cmd;
-    uint32_t index;  /* frame number, from 0 */
-    uint32_t slot;   /* frame-in-flight slot, for per-slot resources */
-    int verify;      /* also record the readback the benchmark checks */
+    VkCommandBuffer cmd; /* the frame's command buffer (several: cmds[0]) */
+    uint32_t index;      /* frame number, from 0 */
+    uint32_t slot;       /* frame-in-flight slot, for per-slot resources */
+    int verify;          /* also record the readback the benchmark checks */
+    uint32_t primaries;  /* 1, or as set by bench_loop_primaries */
+    VkCommandBuffer cmds[BENCH_MAX_PRIMARIES]; /* submitted in this order */
+    VkCommandPool pools[BENCH_MAX_PRIMARIES];  /* cmds[i]'s, reset by bench_frame_begin */
+    VkDevice device;
+    VkQueryPool queries; /* the loop's timestamps, or VK_NULL_HANDLE */
 };
 
 typedef void (*bench_record_fn)(void *user, const struct bench_frame *frame);
 
+/* Starts recording primary i of the frame; the first one also starts the
+ * frame's GPU timing. Any thread, one per command buffer. */
+static inline void bench_frame_begin(const struct bench_frame *f, uint32_t i)
+{
+    VkCommandBufferBeginInfo begin = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+    BENCH_VK(vkd.ResetCommandPool(f->device, f->pools[i], 0));
+    BENCH_VK(vkd.BeginCommandBuffer(f->cmds[i], &begin));
+    if (i == 0 && f->queries) {
+        vkd.CmdResetQueryPool(f->cmds[0], f->queries, 2 * f->slot, 2);
+        vkd.CmdWriteTimestamp2(f->cmds[0], VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, f->queries, 2 * f->slot);
+    }
+}
+
+/* Ends primary i; the last one first ends the frame's GPU timing. */
+static inline void bench_frame_end(const struct bench_frame *f, uint32_t i)
+{
+    if (i + 1 == f->primaries && f->queries)
+        vkd.CmdWriteTimestamp2(f->cmds[i], VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, f->queries, 2 * f->slot + 1);
+    BENCH_VK(vkd.EndCommandBuffer(f->cmds[i]));
+}
+
 struct bench_loop {
     struct bench_vk *vk;
-    VkCommandPool pools[BENCH_FRAMES_IN_FLIGHT];
-    VkCommandBuffer cmds[BENCH_FRAMES_IN_FLIGHT];
+    VkCommandPool pools[BENCH_FRAMES_IN_FLIGHT][BENCH_MAX_PRIMARIES];
+    VkCommandBuffer cmds[BENCH_FRAMES_IN_FLIGHT][BENCH_MAX_PRIMARIES];
+    uint32_t primaries, allocated; /* per frame, and per slot so far */
     VkFence fences[BENCH_FRAMES_IN_FLIGHT];
     int busy[BENCH_FRAMES_IN_FLIGHT];
     int sample_of[BENCH_FRAMES_IN_FLIGHT]; /* measured frame in the slot, or -1 */
@@ -998,13 +1196,30 @@ struct bench_loop {
     double *cpu, *submit, *gpu, *frame;
 };
 
-static inline void bench_loop_init(struct bench_loop *loop, struct bench_vk *vk, int max_frames)
+/* Primary i of every slot, each in its own pool. */
+static inline void bench_loop_allocate(struct bench_loop *loop, uint32_t i)
 {
+    struct bench_vk *vk = loop->vk;
     VkCommandPoolCreateInfo pool_info = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
         .queueFamilyIndex = vk->queue_family,
     };
+    uint32_t slot;
+    for (slot = 0; slot < BENCH_FRAMES_IN_FLIGHT; slot++) {
+        VkCommandBufferAllocateInfo alloc = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        BENCH_VK(vkd.CreateCommandPool(vk->device, &pool_info, NULL, &loop->pools[slot][i]));
+        alloc.commandPool = loop->pools[slot][i];
+        BENCH_VK(vkd.AllocateCommandBuffers(vk->device, &alloc, &loop->cmds[slot][i]));
+    }
+}
+
+static inline void bench_loop_init(struct bench_loop *loop, struct bench_vk *vk, int max_frames)
+{
     VkFenceCreateInfo fence_info = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
     uint32_t i;
 
@@ -1015,20 +1230,15 @@ static inline void bench_loop_init(struct bench_loop *loop, struct bench_vk *vk,
     loop->submit = bench_alloc(sizeof(double) * (size_t)max_frames);
     loop->gpu = bench_alloc(sizeof(double) * (size_t)max_frames);
     loop->frame = bench_alloc(sizeof(double) * (size_t)max_frames);
+    bench_loop_allocate(loop, 0);
+    loop->primaries = loop->allocated = 1;
     for (i = 0; i < BENCH_FRAMES_IN_FLIGHT; i++) {
-        VkCommandBufferAllocateInfo alloc = {
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = 1,
-        };
-        BENCH_VK(vkd.CreateCommandPool(vk->device, &pool_info, NULL, &loop->pools[i]));
-        alloc.commandPool = loop->pools[i];
-        BENCH_VK(vkd.AllocateCommandBuffers(vk->device, &alloc, &loop->cmds[i]));
         BENCH_VK(vkd.CreateFence(vk->device, &fence_info, NULL, &loop->fences[i]));
         loop->sample_of[i] = -1;
     }
     /* GPU timing is optional: without timestamps the line has no gpu_us. */
-    if (vk->timestamp_bits) {
+    bench_applied.no_gpu_timing = !bench_gpu_timing();
+    if (vk->timestamp_bits && !bench_applied.no_gpu_timing) {
         VkQueryPoolCreateInfo query_info = {
             .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
             .queryType = VK_QUERY_TYPE_TIMESTAMP,
@@ -1066,38 +1276,51 @@ static inline void bench_loop_wait_all(struct bench_loop *loop)
         bench_loop_retire(loop, i);
 }
 
+/* Frames from now on are n primary command buffers (1 to
+ * BENCH_MAX_PRIMARIES), recorded as the section comment says. */
+static inline void bench_loop_primaries(struct bench_loop *loop, uint32_t n)
+{
+    if (n < 1 || n > BENCH_MAX_PRIMARIES)
+        bench_fatal("bench_loop_primaries(%u): 1 to %d", n, BENCH_MAX_PRIMARIES);
+    bench_loop_wait_all(loop);
+    for (; loop->allocated < n; loop->allocated++)
+        bench_loop_allocate(loop, loop->allocated);
+    loop->primaries = n;
+}
+
 /* Records and submits one frame. measured: store its timings. */
 static inline void bench_loop_frame(struct bench_loop *loop, bench_record_fn record, void *user, int verify,
                                     int measured)
 {
     struct bench_vk *vk = loop->vk;
-    uint32_t slot = loop->next_index % BENCH_FRAMES_IN_FLIGHT;
-    VkCommandBufferBeginInfo begin = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-    };
-    VkSubmitInfo submit = { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1 };
+    uint32_t slot = loop->next_index % BENCH_FRAMES_IN_FLIGHT, i;
+    VkSubmitInfo submit = { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO };
     struct bench_frame frame;
     double t0, t1, t2;
 
     bench_loop_retire(loop, slot);
     t0 = bench_now_us();
-    frame.cmd = loop->cmds[slot];
     frame.index = loop->next_index++;
     frame.slot = slot;
     frame.verify = verify;
-    BENCH_VK(vkd.ResetFences(vk->device, 1, &loop->fences[slot]));
-    BENCH_VK(vkd.ResetCommandPool(vk->device, loop->pools[slot], 0));
-    BENCH_VK(vkd.BeginCommandBuffer(frame.cmd, &begin));
-    if (loop->queries) {
-        vkd.CmdResetQueryPool(frame.cmd, loop->queries, 2 * slot, 2);
-        vkd.CmdWriteTimestamp2(frame.cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, loop->queries, 2 * slot);
+    frame.primaries = loop->primaries;
+    for (i = 0; i < frame.primaries; i++) {
+        frame.cmds[i] = loop->cmds[slot][i];
+        frame.pools[i] = loop->pools[slot][i];
     }
-    record(user, &frame);
-    if (loop->queries)
-        vkd.CmdWriteTimestamp2(frame.cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, loop->queries, 2 * slot + 1);
-    BENCH_VK(vkd.EndCommandBuffer(frame.cmd));
-    submit.pCommandBuffers = &frame.cmd;
+    frame.cmd = frame.cmds[0];
+    frame.device = vk->device;
+    frame.queries = loop->queries;
+    BENCH_VK(vkd.ResetFences(vk->device, 1, &loop->fences[slot]));
+    if (frame.primaries == 1) {
+        bench_frame_begin(&frame, 0);
+        record(user, &frame);
+        bench_frame_end(&frame, 0);
+    } else {
+        record(user, &frame); /* begins and ends every primary */
+    }
+    submit.commandBufferCount = frame.primaries;
+    submit.pCommandBuffers = frame.cmds;
     t1 = bench_now_us();
     BENCH_VK(vkd.QueueSubmit(vk->queue, 1, &submit, loop->fences[slot]));
     t2 = bench_now_us();
@@ -1158,11 +1381,12 @@ static inline double bench_loop_gpu_median(const struct bench_loop *loop)
 static inline void bench_loop_destroy(struct bench_loop *loop)
 {
     struct bench_vk *vk = loop->vk;
-    uint32_t i;
+    uint32_t i, k;
     bench_loop_wait_all(loop);
     for (i = 0; i < BENCH_FRAMES_IN_FLIGHT; i++) {
         vkd.DestroyFence(vk->device, loop->fences[i], NULL);
-        vkd.DestroyCommandPool(vk->device, loop->pools[i], NULL);
+        for (k = 0; k < loop->allocated; k++)
+            vkd.DestroyCommandPool(vk->device, loop->pools[i][k], NULL);
     }
     if (loop->queries)
         vkd.DestroyQueryPool(vk->device, loop->queries, NULL);
