@@ -58484,6 +58484,10 @@ struct pvk_draw_track {
     uint32_t pipeline_int, first_slots;
     uint8_t map[PVK_MAX_COLOR_ATTACHMENTS];
     bool first_draw;
+    /* The bound pipeline's fetched-only and written logical indices through
+     * map, as color slots (mapped: up to date) */
+    bool mapped;
+    uint32_t map_only, map_writes;
 };
 
 /* Queries a render encoder makes available once it ends. */
@@ -60741,6 +60745,7 @@ static void pvk_track_pipeline(struct pvk_draw_track *t, const struct pvk_pipeli
     if (!p || !p->gfx)
         return;
     t->gfx = p->gfx;
+    t->mapped = false;
     t->fetches |= p->gfx->fetches;
     if (!(p->gfx->dynamic & PVK_DYN_BIT(PRIMITIVE_TOPOLOGY)))
         t->topology = p->gfx->state.topology;
@@ -60772,50 +60777,61 @@ static uint32_t pvk_topology_class(uint32_t topology)
     }
 }
 
-static bool pvk_scan_packet(struct pvk_encoder *e, struct pvk_draw_track *t, const struct pvk_cmd *c, uint32_t depth)
+/* A draw's part in the scan (pvk_scan_packet). */
+static void pvk_scan_draw(struct pvk_draw_track *t)
 {
-    uint32_t conv, i;
-    if (c->op == PVK_CMD_DRAW || c->op == PVK_CMD_DRAW_INDEXED || c->op == PVK_CMD_DRAW_INDIRECT)
-        t->draws |= t->gfx && t->gfx->bresenham && (t->gfx->lines || pvk_topology_class(t->topology) ==
-                                                                          PVK_MTLPrimitiveTopologyClassLine)
-                        ? 1u
-                        : 2u;
-    if ((c->op == PVK_CMD_DRAW || c->op == PVK_CMD_DRAW_INDEXED || c->op == PVK_CMD_DRAW_INDIRECT) && t->gfx) {
-        uint32_t only = t->gfx->fetched & ~t->gfx->writes;
-        for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
-            if (t->map[i] != PVK_NO_SLOT) {
-                t->tex |= (only >> i & 1u) << t->map[i];
-                t->written |= (t->gfx->writes >> i & 1u) << t->map[i];
-            }
-        t->tex_bad |= only && !t->gfx->tex_variant;
-    }
-    if ((c->op == PVK_CMD_DRAW || c->op == PVK_CMD_DRAW_INDEXED || c->op == PVK_CMD_DRAW_INDIRECT) && t->gfx &&
-        t->gfx->fetches && t->nsplit > 1 && !t->fetch_bad) {
-        uint32_t g, h;
-        t->fetch_bad = !t->gfx->fetch_split;
-        for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS && !t->fetch_bad; i++) {
-            uint32_t deps = t->gfx->fetch_deps[i], k;
-            if (!(t->gfx->writes >> i & 1u) || t->map[i] == PVK_NO_SLOT)
-                continue;
-            for (g = 0; g < t->nsplit && !(t->split[g] >> t->map[i] & 1u); g++)
-                ;
-            for (k = 0; k < PVK_MAX_COLOR_ATTACHMENTS; k++)
-                if (deps >> k & 1u) {
-                    for (h = 0; t->map[k] != PVK_NO_SLOT && h < t->nsplit && !(t->split[h] >> t->map[k] & 1u); h++)
-                        ;
-                    t->fetch_bad |= t->map[k] == PVK_NO_SLOT || h != g;
-                }
-        }
-    }
-    if (!t->first_draw && (c->op == PVK_CMD_DRAW || c->op == PVK_CMD_DRAW_INDEXED || c->op == PVK_CMD_DRAW_INDIRECT)) {
+    const struct pvk_gfx_pipeline *g = t->gfx;
+    uint32_t i;
+    t->draws |= g && g->bresenham && (g->lines || pvk_topology_class(t->topology) == PVK_MTLPrimitiveTopologyClassLine)
+                    ? 1u
+                    : 2u;
+    if (!t->first_draw) {
         t->first_draw = true;
         for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
             if ((t->pipeline_int & (1u << i)) && t->map[i] != PVK_NO_SLOT)
                 t->first_slots |= 1u << t->map[i];
     }
+    if (!g)
+        return;
+    if (!t->mapped) { /* the first draw since the pipeline or the map changed */
+        uint32_t only = g->fetched & ~g->writes;
+        t->map_only = t->map_writes = 0;
+        for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
+            if (t->map[i] != PVK_NO_SLOT) {
+                t->map_only |= (only >> i & 1u) << t->map[i];
+                t->map_writes |= (g->writes >> i & 1u) << t->map[i];
+            }
+        t->mapped = true;
+    }
+    t->tex |= t->map_only;
+    t->written |= t->map_writes;
+    t->tex_bad |= (g->fetched & ~g->writes) && !g->tex_variant;
+    if (g->fetches && t->nsplit > 1 && !t->fetch_bad) {
+        uint32_t gr, h;
+        t->fetch_bad = !g->fetch_split;
+        for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS && !t->fetch_bad; i++) {
+            uint32_t deps = g->fetch_deps[i], k;
+            if (!(g->writes >> i & 1u) || t->map[i] == PVK_NO_SLOT)
+                continue;
+            for (gr = 0; gr < t->nsplit && !(t->split[gr] >> t->map[i] & 1u); gr++)
+                ;
+            for (k = 0; k < PVK_MAX_COLOR_ATTACHMENTS; k++)
+                if (deps >> k & 1u) {
+                    for (h = 0; t->map[k] != PVK_NO_SLOT && h < t->nsplit && !(t->split[h] >> t->map[k] & 1u); h++)
+                        ;
+                    t->fetch_bad |= t->map[k] == PVK_NO_SLOT || h != gr;
+                }
+        }
+    }
+}
+
+static bool pvk_scan_packet(struct pvk_encoder *e, struct pvk_draw_track *t, const struct pvk_cmd *c, uint32_t depth)
+{
+    uint32_t conv, i;
     switch ((enum pvk_cmd_op)c->op) {
     case PVK_CMD_SUBPASS:
         memcpy(t->map, ((const struct pvk_cmd_subpass *)c)->map, sizeof(t->map));
+        t->mapped = false;
         t->tex_bad |= !((const struct pvk_cmd_subpass *)c)->dynamic; /* (render passes: other Metal passes) */
         break;
     case PVK_CMD_BIND_PIPELINE:
@@ -60839,8 +60855,12 @@ static bool pvk_scan_packet(struct pvk_encoder *e, struct pvk_draw_track *t, con
         t->index_type = b->type;
         break;
     }
+    case PVK_CMD_DRAW:
+        pvk_scan_draw(t);
+        break;
     case PVK_CMD_DRAW_INDEXED:
     case PVK_CMD_DRAW_INDIRECT:
+        pvk_scan_draw(t);
         if ((conv = pvk_draw_conv(t, c)))
             pvk_prepass_draw(e, t, c, conv);
         break;
@@ -62454,6 +62474,7 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     track.fetch_bad = false;
     track.draws = 0;
     memset(track.map, PVK_NO_SLOT, sizeof(track.map));
+    track.mapped = false;
     track.hidden = r->pipeline && r->pipeline->gfx /* the depth/stencil copies its pipelines need */
                        ? r->pipeline->gfx->reads | (r->pipeline->gfx->bounds ? PVK_HIDDEN_DEPTH : 0u)
                        : 0;
