@@ -29866,6 +29866,39 @@ static inline struct pvk_block pvk_block_make(void (*fn)(void *user, id arg), vo
     return block;
 }
 
+/* A block taking two object arguments, e.g. Metal's library completion
+ * handlers (library, error); otherwise as struct pvk_block. */
+struct pvk_block2 {
+    void *isa;
+    int flags;
+    int reserved;
+    void (*invoke)(struct pvk_block2 *self, id a, id b);
+    const struct pvk_block_descriptor *descriptor;
+    /* captures */
+    void (*fn)(void *user, id a, id b);
+    void *user;
+};
+
+static inline void pvk_block2_invoke(struct pvk_block2 *self, id a, id b)
+{
+    self->fn(self->user, a, b);
+}
+
+static const struct pvk_block_descriptor pvk_block2_descriptor = { 0, sizeof(struct pvk_block2) };
+
+static inline struct pvk_block2 pvk_block2_make(void (*fn)(void *user, id a, id b), void *user)
+{
+    struct pvk_block2 block;
+    block.isa = _NSConcreteStackBlock;
+    block.flags = 0;
+    block.reserved = 0;
+    block.invoke = pvk_block2_invoke;
+    block.descriptor = &pvk_block2_descriptor;
+    block.fn = fn;
+    block.user = user;
+    return block;
+}
+
 /* ---- Foundation ---- */
 
 static inline void pvk_release(id object)
@@ -31438,6 +31471,7 @@ static inline id pvk_MTLDevice_newSharedEvent(id self) { PVK_SEL_CACHE("newShare
 static inline id pvk_MTLDevice_newEvent(id self) { PVK_SEL_CACHE("newEvent"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline id pvk_MTLDevice_newBufferWithLength_options(id self, unsigned long length, pvk_MTLResourceOptions options) { PVK_SEL_CACHE("newBufferWithLength:options:"); return PVK_MSG(id, (id, SEL, unsigned long, pvk_MTLResourceOptions))(self, pvk_sel_, length, options); }
 static inline id pvk_MTLDevice_newLibraryWithSource_options_error(id self, id source, id options, id * error) { PVK_SEL_CACHE("newLibraryWithSource:options:error:"); return PVK_MSG(id, (id, SEL, id, id, id *))(self, pvk_sel_, source, options, error); }
+static inline void pvk_MTLDevice_newLibraryWithSource_options_completionHandler(id self, id source, id options, void * completionHandler) { PVK_SEL_CACHE("newLibraryWithSource:options:completionHandler:"); PVK_MSG(void, (id, SEL, id, id, void *))(self, pvk_sel_, source, options, completionHandler); }
 static inline id pvk_MTLDevice_newComputePipelineStateWithDescriptor_options_reflection_error(id self, id descriptor, pvk_MTLPipelineOption options, id * reflection, id * error) { PVK_SEL_CACHE("newComputePipelineStateWithDescriptor:options:reflection:error:"); return PVK_MSG(id, (id, SEL, id, pvk_MTLPipelineOption, id *, id *))(self, pvk_sel_, descriptor, options, reflection, error); }
 static inline void pvk_MTL4CommandQueue_commit_count(id self, const id * commandBuffers, unsigned long count) { PVK_SEL_CACHE("commit:count:"); PVK_MSG(void, (id, SEL, const id *, unsigned long))(self, pvk_sel_, commandBuffers, count); }
 static inline void pvk_MTL4CommandQueue_commit_count_options(id self, const id * commandBuffers, unsigned long count, id options) { PVK_SEL_CACHE("commit:count:options:"); PVK_MSG(void, (id, SEL, const id *, unsigned long, id))(self, pvk_sel_, commandBuffers, count, options); }
@@ -59741,25 +59775,122 @@ static void pvk_msl_math_options(id options, const char *msl)
     }
 }
 
-/* MSL compiled as section 13 asks (MSL 3.2, safe math, invariance preserved
- * for an invariant position) into a library (retained), NULL with a message
- * in error[]. */
-static id pvk_msl_library(struct pvk_device *device, const char *msl, bool invariant, char *error, size_t error_size)
+/* The options MSL compiles with as section 13 asks: MSL 3.2, the math mode,
+ * invariance preserved for an invariant position (retained). */
+static id pvk_msl_compile_options(const char *msl, bool invariant)
 {
-    void *pool = objc_autoreleasePoolPush();
-    id options = pvk_MTLCompileOptions_new(), library = NULL, err = NULL;
+    id options = pvk_MTLCompileOptions_new();
     if (options) {
         pvk_msl_math_options(options, msl);
         pvk_MTLCompileOptions_setLanguageVersion(options, PVK_MTLLanguageVersion3_2);
         if (invariant)
             pvk_MTLCompileOptions_setPreserveInvariance(options, true);
+    }
+    return options;
+}
+
+/* MSL compiled with those into a library (retained), NULL with a message in
+ * error[]. */
+static id pvk_msl_library(struct pvk_device *device, const char *msl, bool invariant, char *error, size_t error_size)
+{
+    void *pool = objc_autoreleasePoolPush();
+    id options = pvk_msl_compile_options(msl, invariant), library = NULL, err = NULL;
+    if (options)
         library = pvk_MTLDevice_newLibraryWithSource_options_error(device->physical_device->mtl_device,
                                                                  pvk_NSString_stringWithUTF8String(msl), options, &err);
-    }
     if (!library)
         snprintf(error, error_size, "%s", err ? pvk_ns_utf8(pvk_NSError_localizedDescription(err)) : "Metal could not compile it");
     pvk_release(options);
     objc_autoreleasePoolPop(pool);
+    return library;
+}
+
+/* pvk_msl_library on Metal's own threads, for compiles that can overlap
+ * the caller's: pvk_msl_library_start, then pvk_msl_library_wait (once,
+ * always) for the library (retained) or NULL with a message in error[].
+ * The task is the caller's and the completion handler's, and the last of
+ * them to let go frees it: the handler may still be in its unlock when the
+ * caller sees the library. System memory (Metal's thread may free it). */
+struct pvk_library_task {
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    int refs;
+    bool done;
+    id library;
+    char error[256];
+};
+
+static void pvk_library_task_put(struct pvk_library_task *t)
+{
+    if (__atomic_sub_fetch(&t->refs, 1, __ATOMIC_ACQ_REL) == 0) {
+        pthread_cond_destroy(&t->cond);
+        pthread_mutex_destroy(&t->lock);
+        free(t);
+    }
+}
+
+static void pvk_msl_library_done(void *user, id library, id error)
+{
+    struct pvk_library_task *t = user;
+    void *pool = objc_autoreleasePoolPush(); /* (the message) */
+    pthread_mutex_lock(&t->lock);
+    t->library = pvk_retain(library);
+    if (!library)
+        snprintf(t->error, sizeof(t->error), "%s",
+                 error ? pvk_ns_utf8(pvk_NSError_localizedDescription(error)) : "Metal could not compile it");
+    t->done = true;
+    pthread_cond_signal(&t->cond);
+    pthread_mutex_unlock(&t->lock);
+    objc_autoreleasePoolPop(pool);
+    pvk_library_task_put(t);
+}
+
+/* NULL: not started (out of resources); compile it with pvk_msl_library. */
+static struct pvk_library_task *pvk_msl_library_start(struct pvk_device *device, const char *msl, bool invariant)
+{
+    struct pvk_library_task *t = calloc(1, sizeof(*t));
+    struct pvk_block2 block;
+    void *pool;
+    id options;
+    if (!t)
+        return NULL;
+    if (pthread_mutex_init(&t->lock, NULL) != 0) {
+        free(t);
+        return NULL;
+    }
+    if (pthread_cond_init(&t->cond, NULL) != 0) {
+        pthread_mutex_destroy(&t->lock);
+        free(t);
+        return NULL;
+    }
+    t->refs = 2;
+    pool = objc_autoreleasePoolPush();
+    options = pvk_msl_compile_options(msl, invariant);
+    block = pvk_block2_make(pvk_msl_library_done, t);
+    if (options)
+        pvk_MTLDevice_newLibraryWithSource_options_completionHandler(
+            device->physical_device->mtl_device, pvk_NSString_stringWithUTF8String(msl), options, &block);
+    pvk_release(options);
+    objc_autoreleasePoolPop(pool);
+    if (!options) { /* (no handler) */
+        t->refs = 1;
+        pvk_library_task_put(t);
+        return NULL;
+    }
+    return t;
+}
+
+static id pvk_msl_library_wait(struct pvk_library_task *t, char *error, size_t error_size)
+{
+    id library;
+    pthread_mutex_lock(&t->lock);
+    while (!t->done)
+        pthread_cond_wait(&t->cond, &t->lock);
+    library = t->library;
+    if (!library)
+        snprintf(error, error_size, "%s", t->error);
+    pthread_mutex_unlock(&t->lock);
+    pvk_library_task_put(t);
     return library;
 }
 
@@ -65278,12 +65409,13 @@ static void pvk_key_add_code(struct pvk_key *k, const uint64_t hash[2], size_t w
  * compile a stage once. A translation is keyed by everything it is made
  * from (pvk_stage_key), a library by its MSL and invariance, which also
  * shares the libraries of MSL from pipeline cache data and of the generated
- * functions of variants. Both are made outside the lock (threads racing
- * for one keep the first) and kept most recently used first, within
- * PVK_SHADER_CACHE_BYTES of MSL. System memory: entries outlive the
- * commands that made them, and libraries are also made while encoding and
- * on the device's own thread (pvk_device_warm). Its hits are not
- * application pipeline cache hits (creation feedback). */
+ * functions of variants (a pipeline's two libraries, when neither is
+ * there, compile side by side: pvk_library_get2). Both are made outside
+ * the lock (threads racing for one keep the first) and kept most recently
+ * used first, within PVK_SHADER_CACHE_BYTES of MSL. System memory: entries
+ * outlive the commands that made them, and libraries are also made while
+ * encoding and on the device's own thread (pvk_device_warm). Its hits are
+ * not application pipeline cache hits (creation feedback). */
 
 #define PVK_SHADER_CACHE_BYTES (64u << 20)
 
@@ -65422,38 +65554,95 @@ static void pvk_shader_insert_locked(struct pvk_shader_cache *c, struct pvk_shad
         pvk_shader_remove_locked(c, c->oldest);
 }
 
-/* MSL compiled into a library as pvk_msl_library does (retained), once per
- * device; NULL with a message in error[]. */
-static id pvk_library_get(struct pvk_device *device, const char *msl, bool invariant, char *error, size_t error_size)
+/* The cache's library of a key (retained), NULL: none. */
+static id pvk_library_find(struct pvk_device *device, const struct pvk_key *key)
 {
     struct pvk_shader_cache *c = device->shaders;
     struct pvk_shader_entry *e;
-    struct pvk_key key;
-    size_t n = strlen(msl);
     id library;
-    pvk_key_init(&key, invariant ? 'I' : 'L');
-    pvk_key_add(&key, msl, n);
     pthread_mutex_lock(&c->lock);
-    e = pvk_shader_find_locked(c, &key);
+    e = pvk_shader_find_locked(c, key);
     library = e ? pvk_retain(e->library) : NULL;
     pthread_mutex_unlock(&c->lock);
-    if (library)
-        return library;
-    library = pvk_msl_library(device, msl, invariant, error, error_size);
-    if (!library)
-        return NULL;
+    return library;
+}
+
+/* Keeps a library just made (of n bytes of MSL); returns the one to use
+ * (retained): it, or one another thread made meanwhile. */
+static id pvk_library_keep(struct pvk_device *device, const struct pvk_key *key, size_t n, id library)
+{
+    struct pvk_shader_cache *c = device->shaders;
+    struct pvk_shader_entry *e;
     pthread_mutex_lock(&c->lock);
-    if ((e = pvk_shader_find_locked(c, &key))) { /* made meanwhile: that one */
+    if ((e = pvk_shader_find_locked(c, key))) {
         pvk_release(library);
         library = pvk_retain(e->library);
     } else if ((e = calloc(1, sizeof(*e)))) { /* (out of memory: not kept) */
-        e->key = key;
+        e->key = *key;
         e->bytes = n;
         e->library = pvk_retain(library);
         pvk_shader_insert_locked(c, e);
     }
     pthread_mutex_unlock(&c->lock);
     return library;
+}
+
+static struct pvk_key pvk_library_key(const char *msl, size_t n, bool invariant)
+{
+    struct pvk_key key;
+    pvk_key_init(&key, invariant ? 'I' : 'L');
+    pvk_key_add(&key, msl, n);
+    return key;
+}
+
+/* MSL compiled into a library as pvk_msl_library does (retained), once per
+ * device; NULL with a message in error[]. */
+static id pvk_library_get(struct pvk_device *device, const char *msl, bool invariant, char *error, size_t error_size)
+{
+    size_t n = strlen(msl);
+    struct pvk_key key = pvk_library_key(msl, n, invariant);
+    id library = pvk_library_find(device, &key);
+    if (library)
+        return library;
+    library = pvk_msl_library(device, msl, invariant, error, error_size);
+    return library ? pvk_library_keep(device, &key, n, library) : NULL;
+}
+
+/* The libraries of a graphics pipeline's two stages (pvk_library_get;
+ * fs_msl NULL: one), compiled side by side when neither is in the cache:
+ * a compile takes milliseconds, and Metal runs several at once. false
+ * with a message in error[] (and nothing in *vs_lib, *fs_lib). */
+static bool pvk_library_get2(struct pvk_device *device, const char *vs_msl, bool invariant, const char *fs_msl,
+                             id *vs_lib, id *fs_lib, char *error, size_t error_size)
+{
+    size_t vn = strlen(vs_msl), fn = fs_msl ? strlen(fs_msl) : 0;
+    struct pvk_key vk = pvk_library_key(vs_msl, vn, invariant), fk = vk;
+    struct pvk_library_task *task = NULL;
+    *fs_lib = NULL;
+    *vs_lib = pvk_library_find(device, &vk);
+    if (fs_msl) {
+        fk = pvk_library_key(fs_msl, fn, false);
+        *fs_lib = pvk_library_find(device, &fk);
+        if (!*vs_lib && !*fs_lib)
+            task = pvk_msl_library_start(device, fs_msl, false);
+    }
+    if (!*vs_lib && (*vs_lib = pvk_msl_library(device, vs_msl, invariant, error, error_size)))
+        *vs_lib = pvk_library_keep(device, &vk, vn, *vs_lib);
+    if (task) {
+        char fs_error[256];
+        if ((*fs_lib = pvk_msl_library_wait(task, fs_error, sizeof(fs_error))))
+            *fs_lib = pvk_library_keep(device, &fk, fn, *fs_lib);
+        else if (*vs_lib)
+            snprintf(error, error_size, "%s", fs_error);
+    } else if (fs_msl && !*fs_lib && *vs_lib && (*fs_lib = pvk_msl_library(device, fs_msl, false, error, error_size))) {
+        *fs_lib = pvk_library_keep(device, &fk, fn, *fs_lib);
+    }
+    if (*vs_lib && (*fs_lib || !fs_msl))
+        return true;
+    pvk_release(*vs_lib);
+    pvk_release(*fs_lib);
+    *vs_lib = *fs_lib = NULL;
+    return false;
 }
 
 /* Compiles MSL into a compute pipeline state (retained) labeled `label`
@@ -67577,7 +67766,7 @@ static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *
                           const char *label, char *error, size_t error_size)
 {
     void *pool = objc_autoreleasePoolPush();
-    id vs_lib = pvk_library_get(device, vs_msl, invariant, error, error_size), fs_lib = NULL, desc = NULL, vf = NULL;
+    id vs_lib = NULL, fs_lib = NULL, desc = NULL, vf = NULL;
     id ff = NULL, pso = NULL;
     uint32_t l;
     char mask_msl[512];
@@ -67590,9 +67779,7 @@ static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *
         fs_msl = mask_msl;
         fs_entry = "pvk_sample_mask";
     }
-    if (vs_lib && fs_msl)
-        fs_lib = pvk_library_get(device, fs_msl, false, error, error_size);
-    if (vs_lib && (fs_lib || !fs_msl))
+    if (pvk_library_get2(device, vs_msl, invariant, fs_msl, &vs_lib, &fs_lib, error, error_size))
         desc = pvk_MTL4RenderPipelineDescriptor_new();
     if (desc) {
         id atts = pvk_MTL4RenderPipelineDescriptor_colorAttachments(desc);
