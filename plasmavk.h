@@ -39874,11 +39874,16 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  *   for inline uniform blocks, their bytes plus 16 per binding
  *   (maxInlineUniformBlockBindings).
  *   So any allocation within the pool sizes and maxSets fits. Sets are
- *   ranges of the buffer in a list ordered by offset: allocation appends
- *   after the last set or else takes the first gap that fits; freeing
- *   unlinks. When all sets have one size, every gap is a multiple of it, so
- *   fragmentation cannot fail an allocation the pool sizes allow (which
- *   vkAllocateDescriptorSets requires).
+ *   ranges of the buffer in a list ordered by offset. A freed set stays in
+ *   the list as a hole, in the pool's bin of holes of its size (sets of
+ *   sizes beyond PVK_POOL_BINS unlink), and the next set of that size takes
+ *   the hole over: a pool of one set size whose sets come and go (sets per
+ *   texture or material, streamed) allocates without searching. Otherwise
+ *   allocation appends after the last set or hole, or else unlinks every
+ *   hole and takes the first gap that fits. When all sets have one size,
+ *   every hole and gap is a multiple of it, so fragmentation cannot fail an
+ *   allocation the pool sizes allow (which vkAllocateDescriptorSets
+ *   requires).
  *   A set's layout stays alive while the set does (vkCmdBindDescriptorSets
  *   reads it). The pool references the first PVK_POOL_LAYOUTS layouts of
  *   its sets once each, until it is reset or destroyed; sets of other
@@ -40247,8 +40252,10 @@ VKAPI_ATTR void VKAPI_CALL vkGetDescriptorSetLayoutSupport(VkDevice _device,
 
 struct pvk_descriptor_pool;
 
-/* Layouts a pool references for its sets (see POOLS). */
+/* Layouts a pool references for its sets, and sizes of holes it keeps (see
+ * POOLS). */
 #define PVK_POOL_LAYOUTS 8
+#define PVK_POOL_BINS 8
 
 struct pvk_descriptor_set {
     struct pvk_descriptor_pool *pool;
@@ -40258,7 +40265,8 @@ struct pvk_descriptor_set {
     char *contents;                           /* the table, for the CPU */
     pvk_MTLGPUAddress address;                /* the table, for the GPU */
     uint32_t variable_count;                  /* descriptors (bytes) of the variable-count binding */
-    bool layout_ref;
+    bool layout_ref;                          /* the set references its layout, not the pool */
+    struct pvk_descriptor_set *bin_next;      /* a hole (freed, see POOLS): the next in its bin */
 };
 
 struct pvk_descriptor_pool {
@@ -40272,6 +40280,11 @@ struct pvk_descriptor_pool {
     VkDeviceSize size, used;                 /* bytes of mtl_buffer; held by sets */
     struct pvk_descriptor_set *first, *last; /* by offset; empty sets (offset 0) first */
     struct pvk_descriptor_set *spare;        /* freed sets' structs, for the next sets (by next) */
+    struct {
+        VkDeviceSize size;
+        struct pvk_descriptor_set *holes; /* by bin_next; NULL: the bin is free */
+    } bins[PVK_POOL_BINS];
+    uint32_t holes; /* in all bins */
     struct pvk_descriptor_set_layout *layouts[PVK_POOL_LAYOUTS]; /* referenced until a reset; NULL: none */
     uint32_t layout_hit;                                         /* the one the last allocation used */
 };
@@ -40338,7 +40351,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorPool(VkDevice _device, const Vk
     return VK_SUCCESS;
 }
 
-static void pvk_descriptor_set_free(struct pvk_descriptor_set *set)
+/* Takes a set or hole out of the pool's list; its struct becomes spare. */
+static void pvk_descriptor_set_unlink(struct pvk_descriptor_set *set)
 {
     struct pvk_descriptor_pool *pool = set->pool;
     if (set->prev)
@@ -40349,13 +40363,69 @@ static void pvk_descriptor_set_free(struct pvk_descriptor_set *set)
         set->next->prev = set->prev;
     else
         pool->last = set->prev;
+    set->next = pool->spare;
+    pool->spare = set;
+}
+
+/* A freed set becomes a hole in the bin of its size, or else in a free bin;
+ * without one (or empty), it is unlinked. */
+static void pvk_descriptor_set_free(struct pvk_descriptor_set *set)
+{
+    struct pvk_descriptor_pool *pool = set->pool;
+    uint32_t i, bin = PVK_POOL_BINS;
     pool->used -= set->size;
     pool->set_count--;
     if (set->layout_ref)
         pvk_set_layout_unref(set->layout);
+    set->layout_ref = false; /* a hole has nothing for a reset to drop */
     pvk_forget(set);
-    set->next = pool->spare;
-    pool->spare = set;
+    for (i = 0; set->size && i < PVK_POOL_BINS; i++) {
+        if (pool->bins[i].holes && pool->bins[i].size == set->size) {
+            bin = i;
+            break;
+        }
+        if (!pool->bins[i].holes && bin == PVK_POOL_BINS)
+            bin = i;
+    }
+    if (bin == PVK_POOL_BINS) {
+        pvk_descriptor_set_unlink(set);
+        return;
+    }
+    set->bin_next = pool->bins[bin].holes;
+    pool->bins[bin].size = set->size;
+    pool->bins[bin].holes = set;
+    pool->holes++;
+}
+
+/* A hole of `size` bytes, made a set again; NULL: none. */
+static struct pvk_descriptor_set *pvk_descriptor_pool_hole(struct pvk_descriptor_pool *pool, VkDeviceSize size)
+{
+    struct pvk_descriptor_set *set;
+    uint32_t i;
+    for (i = 0; i < PVK_POOL_BINS; i++)
+        if (pool->bins[i].holes && pool->bins[i].size == size) {
+            set = pool->bins[i].holes;
+            pool->bins[i].holes = set->bin_next;
+            pool->holes--;
+            pool->used += size;
+            return set;
+        }
+    return NULL;
+}
+
+/* Unlinks every hole: their ranges become gaps. */
+static void pvk_descriptor_pool_purge(struct pvk_descriptor_pool *pool)
+{
+    struct pvk_descriptor_set *set, *next;
+    uint32_t i;
+    for (i = 0; i < PVK_POOL_BINS; i++) {
+        for (set = pool->bins[i].holes; set; set = next) {
+            next = set->bin_next;
+            pvk_descriptor_set_unlink(set);
+        }
+        pool->bins[i].holes = NULL;
+    }
+    pool->holes = 0;
 }
 
 /* Whether the pool references `layout` for its sets: it does for the first
@@ -40386,6 +40456,10 @@ static VkResult pvk_descriptor_pool_place(struct pvk_descriptor_pool *pool, stru
 
     if (set->size) {
         at = pool->last ? pool->last->offset + pool->last->size : 0;
+        if (pool->size - at < set->size && pool->holes) {
+            pvk_descriptor_pool_purge(pool);
+            at = pool->last ? pool->last->offset + pool->last->size : 0;
+        }
         if (pool->size - at >= set->size) {
             prev = pool->last;
         } else {
@@ -40444,17 +40518,20 @@ static VkResult pvk_descriptor_set_create(struct pvk_descriptor_pool *pool, stru
     }
     if (pool->set_count >= pool->max_sets || size > pool->size)
         return VK_ERROR_OUT_OF_POOL_MEMORY;
-    set = pool->spare;
-    if (set)
-        pool->spare = set->next;
-    else if (!(set = pvk_alloc(pvk_descriptor_pool_alloc(pool), sizeof(*set), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT)))
-        return VK_ERROR_OUT_OF_HOST_MEMORY;
-    set->size = size;
-    result = pvk_descriptor_pool_place(pool, set);
-    if (result != VK_SUCCESS) {
-        set->next = pool->spare;
-        pool->spare = set;
-        return result;
+    set = pool->holes && size ? pvk_descriptor_pool_hole(pool, size) : NULL;
+    if (!set) {
+        set = pool->spare;
+        if (set)
+            pool->spare = set->next;
+        else if (!(set = pvk_alloc(pvk_descriptor_pool_alloc(pool), sizeof(*set), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT)))
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        set->size = size;
+        result = pvk_descriptor_pool_place(pool, set);
+        if (result != VK_SUCCESS) {
+            set->next = pool->spare;
+            pool->spare = set;
+            return result;
+        }
     }
     pool->set_count++;
     set->pool = pool;
@@ -40471,7 +40548,8 @@ static VkResult pvk_descriptor_set_create(struct pvk_descriptor_pool *pool, stru
     return VK_SUCCESS;
 }
 
-/* Frees every set: one pass, then the list joins the spare structs. */
+/* Frees every set: one pass, then the list (holes too) joins the spare
+ * structs. */
 static void pvk_descriptor_pool_reset(struct pvk_descriptor_pool *pool)
 {
     struct pvk_descriptor_set *set;
@@ -40488,6 +40566,9 @@ static void pvk_descriptor_pool_reset(struct pvk_descriptor_pool *pool)
     pool->first = pool->last = NULL;
     pool->used = 0;
     pool->set_count = 0;
+    for (i = 0; i < PVK_POOL_BINS; i++)
+        pool->bins[i].holes = NULL;
+    pool->holes = 0;
     for (i = 0; i < PVK_POOL_LAYOUTS; i++) {
         pvk_set_layout_unref(pool->layouts[i]);
         pool->layouts[i] = NULL;

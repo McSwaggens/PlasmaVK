@@ -1107,6 +1107,62 @@ static void test_pool_layout_refs(void)
         vkDestroyDescriptorSetLayout(device, layouts[i], NULL);
 }
 
+/* A freed set leaves a hole that the next set of its size takes over in
+ * place; a set of another size appends, or unlinks the holes and takes the
+ * first gap that fits. Holes of PVK_POOL_BINS sizes are kept. */
+static void test_pool_holes(void)
+{
+    VkDescriptorSetLayoutBinding b[PVK_POOL_BINS + 1];
+    VkDescriptorPoolSize size = ps(SSBO, 8);
+    VkDescriptorSetLayout one, two, sized[PVK_POOL_BINS + 1];
+    VkDescriptorSet s[PVK_POOL_BINS + 1], again;
+    struct pvk_descriptor_pool *p;
+    VkDescriptorPool pool;
+    uint32_t i;
+
+    for (i = 0; i <= PVK_POOL_BINS; i++)
+        b[i] = lb(i, SSBO, 1);
+    one = make_set_layout(b, 1, 0, NULL);
+    two = make_set_layout(b, 2, 0, NULL);
+    pool = make_pool(8, &size, 1, VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT, NULL);
+    REQUIRE(one && two && pool);
+    p = (struct pvk_descriptor_pool *)pool;
+    for (i = 0; i < 4; i++)
+        s[i] = alloc_set(pool, one); /* 16 bytes each, at 0, 16, 32, 48 */
+    CHECK_VK(vkFreeDescriptorSets(device, pool, 1, &s[1]), VK_SUCCESS);
+    CHECK(p->holes == 1 && p->bins[0].holes == (struct pvk_descriptor_set *)s[1]);
+    CHECK(p->used == 48 && p->set_count == 3 && ((struct pvk_descriptor_set *)s[2])->prev == p->bins[0].holes);
+    again = alloc_set(pool, one);
+    CHECK(again == s[1] && p->holes == 0 && ((struct pvk_descriptor_set *)again)->offset == 16);
+    CHECK_VK(vkFreeDescriptorSets(device, pool, 2, &s[1]), VK_SUCCESS);
+    CHECK(p->holes == 2);
+    s[4] = alloc_set(pool, two); /* after the last set, at 64 and 96 */
+    s[5] = alloc_set(pool, two);
+    CHECK(((struct pvk_descriptor_set *)s[5])->offset == 96 && p->holes == 2);
+    s[6] = alloc_set(pool, two); /* the pool's end is taken: the holes go, the gap at 16 fits */
+    CHECK(s[6] && ((struct pvk_descriptor_set *)s[6])->offset == 16 && p->holes == 0);
+    vkDestroyDescriptorPool(device, pool, NULL);
+
+    /* One more size than there are bins: its set unlinks. */
+    size = ps(SSBO, (PVK_POOL_BINS + 1) * (PVK_POOL_BINS + 2) / 2);
+    pool = make_pool(PVK_POOL_BINS + 1, &size, 1, VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT, NULL);
+    REQUIRE(pool);
+    p = (struct pvk_descriptor_pool *)pool;
+    for (i = 0; i <= PVK_POOL_BINS; i++) {
+        sized[i] = make_set_layout(b, i + 1, 0, NULL);
+        s[i] = alloc_set(pool, sized[i]);
+    }
+    CHECK_VK(vkFreeDescriptorSets(device, pool, PVK_POOL_BINS + 1, s), VK_SUCCESS);
+    CHECK(p->holes == PVK_POOL_BINS && p->set_count == 0 && p->used == 0);
+    CHECK_VK(vkResetDescriptorPool(device, pool, 0), VK_SUCCESS);
+    CHECK(p->holes == 0 && !p->first);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    for (i = 0; i <= PVK_POOL_BINS; i++)
+        vkDestroyDescriptorSetLayout(device, sized[i], NULL);
+    vkDestroyDescriptorSetLayout(device, one, NULL);
+    vkDestroyDescriptorSetLayout(device, two, NULL);
+}
+
 /* A freed set's struct serves the pool's next set, so its handle comes
  * back: without the private data and name it had, after vkFreeDescriptorSets
  * and after vkResetDescriptorPool. */
@@ -2911,6 +2967,7 @@ int main(void)
     RUN(test_layout_support);
     RUN(test_pools);
     RUN(test_pool_layout_refs);
+    RUN(test_pool_holes);
     RUN(test_pool_set_reuse);
     RUN(test_buffers);
     RUN(test_pipeline_robustness);
