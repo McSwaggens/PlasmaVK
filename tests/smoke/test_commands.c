@@ -210,6 +210,19 @@ static void test_fill(void)
     CHECK(check_words(&b, 40000, 40400, 0xCAFEF00Du));
     CHECK(check_words(&b, 40400, 65536 + 4, 0x5A5A5A5Au));
     CHECK(b.data[65536 + 4] == 0xEE && b.data[65536 + 5] == 0xEE); /* past the last whole word */
+    /* the kernel's 16-byte vectors: words before and after them, words only */
+    cb = begin();
+    vkCmdFillBuffer(cb, b.buffer, 100, 8, 0x11223344u);  /* 100-107: before a boundary */
+    vkCmdFillBuffer(cb, b.buffer, 204, 44, 0x55667788u); /* 204-207, 208-239, 240-247 */
+    vkCmdFillBuffer(cb, b.buffer, 304, 16, 0x99aabbccu); /* one vector */
+    vkCmdFillBuffer(cb, b.buffer, 412, 4, 0xddeeff00u);
+    barrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT);
+    REQUIRE_VK(finish(cb));
+    CHECK(check_words(&b, 96, 100, 0x5A5A5A5Au) && check_words(&b, 100, 108, 0x11223344u) &&
+          check_words(&b, 108, 204, 0x5A5A5A5Au));
+    CHECK(check_words(&b, 204, 248, 0x55667788u) && check_words(&b, 248, 304, 0x5A5A5A5Au));
+    CHECK(check_words(&b, 304, 320, 0x99aabbccu) && check_words(&b, 320, 412, 0x5A5A5A5Au));
+    CHECK(check_words(&b, 412, 416, 0xddeeff00u) && check_words(&b, 416, 420, 0x5A5A5A5Au));
     free_buf(&b);
 }
 

@@ -59450,11 +59450,17 @@ static void pvk_encode_barrier(struct pvk_encoder *e, const struct pvk_cmd_barri
 
 static id pvk_device_fill_pipeline(struct pvk_device *device);
 
+/* Arguments of pvk_fill_buffer (pvk_fill_msl). */
+struct pvk_fill_args {
+    uint64_t head, vecs, tail; /* the words before the vectors, the vectors, the words after them */
+    uint32_t head_count, count, tail_count, value;
+};
+
 static void pvk_encode_fill(struct pvk_encoder *e, const struct pvk_cmd_fill *c)
 {
     uint32_t byte = c->data & 0xffu;
-    VkDeviceSize words = c->size / 4, done;
-    id enc = pvk_encoder_get(e), pso;
+    VkDeviceSize words = c->size / 4, head, vecs, tail, done;
+    id enc = words ? pvk_encoder_get(e) : NULL, pso;
 
     if (!enc)
         return;
@@ -59473,25 +59479,35 @@ static void pvk_encode_fill(struct pvk_encoder *e, const struct pvk_cmd_fill *c)
     }
     pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, pso);
     e->pipeline_dirty = true;
-    for (done = 0; done < words;) {
-        uint32_t n = words - done > (1u << 30) ? 1u << 30 : (uint32_t)(words - done);
+    /* the words up to a 16-byte boundary, 16-byte vectors, the words after */
+    head = ((16 - (c->address & 15)) & 15) / 4;
+    if (head > words)
+        head = words;
+    vecs = (words - head) / 4;
+    tail = words - head - vecs * 4;
+    done = 0;
+    do {
+        uint32_t n = vecs - done > (1u << 30) ? 1u << 30 : (uint32_t)(vecs - done);
         pvk_MTLSize groups, threads;
         pvk_MTLGPUAddress address;
-        unsigned char *args = pvk_upload(e, 16, 16, NULL, NULL, &address);
-        uint64_t dst = c->address + done * 4;
-        if (!args)
+        struct pvk_fill_args *a = pvk_upload(e, sizeof(*a), 16, NULL, NULL, &address);
+        if (!a)
             return;
-        memcpy(args, &dst, 8);
-        memcpy(args + 8, &n, 4);
-        memcpy(args + 12, &c->data, 4);
+        a->head = c->address;
+        a->vecs = c->address + head * 4 + done * 16;
+        a->tail = c->address + (head + vecs * 4) * 4;
+        a->head_count = done ? 0 : (uint32_t)head;
+        a->count = n;
+        a->tail_count = done + n == vecs ? (uint32_t)tail : 0;
+        a->value = c->data;
         pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
-        groups.width = (n + 63) / 64;
+        groups.width = ((n > 3 ? n : 3) + 255) / 256; /* (the head and tail words: 3 at most) */
         groups.height = groups.depth = 1;
-        threads.width = 64;
+        threads.width = 256;
         threads.height = threads.depth = 1;
         pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(enc, groups, threads);
         done += n;
-    }
+    } while (done < vecs);
     e->push_bound = 0;
 }
 
@@ -66336,16 +66352,24 @@ static void pvk_stage_label(char *buf, size_t size, const VkPipelineShaderStageC
     snprintf(buf, size, "%s %s", what, stage->pName);
 }
 
-/* vkCmdFillBuffer for patterns whose four bytes differ (section 16): one
- * 32-bit word per thread, arguments at the push-constant index. */
+/* vkCmdFillBuffer for patterns whose four bytes differ (section 16): a
+ * 16-byte store per thread (one 32-bit word per thread ran at a third of
+ * the bandwidth, M4 Max), the words before the first 16-byte boundary and
+ * after the last vector by threads 0-2 too; arguments at the push-constant
+ * index (struct pvk_fill_args). */
 static const char pvk_fill_msl[] =
     "#include <metal_stdlib>\n"
     "using namespace metal;\n"
-    "struct pvk_fill_args { device uint *dst; uint count; uint value; };\n"
+    "struct pvk_fill_args { device uint *head; device uint4 *vecs; device uint *tail;\n"
+    "                       uint head_count, count, tail_count, value; };\n"
     "kernel void pvk_fill_buffer(constant pvk_fill_args &a [[buffer(30)]], uint i [[thread_position_in_grid]])\n"
     "{\n"
     "    if (i < a.count)\n"
-    "        a.dst[i] = a.value;\n"
+    "        a.vecs[i] = uint4(a.value);\n"
+    "    if (i < a.head_count)\n"
+    "        a.head[i] = a.value;\n"
+    "    if (i < a.tail_count)\n"
+    "        a.tail[i] = a.value;\n"
     "}\n";
 
 static pthread_mutex_t pvk_internal_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -66356,7 +66380,7 @@ static id pvk_device_fill_pipeline(struct pvk_device *device)
     pthread_mutex_lock(&pvk_internal_lock); /* queues of a device encode concurrently */
     if (!device->fill_pipeline) {
         char error[256];
-        device->fill_pipeline = pvk_compile_compute(device, pvk_fill_msl, "pvk_fill_buffer", 64, error, sizeof(error));
+        device->fill_pipeline = pvk_compile_compute(device, pvk_fill_msl, "pvk_fill_buffer", 256, error, sizeof(error));
         if (!device->fill_pipeline)
             pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
                      "internal fill kernel: %s", error);
