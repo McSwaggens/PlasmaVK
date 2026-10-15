@@ -37646,6 +37646,7 @@ struct pvk_image_view {
     uint32_t base_level, levels, base_layer, layers;
     uint32_t depth_plane; /* 2D views of 3D images: first slice */
     bool resident; /* mtl_texture is in the device residency set */
+    bool image_texture; /* mtl_texture is the image's own: a view of all of it in its format, type and channels */
     /* Render pass attachments (sections 15-16): mtl_texture, or when that is
      * swizzled (depth and stencil views always are), an unswizzled view of
      * the same subresources: Metal renders to no swizzled view. */
@@ -38859,6 +38860,15 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
         /* Metal makes no views of memoryless textures; attachments of
          * transient images use the texture with the view's level and layer. */
         view->mtl_texture = pvk_retain(image->mtl_texture);
+    } else if (!image->plane_count && !image->sparse && format == image->fmt->mtl && type == image->mtl_type &&
+               levels.location == 0 && levels.length == image->levels && slices.location == 0 &&
+               slices.length == (image->type == VK_IMAGE_TYPE_3D ? 1 : image->layers) &&
+               swizzle.red == PVK_MTLTextureSwizzleRed && swizzle.green == PVK_MTLTextureSwizzleGreen &&
+               swizzle.blue == PVK_MTLTextureSwizzleBlue && swizzle.alpha == PVK_MTLTextureSwizzleAlpha) {
+        /* All of the image as it is: the image's texture itself, which a
+         * view would only duplicate (about 0.6 us to make, 0.2 us to free). */
+        view->mtl_texture = pvk_retain(image->mtl_texture);
+        view->image_texture = true;
     } else {
         pool = objc_autoreleasePoolPush();
         view->mtl_texture = pvk_MTLTexture_newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(
@@ -38964,8 +38974,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
     view->plane_ids[1] = pvk_texture_id(view->planes[1]);
     /* Descriptors name the view's texture by its resource ID. The heap
      * covers its memory, but Metal's shader validation also wants the view
-     * object itself resident. Memoryless textures can't join a set. */
-    if (!image->memoryless) {
+     * object itself resident; the image's own texture is covered as the
+     * image is. Memoryless textures can't join a set. */
+    if (!image->memoryless && !view->image_texture) {
         pvk_device_make_resident(device, view->mtl_texture);
         for (p = 0; p < 2; p++)
             if (view->planes[p])
