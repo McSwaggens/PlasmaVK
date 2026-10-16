@@ -61236,10 +61236,19 @@ static const char pvk_blit_prelude_msl[] =
     "    o.layer = iid;\n"
     "    return o;\n"
     "}\n"
-    "template <typename T> vec<T, 4> pvk_swizzle(vec<T, 4> c, uint4 s)\n"
+    /* the source format's swizzle (pvk_blit_swizzle); the draws skip it for
+     * formats without one (most), a branch every pixel takes alike: the
+     * lookup in a local array cost a 4K upscale 12% (M4 Max) */
+    "template <typename T> vec<T, 4> pvk_swizzle_lookup(vec<T, 4> c, uint4 s)\n"
     "{\n"
     "    T v[6] = { c.x, c.y, c.z, c.w, T(0), T(1) };\n"
     "    return vec<T, 4>(v[s.x], v[s.y], v[s.z], v[s.w]);\n"
+    "}\n"
+    "template <typename T> vec<T, 4> pvk_swizzle(vec<T, 4> c, uint4 s)\n"
+    "{\n"
+    "    if (all(s == uint4(0, 1, 2, 3)))\n"
+    "        return c;\n"
+    "    return pvk_swizzle_lookup(c, s);\n"
     "}\n"
     "static float2 pvk_coord(float4 pos, constant pvk_blit_args &a)\n"
     "{\n"
@@ -61281,6 +61290,10 @@ static const struct pvk_blit_part {
     { PVK_BLIT_LIB_OTHER, PVK_MSL_RESOLVE("uint", "u", PVK_MSL_SAMPLE0) },
     { PVK_BLIT_LIB_OTHER, PVK_MSL_RESOLVE("int", "i", PVK_MSL_SAMPLE0) },
     { PVK_BLIT_LIB_CBLIT,
+      /* the dispatches keep the lookup: with the branch, 2048^2 mip chains
+       * into storage images took 2% longer, if a 4K upscale into one 9% less
+       * (M4 Max) */
+      "#define pvk_swizzle pvk_swizzle_lookup\n"
       PVK_MSL_BLIT_KERNEL("pvk_cblit_f_2d", "texture2d", PVK_MSL_NEAREST_2D, "uint2(pos.xy)")
       PVK_MSL_BLIT_KERNEL("pvk_cblit_f_2darray", "texture2d_array", PVK_MSL_NEAREST_2DARRAY("gid.z"),
                           "uint2(pos.xy), uint(a.offset.z) + gid.z")
