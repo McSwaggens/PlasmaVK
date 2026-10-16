@@ -269,6 +269,40 @@ CT_TEST(memory_properties2,
     ct_env_fini(&e);
 }
 
+CT_TEST(memory_budget,
+        "Memory Allocation > Device Memory Properties (VK_EXT_memory_budget): heapBudget and heapUsage are zero for "
+        "elements at or above memoryHeapCount; heapBudget is non-zero below it, and at most VkMemoryHeap::size",
+        "vkGetPhysicalDeviceMemoryProperties2")
+{
+    struct ct_env e;
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT b;
+    VkPhysicalDeviceMemoryProperties2 m2;
+    uint32_t i;
+
+    ct_env_init(t, &e);
+    if (e.version < VK_API_VERSION_1_1)
+        ct_skip(t, "Vulkan 1.1 is not available");
+    if (!ct_device_extension_supported(e.pd, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME))
+        ct_skip(t, "VK_EXT_memory_budget is not supported");
+    memset(&b, 0xFF, sizeof(b));
+    b.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    b.pNext = NULL;
+    memset(&m2, 0, sizeof(m2));
+    m2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+    m2.pNext = &b;
+    vkGetPhysicalDeviceMemoryProperties2(e.pd, &m2);
+    for (i = 0; i < VK_MAX_MEMORY_HEAPS; i++) {
+        if (i < m2.memoryProperties.memoryHeapCount)
+            CT_CHECKF(t, b.heapBudget[i] > 0 && b.heapBudget[i] <= m2.memoryProperties.memoryHeaps[i].size,
+                      "heap %u: budget %llu, size %llu", i, (unsigned long long)b.heapBudget[i],
+                      (unsigned long long)m2.memoryProperties.memoryHeaps[i].size);
+        else
+            CT_CHECKF(t, b.heapBudget[i] == 0 && b.heapUsage[i] == 0, "unused heap %u: budget %llu, usage %llu", i,
+                      (unsigned long long)b.heapBudget[i], (unsigned long long)b.heapUsage[i]);
+    }
+    ct_env_fini(&e);
+}
+
 /* ==========================================================================
  * Allocation
  * ========================================================================== */
@@ -1052,6 +1086,7 @@ static const struct ct_test *const tests[] = {
     CT_REF(memory_type_order),
     CT_REF(memory_type_exclusive_bits),
     CT_REF(memory_properties2),
+    CT_REF(memory_budget),
     CT_REF(allocate_every_type),
     CT_REF(allocate_many),
     CT_REF(free_memory_null),

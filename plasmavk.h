@@ -29783,6 +29783,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetMemoryMetalHandlePropertiesEXT(
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/sysctl.h>
 #include <time.h>
 
 /* ==========================================================================
@@ -32048,14 +32049,14 @@ static VkResult pvk_enumerate(const void *items, size_t item_size, uint32_t coun
 /* ==========================================================================
  * 6. Extensions
  *
- * Advertised extensions: PlasmaVK's own (surfaces, swapchains, debug utils)
- * and, as Vulkan 1.4 drivers do, every extension promoted to Vulkan 1.1-1.4
- * whose functionality PlasmaVK has (Core Revisions). Applications written
- * for an older apiVersion enable those and call the core commands by their
- * KHR/EXT names (section 19). A promoted extension that needs a feature
- * Vulkan 1.4 leaves optional is offered only with that feature
- * (pvk_device_extension_features, section 7). An extension's own commands
- * get entries in section 19.
+ * Advertised extensions: PlasmaVK's own (surfaces, swapchains, debug utils,
+ * calibrated timestamps, memory budget) and, as Vulkan 1.4 drivers do, every
+ * extension promoted to Vulkan 1.1-1.4 whose functionality PlasmaVK has
+ * (Core Revisions). Applications written for an older apiVersion enable
+ * those and call the core commands by their KHR/EXT names (section 19). A
+ * promoted extension that needs a feature Vulkan 1.4 leaves optional is
+ * offered only with that feature (pvk_device_extension_features, section
+ * 7). An extension's own commands get entries in section 19.
  * ========================================================================== */
 
 enum pvk_instance_extension {
@@ -32115,6 +32116,7 @@ static const VkExtensionProperties pvk_debug_layer_extensions[] = {
 enum pvk_device_extension {
     PVK_DEVICE_EXT_KHR_swapchain,
     PVK_DEVICE_EXT_KHR_calibrated_timestamps, /* the device's clock is the host's mach_absolute_time (section 14) */
+    PVK_DEVICE_EXT_EXT_memory_budget,         /* no commands: Metal's allocations and the room left (section 7) */
     /* Promoted to Vulkan 1.1 */
     PVK_DEVICE_EXT_KHR_16bit_storage,
     PVK_DEVICE_EXT_KHR_bind_memory2,
@@ -32207,6 +32209,7 @@ enum pvk_device_extension {
 static const VkExtensionProperties pvk_device_extensions[PVK_DEVICE_EXTENSION_COUNT] = {
     PVK_EXT(PVK_DEVICE_EXT_, KHR_swapchain, KHR_SWAPCHAIN),
     PVK_EXT(PVK_DEVICE_EXT_, KHR_calibrated_timestamps, KHR_CALIBRATED_TIMESTAMPS),
+    PVK_EXT(PVK_DEVICE_EXT_, EXT_memory_budget, EXT_MEMORY_BUDGET),
     /* Vulkan 1.1 */
     PVK_EXT(PVK_DEVICE_EXT_, KHR_16bit_storage, KHR_16BIT_STORAGE),
     PVK_EXT(PVK_DEVICE_EXT_, KHR_bind_memory2, KHR_BIND_MEMORY_2),
@@ -32930,7 +32933,7 @@ static bool pvk_vuid(const struct pvk_device *device, const char *vuid, VkObject
 /* Apple GPUs run SIMD-groups of 32 threads (threadExecutionWidth). */
 #define PVK_SUBGROUP_SIZE 32u
 
-/* ---- Memory heap ----
+/* ---- Memory heap and budget ----
  *
  * Apple GPUs have unified memory: one heap of system memory. Its size is the
  * working set Metal recommends for the GPU (recommendedMaxWorkingSetSize),
@@ -32943,36 +32946,174 @@ static bool pvk_vuid(const struct pvk_device *device, const char *vuid, VkObject
  * gets streaming engines killed instead of throttled. TASK_VM_INFO has the
  * limit (phys_footprint plus limit_bytes_remaining, which is 0 without one,
  * as on macOS), read once so that every instance of the process reports the
- * same heap. */
+ * same heap.
+ *
+ * VK_EXT_memory_budget's values are read at each query (VMA asks about once
+ * a frame), in under a microsecond of system calls (about one and a half
+ * under memory pressure on macOS):
+ * - heapUsage is what Metal has allocated for the process
+ *   (currentAllocatedSize, which follows every allocation and free at once,
+ *   of every instance and device and of the application's own Metal
+ *   objects), less the freed heaps kept in heap caches (section 10, HEAP
+ *   CACHE). Pool chunks count whole.
+ * - heapBudget is Metal's allocated size (cached heaps included) plus 9/10
+ *   of the headroom (as Mesa's Intel driver gives on unified memory, so that
+ *   an application at its budget leaves the system some), at most the
+ *   heap's size and, while that allows, above the usage (as the CTS checks).
+ * - With a limit, the headroom is what the process may still allocate
+ *   before it (limit_bytes_remaining, even at 0), which counts its CPU
+ *   memory too. Without one (macOS), it is the heap's unallocated rest while
+ *   the system's memory pressure is normal
+ *   (kern.memorystatus_vm_pressure_level), as macOS then compresses idle
+ *   memory to make room (MoltenVK's budget is the heap). Under pressure, it
+ *   is the memory the system can give without compressing or swapping out
+ *   anyone's: free, file-backed and purgeable pages (HOST_VM_INFO64, which
+ *   the kernel answers an application about once a second, repeating its
+ *   last answer between).
+ * - Those two count pages in use only, and an allocation gets its pages
+ *   when the GPU first uses its heap (all of them then) or the CPU writes
+ *   it. Engines allocate first and fill later (level loads, VMA's 256 MB
+ *   blocks), so what Metal has allocated beyond the footprint's graphics
+ *   part (ledger_tag_graphics_footprint, compressed pages included) comes
+ *   off them. Graphics memory that currentAllocatedSize doesn't count
+ *   (160 MB once the GPU has run, on M4 Max) and freed pages (which leave
+ *   the footprint a second or two later) can hide as much of it.
+ * Engines that stream to their budget then back off instead of being killed
+ * (iOS) or making the system swap (macOS). */
 
-/* The process's memory limit and what it may still allocate before it;
- * false without a limit. */
-static bool pvk_process_limit(VkDeviceSize *limit, VkDeviceSize *remaining)
+/* Bytes of the freed heaps in every device's heap cache (section 10), one
+ * GPU's (atomic). */
+static VkDeviceSize pvk_heap_cache_total;
+
+/* The process's memory limit when the first physical device was made;
+ * UINT64_MAX without one, 0 before (atomic). */
+static VkDeviceSize pvk_memory_limit;
+
+/* The process's TASK_VM_INFO, up to limit_bytes_remaining; false if the
+ * system doesn't give that much. */
+static bool pvk_task_vm_info(task_vm_info_data_t *info)
 {
-    task_vm_info_data_t info;
     mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
-    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count) != KERN_SUCCESS ||
-        count < TASK_VM_INFO_REV4_COUNT || !info.limit_bytes_remaining)
-        return false;
-    *limit = info.phys_footprint + info.limit_bytes_remaining;
-    *remaining = info.limit_bytes_remaining;
-    return true;
+    return task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)info, &count) == KERN_SUCCESS &&
+           count >= TASK_VM_INFO_REV4_COUNT;
 }
 
 /* The heap's size: the recommended working set, or the process's limit when
  * the first physical device was made if less (whole MB). */
 static VkDeviceSize pvk_memory_heap_size(id mtl)
 {
-    static VkDeviceSize first_limit; /* UINT64_MAX: none; 0: not read yet (atomic) */
-    VkDeviceSize heap = pvk_MTLDevice_recommendedMaxWorkingSetSize(mtl), remaining, unread = 0;
-    VkDeviceSize limit = __atomic_load_n(&first_limit, __ATOMIC_RELAXED);
+    VkDeviceSize heap = pvk_MTLDevice_recommendedMaxWorkingSetSize(mtl), unread = 0;
+    VkDeviceSize limit = __atomic_load_n(&pvk_memory_limit, __ATOMIC_RELAXED);
+    task_vm_info_data_t info;
     if (!limit) {
-        if (!pvk_process_limit(&limit, &remaining))
-            limit = UINT64_MAX;
-        if (!__atomic_compare_exchange_n(&first_limit, &unread, limit, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+        limit = pvk_task_vm_info(&info) && info.limit_bytes_remaining ? info.phys_footprint + info.limit_bytes_remaining
+                                                                      : UINT64_MAX;
+        if (!__atomic_compare_exchange_n(&pvk_memory_limit, &unread, limit, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
             limit = unread; /* another thread's */
     }
     return limit < heap ? limit & ~(((VkDeviceSize)1 << 20) - 1) : heap;
+}
+
+/* Whether the system's memory pressure is above normal
+ * (kern.memorystatus_vm_pressure_level: 1 normal, 2 warning, 4 critical);
+ * false if it can't be read. */
+static bool pvk_memory_pressure(void)
+{
+    static int oid; /* its MIB is {CTL_KERN, oid}; 0: not looked up, -1: unreadable (atomic) */
+    int mib[2], level = 0;
+    size_t length = 2, size = sizeof(level);
+    mib[0] = CTL_KERN;
+    mib[1] = __atomic_load_n(&oid, __ATOMIC_RELAXED);
+    if (!mib[1]) {
+        if (sysctlnametomib("kern.memorystatus_vm_pressure_level", mib, &length) || length != 2 || mib[0] != CTL_KERN)
+            mib[1] = -1;
+        __atomic_store_n(&oid, mib[1], __ATOMIC_RELAXED);
+    }
+    if (mib[1] < 0)
+        return false;
+    if (sysctl(mib, 2, &level, &size, NULL, 0) != 0) {
+        __atomic_store_n(&oid, -1, __ATOMIC_RELAXED); /* a sandbox: don't ask again */
+        return false;
+    }
+    return level > 1;
+}
+
+/* Where a budget's headroom comes from (above). */
+enum pvk_memory_headroom {
+    PVK_MEMORY_HEADROOM_HEAP,   /* the heap's unallocated rest */
+    PVK_MEMORY_HEADROOM_LIMIT,  /* the process's limit */
+    PVK_MEMORY_HEADROOM_SYSTEM, /* the system's free memory */
+};
+
+/* Metal's allocated bytes, how many of them have pages (backed) and the
+ * headroom from `from` (above). */
+static void pvk_memory_room(const struct pvk_physical_device *pd, enum pvk_memory_headroom from,
+                            VkDeviceSize *allocated, VkDeviceSize *backed, VkDeviceSize *headroom)
+{
+    static mach_port_t host; /* mach_host_self() adds a reference each time: one for all (atomic) */
+    VkDeviceSize heap = pd->memory_properties.memoryHeaps[0].size;
+    task_vm_info_data_t info;
+    vm_statistics64_data_t vm;
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    mach_port_t h;
+
+    *allocated = *backed = pvk_MTLDevice_currentAllocatedSize(pd->mtl_device);
+    *headroom = heap > *allocated ? heap - *allocated : 0;
+    if (from == PVK_MEMORY_HEADROOM_HEAP)
+        return;
+    *backed = *headroom = 0; /* what can't be read, nothing */
+    if (pvk_task_vm_info(&info)) {
+        *backed = (VkDeviceSize)info.ledger_tag_graphics_footprint +
+                  (VkDeviceSize)info.ledger_tag_graphics_footprint_compressed;
+        if (from == PVK_MEMORY_HEADROOM_LIMIT)
+            *headroom = info.limit_bytes_remaining;
+    }
+    if (from == PVK_MEMORY_HEADROOM_SYSTEM) {
+        h = __atomic_load_n(&host, __ATOMIC_RELAXED);
+        if (!h) {
+            h = mach_host_self();
+            __atomic_store_n(&host, h, __ATOMIC_RELAXED);
+        }
+        if (host_statistics64(h, HOST_VM_INFO64, (host_info64_t)&vm, &count) == KERN_SUCCESS)
+            *headroom =
+                ((VkDeviceSize)vm.free_count + vm.external_page_count + vm.purgeable_count) * vm_kernel_page_size;
+    }
+}
+
+/* A heap's budget and usage (above) from Metal's allocated bytes, the
+ * cached heaps', the allocated bytes with pages and the headroom. */
+static void pvk_memory_budget_of(VkDeviceSize heap, VkDeviceSize allocated, VkDeviceSize cached, VkDeviceSize backed,
+                                 VkDeviceSize headroom, VkDeviceSize *budget, VkDeviceSize *usage)
+{
+    VkDeviceSize unbacked = allocated > backed ? allocated - backed : 0;
+    VkDeviceSize b = allocated + (headroom > unbacked ? headroom - unbacked : 0) / 10 * 9;
+    *usage = allocated > cached ? allocated - cached : 0;
+    if (b < *usage + PVK_PAGE_SIZE)
+        b = *usage + PVK_PAGE_SIZE;
+    *budget = b < heap ? b : heap;
+}
+
+/* The heap's budget and usage with the headroom from `from`. */
+static void pvk_memory_budget_from(const struct pvk_physical_device *pd, enum pvk_memory_headroom from,
+                                   VkDeviceSize *budget, VkDeviceSize *usage)
+{
+    VkDeviceSize allocated, backed, headroom;
+    pvk_memory_room(pd, from, &allocated, &backed, &headroom);
+    pvk_memory_budget_of(pd->memory_properties.memoryHeaps[0].size, allocated,
+                         __atomic_load_n(&pvk_heap_cache_total, __ATOMIC_RELAXED), backed, headroom, budget, usage);
+}
+
+/* VkPhysicalDeviceMemoryBudgetPropertiesEXT (vkGetPhysicalDeviceMemoryProperties2). */
+static void pvk_memory_budget(const struct pvk_physical_device *pd, VkPhysicalDeviceMemoryBudgetPropertiesEXT *p)
+{
+    enum pvk_memory_headroom from = PVK_MEMORY_HEADROOM_HEAP;
+    if (__atomic_load_n(&pvk_memory_limit, __ATOMIC_RELAXED) != UINT64_MAX)
+        from = PVK_MEMORY_HEADROOM_LIMIT; /* even at 0 left */
+    else if (pvk_memory_pressure())
+        from = PVK_MEMORY_HEADROOM_SYSTEM;
+    memset(p->heapBudget, 0, sizeof(p->heapBudget));
+    memset(p->heapUsage, 0, sizeof(p->heapUsage));
+    pvk_memory_budget_from(pd, from, &p->heapBudget[0], &p->heapUsage[0]);
 }
 
 /* ---- Design limits ----
@@ -33683,10 +33824,10 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     pvk_physical_device_init_graphics_features(pd);
     pvk_physical_device_init_sparse(pd);
 
-    /* Apple GPUs have unified memory: one heap (Memory heap, above);
-     * private, shared (twice) and lazily allocated (memoryless tile memory)
-     * types. The order follows the spec's rule: a type whose flags are a
-     * strict subset of another's comes first. */
+    /* Apple GPUs have unified memory: one heap (Memory heap and budget,
+     * above); private, shared (twice) and lazily allocated (memoryless tile
+     * memory) types. The order follows the spec's rule: a type whose flags
+     * are a strict subset of another's comes first. */
     m->memoryHeapCount = 1;
     m->memoryHeaps[0].size = pvk_memory_heap_size(pd->mtl_device);
     m->memoryHeaps[0].flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
@@ -34185,9 +34326,12 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceMemoryProperties(VkPhysicalDevice 
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceMemoryProperties2(VkPhysicalDevice physicalDevice,
                                                                 VkPhysicalDeviceMemoryProperties2 *pMemoryProperties)
 {
-    /* No struct of core 1.1-1.4 extends VkPhysicalDeviceMemoryProperties2
-     * (VK_EXT_memory_budget is not advertised). */
+    VkBaseOutStructure *s;
     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &pMemoryProperties->memoryProperties);
+    for (s = pMemoryProperties->pNext; s; s = s->pNext)
+        if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT)
+            pvk_memory_budget((const struct pvk_physical_device *)physicalDevice,
+                              (VkPhysicalDeviceMemoryBudgetPropertiesEXT *)(void *)s);
 }
 
 /* ---- Formats ----
@@ -37229,7 +37373,8 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, u
  *   an iOS application that frees memory on a memory warning, or before it
  *   goes to the background and stops submitting, gets it all back. What
  *   leaves the cache leaves the residency set at once, which returns its
- *   memory.
+ *   memory. VK_EXT_memory_budget counts cached heaps as room, not usage
+ *   (section 7, Memory heap and budget): a free lowers the usage at once.
  *
  * A VkBuffer is only (memory, offset, size). Metal 4 binds buffers by GPU
  * address, so its device address is the memory's gpuAddress + offset;
@@ -37483,6 +37628,14 @@ static void pvk_heap_cache_set_count(struct pvk_device *device, uint32_t count)
     __atomic_store_n(&device->heap_cache_count, count, __ATOMIC_RELAXED);
 }
 
+/* Under pool_lock: VK_EXT_memory_budget's usage leaves out every cache's
+ * bytes (section 7, Memory heap and budget). */
+static void pvk_heap_cache_set_bytes(struct pvk_device *device, VkDeviceSize bytes)
+{
+    __atomic_add_fetch(&pvk_heap_cache_total, bytes - device->heap_cache_bytes, __ATOMIC_RELAXED); /* mod 2^64 */
+    device->heap_cache_bytes = bytes;
+}
+
 /* Under pool_lock: moves the cache's oldest heaps to out (room for
  * PVK_HEAP_CACHE_SLOTS) while one was freed before `before` (ns), or until
  * `slots` slots and `bytes` bytes are free in it; their count. */
@@ -37496,7 +37649,7 @@ static uint32_t pvk_heap_cache_trim(struct pvk_device *device, uint64_t before, 
             device->heap_cache_bytes + bytes <= device->heap_cache_limit)
             break;
         out[n++] = *oldest;
-        device->heap_cache_bytes -= oldest->heap_size;
+        pvk_heap_cache_set_bytes(device, device->heap_cache_bytes - oldest->heap_size);
         pvk_heap_cache_set_count(device, device->heap_cache_count - 1);
     }
     return n;
@@ -37524,7 +37677,7 @@ static bool pvk_heap_cache_take(struct pvk_device *device, struct pvk_device_mem
         return false;
     }
     h = device->heap_cache[best];
-    device->heap_cache_bytes -= h.heap_size;
+    pvk_heap_cache_set_bytes(device, device->heap_cache_bytes - h.heap_size);
     pvk_heap_cache_set_count(device, device->heap_cache_count - 1);
     memmove(&device->heap_cache[best], &device->heap_cache[best + 1], sizeof(h) * (device->heap_cache_count - best));
     pthread_mutex_unlock(&device->pool_lock);
@@ -37579,7 +37732,7 @@ static bool pvk_heap_cache_put(struct pvk_device *device, struct pvk_device_memo
     } else {
         memmove(&device->heap_cache[1], &device->heap_cache[0], sizeof(h) * device->heap_cache_count);
         device->heap_cache[0] = h;
-        device->heap_cache_bytes += h.heap_size;
+        pvk_heap_cache_set_bytes(device, device->heap_cache_bytes + h.heap_size);
         pvk_heap_cache_set_count(device, device->heap_cache_count + 1);
     }
     pthread_mutex_unlock(&device->pool_lock);
@@ -37731,7 +37884,7 @@ static void pvk_memory_pools_free(struct pvk_device *device)
         pvk_release(device->heap_cache[t].heap);
     }
     device->heap_cache_count = 0;
-    device->heap_cache_bytes = 0;
+    pvk_heap_cache_set_bytes(device, 0);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemoryAllocateInfo *pAllocateInfo,

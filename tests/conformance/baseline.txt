@@ -82,6 +82,7 @@ memory.memory_type_device_local_heap
 memory.memory_type_order
 memory.memory_type_exclusive_bits
 memory.memory_properties2
+memory.memory_budget
 memory.allocate_every_type
 memory.allocate_many
 memory.free_memory_null

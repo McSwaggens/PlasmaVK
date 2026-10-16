@@ -20,7 +20,7 @@ One file per chapter of the Vulkan specification:
 | `initialization.c` | Initialization: `vkGet*ProcAddr` (also of the KHR/EXT names of promoted extensions' commands), instances | 25 |
 | `devsandqueues.c` | Devices and Queues: physical devices, properties, features queries, queue families, devices, queues | 34 |
 | `cmdbuffers.c` | Command Buffers: resetting pools and command buffers (what they hold afterwards), trimming pools, `vkQueueSubmit2` (batches, binary and timeline semaphores, fences), the device mask | 5 |
-| `memory.c` | Memory Allocation: memory properties, allocation, mapping, flushing, host/device visibility, peer memory features | 28 |
+| `memory.c` | Memory Allocation: memory properties (also the budget of VK_EXT_memory_budget), allocation, mapping, flushing, host/device visibility, peer memory features | 29 |
 | `resources.c` | Resource Creation: buffers, images, memory requirements, binding, device addresses, subresource layouts, image and buffer views, multi-planar images (disjoint planes, linear plane layouts), the subresource layout queries of VK_KHR_maintenance5 on a 1.3 device | 32 |
 | `extensions.c` | Layers & Extensions: enumeration, extension dependencies, enabling a layer (with the instance extensions it provides), device layers of an instance with a layer enabled, the device extensions of each layer | 16 |
 | `features.c` | Features > Feature Requirements: one test per required feature (also those extensions promoted to core require, in core structures or their own), the format features of VK_EXT_4444_formats | 95 |

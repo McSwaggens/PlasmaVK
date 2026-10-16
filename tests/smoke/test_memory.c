@@ -192,7 +192,7 @@ static bool gpu_copy(id src, unsigned long src_offset, id dst, unsigned long dst
 static void test_limits(void)
 {
     const struct pvk_physical_device *pd = ((struct pvk_device *)device)->physical_device;
-    VkDeviceSize heap = pd->memory_properties.memoryHeaps[0].size, limit, remaining;
+    VkDeviceSize heap = pd->memory_properties.memoryHeaps[0].size, limit = pvk_memory_limit;
     VkPhysicalDeviceMaintenance3Properties m3;
     VkPhysicalDeviceMaintenance4Properties m4;
     VkPhysicalDeviceProperties2 props2;
@@ -222,7 +222,8 @@ static void test_limits(void)
     /* The heap is the recommended working set, or the process's memory
      * limit if less (section 7, Memory heap), and no allocation is larger
      * (but for Vulkan's minimum). */
-    if (pvk_process_limit(&limit, &remaining))
+    CHECK(limit != 0); /* read */
+    if (limit != UINT64_MAX)
         CHECK(heap <= limit && heap <= pvk_MTLDevice_recommendedMaxWorkingSetSize(pd->mtl_device));
     else
         CHECK(heap == pvk_MTLDevice_recommendedMaxWorkingSetSize(pd->mtl_device)); /* macOS */
@@ -823,6 +824,127 @@ static void test_heap_cache(void)
     CHECK(d->heap_cache_count == 1 && d->heap_cache[0].heap == heap);
 }
 
+/* VK_EXT_memory_budget (section 7, Memory heap and budget): the usage
+ * follows allocations and frees at once, seen from every instance, also when
+ * a free goes to the heap cache and an allocation takes it back; the budget
+ * stays above the usage and within the heap, and an allocation takes its
+ * room before anything uses its pages. */
+static VkDeviceSize budget_of(VkPhysicalDevice pd, VkDeviceSize *usage)
+{
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT budget;
+    VkPhysicalDeviceMemoryProperties2 mem2;
+    uint32_t i;
+    memset(&budget, 0xFF, sizeof(budget));
+    budget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    budget.pNext = NULL;
+    memset(&mem2, 0, sizeof(mem2));
+    mem2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+    mem2.pNext = &budget;
+    vkGetPhysicalDeviceMemoryProperties2(pd, &mem2);
+    CHECK(mem2.memoryProperties.memoryHeapCount == 1);
+    CHECK(budget.heapBudget[0] > budget.heapUsage[0] && budget.heapBudget[0] <= mem2.memoryProperties.memoryHeaps[0].size);
+    for (i = 1; i < VK_MAX_MEMORY_HEAPS; i++)
+        CHECK(budget.heapBudget[i] == 0 && budget.heapUsage[i] == 0);
+    *usage = budget.heapUsage[0];
+    return budget.heapBudget[0];
+}
+
+/* Metal's other allocations may change meanwhile, by much less. */
+#define NEAR(a, b) ((a) + size / 4 > (b) && (b) + size / 4 > (a))
+
+static void test_memory_budget(void)
+{
+    const VkDeviceSize size = 4u << 20, big = 256u << 20, slack = 8u << 20, gb = (VkDeviceSize)1 << 30;
+    struct pvk_device *d = (struct pvk_device *)device;
+    const struct pvk_physical_device *pd = d->physical_device;
+    VkDeviceSize budget, usage, before, after, room, allocated, backed, headroom, allocated2, backed2, headroom2;
+    VkExtensionProperties exts[128];
+    VkInstance other_instance;
+    VkPhysicalDevice other;
+    VkInstanceCreateInfo instance_info;
+    VkDeviceMemory memory;
+    uint32_t count = PVK_ARRAY_SIZE(exts), i, one = 1;
+    bool offered = false;
+    id heap_object;
+
+    vkEnumerateDeviceExtensionProperties(physical_device, NULL, &count, exts);
+    for (i = 0; i < count; i++)
+        offered |= strcmp(exts[i].extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) == 0;
+    CHECK(offered);
+
+    /* The heap cache keeps what this frees (the system's memory pressure
+     * would empty it). */
+    pvk_memory_unwatch_pressure(d);
+    pvk_heap_cache_pressure(d, PVK_DISPATCH_MEMORYPRESSURE_NORMAL);
+    pvk_heap_cache_flush(d, true, true);
+    memset(&instance_info, 0, sizeof(instance_info));
+    instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    REQUIRE_VK(vkCreateInstance(&instance_info, NULL, &other_instance));
+    REQUIRE_VK(vkEnumeratePhysicalDevices(other_instance, &one, &other));
+    CHECK(other != physical_device);
+
+    budget_of(physical_device, &before);
+    budget_of(other, &usage);
+    CHECK(NEAR(usage, before));
+    REQUIRE_VK(allocate(private_type, size, NULL, &memory)); /* over PVK_POOL_LARGEST: a heap of its own */
+    heap_object = ((struct pvk_device_memory *)memory)->mtl_heap;
+    budget_of(physical_device, &after);
+    CHECK(NEAR(after, before + size));
+    budget_of(other, &usage);
+    CHECK(NEAR(usage, after));
+    vkFreeMemory(device, memory, NULL);
+    CHECK(d->heap_cache_count == 1 && d->heap_cache[0].heap == heap_object);
+    budget_of(other, &usage);
+    CHECK(NEAR(usage, before));
+    REQUIRE_VK(allocate(private_type, size, NULL, &memory));
+    CHECK(((struct pvk_device_memory *)memory)->mtl_heap == heap_object);
+    budget_of(other, &usage);
+    CHECK(NEAR(usage, after));
+    vkFreeMemory(device, memory, NULL);
+    vkDestroyInstance(other_instance, NULL);
+    pvk_heap_cache_flush(d, true, true);
+
+    /* What is reported: without a limit and memory pressure, the heap's
+     * rest; with a limit, what it leaves, even nothing (macOS's 0). */
+    if (pvk_memory_limit == UINT64_MAX && !pvk_memory_pressure()) {
+        budget = budget_of(physical_device, &usage);
+        pvk_memory_budget_from(pd, PVK_MEMORY_HEADROOM_HEAP, &before, &after);
+        CHECK(NEAR(before, budget) && NEAR(after, usage));
+        pvk_memory_budget_from(pd, PVK_MEMORY_HEADROOM_LIMIT, &budget, &usage);
+        CHECK(budget == usage + PVK_PAGE_SIZE);
+    }
+
+    /* A fresh allocation lowers the room (budget - usage) by 9/10 of it at
+     * once, also before anything uses its pages: the footprint and the
+     * system's free memory don't see it yet. */
+    pvk_memory_budget_from(pd, PVK_MEMORY_HEADROOM_HEAP, &budget, &usage);
+    room = budget - usage;
+    pvk_memory_room(pd, PVK_MEMORY_HEADROOM_SYSTEM, &allocated, &backed, &headroom);
+    REQUIRE_VK(allocate(private_type, big, NULL, &memory));
+    pvk_memory_budget_from(pd, PVK_MEMORY_HEADROOM_HEAP, &budget, &usage);
+    CHECK(room - (budget - usage) + slack > big / 10 * 9 && room - (budget - usage) < big / 10 * 9 + slack);
+    pvk_memory_room(pd, PVK_MEMORY_HEADROOM_SYSTEM, &allocated2, &backed2, &headroom2);
+    CHECK(allocated2 + slack > allocated + big && backed2 < backed + big / 4);
+    vkFreeMemory(device, memory, NULL);
+    pvk_heap_cache_flush(d, true, true);
+
+    /* The rules (heap, allocated, cached, backed, headroom). */
+    pvk_memory_budget_of(6 * gb, gb, 64 << 20, gb, 4 * gb, &budget, &usage);
+    CHECK(usage == gb - (64 << 20) && budget == gb + 4 * gb / 10 * 9);
+    pvk_memory_budget_of(6 * gb, 2 * gb, 0, gb, 4 * gb, &budget, &usage); /* 1 GB without pages yet */
+    CHECK(usage == 2 * gb && budget == 2 * gb + 3 * gb / 10 * 9);
+    pvk_memory_budget_of(6 * gb, 3 * gb, 0, 0, 2 * gb, &budget, &usage); /* more than is left */
+    CHECK(usage == 3 * gb && budget == 3 * gb + PVK_PAGE_SIZE);
+    pvk_memory_budget_of(6 * gb, gb, 0, 2 * gb, 4 * gb, &budget, &usage); /* graphics memory Metal doesn't count */
+    CHECK(usage == gb && budget == gb + 4 * gb / 10 * 9);
+    pvk_memory_budget_of(6 * gb, gb, 0, gb, 0, &budget, &usage); /* nothing left: just above the usage */
+    CHECK(usage == gb && budget == gb + PVK_PAGE_SIZE);
+    pvk_memory_budget_of(6 * gb, 7 * gb, 0, 7 * gb, gb, &budget, &usage); /* over the heap: the heap */
+    CHECK(usage == 7 * gb && budget == 6 * gb);
+    pvk_memory_budget_of(6 * gb, 0, 0, 0, 100 * gb, &budget, &usage);
+    CHECK(usage == 0 && budget == 6 * gb);
+}
+
 int main(void)
 {
     setup();
@@ -841,6 +963,7 @@ int main(void)
     RUN(test_small_allocations);
     RUN(test_small_allocations_on_gpu);
     RUN(test_heap_cache);
+    RUN(test_memory_budget);
     vkDestroyDevice(device, NULL);
     vkDestroyInstance(instance, NULL);
     return TEST_RESULT();
