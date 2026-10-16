@@ -231,23 +231,61 @@ static int listed(const VkExtensionProperties *props, uint32_t count, const char
     return 0;
 }
 
+/* An internal function of a blit library (NULL: none). */
+static id blit_function(id library, const char *name, const char *suffix)
+{
+    char full[64];
+    void *pool = objc_autoreleasePoolPush();
+    id f;
+    snprintf(full, sizeof(full), "%s%s", name, suffix);
+    f = pvk_MTLLibrary_newFunctionWithName(library, pvk_NSString_stringWithUTF8String(full));
+    objc_autoreleasePoolPop(pool);
+    return f;
+}
+
 /* The internal shaders are compiled on the device's own thread, without any
- * use (white box: pvk_device_warm); a device destroyed at once stops it. */
+ * use (white box: pvk_device_warm), also by two devices at once (the blit
+ * libraries' locks are global) and with a first use meanwhile; a device
+ * destroyed at once stops it. Each blit function (also layered) and kernel
+ * is in the library it is looked up in. */
 static void test_internal_shaders_ahead(void)
 {
     VkResult result;
-    VkDevice device = create_device(NULL, 0, NULL, &result), quick;
-    struct pvk_device *d = (struct pvk_device *)device;
-    unsigned i;
+    VkDevice devices[2], quick;
+    unsigned i, k;
+    id f;
 
-    REQUIRE(device);
-    CHECK(d->warm_running);
-    pthread_join(d->warm_thread, NULL); /* (it ends once all are made) */
-    d->warm_running = false;
-    CHECK(d->blit_library && d->fill_pipeline && d->query_copy_pipeline && d->ds_copy_library);
-    for (i = 0; i < PVK_PP_KERNEL_COUNT; i++)
-        CHECK(d->prepass_pipelines[i] != NULL);
-    vkDestroyDevice(device, NULL);
+    for (k = 0; k < 2; k++) {
+        devices[k] = create_device(NULL, 0, NULL, &result);
+        REQUIRE(devices[k]);
+    }
+    CHECK(pvk_blit_library((struct pvk_device *)devices[1], PVK_BLIT_LIB_CCLEAR) != NULL);
+    for (k = 0; k < 2; k++) {
+        struct pvk_device *d = (struct pvk_device *)devices[k];
+        CHECK(d->warm_running);
+        pthread_join(d->warm_thread, NULL); /* (it ends once all are made) */
+        d->warm_running = false;
+        CHECK(d->fill_pipeline && d->query_copy_pipeline && d->ds_copy_library);
+        for (i = 0; i < PVK_PP_KERNEL_COUNT; i++)
+            CHECK(d->prepass_pipelines[i] != NULL);
+        for (i = 0; i < PVK_BLIT_LIB_COUNT; i++)
+            REQUIRE(d->blit_libraries[i] != NULL);
+        for (i = 0; i < PVK_BLIT_FUNCTION_COUNT; i++) {
+            CHECK((f = blit_function(d->blit_libraries[pvk_blit_function_library(i)], pvk_blit_function_names[i], "")));
+            pvk_release(f);
+            if (pvk_blit_reads_layer(i)) {
+                CHECK((f = blit_function(d->blit_libraries[pvk_blit_function_library(i)], pvk_blit_function_names[i],
+                                         "_l")));
+                pvk_release(f);
+            }
+        }
+        for (i = 0; i < PVK_ARRAY_SIZE(pvk_blit_kernel_names); i++) {
+            CHECK((f = blit_function(d->blit_libraries[pvk_blit_kernel_library(i)], pvk_blit_kernel_names[i], "")));
+            pvk_release(f);
+        }
+    }
+    for (k = 0; k < 2; k++)
+        vkDestroyDevice(devices[k], NULL);
     for (i = 0; i < 4; i++) {
         quick = create_device(NULL, 0, NULL, &result);
         REQUIRE(quick);

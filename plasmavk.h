@@ -32487,9 +32487,9 @@ struct pvk_device {
     id fill_pipeline;      /* internal kernel of vkCmdFillBuffer, made on first use */
     /* Images (sections 11, 15 and 16) */
     struct pvk_sampler_state *sampler_states; /* MTLSamplerStates shared by equal VkSamplers */
-    id blit_library;                          /* internal blit/resolve shaders, made on first use */
-    struct pvk_blit_pipeline *blit_pipelines; /* render pipelines made from it, by function and format */
-    id blit_kernels[18];                      /* compute pipelines made from it (pvk_blit_kernel), on first use */
+    id blit_libraries[5];                     /* internal shaders (enum pvk_blit_lib), made on first use */
+    struct pvk_blit_pipeline *blit_pipelines; /* render pipelines made from them, by function and format */
+    id blit_kernels[18];                      /* compute pipelines made from them (pvk_blit_kernel), on first use */
     id host_queue, host_event;                /* MTL4CommandQueue, MTLSharedEvent: host copies' blits */
     uint64_t host_serial;
     /* Graphics (sections 15-17), made on first use */
@@ -60088,7 +60088,7 @@ static id pvk_encode_compute_state(struct pvk_encoder *e, const uint32_t base[3]
  * texels into a drawable (section 18). */
 
 /* Arguments of the internal draws, at buffer index 0 (pvk_blit_args in
- * pvk_blit_msl). */
+ * pvk_blit_prelude_msl). */
 struct pvk_blit_args {
     float src[4];        /* blits: source rectangle x0, y0, x1, y1 (texels) */
     float dst[4];        /* blits: destination rectangle x0, y0, x1, y1 (pixels) */
@@ -60123,21 +60123,26 @@ struct pvk_blit_args {
     "{\n"                                                                                                       \
     "    return " VALUE ";\n"                                                                                   \
     "}\n"
-#define PVK_MSL_BLIT_NEAREST(T, P)                                                                              \
+/* The nearest blits of a component type, of 2D images and arrays, and of 3D
+ * images */
+#define PVK_MSL_BLITS_2D(T, P)                                                                                  \
     PVK_MSL_BLIT_FRAGMENT("vec<" T ", 4>", "pvk_blit_" P "_2d", "texture2d<" T ">", PVK_MSL_NEAREST_2D, "")     \
     PVK_MSL_BLIT_FRAGMENT("vec<" T ", 4>", "pvk_blit_" P "_2darray", "texture2d_array<" T ">",                  \
                           PVK_MSL_NEAREST_2DARRAY("0u"), "")                                                    \
-    PVK_MSL_BLIT_FRAGMENT("vec<" T ", 4>", "pvk_blit_" P "_3d", "texture3d<" T ">", PVK_MSL_NEAREST_3D("0u"), "") \
     PVK_MSL_BLIT_FRAGMENT("vec<" T ", 4>", "pvk_blit_" P "_2darray_l", "texture2d_array<" T ">",                \
-                          PVK_MSL_NEAREST_2DARRAY("l"), PVK_MSL_LAYER_ARG)                                      \
+                          PVK_MSL_NEAREST_2DARRAY("l"), PVK_MSL_LAYER_ARG)
+#define PVK_MSL_BLITS_3D(T, P)                                                                                  \
+    PVK_MSL_BLIT_FRAGMENT("vec<" T ", 4>", "pvk_blit_" P "_3d", "texture3d<" T ">", PVK_MSL_NEAREST_3D("0u"), "") \
     PVK_MSL_BLIT_FRAGMENT("vec<" T ", 4>", "pvk_blit_" P "_3d_l", "texture3d<" T ">", PVK_MSL_NEAREST_3D("l"),  \
                           PVK_MSL_LAYER_ARG)
-#define PVK_MSL_BLIT_LINEAR                                                                                     \
+/* The linear blits, of 2D images and arrays, and of 3D images */
+#define PVK_MSL_LINEAR_BLITS_2D                                                                                 \
     PVK_MSL_BLIT_FRAGMENT("float4", "pvk_blit_fl_2d", "texture2d<float>", PVK_MSL_LINEAR_2D, "")                \
     PVK_MSL_BLIT_FRAGMENT("float4", "pvk_blit_fl_2darray", "texture2d_array<float>", PVK_MSL_LINEAR_2DARRAY("0u"), "") \
-    PVK_MSL_BLIT_FRAGMENT("float4", "pvk_blit_fl_3d", "texture3d<float>", PVK_MSL_LINEAR_3D("0u"), "")          \
     PVK_MSL_BLIT_FRAGMENT("float4", "pvk_blit_fl_2darray_l", "texture2d_array<float>", PVK_MSL_LINEAR_2DARRAY("l"), \
-                          PVK_MSL_LAYER_ARG)                                                                    \
+                          PVK_MSL_LAYER_ARG)
+#define PVK_MSL_LINEAR_BLITS_3D                                                                                 \
+    PVK_MSL_BLIT_FRAGMENT("float4", "pvk_blit_fl_3d", "texture3d<float>", PVK_MSL_LINEAR_3D("0u"), "")          \
     PVK_MSL_BLIT_FRAGMENT("float4", "pvk_blit_fl_3d_l", "texture3d<float>", PVK_MSL_LINEAR_3D("l"), PVK_MSL_LAYER_ARG)
 /* Blits into storage images (pvk_blit_kernel): a thread per destination
  * texel, at the draws' pixel centers, of destination layer gid.z; into layer
@@ -60186,8 +60191,27 @@ struct pvk_blit_args {
     "    return s / float(n);\n"
 #define PVK_MSL_SAMPLE0(L) "    return t.read(i, " L "0);\n"
 
-/* In parts: C99 compilers need not take string literals over 4095 bytes. */
-static const char *const pvk_blit_msl[] = {
+/* The libraries of the internal functions (pvk_blit_library), compiled
+ * apart, side by side (pvk_blit_libraries_warm): without Metal's shader
+ * cache (an application's first launch) all of them in one took 800 ms to
+ * compile on M4 Max, and a swapchain's creation (its present pipeline), the
+ * first vkCmdBlitImage (mipmaps while textures load) and every other first
+ * transfer waited for all of it. Side by side, cold, they are in after: the
+ * present draw 50 ms; the float blits of 2D images and arrays (mipmaps of
+ * 2D, cube and array textures; scaling) 95 ms; the float blits into storage
+ * images (mipmaps too) 235 ms; the other blits and the resolves 340 ms; the
+ * clears of storage images 415 ms. */
+enum pvk_blit_lib {
+    PVK_BLIT_LIB_PRESENT,
+    PVK_BLIT_LIB_2D,
+    PVK_BLIT_LIB_CBLIT,
+    PVK_BLIT_LIB_OTHER,
+    PVK_BLIT_LIB_CCLEAR,
+    PVK_BLIT_LIB_COUNT
+};
+
+/* What each library begins with: the vertex functions and the helpers. */
+static const char pvk_blit_prelude_msl[] =
     "#include <metal_stdlib>\n"
     "using namespace metal;\n"
     "struct pvk_blit_args { float4 src; float4 dst; float4 size; float4 layer; uint4 swizzle; int4 offset; };\n"
@@ -60226,32 +60250,46 @@ static const char *const pvk_blit_msl[] = {
     "static float pvk_z(uint l, constant pvk_blit_args &a)\n"
     "{\n"
     "    return a.layer.x + (float(a.offset.x + int(l)) + 0.5 - a.layer.y) * a.layer.z / a.layer.w;\n"
-    "}\n",
-    PVK_MSL_BLIT_NEAREST("float", "f"),
-    PVK_MSL_BLIT_NEAREST("uint", "u"),
-    PVK_MSL_BLIT_NEAREST("int", "i"),
-    "constexpr sampler pvk_linear(filter::linear, mip_filter::nearest, address::clamp_to_edge);\n" PVK_MSL_BLIT_LINEAR,
-    PVK_MSL_RESOLVE("float", "f", PVK_MSL_AVERAGE),
-    PVK_MSL_RESOLVE("uint", "u", PVK_MSL_SAMPLE0),
-    PVK_MSL_RESOLVE("int", "i", PVK_MSL_SAMPLE0),
-    "fragment float4 pvk_present(float4 pos [[position]], texture2d<float> t [[texture(0)]])\n"
-    "{\n"
-    "    return t.read(uint2(pos.xy));\n"
-    "}\n",
-    PVK_MSL_BLIT_KERNEL("pvk_cblit_f_2d", "texture2d", PVK_MSL_NEAREST_2D, "uint2(pos.xy)")
-    PVK_MSL_BLIT_KERNEL("pvk_cblit_f_2darray", "texture2d_array", PVK_MSL_NEAREST_2DARRAY("gid.z"),
-                        "uint2(pos.xy), uint(a.offset.z) + gid.z")
-    PVK_MSL_BLIT_KERNEL("pvk_cblit_f_3d", "texture3d", PVK_MSL_NEAREST_3D("gid.z"),
-                        "uint3(uint2(pos.xy), uint(a.offset.z) + gid.z)"),
-    PVK_MSL_BLIT_KERNEL("pvk_cblit_fl_2d", "texture2d", PVK_MSL_LINEAR_2D, "uint2(pos.xy)")
-    PVK_MSL_BLIT_KERNEL("pvk_cblit_fl_2darray", "texture2d_array", PVK_MSL_LINEAR_2DARRAY("gid.z"),
-                        "uint2(pos.xy), uint(a.offset.z) + gid.z")
-    PVK_MSL_BLIT_KERNEL("pvk_cblit_fl_3d", "texture3d", PVK_MSL_LINEAR_3D("gid.z"),
-                        "uint3(uint2(pos.xy), uint(a.offset.z) + gid.z)"),
-    "struct pvk_cclear_args { uint4 value; uint4 at; };\n"
-    PVK_MSL_CLEAR_KERNELS("float", "f", "as_type<float4>(a.value)")
-    PVK_MSL_CLEAR_KERNELS("half", "h", "as_type<half4>(a.value.xy)"),
-    PVK_MSL_CLEAR_KERNELS("uint", "u", "a.value") PVK_MSL_CLEAR_KERNELS("int", "i", "as_type<int4>(a.value)"),
+    "}\n"
+    "constexpr sampler pvk_linear(filter::linear, mip_filter::nearest, address::clamp_to_edge);\n";
+
+/* The functions, in parts of one library each (C99 compilers need not take
+ * string literals over 4095 bytes). */
+static const struct pvk_blit_part {
+    uint32_t library; /* enum pvk_blit_lib */
+    const char *msl;
+} pvk_blit_msl[] = {
+    { PVK_BLIT_LIB_PRESENT,
+      "fragment float4 pvk_present(float4 pos [[position]], texture2d<float> t [[texture(0)]])\n"
+      "{\n"
+      "    return t.read(uint2(pos.xy));\n"
+      "}\n" },
+    { PVK_BLIT_LIB_2D, PVK_MSL_BLITS_2D("float", "f") },
+    { PVK_BLIT_LIB_2D, PVK_MSL_LINEAR_BLITS_2D },
+    { PVK_BLIT_LIB_OTHER, PVK_MSL_BLITS_3D("float", "f") PVK_MSL_LINEAR_BLITS_3D },
+    { PVK_BLIT_LIB_OTHER, PVK_MSL_BLITS_2D("uint", "u") PVK_MSL_BLITS_3D("uint", "u") },
+    { PVK_BLIT_LIB_OTHER, PVK_MSL_BLITS_2D("int", "i") PVK_MSL_BLITS_3D("int", "i") },
+    { PVK_BLIT_LIB_OTHER, PVK_MSL_RESOLVE("float", "f", PVK_MSL_AVERAGE) },
+    { PVK_BLIT_LIB_OTHER, PVK_MSL_RESOLVE("uint", "u", PVK_MSL_SAMPLE0) },
+    { PVK_BLIT_LIB_OTHER, PVK_MSL_RESOLVE("int", "i", PVK_MSL_SAMPLE0) },
+    { PVK_BLIT_LIB_CBLIT,
+      PVK_MSL_BLIT_KERNEL("pvk_cblit_f_2d", "texture2d", PVK_MSL_NEAREST_2D, "uint2(pos.xy)")
+      PVK_MSL_BLIT_KERNEL("pvk_cblit_f_2darray", "texture2d_array", PVK_MSL_NEAREST_2DARRAY("gid.z"),
+                          "uint2(pos.xy), uint(a.offset.z) + gid.z")
+      PVK_MSL_BLIT_KERNEL("pvk_cblit_f_3d", "texture3d", PVK_MSL_NEAREST_3D("gid.z"),
+                          "uint3(uint2(pos.xy), uint(a.offset.z) + gid.z)") },
+    { PVK_BLIT_LIB_CBLIT,
+      PVK_MSL_BLIT_KERNEL("pvk_cblit_fl_2d", "texture2d", PVK_MSL_LINEAR_2D, "uint2(pos.xy)")
+      PVK_MSL_BLIT_KERNEL("pvk_cblit_fl_2darray", "texture2d_array", PVK_MSL_LINEAR_2DARRAY("gid.z"),
+                          "uint2(pos.xy), uint(a.offset.z) + gid.z")
+      PVK_MSL_BLIT_KERNEL("pvk_cblit_fl_3d", "texture3d", PVK_MSL_LINEAR_3D("gid.z"),
+                          "uint3(uint2(pos.xy), uint(a.offset.z) + gid.z)") },
+    { PVK_BLIT_LIB_CCLEAR,
+      "struct pvk_cclear_args { uint4 value; uint4 at; };\n"
+      PVK_MSL_CLEAR_KERNELS("float", "f", "as_type<float4>(a.value)")
+      PVK_MSL_CLEAR_KERNELS("half", "h", "as_type<half4>(a.value.xy)") },
+    { PVK_BLIT_LIB_CCLEAR,
+      PVK_MSL_CLEAR_KERNELS("uint", "u", "a.value") PVK_MSL_CLEAR_KERNELS("int", "i", "as_type<int4>(a.value)") },
 };
 
 /* Arguments of the clear kernels (pvk_cclear_args in pvk_blit_msl). */
@@ -60285,31 +60323,110 @@ struct pvk_blit_pipeline {
     id pso; /* MTLRenderPipelineState */
 };
 
-static pthread_mutex_t pvk_blit_lock = PTHREAD_MUTEX_INITIALIZER; /* queues of a device encode concurrently */
+/* The pipelines and kernels made (queues of a device encode concurrently);
+ * not held while they compile, nor while a library does */
+static pthread_mutex_t pvk_blit_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* One per library: a first use waits for the compile of its own only (the
+ * check: one per library here and in struct pvk_device). */
+static pthread_mutex_t pvk_blit_library_locks[] = {
+    PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER,
+    PTHREAD_MUTEX_INITIALIZER
+};
+typedef char pvk_blit_lib_check[PVK_ARRAY_SIZE(((struct pvk_device *)0)->blit_libraries) == PVK_BLIT_LIB_COUNT &&
+                                        PVK_ARRAY_SIZE(pvk_blit_library_locks) == PVK_BLIT_LIB_COUNT ? 1 : -1];
+
+struct pvk_library_task;
 static id pvk_msl_library(struct pvk_device *device, const char *msl, bool invariant, char *error, size_t error_size);
+static struct pvk_library_task *pvk_msl_library_start(struct pvk_device *device, const char *msl, bool invariant);
+static id pvk_msl_library_wait(struct pvk_library_task *t, char *error, size_t error_size);
 
-/* The internal blit/resolve shaders (made on first use, or by
- * pvk_device_warm; NULL on failure). The caller holds pvk_blit_lock. */
-static id pvk_blit_library(struct pvk_device *device)
+/* The source of library `index` (the device's allocation; NULL: out of
+ * memory). */
+static char *pvk_blit_library_msl(struct pvk_device *device, uint32_t index)
 {
-    if (!device->blit_library) {
-        size_t i, n = 1;
-        char *msl, error[256] = "out of memory";
+    size_t i, n = sizeof(pvk_blit_prelude_msl);
+    char *msl;
+    for (i = 0; i < PVK_ARRAY_SIZE(pvk_blit_msl); i++)
+        if (pvk_blit_msl[i].library == index)
+            n += strlen(pvk_blit_msl[i].msl);
+    msl = pvk_alloc(pvk_device_alloc(device), n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+    if (msl) {
+        strcpy(msl, pvk_blit_prelude_msl);
         for (i = 0; i < PVK_ARRAY_SIZE(pvk_blit_msl); i++)
-            n += strlen(pvk_blit_msl[i]);
-        msl = pvk_alloc(pvk_device_alloc(device), n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-        if (msl) {
-            for (i = 0; i < PVK_ARRAY_SIZE(pvk_blit_msl); i++)
-                strcat(msl, pvk_blit_msl[i]);
-            device->blit_library = pvk_msl_library(device, msl, false, error, sizeof(error)); /* (safe math) */
-        }
-        pvk_free(pvk_device_alloc(device), msl);
-        if (!device->blit_library)
-            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
-                     "internal blit shaders: %s", error);
+            if (pvk_blit_msl[i].library == index)
+                strcat(msl, pvk_blit_msl[i].msl);
     }
-    return device->blit_library;
+    return msl;
+}
+
+static void pvk_blit_library_failed(struct pvk_device *device, const char *error)
+{
+    pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0, "internal blit shaders: %s",
+             error);
+}
+
+/* Library `index` (enum pvk_blit_lib) of the internal shaders (made on
+ * first use, or by pvk_blit_libraries_warm; NULL on failure). A first use
+ * meanwhile waits for the compile in progress. */
+static id pvk_blit_library(struct pvk_device *device, uint32_t index)
+{
+    id library;
+    pthread_mutex_lock(&pvk_blit_library_locks[index]);
+    if (!device->blit_libraries[index]) {
+        char *msl = pvk_blit_library_msl(device, index), error[256] = "out of memory";
+        if (msl)
+            device->blit_libraries[index] = pvk_msl_library(device, msl, false, error, sizeof(error)); /* (safe math) */
+        pvk_free(pvk_device_alloc(device), msl);
+        if (!device->blit_libraries[index])
+            pvk_blit_library_failed(device, error);
+    }
+    library = device->blit_libraries[index];
+    pthread_mutex_unlock(&pvk_blit_library_locks[index]);
+    return library;
+}
+
+/* pvk_device_warm's first step: all the libraries at once, on Metal's
+ * threads (side by side they take about as long as the slowest alone),
+ * each under its lock until it is in, so that a first use waits for its
+ * own only. One whose lock is taken (a first use compiling it, or another
+ * device's warm-up: the locks are global) is made after the others, as one
+ * the start of which failed. */
+static void pvk_blit_libraries_warm(struct pvk_device *device)
+{
+    struct pvk_library_task *tasks[PVK_BLIT_LIB_COUNT];
+    bool locked[PVK_BLIT_LIB_COUNT];
+    char error[256];
+    uint32_t i;
+    for (i = 0; i < PVK_BLIT_LIB_COUNT; i++) {
+        char *msl;
+        tasks[i] = NULL;
+        locked[i] = pthread_mutex_trylock(&pvk_blit_library_locks[i]) == 0; /* (never waits holding others) */
+        if (locked[i] && !device->blit_libraries[i] && (msl = pvk_blit_library_msl(device, i))) {
+            tasks[i] = pvk_msl_library_start(device, msl, false);
+            pvk_free(pvk_device_alloc(device), msl);
+        }
+    }
+    for (i = 0; i < PVK_BLIT_LIB_COUNT; i++) { /* (the order they come in) */
+        if (tasks[i] && !(device->blit_libraries[i] = pvk_msl_library_wait(tasks[i], error, sizeof(error))))
+            pvk_blit_library_failed(device, error);
+        if (locked[i])
+            pthread_mutex_unlock(&pvk_blit_library_locks[i]);
+    }
+    for (i = 0; i < PVK_BLIT_LIB_COUNT && !__atomic_load_n(&device->warm_stop, __ATOMIC_ACQUIRE); i++)
+        if (!tasks[i])
+            pvk_blit_library(device, i);
+}
+
+/* The library of an internal function (enum pvk_blit_function). */
+static uint32_t pvk_blit_function_library(uint32_t function)
+{
+    if (function == PVK_BLIT_PRESENT)
+        return PVK_BLIT_LIB_PRESENT;
+    return function == PVK_BLIT_F_2D || function == PVK_BLIT_F_2DARRAY || function == PVK_BLIT_FL_2D ||
+                   function == PVK_BLIT_FL_2DARRAY
+               ? PVK_BLIT_LIB_2D
+               : PVK_BLIT_LIB_OTHER;
 }
 
 /* Whether an internal function reads the destination layer drawn (array
@@ -60331,13 +60448,12 @@ static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MT
     for (p = device->blit_pipelines; p; p = p->next)
         if (p->function == function && p->format == format && p->layered == layered)
             break;
-    if (p) {
-        pso = p->pso;
-        pthread_mutex_unlock(&pvk_blit_lock);
+    pso = p ? p->pso : NULL;
+    pthread_mutex_unlock(&pvk_blit_lock);
+    if (p)
         return pso;
-    }
     pool = objc_autoreleasePoolPush();
-    if ((library = pvk_blit_library(device))) {
+    if ((library = pvk_blit_library(device, pvk_blit_function_library(function)))) {
         char name[64];
         id desc = pvk_MTLRenderPipelineDescriptor_new(), err = NULL, vs, fs;
         snprintf(name, sizeof(name), "%s%s", pvk_blit_function_names[function],
@@ -60365,19 +60481,25 @@ static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MT
         pvk_release(desc);
     }
     objc_autoreleasePoolPop(pool);
-    if (pso) {
-        p = pvk_alloc(pvk_device_alloc(device), sizeof(*p), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
-        if (p) {
-            p->function = function;
-            p->format = format;
-            p->layered = layered;
-            p->pso = pso;
-            p->next = device->blit_pipelines;
-            device->blit_pipelines = p;
-        } else {
-            pvk_release(pso);
-            pso = NULL;
-        }
+    if (!pso)
+        return NULL;
+    pthread_mutex_lock(&pvk_blit_lock);
+    for (p = device->blit_pipelines; p; p = p->next) /* made meanwhile by another queue */
+        if (p->function == function && p->format == format && p->layered == layered)
+            break;
+    if (p) {
+        pvk_release(pso);
+        pso = p->pso;
+    } else if ((p = pvk_alloc(pvk_device_alloc(device), sizeof(*p), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE))) {
+        p->function = function;
+        p->format = format;
+        p->layered = layered;
+        p->pso = pso;
+        p->next = device->blit_pipelines;
+        device->blit_pipelines = p;
+    } else {
+        pvk_release(pso);
+        pso = NULL;
     }
     pthread_mutex_unlock(&pvk_blit_lock);
     return pso;
@@ -60385,6 +60507,13 @@ static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MT
 
 static id pvk_library_compute(struct pvk_device *device, id library, const char *entry, unsigned long max_threads,
                               const char *label, char *error, size_t error_size);
+
+/* The library of kernel k of pvk_blit_kernel_names (the 6 blits, then the
+ * clears). */
+static uint32_t pvk_blit_kernel_library(uint32_t k)
+{
+    return k < 6 ? PVK_BLIT_LIB_CBLIT : PVK_BLIT_LIB_CCLEAR;
+}
 
 /* The compute pipeline of kernel k of pvk_blit_kernel_names (made on first
  * use; NULL on failure): threadgroups of up to 256 threads (16x16). */
@@ -60394,17 +60523,26 @@ static id pvk_blit_kernel(struct pvk_device *device, uint32_t k)
     id pso, library;
     void *pool;
     pthread_mutex_lock(&pvk_blit_lock);
-    if (!device->blit_kernels[k] && (library = pvk_blit_library(device))) {
-        pool = objc_autoreleasePoolPush();
-        snprintf(label, sizeof(label), "PlasmaVK %s", pvk_blit_kernel_names[k]);
-        device->blit_kernels[k] =
-            pvk_library_compute(device, library, pvk_blit_kernel_names[k], 256, label, error, sizeof(error));
-        objc_autoreleasePoolPop(pool);
-        if (!device->blit_kernels[k])
-            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
-                     "internal blit kernel %s: %s", pvk_blit_kernel_names[k], error);
-    }
     pso = device->blit_kernels[k];
+    pthread_mutex_unlock(&pvk_blit_lock);
+    if (pso || !(library = pvk_blit_library(device, pvk_blit_kernel_library(k))))
+        return pso;
+    pool = objc_autoreleasePoolPush();
+    snprintf(label, sizeof(label), "PlasmaVK %s", pvk_blit_kernel_names[k]);
+    pso = pvk_library_compute(device, library, pvk_blit_kernel_names[k], 256, label, error, sizeof(error));
+    objc_autoreleasePoolPop(pool);
+    if (!pso) {
+        pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
+                 "internal blit kernel %s: %s", pvk_blit_kernel_names[k], error);
+        return NULL;
+    }
+    pthread_mutex_lock(&pvk_blit_lock);
+    if (device->blit_kernels[k]) { /* made meanwhile by another queue */
+        pvk_release(pso);
+        pso = device->blit_kernels[k];
+    } else {
+        device->blit_kernels[k] = pso;
+    }
     pthread_mutex_unlock(&pvk_blit_lock);
     return pso;
 }
@@ -60424,8 +60562,10 @@ static void pvk_device_finish_images(struct pvk_device *device)
         pvk_release(device->blit_kernels[k]);
         device->blit_kernels[k] = NULL;
     }
-    pvk_release(device->blit_library);
-    device->blit_library = NULL;
+    for (k = 0; k < PVK_ARRAY_SIZE(device->blit_libraries); k++) {
+        pvk_release(device->blit_libraries[k]);
+        device->blit_libraries[k] = NULL;
+    }
     pvk_device_free_sampler_states(device);
     pvk_release(device->host_queue);
     pvk_release(device->host_event);
@@ -67131,13 +67271,14 @@ static id pvk_device_fill_pipeline(struct pvk_device *device)
 }
 
 /* Compiles the internal shaders whose source is fixed on a thread of the
- * device's own, from vkCreateDevice: their first use is inside a
- * submission (the blit library at the vkQueueSubmit of the first
- * vkCmdBlitImage), and a compile Metal's shader cache does not have takes up
- * to a third of a second (M4 Max: a new PlasmaVK, or another driver's
- * compiles in the app's cache since). A first use meanwhile waits for the
- * compile in progress under the getter's lock. vkDestroyDevice stops it
- * between compiles. */
+ * device's own, from vkCreateDevice: their first use is in
+ * vkCreateSwapchainKHR (the present pipeline) or inside a submission (the
+ * blits that make mipmaps at the vkQueueSubmit of the first vkCmdBlitImage,
+ * resolves, clears of storage images), and a compile Metal's shader cache
+ * does not have (an application's first launch) takes long: 50 to 415 ms
+ * for the blit libraries, side by side (enum pvk_blit_lib), on M4 Max. A
+ * first use meanwhile waits for the compile in progress under the getter's
+ * lock. vkDestroyDevice stops it between steps. */
 static void *pvk_device_warm(void *arg)
 {
     struct pvk_device *device = arg;
@@ -67146,9 +67287,7 @@ static void *pvk_device_warm(void *arg)
     for (step = 0; step < 4 + PVK_PP_KERNEL_COUNT && !__atomic_load_n(&device->warm_stop, __ATOMIC_ACQUIRE); step++) {
         void *pool = objc_autoreleasePoolPush();
         if (step == 0) {
-            pthread_mutex_lock(&pvk_blit_lock);
-            pvk_blit_library(device);
-            pthread_mutex_unlock(&pvk_blit_lock);
+            pvk_blit_libraries_warm(device);
         } else if (step == 1) {
             pvk_device_fill_pipeline(device);
         } else if (step == 2) {
