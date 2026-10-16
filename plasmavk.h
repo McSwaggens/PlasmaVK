@@ -69947,6 +69947,10 @@ static void pvk_stage_code(const VkPipelineShaderStageCreateInfo *stage, const u
     }
 }
 
+/* VK_EXT_pipeline_creation_feedback for a pipeline whose creation began at
+ * `start` (pvk_clock_ns(CLOCK_UPTIME_RAW): CLOCK_MONOTONIC counts whole
+ * microseconds on macOS, and a pipeline the device's caches hold takes less,
+ * which reported 0 ns). */
 static void pvk_creation_feedback(const void *pNext, uint64_t start, bool hit)
 {
     const VkBaseInStructure *ext;
@@ -69957,7 +69961,7 @@ static void pvk_creation_feedback(const void *pNext, uint64_t start, bool hit)
             fb->pPipelineCreationFeedback->flags =
                 VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT |
                 (hit ? VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT : 0);
-            fb->pPipelineCreationFeedback->duration = pvk_now_ns() - start;
+            fb->pPipelineCreationFeedback->duration = pvk_clock_ns(CLOCK_UPTIME_RAW) - start;
             for (i = 0; fb->pPipelineStageCreationFeedbacks && i < fb->pipelineStageCreationFeedbackCount; i++)
                 fb->pPipelineStageCreationFeedbacks[i] = *fb->pPipelineCreationFeedback;
         }
@@ -70899,7 +70903,7 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
     id pso = NULL;
     int hit = 0;
     VkResult result;
-    uint64_t start = pvk_now_ns();
+    uint64_t start = pvk_clock_ns(CLOCK_UPTIME_RAW);
 
     *pPipeline = VK_NULL_HANDLE;
     if (!cache && !(flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT))
@@ -72706,7 +72710,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     id pso = NULL, pso_snorm = NULL;
     int hit, hit_snorm;
     VkResult result;
-    uint64_t start = pvk_now_ns();
+    uint64_t start = pvk_clock_ns(CLOCK_UPTIME_RAW);
 
     *pPipeline = VK_NULL_HANDLE;
     if (!cache && !(flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT))
