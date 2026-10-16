@@ -29771,6 +29771,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetMemoryMetalHandlePropertiesEXT(
 #endif
 
 #include <TargetConditionals.h>
+#include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
@@ -32929,6 +32930,51 @@ static bool pvk_vuid(const struct pvk_device *device, const char *vuid, VkObject
 /* Apple GPUs run SIMD-groups of 32 threads (threadExecutionWidth). */
 #define PVK_SUBGROUP_SIZE 32u
 
+/* ---- Memory heap ----
+ *
+ * Apple GPUs have unified memory: one heap of system memory. Its size is the
+ * working set Metal recommends for the GPU (recommendedMaxWorkingSetSize),
+ * or the process's memory limit if that is less, as on iOS and iPadOS:
+ * jetsam ends a process whose footprint (its CPU memory and its Metal
+ * resources) reaches its limit, and an iPhone Air with 12 GB recommends
+ * 8 GB but limits a process to about 6 GB, even with the
+ * increased-memory-limit entitlement. Allocators size their pools by the
+ * heap (VMA budgets 80% of it, DXVK all of it), so a heap above the limit
+ * gets streaming engines killed instead of throttled. TASK_VM_INFO has the
+ * limit (phys_footprint plus limit_bytes_remaining, which is 0 without one,
+ * as on macOS), read once so that every instance of the process reports the
+ * same heap. */
+
+/* The process's memory limit and what it may still allocate before it;
+ * false without a limit. */
+static bool pvk_process_limit(VkDeviceSize *limit, VkDeviceSize *remaining)
+{
+    task_vm_info_data_t info;
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count) != KERN_SUCCESS ||
+        count < TASK_VM_INFO_REV4_COUNT || !info.limit_bytes_remaining)
+        return false;
+    *limit = info.phys_footprint + info.limit_bytes_remaining;
+    *remaining = info.limit_bytes_remaining;
+    return true;
+}
+
+/* The heap's size: the recommended working set, or the process's limit when
+ * the first physical device was made if less (whole MB). */
+static VkDeviceSize pvk_memory_heap_size(id mtl)
+{
+    static VkDeviceSize first_limit; /* UINT64_MAX: none; 0: not read yet (atomic) */
+    VkDeviceSize heap = pvk_MTLDevice_recommendedMaxWorkingSetSize(mtl), remaining, unread = 0;
+    VkDeviceSize limit = __atomic_load_n(&first_limit, __ATOMIC_RELAXED);
+    if (!limit) {
+        if (!pvk_process_limit(&limit, &remaining))
+            limit = UINT64_MAX;
+        if (!__atomic_compare_exchange_n(&first_limit, &unread, limit, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            limit = unread; /* another thread's */
+    }
+    return limit < heap ? limit & ~(((VkDeviceSize)1 << 20) - 1) : heap;
+}
+
 /* ---- Design limits ----
  *
  * Where Metal's own limit is below what Vulkan requires, a limit is what
@@ -32966,6 +33012,7 @@ static void pvk_physical_device_init_memory_limits(struct pvk_physical_device *p
     };
     VkPhysicalDeviceLimits *l = &pd->properties.limits;
     unsigned long max_buffer = pvk_MTLDevice_maxBufferLength(pd->mtl_device);
+    VkDeviceSize heap = pvk_memory_heap_size(pd->mtl_device), most;
     uint32_t max_range = max_buffer > UINT32_MAX ? UINT32_MAX : (uint32_t)max_buffer;
     unsigned i;
 
@@ -33000,9 +33047,13 @@ static void pvk_physical_device_init_memory_limits(struct pvk_physical_device *p
      * alignment and non-page sizes on M4 Max), so linear and optimal
      * resources may be neighbours. */
     l->bufferImageGranularity = 1;
-    /* Every allocation is backed by a buffer of its full size (section 10).
-     * These also answer VkPhysicalDeviceMaintenance3/4Properties. */
-    pd->properties_1x.v11.maxMemoryAllocationSize = max_buffer;
+    /* Every allocation is backed by a buffer of its full size (section 10),
+     * in the heap: on iOS one larger than the process's limit would end it.
+     * A heap under Vulkan's minimum of 1 GB (an app extension's limit) still
+     * offers that much, as allocating beyond the heap is the application's
+     * error. These also answer VkPhysicalDeviceMaintenance3/4Properties. */
+    most = heap > ((VkDeviceSize)1 << 30) ? heap : (VkDeviceSize)1 << 30;
+    pd->properties_1x.v11.maxMemoryAllocationSize = max_buffer < most ? max_buffer : most;
     pd->properties_1x.v13.maxBufferSize = max_buffer;
 }
 
@@ -33632,12 +33683,12 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     pvk_physical_device_init_graphics_features(pd);
     pvk_physical_device_init_sparse(pd);
 
-    /* Apple GPUs have unified memory: one heap; private, shared (twice) and
-     * lazily allocated (memoryless tile memory) types. The order follows the
-     * spec's rule: a type whose flags are a strict subset of another's comes
-     * first. */
+    /* Apple GPUs have unified memory: one heap (Memory heap, above);
+     * private, shared (twice) and lazily allocated (memoryless tile memory)
+     * types. The order follows the spec's rule: a type whose flags are a
+     * strict subset of another's comes first. */
     m->memoryHeapCount = 1;
-    m->memoryHeaps[0].size = pvk_MTLDevice_recommendedMaxWorkingSetSize(pd->mtl_device);
+    m->memoryHeaps[0].size = pvk_memory_heap_size(pd->mtl_device);
     m->memoryHeaps[0].flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
     m->memoryTypeCount = PVK_MEMORY_TYPE_COUNT;
     m->memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT; /* MTLStorageModePrivate */
@@ -37172,12 +37223,13 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceGroupPeerMemoryFeatures(VkDevice device, u
  *   first. It lets go of heaps freed over a second before at every free,
  *   cache miss and submission (so the memory returns once frees stop), of
  *   all of them when the device's allocations would exceed the heap's size
- *   (recommendedMaxWorkingSetSize) or a heap cannot be made, and at
- *   vkDestroyDevice. The system's memory pressure (a libdispatch source)
- *   empties it too, and while it is above normal frees keep nothing: an iOS
- *   application that frees memory on a memory warning, or before it goes to
- *   the background and stops submitting, gets it all back. What leaves the
- *   cache leaves the residency set at once, which returns its memory.
+ *   (on iOS the process's memory limit, section 7) or a heap cannot be made,
+ *   and at vkDestroyDevice. The system's memory pressure (a libdispatch
+ *   source) empties it too, and while it is above normal frees keep nothing:
+ *   an iOS application that frees memory on a memory warning, or before it
+ *   goes to the background and stops submitting, gets it all back. What
+ *   leaves the cache leaves the residency set at once, which returns its
+ *   memory.
  *
  * A VkBuffer is only (memory, offset, size). Metal 4 binds buffers by GPU
  * address, so its device address is the memory's gpuAddress + offset;
@@ -37696,7 +37748,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice _device, const VkMemory
     /* The pNext structs PlasmaVK accepts (dedicated allocation, allocate
      * flags, capture address) need nothing: every allocation has a GPU
      * address. */
-    if (type >= types->memoryTypeCount || size == 0 || size > device->physical_device->properties_1x.v13.maxBufferSize)
+    if (type >= types->memoryTypeCount || size == 0 ||
+        size > device->physical_device->properties_1x.v11.maxMemoryAllocationSize)
         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     memory = pvk_alloc(alloc, sizeof(*memory), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (!memory)

@@ -191,6 +191,8 @@ static bool gpu_copy(id src, unsigned long src_offset, id dst, unsigned long dst
 
 static void test_limits(void)
 {
+    const struct pvk_physical_device *pd = ((struct pvk_device *)device)->physical_device;
+    VkDeviceSize heap = pd->memory_properties.memoryHeaps[0].size, limit, remaining;
     VkPhysicalDeviceMaintenance3Properties m3;
     VkPhysicalDeviceMaintenance4Properties m4;
     VkPhysicalDeviceProperties2 props2;
@@ -216,6 +218,15 @@ static void test_limits(void)
     vkGetPhysicalDeviceProperties2(physical_device, &props2);
     CHECK(m3.maxMemoryAllocationSize >= (1u << 30)); /* the spec's minimum */
     CHECK(m4.maxBufferSize >= (1u << 30));
+
+    /* The heap is the recommended working set, or the process's memory
+     * limit if less (section 7, Memory heap), and no allocation is larger
+     * (but for Vulkan's minimum). */
+    if (pvk_process_limit(&limit, &remaining))
+        CHECK(heap <= limit && heap <= pvk_MTLDevice_recommendedMaxWorkingSetSize(pd->mtl_device));
+    else
+        CHECK(heap == pvk_MTLDevice_recommendedMaxWorkingSetSize(pd->mtl_device)); /* macOS */
+    CHECK(m3.maxMemoryAllocationSize <= heap || m3.maxMemoryAllocationSize == 1u << 30);
 }
 
 static void test_allocate_free(void)
