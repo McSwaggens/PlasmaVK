@@ -12008,6 +12008,53 @@ static void test_pipeline_cache(void)
     CHECK_VK(make_pipe_result(&p, &b), VK_SUCCESS); /* the merged entry has the pipeline state */
     vkDestroyPipeline(device, b, NULL);
 
+    /* The size (kept as entries are added, not counted per query) is what
+     * the data takes, through loads and merges; merging an entry the cache
+     * has adds nothing. */
+    {
+        VkPipelineCache reloaded = VK_NULL_HANDLE;
+        size_t n = 0, two = 0, written;
+        unsigned char *more;
+        uint32_t count = 0;
+        written = size;
+        CHECK_VK(vkGetPipelineCacheData(device, cache, &written, data), VK_SUCCESS);
+        CHECK(written == size);
+        CHECK_VK(vkGetPipelineCacheData(device, loaded, &n, NULL), VK_SUCCESS);
+        CHECK(n == size);
+        CHECK_VK(vkMergePipelineCaches(device, merged, 1, &loaded), VK_SUCCESS);
+        n = 0;
+        CHECK_VK(vkGetPipelineCacheData(device, merged, &n, NULL), VK_SUCCESS);
+        CHECK(n == size);
+        p.cache = merged;
+        p.flags = 0;
+        p.color_formats[0] = VK_FORMAT_R16G16B16A16_SFLOAT; /* another pipeline */
+        b = VK_NULL_HANDLE;
+        CHECK_VK(make_pipe_result(&p, &b), VK_SUCCESS);
+        vkDestroyPipeline(device, b, NULL);
+        CHECK_VK(vkGetPipelineCacheData(device, merged, &two, NULL), VK_SUCCESS);
+        CHECK(two > size);
+        more = malloc(two);
+        REQUIRE(more);
+        written = two;
+        CHECK_VK(vkGetPipelineCacheData(device, merged, &written, more), VK_SUCCESS);
+        memcpy(&count, more + sizeof(header), 4);
+        CHECK(written == two && count == 2);
+        written = two - 1; /* the newer entry fits, the first does not */
+        CHECK_VK(vkGetPipelineCacheData(device, merged, &written, more), VK_INCOMPLETE);
+        memcpy(&count, more + sizeof(header), 4);
+        CHECK(written == two - (size - (sizeof(header) + 4)) && count == 1);
+        written = two;
+        CHECK_VK(vkGetPipelineCacheData(device, merged, &written, more), VK_SUCCESS);
+        ci.initialDataSize = two;
+        ci.pInitialData = more;
+        CHECK_VK(vkCreatePipelineCache(device, &ci, NULL, &reloaded), VK_SUCCESS);
+        n = 0;
+        CHECK_VK(vkGetPipelineCacheData(device, reloaded, &n, NULL), VK_SUCCESS);
+        CHECK(n == two);
+        vkDestroyPipelineCache(device, reloaded, NULL);
+        free(more);
+    }
+
     data[16] ^= 0xff; /* another UUID: ignored */
     ci.initialDataSize = size;
     ci.pInitialData = data;

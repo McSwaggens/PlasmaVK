@@ -70238,8 +70238,9 @@ struct pvk_cache_entry {
     struct pvk_key key;
     struct pvk_cache_info info;
     char entry[2][64];
-    char *msl[2]; /* NUL-terminated, [1] NULL: one stage; the implicit cache's: NULL */
-    id pso;       /* made in this process (retained), else NULL */
+    char *msl[2];    /* NUL-terminated, [1] NULL: one stage; the implicit cache's: NULL */
+    uint32_t len[2]; /* their strlen (0: none) */
+    id pso;          /* made in this process (retained), else NULL */
     struct pvk_gfx_libs libs; /* with pso: what it was made of (graphics; in this process only) */
 };
 
@@ -70261,7 +70262,8 @@ struct pvk_pipeline_cache {
     struct pvk_cache_entry *entries, *oldest;
     struct pvk_cache_entry **buckets; /* by key.a (bucket_count, a power of two; NULL: none yet) */
     uint32_t bucket_count, count;
-    uint32_t cap; /* the entries it keeps, most recently used (0: all) */
+    uint32_t cap;     /* the entries it keeps, most recently used (0: all) */
+    size_t data_size; /* what vkGetPipelineCacheData writes: stored under the lock, loaded without it */
 };
 
 static const VkAllocationCallbacks *pvk_cache_alloc(const struct pvk_pipeline_cache *cache)
@@ -70360,6 +70362,17 @@ static void pvk_cache_entry_free(const struct pvk_pipeline_cache *cache, struct 
     pvk_free(pvk_cache_alloc(cache), e);
 }
 
+/* Serialized entry: key (16 B), info, entry points (2 x 64 B), MSL sizes
+ * (2 x uint32, 0: none) and the MSL bytes (without NULs), 4-byte padded.
+ * The data: the header, the entry count (uint32) and the entries. */
+#define PVK_CACHE_ENTRY_FIXED (16u + sizeof(struct pvk_cache_info) + 128u + 8u)
+#define PVK_CACHE_DATA_FIXED (sizeof(VkPipelineCacheHeaderVersionOne) + 4u)
+
+static size_t pvk_cache_entry_size(const struct pvk_cache_entry *e)
+{
+    return PVK_CACHE_ENTRY_FIXED + (((size_t)e->len[0] + 3) & ~(size_t)3) + (((size_t)e->len[1] + 3) & ~(size_t)3);
+}
+
 /* Adds an entry to the list and its bucket (the buckets grow with the
  * entries: out of memory, the chains do), then drops the least recently
  * used beyond the cap. */
@@ -70367,6 +70380,7 @@ static void pvk_cache_add_locked(struct pvk_pipeline_cache *cache, struct pvk_ca
 {
     struct pvk_cache_entry **b;
     uint32_t i, n = cache->bucket_count ? 2 * cache->bucket_count : 64;
+    size_t size;
     if (cache->count >= cache->bucket_count &&
         (b = pvk_alloc(pvk_cache_alloc(cache), sizeof(*b) * n, VK_SYSTEM_ALLOCATION_SCOPE_CACHE))) {
         for (i = 0; i < cache->bucket_count; i++)
@@ -70389,6 +70403,7 @@ static void pvk_cache_add_locked(struct pvk_pipeline_cache *cache, struct pvk_ca
     *b = e;
     pvk_cache_link_locked(cache, e);
     cache->count++;
+    size = cache->data_size + pvk_cache_entry_size(e);
     while (cache->cap && cache->count > cache->cap && cache->oldest != e) {
         struct pvk_cache_entry *old = cache->oldest;
         for (b = &cache->buckets[old->key.a & (cache->bucket_count - 1)]; *b != old; b = &(*b)->chain)
@@ -70396,8 +70411,10 @@ static void pvk_cache_add_locked(struct pvk_pipeline_cache *cache, struct pvk_ca
         *b = old->chain;
         pvk_cache_unlink_locked(cache, old);
         cache->count--;
+        size -= pvk_cache_entry_size(old);
         pvk_cache_entry_free(cache, old);
     }
+    __atomic_store_n(&cache->data_size, size, __ATOMIC_RELAXED);
 }
 
 /* Adds an entry, or the pipeline state (made of libraries libs, NULL:
@@ -70429,6 +70446,8 @@ static void pvk_cache_insert(struct pvk_pipeline_cache *cache, const struct pvk_
         snprintf(e->entry[1], sizeof(e->entry[1]), "%s", entry1 ? entry1 : "");
         e->msl[0] = pvk_cache_strdup(cache, msl0, len0);
         e->msl[1] = pvk_cache_strdup(cache, msl1, len1);
+        e->len[0] = msl0 ? (uint32_t)len0 : 0;
+        e->len[1] = msl1 ? (uint32_t)len1 : 0;
         if ((msl0 && !e->msl[0]) || (msl1 && !e->msl[1])) {
             pvk_cache_entry_free(cache, e);
         } else {
@@ -70440,16 +70459,6 @@ static void pvk_cache_insert(struct pvk_pipeline_cache *cache, const struct pvk_
         }
     }
     pthread_mutex_unlock(&cache->lock);
-}
-
-/* Serialized entry: key (16 B), info, entry points (2 x 64 B), MSL sizes
- * (2 x uint32, 0: none) and the MSL bytes (without NULs), 4-byte padded. */
-#define PVK_CACHE_ENTRY_FIXED (16u + sizeof(struct pvk_cache_info) + 128u + 8u)
-
-static size_t pvk_cache_entry_size(const struct pvk_cache_entry *e)
-{
-    size_t a = e->msl[0] ? strlen(e->msl[0]) : 0, b = e->msl[1] ? strlen(e->msl[1]) : 0;
-    return PVK_CACHE_ENTRY_FIXED + ((a + 3) & ~(size_t)3) + ((b + 3) & ~(size_t)3);
 }
 
 static void pvk_cache_header(const struct pvk_device *device, VkPipelineCacheHeaderVersionOne *h)
@@ -70513,6 +70522,7 @@ static struct pvk_pipeline_cache *pvk_pipeline_cache_new(struct pvk_device *devi
         return NULL;
     }
     cache->device = device;
+    cache->data_size = PVK_CACHE_DATA_FIXED;
     if (alloc) {
         cache->alloc = *alloc;
         cache->has_alloc = true;
@@ -70571,60 +70581,56 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineCache(VkDevice device, VkPipelineCac
 }
 
 /* Pipeline Cache > Retrieving Pipeline Cache Data: as many whole entries as
- * fit, VK_INCOMPLETE if not all; nothing (size 0) if the header does not fit. */
+ * fit, VK_INCOMPLETE if not all; nothing (size 0) if the header does not fit.
+ * The size is kept as entries are added, so a query is one load and takes
+ * no lock (engines that save their cache as it grows query it after every
+ * pipeline). */
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPipelineCacheData(VkDevice device, VkPipelineCache pipelineCache, size_t *pDataSize,
                                                       void *pData)
 {
     struct pvk_pipeline_cache *cache = (struct pvk_pipeline_cache *)pipelineCache;
     VkPipelineCacheHeaderVersionOne header;
     struct pvk_cache_entry *e;
-    size_t total = sizeof(header) + 4, at;
+    size_t at = PVK_CACHE_DATA_FIXED;
     uint32_t count = 0;
     VkResult result = VK_SUCCESS;
     (void)device;
-    pthread_mutex_lock(&cache->lock);
-    for (e = cache->entries; e; e = e->next)
-        total += pvk_cache_entry_size(e);
     if (!pData) {
-        *pDataSize = total;
-        pthread_mutex_unlock(&cache->lock);
+        *pDataSize = __atomic_load_n(&cache->data_size, __ATOMIC_RELAXED);
         return VK_SUCCESS;
     }
-    if (*pDataSize < sizeof(header) + 4) {
+    if (*pDataSize < PVK_CACHE_DATA_FIXED) {
         *pDataSize = 0;
-        pthread_mutex_unlock(&cache->lock);
         return VK_INCOMPLETE;
     }
     pvk_cache_header(cache->device, &header);
     memcpy(pData, &header, sizeof(header));
-    at = sizeof(header) + 4;
+    pthread_mutex_lock(&cache->lock);
     for (e = cache->entries; e; e = e->next) {
         unsigned char *p = (unsigned char *)pData + at;
         size_t n = pvk_cache_entry_size(e);
-        uint32_t len[2], s;
+        uint32_t s;
         if (n > *pDataSize - at) {
             result = VK_INCOMPLETE;
             break;
         }
         memset(p, 0, n);
-        len[0] = e->msl[0] ? (uint32_t)strlen(e->msl[0]) : 0;
-        len[1] = e->msl[1] ? (uint32_t)strlen(e->msl[1]) : 0;
         memcpy(p, &e->key, 16);
         memcpy(p + 16, &e->info, sizeof(e->info));
         memcpy(p + 16 + sizeof(e->info), e->entry, 128);
-        memcpy(p + 16 + sizeof(e->info) + 128, len, 8);
+        memcpy(p + 16 + sizeof(e->info) + 128, e->len, 8);
         p += PVK_CACHE_ENTRY_FIXED;
         for (s = 0; s < 2; s++) {
-            if (len[s])
-                memcpy(p, e->msl[s], len[s]);
-            p += (len[s] + 3) & ~3u;
+            if (e->len[s])
+                memcpy(p, e->msl[s], e->len[s]);
+            p += (e->len[s] + 3) & ~3u;
         }
         at += n;
         count++;
     }
+    pthread_mutex_unlock(&cache->lock);
     memcpy((unsigned char *)pData + sizeof(header), &count, 4);
     *pDataSize = at;
-    pthread_mutex_unlock(&cache->lock);
     return result;
 }
 
@@ -70641,9 +70647,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkMergePipelineCaches(VkDevice device, VkPipeline
             continue;
         pthread_mutex_lock(&src->lock);
         for (e = src->entries; e; e = e->next)
-            pvk_cache_insert(dst, &e->key, &e->info, e->entry[0], e->entry[1], e->msl[0],
-                             e->msl[0] ? strlen(e->msl[0]) : 0, e->msl[1], e->msl[1] ? strlen(e->msl[1]) : 0, e->pso,
-                             &e->libs);
+            pvk_cache_insert(dst, &e->key, &e->info, e->entry[0], e->entry[1], e->msl[0], e->len[0], e->msl[1],
+                             e->len[1], e->pso, &e->libs);
         pthread_mutex_unlock(&src->lock);
     }
     return VK_SUCCESS;
