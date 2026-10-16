@@ -13,6 +13,7 @@
 #include <mach/mach_time.h>
 #include <math.h>
 #include <string.h>
+#include <time.h>
 
 #include "../pvk_test.h"
 
@@ -367,6 +368,104 @@ static const uint32_t spv_params_fs[] = {
     0x00000003, 0x000200f8, 0x00000005, 0x0004003d, 0x00000007, 0x0000000c, 0x0000000b, 0x00050080,
     0x00000007, 0x0000000f, 0x0000000c, 0x0000000e, 0x0003003e, 0x00000009, 0x0000000f, 0x000100fd,
     0x00010038,
+};
+
+/*
+ * #version 450
+ * layout(location = 0) out vec4 o_color;
+ * void main()
+ * {
+ *     o_color = vec4(gl_SamplePosition, 0.0, 1.0);
+ * }
+ */
+static const uint32_t spv_sample_position_fs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000013, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x00000023, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
+    0x00000000, 0x00000001, 0x0007000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009,
+    0x0000000c, 0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00040005, 0x00000009, 0x6f635f6f, 0x00726f6c, 0x00070005,
+    0x0000000c, 0x535f6c67, 0x6c706d61, 0x736f5065, 0x6f697469, 0x0000006e, 0x00040047, 0x00000009,
+    0x0000001e, 0x00000000, 0x00040047, 0x0000000c, 0x0000000b, 0x00000013, 0x00020013, 0x00000002,
+    0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007,
+    0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008,
+    0x00000009, 0x00000003, 0x00040017, 0x0000000a, 0x00000006, 0x00000002, 0x00040020, 0x0000000b,
+    0x00000001, 0x0000000a, 0x0004003b, 0x0000000b, 0x0000000c, 0x00000001, 0x0004002b, 0x00000006,
+    0x0000000e, 0x00000000, 0x0004002b, 0x00000006, 0x0000000f, 0x3f800000, 0x00050036, 0x00000002,
+    0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003d, 0x0000000a, 0x0000000d,
+    0x0000000c, 0x00050051, 0x00000006, 0x00000010, 0x0000000d, 0x00000000, 0x00050051, 0x00000006,
+    0x00000011, 0x0000000d, 0x00000001, 0x00070050, 0x00000007, 0x00000012, 0x00000010, 0x00000011,
+    0x0000000e, 0x0000000f, 0x0003003e, 0x00000009, 0x00000012, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 460
+ * layout(location = 0) in vec2 pos;
+ * layout(location = 0) flat out uvec4 v_ids;
+ * layout(push_constant) uniform P { int row; } pc;
+ * void main()
+ * {
+ *     gl_Position = vec4(pos.x, pos.y + float(gl_InstanceIndex - gl_BaseInstance + pc.row) * 0.125, 0.0, 1.0);
+ *     gl_PointSize = 1.0;
+ *     v_ids = uvec4(gl_InstanceIndex, gl_VertexIndex, gl_BaseVertex, gl_BaseInstance);
+ * }
+ */
+static const uint32_t spv_count_params_vs[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000040, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
+    0x0000114b, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
+    0x00000000, 0x00000001, 0x000d000f, 0x00000000, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000d,
+    0x00000012, 0x0000001a, 0x0000001c, 0x00000021, 0x00000034, 0x00000037, 0x0000003a, 0x00030003,
+    0x00000002, 0x000001cc, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00060005, 0x0000000b,
+    0x505f6c67, 0x65567265, 0x78657472, 0x00000000, 0x00060006, 0x0000000b, 0x00000000, 0x505f6c67,
+    0x7469736f, 0x006e6f69, 0x00070006, 0x0000000b, 0x00000001, 0x505f6c67, 0x746e696f, 0x657a6953,
+    0x00000000, 0x00070006, 0x0000000b, 0x00000002, 0x435f6c67, 0x4470696c, 0x61747369, 0x0065636e,
+    0x00070006, 0x0000000b, 0x00000003, 0x435f6c67, 0x446c6c75, 0x61747369, 0x0065636e, 0x00030005,
+    0x0000000d, 0x00000000, 0x00030005, 0x00000012, 0x00736f70, 0x00070005, 0x0000001a, 0x495f6c67,
+    0x6174736e, 0x4965636e, 0x7865646e, 0x00000000, 0x00060005, 0x0000001c, 0x425f6c67, 0x49657361,
+    0x6174736e, 0x0065636e, 0x00030005, 0x0000001f, 0x00000050, 0x00040006, 0x0000001f, 0x00000000,
+    0x00776f72, 0x00030005, 0x00000021, 0x00006370, 0x00040005, 0x00000034, 0x64695f76, 0x00000073,
+    0x00060005, 0x00000037, 0x565f6c67, 0x65747265, 0x646e4978, 0x00007865, 0x00060005, 0x0000003a,
+    0x425f6c67, 0x56657361, 0x65747265, 0x00000078, 0x00030047, 0x0000000b, 0x00000002, 0x00050048,
+    0x0000000b, 0x00000000, 0x0000000b, 0x00000000, 0x00050048, 0x0000000b, 0x00000001, 0x0000000b,
+    0x00000001, 0x00050048, 0x0000000b, 0x00000002, 0x0000000b, 0x00000003, 0x00050048, 0x0000000b,
+    0x00000003, 0x0000000b, 0x00000004, 0x00040047, 0x00000012, 0x0000001e, 0x00000000, 0x00040047,
+    0x0000001a, 0x0000000b, 0x0000002b, 0x00040047, 0x0000001c, 0x0000000b, 0x00001149, 0x00030047,
+    0x0000001f, 0x00000002, 0x00050048, 0x0000001f, 0x00000000, 0x00000023, 0x00000000, 0x00030047,
+    0x00000034, 0x0000000e, 0x00040047, 0x00000034, 0x0000001e, 0x00000000, 0x00040047, 0x00000037,
+    0x0000000b, 0x0000002a, 0x00040047, 0x0000003a, 0x0000000b, 0x00001148, 0x00020013, 0x00000002,
+    0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007,
+    0x00000006, 0x00000004, 0x00040015, 0x00000008, 0x00000020, 0x00000000, 0x0004002b, 0x00000008,
+    0x00000009, 0x00000001, 0x0004001c, 0x0000000a, 0x00000006, 0x00000009, 0x0006001e, 0x0000000b,
+    0x00000007, 0x00000006, 0x0000000a, 0x0000000a, 0x00040020, 0x0000000c, 0x00000003, 0x0000000b,
+    0x0004003b, 0x0000000c, 0x0000000d, 0x00000003, 0x00040015, 0x0000000e, 0x00000020, 0x00000001,
+    0x0004002b, 0x0000000e, 0x0000000f, 0x00000000, 0x00040017, 0x00000010, 0x00000006, 0x00000002,
+    0x00040020, 0x00000011, 0x00000001, 0x00000010, 0x0004003b, 0x00000011, 0x00000012, 0x00000001,
+    0x0004002b, 0x00000008, 0x00000013, 0x00000000, 0x00040020, 0x00000014, 0x00000001, 0x00000006,
+    0x00040020, 0x00000019, 0x00000001, 0x0000000e, 0x0004003b, 0x00000019, 0x0000001a, 0x00000001,
+    0x0004003b, 0x00000019, 0x0000001c, 0x00000001, 0x0003001e, 0x0000001f, 0x0000000e, 0x00040020,
+    0x00000020, 0x00000009, 0x0000001f, 0x0004003b, 0x00000020, 0x00000021, 0x00000009, 0x00040020,
+    0x00000022, 0x00000009, 0x0000000e, 0x0004002b, 0x00000006, 0x00000027, 0x3e000000, 0x0004002b,
+    0x00000006, 0x0000002a, 0x00000000, 0x0004002b, 0x00000006, 0x0000002b, 0x3f800000, 0x00040020,
+    0x0000002d, 0x00000003, 0x00000007, 0x0004002b, 0x0000000e, 0x0000002f, 0x00000001, 0x00040020,
+    0x00000030, 0x00000003, 0x00000006, 0x00040017, 0x00000032, 0x00000008, 0x00000004, 0x00040020,
+    0x00000033, 0x00000003, 0x00000032, 0x0004003b, 0x00000033, 0x00000034, 0x00000003, 0x0004003b,
+    0x00000019, 0x00000037, 0x00000001, 0x0004003b, 0x00000019, 0x0000003a, 0x00000001, 0x00050036,
+    0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x00050041, 0x00000014,
+    0x00000015, 0x00000012, 0x00000013, 0x0004003d, 0x00000006, 0x00000016, 0x00000015, 0x00050041,
+    0x00000014, 0x00000017, 0x00000012, 0x00000009, 0x0004003d, 0x00000006, 0x00000018, 0x00000017,
+    0x0004003d, 0x0000000e, 0x0000001b, 0x0000001a, 0x0004003d, 0x0000000e, 0x0000001d, 0x0000001c,
+    0x00050082, 0x0000000e, 0x0000001e, 0x0000001b, 0x0000001d, 0x00050041, 0x00000022, 0x00000023,
+    0x00000021, 0x0000000f, 0x0004003d, 0x0000000e, 0x00000024, 0x00000023, 0x00050080, 0x0000000e,
+    0x00000025, 0x0000001e, 0x00000024, 0x0004006f, 0x00000006, 0x00000026, 0x00000025, 0x00050085,
+    0x00000006, 0x00000028, 0x00000026, 0x00000027, 0x00050081, 0x00000006, 0x00000029, 0x00000018,
+    0x00000028, 0x00070050, 0x00000007, 0x0000002c, 0x00000016, 0x00000029, 0x0000002a, 0x0000002b,
+    0x00050041, 0x0000002d, 0x0000002e, 0x0000000d, 0x0000000f, 0x0003003e, 0x0000002e, 0x0000002c,
+    0x00050041, 0x00000030, 0x00000031, 0x0000000d, 0x0000002f, 0x0003003e, 0x00000031, 0x0000002b,
+    0x0004003d, 0x0000000e, 0x00000035, 0x0000001a, 0x0004007c, 0x00000008, 0x00000036, 0x00000035,
+    0x0004003d, 0x0000000e, 0x00000038, 0x00000037, 0x0004007c, 0x00000008, 0x00000039, 0x00000038,
+    0x0004003d, 0x0000000e, 0x0000003b, 0x0000003a, 0x0004007c, 0x00000008, 0x0000003c, 0x0000003b,
+    0x0004003d, 0x0000000e, 0x0000003d, 0x0000001c, 0x0004007c, 0x00000008, 0x0000003e, 0x0000003d,
+    0x00070050, 0x00000032, 0x0000003f, 0x00000036, 0x00000039, 0x0000003c, 0x0000003e, 0x0003003e,
+    0x00000034, 0x0000003f, 0x000100fd, 0x00010038,
 };
 
 /*
@@ -1933,6 +2032,46 @@ static VkCommandBuffer begin_rendering_secondary(VkCommandBuffer cb, const struc
 }
 
 /* Draws spv_rect_vs's rectangle (x0, y0, x1, y1 in NDC) with a color. */
+/* How draw_via (and rect) draw: 0 vkCmdDraw; 1 as the one record counted
+ * of a count draw of at most 4; 2 as the middle record of a multi-draw of
+ * 16384 (PVK_ICB_MIN_DRAWS) records, the others drawing nothing. Tests of
+ * passes whose count draws and long multi-draws cannot be commands of an
+ * indirect command buffer (pvk_prepass_later, struct pvk_gfx_icb) draw so;
+ * the records' buffers live until via_end(). */
+static int via;
+static struct buf via_bufs[16];
+static uint32_t via_count;
+
+static void draw_via(VkCommandBuffer cb, uint32_t vertex_count, uint32_t first_vertex)
+{
+    uint32_t n = via == 2 ? 16384 : 4, i;
+    struct buf *b;
+    if (!via || via_count == PVK_ARRAY_SIZE(via_bufs)) {
+        vkCmdDraw(cb, vertex_count, 1, first_vertex, 0);
+        return;
+    }
+    b = &via_bufs[via_count++];
+    *b = make_buf(16 * n + 16);
+    if (!b->data)
+        return;
+    for (i = 0; i < n; i++) {
+        uint32_t *u = (uint32_t *)(b->data + 16 * i);
+        u[0] = vertex_count, u[1] = via == 2 ? i == n / 2 : i == 0, u[2] = first_vertex, u[3] = 0;
+    }
+    *(uint32_t *)(b->data + 16 * n) = 1;
+    if (via == 1)
+        vkCmdDrawIndirectCount(cb, b->buffer, 0, b->buffer, 16 * n, n, 16);
+    else
+        vkCmdDrawIndirect(cb, b->buffer, 0, n, 16);
+}
+
+static void via_end(void)
+{
+    while (via_count)
+        free_buf(&via_bufs[--via_count]);
+    via = 0;
+}
+
 static void rect(VkCommandBuffer cb, float x0, float y0, float x1, float y1, float r, float g, float b, float a,
                  float depth)
 {
@@ -1948,7 +2087,7 @@ static void rect(VkCommandBuffer cb, float x0, float y0, float x1, float y1, flo
     pc.color[3] = a;
     pc.depth = depth;
     vkCmdPushConstants(cb, pc_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
-    vkCmdDraw(cb, 4, 1, 0, 0);
+    draw_via(cb, 4, 0);
 }
 
 /* RGBA8 pixel (x, y) of a tightly packed W-wide download. */
@@ -4481,6 +4620,411 @@ static void test_multi_draw_secondary(void)
     multi_draw(true);
 }
 
+/* Count draws of a pipeline without DrawIndex (an indirect command buffer
+ * the preprocessing encodes, whose commands inherit the encoder's state).
+ * Points, pixel = vertex, output (gl_InstanceIndex, gl_VertexIndex,
+ * gl_BaseVertex, gl_BaseInstance) + 1; instances go down a row each, from
+ * the row of push constant `row`:
+ *   row 0-1  count 4 of 8: two vertices, no vertices, no instances, two
+ *            instances (firstInstance 7); an occlusion query around it
+ *   row 2    indexed (32-bit), stride 32, count 2 of 4, the second with
+ *            vertexOffset -4
+ *   row 4    16-bit indices, count 100 of 2, scissor x < 1 (the second
+ *            point is cut)
+ *   row 5    count 0 of 4
+ *   row 6    count 1 of 65535 (more commands than the earlier draws'
+ *            indirect command buffer has left), pushed row 1
+ *   row 7    8-bit indices (widened), count 1 of 2
+ * Records past a count would draw pixel (15, row). In the primary, or in a
+ * secondary executed in its render pass instance (without the query). */
+static void count_draws(int secondary)
+{
+    static const VkVertexInputBindingDescription binding = { 0, 8, VK_VERTEX_INPUT_RATE_VERTEX };
+    static const VkVertexInputAttributeDescription attr = { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 };
+    static const VkDynamicState scissor_state = VK_DYNAMIC_STATE_SCISSOR;
+    static const float zero[4] = { 0, 0, 0, 0 };
+    static const struct {
+        uint32_t x, y, v[4];
+    } want[] = {
+        { 0, 0, { 6, 1, 1, 6 } }, { 1, 0, { 6, 2, 1, 6 } },    { 3, 0, { 8, 4, 4, 8 } },
+        { 3, 1, { 9, 4, 4, 8 } }, { 0, 2, { 1, 33, 1, 1 } },   { 1, 2, { 1, 34, 1, 1 } },
+        { 4, 2, { 4, 37, 0xfffffffdu, 4 } },                     { 0, 4, { 1, 65, 1, 1 } },
+        { 0, 6, { 1, 81, 81, 1 } },                              { 0, 7, { 1, 113, 1, 1 } },
+    };
+    const uint32_t a_at = 0, b_at = 256, c_at = 512, d_at = 768, e_at = 1024, f_at = e_at + 65535 * 16;
+    VkPipelineVertexInputStateCreateInfo vi;
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool pool = VK_NULL_HANDLE;
+    struct img target = make_img(VK_FORMAT_R32G32B32A32_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 16), vb = make_buf(256 * 8), ib32 = make_buf(256 * 4), ib16 = make_buf(256 * 2),
+               ib8 = make_buf(256), cnt = make_buf(32), ind = make_buf(f_at + 64);
+    VkRect2D full = { { 0, 0 }, { W, H } }, cut = { { 0, 0 }, { 1, H } };
+    uint32_t *u, i, x, y;
+    int32_t row = 0;
+    uint64_t samples = 0;
+    float *f;
+    struct pipe p;
+    VkPipeline pipeline;
+    VkCommandBuffer cb, rec;
+    VkDeviceSize zero_offset = 0;
+    int bad = 0;
+
+    REQUIRE(features.multiDrawIndirect && features.drawIndirectFirstInstance && ind.data);
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_OCCLUSION;
+    qi.queryCount = 1;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &pool));
+    memset(&vi, 0, sizeof(vi));
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount = 1;
+    vi.pVertexBindingDescriptions = &binding;
+    vi.vertexAttributeDescriptionCount = 1;
+    vi.pVertexAttributeDescriptions = &attr;
+    pipe_init(&p, spv_count_params_vs, sizeof(spv_count_params_vs), spv_params_fs, sizeof(spv_params_fs));
+    p.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+    p.color_formats[0] = VK_FORMAT_R32G32B32A32_UINT;
+    p.vertex = &vi;
+    p.dynamic = &scissor_state;
+    p.dynamic_count = 1;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    f = (float *)vb.data;
+    for (i = 0; i < 256; i++) { /* vertex i: pixel (i % 16, i / 16) */
+        f[2 * i] = ndc_x((float)(i % W) + 0.5f);
+        f[2 * i + 1] = ndc_y((float)(i / W) + 0.5f);
+        ((uint32_t *)ib32.data)[i] = i;
+        ((uint16_t *)ib16.data)[i] = (uint16_t)i;
+        ib8.data[i] = (uint8_t)i;
+    }
+    for (i = 0; i < 8; i++) { /* A: VkDrawIndirectCommand */
+        static const uint32_t a[4][4] = { { 2, 1, 0, 5 }, { 0, 1, 2, 0 }, { 1, 0, 2, 0 }, { 1, 2, 3, 7 } };
+        static const uint32_t past[4] = { 1, 1, 15, 0 };
+        memcpy(ind.data + a_at + 16 * i, i < 4 ? a[i] : past, 16);
+    }
+    for (i = 0; i < 4; i++) { /* B: VkDrawIndexedIndirectCommand, stride 32 */
+        u = (uint32_t *)(ind.data + b_at + 32 * i);
+        u[0] = i < 1 ? 2 : 1, u[1] = 1, u[2] = i == 0 ? 32 : i == 1 ? 40 : 47;
+        u[3] = i == 1 ? (uint32_t)-4 : 0, u[4] = i == 1 ? 3 : 0;
+    }
+    for (i = 0; i < 3; i++) { /* C */
+        u = (uint32_t *)(ind.data + c_at + 20 * i);
+        u[0] = 1, u[1] = 1, u[2] = i < 2 ? 64 + i : 79, u[3] = 0, u[4] = 0;
+    }
+    for (i = 0; i < 4; i++) { /* D */
+        u = (uint32_t *)(ind.data + d_at + 16 * i);
+        u[0] = 1, u[1] = 1, u[2] = 95, u[3] = 0;
+    }
+    for (i = 0; i < 65535; i++) { /* E (pushed row 1) */
+        u = (uint32_t *)(ind.data + e_at + 16 * i);
+        u[0] = 1, u[1] = 1, u[2] = i ? 95 : 80, u[3] = 0;
+    }
+    for (i = 0; i < 2; i++) { /* F */
+        u = (uint32_t *)(ind.data + f_at + 20 * i);
+        u[0] = 1, u[1] = 1, u[2] = i ? 127 : 112, u[3] = 0, u[4] = 0;
+    }
+    u = (uint32_t *)cnt.data;
+    u[0] = 4, u[1] = 2, u[2] = 100, u[3] = 0, u[4] = 1;
+    cb = begin_cmd();
+    vkCmdResetQueryPool(cb, pool, 0, 1);
+    if (secondary) {
+        rec = begin_rendering_secondary(cb, &target, zero);
+    } else {
+        rec = cb;
+        begin_rendering(cb, &target, 1, zero, NULL);
+    }
+    vkCmdBindPipeline(rec, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindVertexBuffers(rec, 0, 1, &vb.buffer, &zero_offset);
+    vkCmdSetScissor(rec, 0, 1, &full);
+    vkCmdPushConstants(rec, pc_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 4, &row);
+    if (!secondary)
+        vkCmdBeginQuery(rec, pool, 0, VK_QUERY_CONTROL_PRECISE_BIT);
+    vkCmdDrawIndirectCount(rec, ind.buffer, a_at, cnt.buffer, 0, 8, 16);
+    if (!secondary)
+        vkCmdEndQuery(rec, pool, 0);
+    vkCmdBindIndexBuffer(rec, ib32.buffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexedIndirectCount(rec, ind.buffer, b_at, cnt.buffer, 4, 4, 32);
+    vkCmdBindIndexBuffer(rec, ib16.buffer, 0, VK_INDEX_TYPE_UINT16);
+    vkCmdSetScissor(rec, 0, 1, &cut);
+    vkCmdDrawIndexedIndirectCount(rec, ind.buffer, c_at, cnt.buffer, 8, 2, 20);
+    vkCmdSetScissor(rec, 0, 1, &full);
+    vkCmdDrawIndirectCount(rec, ind.buffer, d_at, cnt.buffer, 12, 4, 16);
+    row = 1;
+    vkCmdPushConstants(rec, pc_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 4, &row);
+    vkCmdDrawIndirectCount(rec, ind.buffer, e_at, cnt.buffer, 16, 65535, 16);
+    row = 0;
+    vkCmdPushConstants(rec, pc_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 4, &row);
+    vkCmdBindIndexBuffer(rec, ib8.buffer, 0, VK_INDEX_TYPE_UINT8);
+    vkCmdDrawIndexedIndirectCount(rec, ind.buffer, f_at, cnt.buffer, 16, 2, 20);
+    if (secondary) {
+        vkEndCommandBuffer(rec);
+        vkCmdExecuteCommands(cb, 1, &rec);
+    }
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    if (secondary)
+        vkFreeCommandBuffers(device, cmd_pool, 1, &rec);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++) {
+            const uint32_t *got = (const uint32_t *)out.data + 4 * (y * W + x);
+            uint32_t e[4] = { 0, 0, 0, 0 };
+            for (i = 0; i < PVK_ARRAY_SIZE(want); i++)
+                if (want[i].x == x && want[i].y == y)
+                    memcpy(e, want[i].v, sizeof(e));
+            if (memcmp(got, e, sizeof(e)) != 0) {
+                if (bad < 6)
+                    fprintf(stderr, "count draws%s: pixel (%u, %u) is (%u %u %u %u), expected (%u %u %u %u)\n",
+                            secondary ? " (secondary)" : "", x, y, got[0], got[1], got[2], got[3], e[0], e[1], e[2],
+                            e[3]);
+                bad++;
+            }
+        }
+    CHECK(bad == 0);
+    if (!secondary) {
+        CHECK_VK(vkGetQueryPoolResults(device, pool, 0, 1, sizeof(samples), &samples, 8,
+                                       VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+                 VK_SUCCESS);
+        CHECK(samples == 4);
+        if (samples != 4)
+            fprintf(stderr, "count draws: the occlusion query counted %llu samples, expected 4\n",
+                    (unsigned long long)samples);
+    }
+    vkDestroyQueryPool(device, pool, NULL);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_buf(&vb);
+    free_buf(&ib32);
+    free_buf(&ib16);
+    free_buf(&ib8);
+    free_buf(&cnt);
+    free_buf(&ind);
+    free_img(&target);
+}
+
+static void test_count_draws(void)
+{
+    count_draws(false);
+}
+
+static void test_count_draws_secondary(void)
+{
+    count_draws(true);
+}
+
+/* The count draws again after the queue's indirect command buffers were
+ * idle for over a second (a submission lets go of them, PVK_ICB_IDLE_NS):
+ * new ones. */
+static void test_count_draws_idle(void)
+{
+    struct timespec ts;
+    count_draws(false);
+    ts.tv_sec = 1;
+    ts.tv_nsec = 100 * 1000000;
+    nanosleep(&ts, NULL);
+    submit(begin_cmd());
+    count_draws(false);
+}
+
+/* maxDrawIndirectCount (65535) draws in order, counted or a multi-draw:
+ * draw i a point at vertex i % 256 with firstInstance i (drawid: 0, the
+ * pipeline outputting DrawIndex instead), so pixel v shows the last draw
+ * there, and in the multi-draw every third one from the second has no
+ * instances (culled); an occlusion query counts the points. */
+static void many_draws(bool count, bool drawid)
+{
+    static const VkVertexInputBindingDescription binding = { 0, 8, VK_VERTEX_INPUT_RATE_VERTEX };
+    static const VkVertexInputAttributeDescription attr = { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 };
+    static const VkDynamicState scissor_state = VK_DYNAMIC_STATE_SCISSOR;
+    static const float zero[4] = { 0, 0, 0, 0 };
+    const uint32_t n = 65535;
+    VkPipelineVertexInputStateCreateInfo vi;
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool pool = VK_NULL_HANDLE;
+    struct img target = make_img(VK_FORMAT_R32G32B32A32_UINT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 16), vb = make_buf(256 * 8), cnt = make_buf(4), ind = make_buf(16 * n);
+    VkRect2D full = { { 0, 0 }, { W, H } };
+    uint32_t *u, i, v;
+    int32_t row = 0;
+    uint64_t samples = 0;
+    float *f;
+    struct pipe p;
+    VkPipeline pipeline;
+    VkCommandBuffer cb;
+    VkDeviceSize zero_offset = 0;
+    int bad = 0;
+
+    REQUIRE(features.multiDrawIndirect && features.drawIndirectFirstInstance && ind.data);
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_OCCLUSION;
+    qi.queryCount = 1;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &pool));
+    memset(&vi, 0, sizeof(vi));
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount = 1;
+    vi.pVertexBindingDescriptions = &binding;
+    vi.vertexAttributeDescriptionCount = 1;
+    vi.pVertexAttributeDescriptions = &attr;
+    if (drawid)
+        pipe_init(&p, spv_params_vs, sizeof(spv_params_vs), spv_params_fs, sizeof(spv_params_fs));
+    else
+        pipe_init(&p, spv_count_params_vs, sizeof(spv_count_params_vs), spv_params_fs, sizeof(spv_params_fs));
+    p.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+    p.color_formats[0] = VK_FORMAT_R32G32B32A32_UINT;
+    p.vertex = &vi;
+    p.dynamic = &scissor_state;
+    p.dynamic_count = 1;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    f = (float *)vb.data;
+    for (i = 0; i < 256; i++) {
+        f[2 * i] = ndc_x((float)(i % W) + 0.5f);
+        f[2 * i + 1] = ndc_y((float)(i / W) + 0.5f);
+    }
+    for (i = 0; i < n; i++) {
+        u = (uint32_t *)(ind.data + 16 * i);
+        u[0] = 1, u[1] = count || i % 3 != 1, u[2] = i % 256, u[3] = drawid ? 0 : i;
+    }
+    *(uint32_t *)cnt.data = n;
+    cb = begin_cmd();
+    vkCmdResetQueryPool(cb, pool, 0, 1);
+    begin_rendering(cb, &target, 1, zero, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindVertexBuffers(cb, 0, 1, &vb.buffer, &zero_offset);
+    vkCmdSetScissor(cb, 0, 1, &full);
+    vkCmdPushConstants(cb, pc_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 4, &row);
+    vkCmdBeginQuery(cb, pool, 0, VK_QUERY_CONTROL_PRECISE_BIT);
+    if (count)
+        vkCmdDrawIndirectCount(cb, ind.buffer, 0, cnt.buffer, 0, n, 16);
+    else
+        vkCmdDrawIndirect(cb, ind.buffer, 0, n, 16);
+    vkCmdEndQuery(cb, pool, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    for (v = 0; v < 256; v++) {
+        const uint32_t *got = (const uint32_t *)out.data + 4 * v;
+        uint32_t last = (n - 1 - v) / 256 * 256 + v; /* the last i < n with i % 256 == v, drawn */
+        uint32_t e[4];
+        while (!count && last % 3 == 1)
+            last -= 256;
+        if (drawid) /* (gl_InstanceIndex, gl_BaseVertex, gl_BaseInstance, gl_DrawID) + 1 */
+            e[0] = 1, e[1] = v + 1, e[2] = 1, e[3] = last + 1;
+        else
+            e[0] = last + 1, e[1] = v + 1, e[2] = v + 1, e[3] = last + 1;
+        if (memcmp(got, e, sizeof(e)) != 0) {
+            if (bad < 6)
+                fprintf(stderr, "many %s: pixel %u is (%u %u %u %u), expected (%u %u %u %u)\n",
+                        count ? "count draws" : "multi-draws", v, got[0], got[1], got[2], got[3], e[0], e[1], e[2],
+                        e[3]);
+            bad++;
+        }
+    }
+    CHECK(bad == 0);
+    CHECK_VK(vkGetQueryPoolResults(device, pool, 0, 1, sizeof(samples), &samples, 8,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+             VK_SUCCESS);
+    CHECK(samples == (count ? n : n - n / 3)); /* (n % 3 == 0) */
+    if (samples != (count ? n : n - n / 3))
+        fprintf(stderr, "many %s: the occlusion query counted %llu samples, expected %u\n",
+                count ? "count draws" : "multi-draws", (unsigned long long)samples, count ? n : n - n / 3);
+    vkDestroyQueryPool(device, pool, NULL);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_buf(&vb);
+    free_buf(&cnt);
+    free_buf(&ind);
+    free_img(&target);
+}
+
+static void test_count_draws_many(void)
+{
+    many_draws(true, false);
+}
+
+static void test_multi_draw_many(void)
+{
+    many_draws(false, false);
+}
+
+static void test_count_draws_many_drawid(void)
+{
+    many_draws(true, true);
+}
+
+static void test_multi_draw_many_drawid(void)
+{
+    many_draws(false, true);
+}
+
+/* A count draw, then a multi-draw of 16384 records (draw_via), of a
+ * pipeline reading gl_SamplePosition at 4x, resolved: (0.5, 0.5), the mean
+ * of the standard positions. Its indirect command buffer variant (struct
+ * pvk_gfx_icb; AGX failed to make some reading sample positions) draws
+ * them, or else their records are drawn one by one. */
+static void test_count_draws_sample_position(void)
+{
+    struct img ms = make_img(VK_FORMAT_R16G16B16A16_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img resolved = make_img(VK_FORMAT_R16G16B16A16_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 8);
+    VkRenderingAttachmentInfo att;
+    VkRenderingInfo info;
+    struct pipe p;
+    VkPipeline pipeline;
+    VkCommandBuffer cb;
+    uint32_t i;
+    int how, bad = 0;
+
+    REQUIRE(features.sampleRateShading && features.multiDrawIndirect);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_sample_position_fs, sizeof(spv_sample_position_fs));
+    p.samples = VK_SAMPLE_COUNT_4_BIT;
+    p.color_formats[0] = VK_FORMAT_R16G16B16A16_SFLOAT;
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = ms.view;
+    att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+    att.resolveImageView = resolved.view;
+    att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &att;
+    for (how = 1; how <= 2; how++) {
+        via = how;
+        cb = begin_cmd();
+        vkCmdBeginRendering(cb, &info);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        rect(cb, -1, -1, 1, 1, 0, 0, 0, 0, 0);
+        vkCmdEndRendering(cb);
+        download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        for (i = 0; i < W * H; i++) {
+            const uint16_t *h = (const uint16_t *)out.data + 4 * i;
+            if ((fabsf(pvk_spv_half_to_float(h[0]) - 0.5f) > 0.01f || fabsf(pvk_spv_half_to_float(h[1]) - 0.5f) > 0.01f ||
+                 pvk_spv_half_to_float(h[3]) != 1.0f) &&
+                bad++ < 4)
+                fprintf(stderr, "count draws, sample positions (%s): pixel (%u, %u) is (%g, %g, %g, %g)\n",
+                        how == 1 ? "count draw" : "multi-draw", i % W, i / W, pvk_spv_half_to_float(h[0]),
+                        pvk_spv_half_to_float(h[1]), pvk_spv_half_to_float(h[2]), pvk_spv_half_to_float(h[3]));
+        }
+        via_end();
+    }
+    CHECK(bad == 0);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&ms);
+    free_img(&resolved);
+}
+
 /* Vertices of spv_basic_vs: position (R32G32_SFLOAT) and color
  * (R8G8B8A8_UNORM) interleaved, 12 bytes apart. */
 struct vtx {
@@ -4521,11 +5065,27 @@ static uint32_t expect_indices(uint32_t x, uint32_t y)
     }
 }
 
+/* Draws (index_count, 1, 0, vertex_offset, 0) indexed, or (count) as the
+ * record counted (cnt's first uint, 1) of a count draw of at most 2, at
+ * ind's offset 64 * slot. */
+static void draw_indexed_as(VkCommandBuffer rec, bool count, const struct buf *ind, const struct buf *cnt, uint32_t slot,
+                            uint32_t index_count, int32_t vertex_offset)
+{
+    uint32_t *u = (uint32_t *)(ind->data + 64 * slot);
+    if (!count) {
+        vkCmdDrawIndexed(rec, index_count, 1, 0, vertex_offset, 0);
+        return;
+    }
+    u[0] = index_count, u[1] = 1, u[2] = 0, u[3] = (uint32_t)vertex_offset, u[4] = 0;
+    vkCmdDrawIndexedIndirectCount(rec, ind->buffer, 64 * slot, cnt->buffer, 0, 2, 20);
+}
+
 /* Index types (8-bit too), primitive restart on and off (dynamic), strips,
  * lists and triangle fans, indexed and not; recorded in the primary, or in
  * a secondary executed in the primary's render pass instance (whose scan
- * then finds the draws to preprocess there). */
-static void indices(int secondary)
+ * then finds the draws to preprocess there); drawn directly, or (count)
+ * each as the one record counted of a count draw. */
+static void indices(int secondary, bool count)
 {
     static const VkVertexInputBindingDescription binding = { 0, sizeof(struct vtx), VK_VERTEX_INPUT_RATE_VERTEX };
     static const VkVertexInputAttributeDescription attrs[2] = {
@@ -4541,7 +5101,8 @@ static void indices(int secondary)
     static const uint16_t list16[] = { 32, 33, 0xfffe, 33, 0xffff, 0xfffe };
     VkPipelineVertexInputStateCreateInfo vi;
     struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
-    struct buf out = make_buf(W * H * 4), vb = make_buf((65536 + 128) * sizeof(struct vtx)), ib = make_buf(256);
+    struct buf out = make_buf(W * H * 4), vb = make_buf((65536 + 128) * sizeof(struct vtx)), ib = make_buf(256),
+               ind = make_buf(512), cnt = make_buf(4);
     struct vtx *v = (struct vtx *)vb.data;
     struct pipe p;
     VkPipeline pipeline;
@@ -4581,6 +5142,7 @@ static void indices(int secondary)
     memcpy(ib.data + 64, strip16_norestart, sizeof(strip16_norestart));
     memcpy(ib.data + 96, fan32, sizeof(fan32));
     memcpy(ib.data + 160, list16, sizeof(list16));
+    *(uint32_t *)cnt.data = 1;
     cb = begin_cmd();
     if (secondary) {
         rec = begin_rendering_secondary(cb, &target, black);
@@ -4593,21 +5155,27 @@ static void indices(int secondary)
     vkCmdSetPrimitiveTopology(rec, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
     vkCmdSetPrimitiveRestartEnable(rec, VK_TRUE);
     vkCmdBindIndexBuffer(rec, ib.buffer, 0, VK_INDEX_TYPE_UINT16);
-    vkCmdDrawIndexed(rec, 9, 1, 0, 0, 0);
+    draw_indexed_as(rec, count, &ind, &cnt, 0, 9, 0);
     vkCmdBindIndexBuffer(rec, ib.buffer, 32, VK_INDEX_TYPE_UINT8);
-    vkCmdDrawIndexed(rec, 9, 1, 0, 0, 0);
+    draw_indexed_as(rec, count, &ind, &cnt, 1, 9, 0);
     vkCmdSetPrimitiveRestartEnable(rec, VK_FALSE);
     vkCmdBindIndexBuffer(rec, ib.buffer, 64, VK_INDEX_TYPE_UINT16);
-    vkCmdDrawIndexed(rec, 4, 1, 0, 100, 0);
+    draw_indexed_as(rec, count, &ind, &cnt, 2, 4, 100);
     vkCmdSetPrimitiveTopology(rec, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
-    vkCmdDraw(rec, 4, 1, 20, 0);
+    if (count) {
+        uint32_t *u = (uint32_t *)(ind.data + 64 * 3);
+        u[0] = 4, u[1] = 1, u[2] = 20, u[3] = 0;
+        vkCmdDrawIndirectCount(rec, ind.buffer, 64 * 3, cnt.buffer, 0, 2, 16);
+    } else {
+        vkCmdDraw(rec, 4, 1, 20, 0);
+    }
     vkCmdSetPrimitiveRestartEnable(rec, VK_TRUE);
     vkCmdBindIndexBuffer(rec, ib.buffer, 96, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(rec, 9, 1, 0, 0, 0);
+    draw_indexed_as(rec, count, &ind, &cnt, 4, 9, 0);
     vkCmdSetPrimitiveRestartEnable(rec, VK_FALSE);
     vkCmdSetPrimitiveTopology(rec, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
     vkCmdBindIndexBuffer(rec, ib.buffer, 160, VK_INDEX_TYPE_UINT16);
-    vkCmdDrawIndexed(rec, 6, 1, 0, 0, 0);
+    draw_indexed_as(rec, count, &ind, &cnt, 5, 6, 0);
     if (secondary) {
         vkEndCommandBuffer(rec);
         vkCmdExecuteCommands(cb, 1, &rec);
@@ -4617,22 +5185,36 @@ static void indices(int secondary)
     submit(cb);
     if (secondary)
         vkFreeCommandBuffers(device, cmd_pool, 1, &rec);
-    CHECK(count_bad(&out, expect_indices, secondary ? "indices (secondary)" : "indices") == 0);
+    CHECK(count_bad(&out, expect_indices,
+                    secondary ? count ? "indices (count, secondary)" : "indices (secondary)"
+                              : count ? "indices (count)" : "indices") == 0);
     vkDestroyPipeline(device, pipeline, NULL);
     free_buf(&out);
     free_buf(&vb);
     free_buf(&ib);
+    free_buf(&ind);
+    free_buf(&cnt);
     free_img(&target);
 }
 
 static void test_indices(void)
 {
-    indices(false);
+    indices(false, false);
 }
 
 static void test_indices_secondary(void)
 {
-    indices(true);
+    indices(true, false);
+}
+
+static void test_indices_count(void)
+{
+    indices(false, true);
+}
+
+static void test_indices_count_secondary(void)
+{
+    indices(true, true);
 }
 
 static uint32_t expect_strip8(uint32_t x, uint32_t y)
@@ -7285,8 +7867,9 @@ static const uint32_t spv_add_depth_fs[] = {
 /* Draws of a subpass read its depth as an input attachment (through the
  * depth copy) and write it, adding what they read to the color they also
  * read: the first must see the loaded depth (0.25), not what the pass
- * leaves (0.75), the second the first's (0.5). */
-static void test_depth_input_before_write(void)
+ * leaves (0.75), the second the first's (0.5). how: drawn as draw_via
+ * does. */
+static void depth_input_before_write(int how)
 {
     enum { S = 8 }; /* (at 16 x 16 the old in-pass copy read the loaded depth, M4 Max) */
     VkAttachmentDescription a[2];
@@ -7424,7 +8007,8 @@ static void test_depth_input_before_write(void)
                                  0, NULL);
         vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(struct pc),
                            &(struct pc){ { -1, -1, 1, 1 }, { 0, 0, 0, 0 }, i ? 0.75f : 0.5f, 0, 0, 0 });
-        vkCmdDraw(cb, 4, 1, 0, 0);
+        via = how;
+        draw_via(cb, 4, 0);
     }
     vkCmdEndRenderPass(cb);
     download(cb, &out, 0, VK_IMAGE_ASPECT_COLOR_BIT, &got);
@@ -7435,6 +8019,7 @@ static void test_depth_input_before_write(void)
             fprintf(stderr, "depth input before write: texel %u is %g %g %g %g\n", i, t[0], t[1], t[2], t[3]);
     }
     CHECK(bad == 0);
+    via_end();
     vkDestroyPipeline(device, pipeline, NULL);
     vkDestroyDescriptorPool(device, dpool, NULL);
     vkDestroyPipelineLayout(device, layout, NULL);
@@ -7447,13 +8032,26 @@ static void test_depth_input_before_write(void)
     free_img(&ds);
 }
 
+static void test_depth_input_before_write(void)
+{
+    depth_input_before_write(0);
+}
+
+/* As count draws and long multi-draws, in a pass with the depth copy. */
+static void test_depth_input_indirect(void)
+{
+    depth_input_before_write(1);
+    depth_input_before_write(2);
+}
+
 /* Depth bounds (depthBounds), with one and four samples: the scene's
  * sloped triangle over depth 0.5, then a full-screen draw at depth 0.95
  * with static bounds [0.3, 0.6] writing red and its depth, then one at 0.05
  * without a fragment shader with dynamic bounds [0.9, 1.0]: a sample passes
  * where the depth the earlier draws left lies in the bounds. The expected
- * values come from the scene drawn alone. */
-static void depth_bounds_case(VkSampleCountFlagBits samples)
+ * values come from the scene drawn alone. how: the bounded draws drawn as
+ * draw_via does. */
+static void depth_bounds_case(VkSampleCountFlagBits samples, int how)
 {
     static const VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_DEPTH_BOUNDS, VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE };
     static const float quads[] = { /* full screen at 0.95, then at 0.05 */
@@ -7516,11 +8114,12 @@ static void depth_bounds_case(VkSampleCountFlagBits samples)
             pc.color[0] = pc.color[3] = 1.0f;
             vkCmdPushConstants(cb, pc_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
                                &pc);
-            vkCmdDraw(cb, 6, 1, 0, 0);
+            via = how;
+            draw_via(cb, 6, 0);
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, dynamic);
             vkCmdSetDepthBoundsTestEnable(cb, VK_TRUE);
             vkCmdSetDepthBounds(cb, 0.9f, 1.0f);
-            vkCmdDraw(cb, 6, 1, 6, 0);
+            draw_via(cb, 6, 6);
         }
         vkCmdEndRendering(cb);
         if (n == 1) {
@@ -7557,6 +8156,7 @@ static void depth_bounds_case(VkSampleCountFlagBits samples)
         }
     CHECK(bad == 0);
     CHECK(passed[0] > 0 && passed[0] < (int)(W * H * n) && passed[1] >= passed[0]); /* (the bounds decided) */
+    via_end();
     vkDestroyPipeline(device, bounded, NULL);
     vkDestroyPipeline(device, dynamic, NULL);
     for (k = 0; k < 3; k++)
@@ -7571,8 +8171,16 @@ static void depth_bounds_case(VkSampleCountFlagBits samples)
 
 static void test_depth_bounds(void)
 {
-    depth_bounds_case(VK_SAMPLE_COUNT_1_BIT);
-    depth_bounds_case(VK_SAMPLE_COUNT_4_BIT);
+    depth_bounds_case(VK_SAMPLE_COUNT_1_BIT, 0);
+    depth_bounds_case(VK_SAMPLE_COUNT_4_BIT, 0);
+}
+
+/* The bounded draws as a count draw and a long multi-draw: in a pass with
+ * the depth copy, their records drawn one by one (pvk_prepass_later). */
+static void test_depth_bounds_indirect(void)
+{
+    depth_bounds_case(VK_SAMPLE_COUNT_1_BIT, 1);
+    depth_bounds_case(VK_SAMPLE_COUNT_4_BIT, 2);
 }
 
 /* A pipeline leaving the depth bounds test dynamic: the left half drawn red
@@ -8947,8 +9555,9 @@ static const uint32_t spv_mrt8_fs[] = {
 /* Eight RGBA16F attachments with 4 samples, resolved: 256 bytes a pixel,
  * twice what Metal's tile memory takes, so the pass renders them in groups
  * (struct pvk_replay); also with the same pipeline made again from a
- * pipeline cache holding its Metal pipeline (its group variants too). */
-static void test_tile_overflow(void)
+ * pipeline cache holding its Metal pipeline (its group variants too). how:
+ * drawn as draw_via does. */
+static void tile_overflow(int how)
 {
     struct img ms[8], resolved[8];
     struct buf out[8];
@@ -8961,6 +9570,7 @@ static void test_tile_overflow(void)
     uint32_t i, k, x, y;
     int bad = 0;
 
+    via = how;
     pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_mrt8_fs, sizeof(spv_mrt8_fs));
     p.samples = VK_SAMPLE_COUNT_4_BIT;
     p.colors = 8;
@@ -9020,11 +9630,25 @@ static void test_tile_overflow(void)
     vkDestroyPipeline(device, pipelines[0], NULL);
     vkDestroyPipeline(device, pipelines[1], NULL);
     vkDestroyPipelineCache(device, p.cache, NULL);
+    via_end();
     for (i = 0; i < 8; i++) {
         free_buf(&out[i]);
         free_img(&ms[i]);
         free_img(&resolved[i]);
     }
+}
+
+static void test_tile_overflow(void)
+{
+    tile_overflow(0);
+}
+
+/* A count draw and a long multi-draw in a pass split for tile memory: their
+ * records are drawn one by one (pvk_prepass_later). */
+static void test_tile_overflow_indirect(void)
+{
+    tile_overflow(1);
+    tile_overflow(2);
 }
 
 
@@ -10836,8 +11460,9 @@ static uint32_t expect_snorm_quads(uint32_t x, uint32_t y)
  * stored 0x80 gives 0xff), in the pass and in the next; plain SNORM draws of
  * the same pass convert as usual (the pass is split around them). With 4
  * samples and a resolve, and (no SINT views: the pipeline's SNORM variant)
- * with a memoryless depth attachment in the pass. */
-static void test_logic_op_snorm_exact(void)
+ * with a memoryless depth attachment in the pass. how: drawn as draw_via
+ * does. */
+static void logic_op_snorm_exact(int how)
 {
     struct img target = make_img(VK_FORMAT_R8G8B8A8_SNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
     struct img ms = make_img(VK_FORMAT_R8G8B8A8_SNORM, W, H, 1, VK_SAMPLE_COUNT_4_BIT);
@@ -10881,6 +11506,7 @@ static void test_logic_op_snorm_exact(void)
     p.logic_op = VK_LOGIC_OP_COPY_INVERTED;
     ds_inverted = make_pipe(&p);
     REQUIRE(plain && inverted && xor_pipe && ms_xor && ms_plain && ds_plain && ds_inverted);
+    via = how;
 
     /* A pass of logical operations and a clear (never split, bound through
      * the SINT view throughout): COPY_INVERTED of (1, -1, 0, 64/127) on the
@@ -10907,6 +11533,7 @@ static void test_logic_op_snorm_exact(void)
     snorm_color(color, 127, 0, 0, 0);
     rect(cb, -1, 0, 1, 1, color[0], color[1], color[2], color[3], 0);
     vkCmdEndRendering(cb);
+    barrier(cb);
     begin_rendering(cb, &target, 1, NULL, NULL);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, xor_pipe);
     snorm_color(color, 127, 127, 127, 127);
@@ -10989,6 +11616,7 @@ static void test_logic_op_snorm_exact(void)
         snorm_want[3] = RGBA(0, 0, 0, 0);
         CHECK(count_bad(&out, expect_snorm_quads, "SNORM logic op, memoryless depth") == 0);
     }
+    via_end();
     vkDestroyPipeline(device, plain, NULL);
     vkDestroyPipeline(device, inverted, NULL);
     vkDestroyPipeline(device, xor_pipe, NULL);
@@ -11000,6 +11628,19 @@ static void test_logic_op_snorm_exact(void)
     free_img(&target);
     free_img(&ms);
     free_img(&lazy_depth);
+}
+
+static void test_logic_op_snorm_exact(void)
+{
+    logic_op_snorm_exact(0);
+}
+
+/* As count draws and long multi-draws, whose SNORM rebinds keep them from
+ * indirect command buffers (struct pvk_gfx_icb). */
+static void test_logic_op_snorm_indirect(void)
+{
+    logic_op_snorm_exact(1);
+    logic_op_snorm_exact(2);
 }
 
 /* Specialization constants folded through floating-point OpSpecConstantOp
@@ -11184,6 +11825,65 @@ static void test_spec_depth_variant(void)
     free_buf(&out);
     free_img(&target);
     free_img(&ds);
+}
+
+/* A pipeline's indirect command buffer variant (struct pvk_gfx_icb)
+ * specializes its functions as the pipeline does: four pipelines sharing a
+ * fragment library, each a quadrant's colour, drawn by count draws, then
+ * by multi-draws of 16384 records (draw_via) with the same pipelines made
+ * again (from the implicit cache's Metal pipelines). */
+static void test_spec_icb_variant(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    static const VkSpecializationMapEntry entries[3] = { { 0, 0, 4 }, { 1, 4, 4 }, { 2, 8, 4 } };
+    static const struct {
+        uint32_t red;
+        float green;
+        VkBool32 blue;
+    } data[4] = { { 40, 0.0f, VK_TRUE }, { 255, 0.5f, VK_FALSE }, { 128, 1.0f, VK_TRUE }, { 64, 0.25f, VK_FALSE } };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkSpecializationInfo spec[4];
+    VkPipeline pipes[2][4];
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint32_t k, round;
+
+    REQUIRE(features.multiDrawIndirect);
+    for (round = 0; round < 2; round++)
+        for (k = 0; k < 4; k++) {
+            spec[k].mapEntryCount = 3;
+            spec[k].pMapEntries = entries;
+            spec[k].dataSize = sizeof(data[k]);
+            spec[k].pData = &data[k];
+            pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_spec_share_fs, sizeof(spv_spec_share_fs));
+            p.fs_spec = &spec[k];
+            pipes[round][k] = make_pipe(&p);
+            REQUIRE(pipes[round][k]);
+        }
+    for (round = 0; round < 2; round++) {
+        via = round ? 2 : 1;
+        cb = begin_cmd();
+        begin_rendering(cb, &target, 1, black, NULL);
+        for (k = 0; k < 4; k++) {
+            float x = k & 1 ? 0.0f : -1.0f, y = k & 2 ? 0.0f : -1.0f;
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[round][k]);
+            rect(cb, x, y, x + 1.0f, y + 1.0f, 0, 0, 0, 0, 0);
+            quad_want[k] = RGBA(data[k].red, (uint32_t)(data[k].green * 255.0f + 0.5f), data[k].blue ? 255 : 0, 255);
+        }
+        vkCmdEndRendering(cb);
+        download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        via_end();
+        CHECK(count_far(&out, expect_quads, 1, round ? "specialized multi-draws" : "specialized count draws") == 0);
+        for (k = 0; k < 4; k++) /* (drawn through the variant, not the records) */
+            CHECK(pvk_gfx_icb_ready(((struct pvk_pipeline *)pipes[round][k])->gfx) != NULL);
+    }
+    for (round = 0; round < 2; round++)
+        for (k = 0; k < 4; k++)
+            vkDestroyPipeline(device, pipes[round][k], NULL);
+    free_buf(&out);
+    free_img(&target);
 }
 
 /* Pipeline caches: a second creation from the same cache needs no compiler
@@ -12707,6 +13407,134 @@ static void test_parallel_stress(void)
     vkDestroyPipeline(device, pipeline, NULL);
 }
 
+/* Rectangle i of the scene drawn as the one record counted of count draw
+ * records b (4, and the count), or as the middle record of multi-draw
+ * records b (16384, the others drawing nothing): see draw_via. */
+static void par_draw_records(VkCommandBuffer cb, uint32_t i, const struct buf *b, bool count)
+{
+    const struct par_rect *r = &par_rects[i];
+    struct pc pc;
+    memset(&pc, 0, sizeof(pc));
+    pc.rect[0] = -1.0f + 2.0f * (float)r->x0 / W;
+    pc.rect[1] = -1.0f + 2.0f * (float)r->y0 / H;
+    pc.rect[2] = -1.0f + 2.0f * (float)r->x1 / W;
+    pc.rect[3] = -1.0f + 2.0f * (float)r->y1 / H;
+    pc.color[0] = (float)(r->rgba & 255) / 255.0f;
+    pc.color[1] = (float)((r->rgba >> 8) & 255) / 255.0f;
+    pc.color[2] = (float)((r->rgba >> 16) & 255) / 255.0f;
+    pc.color[3] = 1.0f;
+    pc.depth = r->depth;
+    vkCmdPushConstants(cb, pc_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    if (count)
+        vkCmdDrawIndirectCount(cb, b->buffer, 0, b->buffer, 16 * 4, 4, 16);
+    else
+        vkCmdDrawIndirect(cb, b->buffer, 0, 16384, 16);
+}
+
+/* Count draws and long multi-draws among draws encoded in parallel (they
+ * may go through indirect command buffers, section 16): in secondaries a
+ * render pass instance executes, which therefore does not fork (its draws
+ * are preprocessed), and in primaries encoded in jobs of their own, whose
+ * lanes take commands of their own chunks; the multi-draws' records copied
+ * in by the first primary behind a barrier. Three times each. */
+static void test_parallel_icb(void)
+{
+    enum { N = PAR_RECTS / 4 };
+    struct img color = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4), counted[4], multi[4], staging = make_buf(16 * 16384);
+    VkPipeline pipeline = par_pipeline(VK_NULL_HANDLE);
+    VkCommandBuffer cbs[4], secs[4];
+    VkMemoryBarrier2 mb;
+    VkDependencyInfo dep;
+    VkBufferCopy region;
+    uint32_t k, i, round;
+
+    REQUIRE(pipeline && staging.data && features.multiDrawIndirect);
+    for (i = 0; i < 16384; i++) {
+        uint32_t *u = (uint32_t *)(staging.data + 16 * i);
+        u[0] = 4, u[1] = i == 16384 / 2, u[2] = 0, u[3] = 0;
+    }
+    for (k = 0; k < 4; k++) {
+        counted[k] = make_buf(16 * 4 + 16);
+        multi[k] = make_buf(16 * 16384);
+        REQUIRE(counted[k].data && multi[k].data);
+        memset(counted[k].data, 0, 16 * 4 + 16);
+        memcpy(counted[k].data, staging.data, 16); /* (record 0 drawing: 4 vertices, an instance) */
+        ((uint32_t *)counted[k].data)[1] = 1;
+        ((uint32_t *)counted[k].data)[4 * 4] = 1;
+        memcpy(multi[k].data, staging.data, 16 * 16384);
+    }
+    memset(&mb, 0, sizeof(mb));
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+    memset(&dep, 0, sizeof(dep));
+    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers = &mb;
+    memset(&region, 0, sizeof(region));
+    region.size = 16 * 16384;
+    for (round = 0; round < 6; round++) {
+        bool primaries = (round & 1) != 0;
+        char what[64];
+        par_scene(300 + round);
+        for (k = 0; k < 4; k++) {
+            VkCommandBuffer cb;
+            if (primaries) {
+                cb = cbs[k] = begin_cmd();
+                if (k == 0) {
+                    for (i = 0; i < 4; i++) {
+                        memset(multi[i].data, 0, 16 * 16384);
+                        vkCmdCopyBuffer(cb, staging.buffer, multi[i].buffer, 1, &region);
+                    }
+                    vkCmdPipelineBarrier2(cb, &dep);
+                }
+                par_begin(cb, &color, &depth, k == 0, 0);
+            } else {
+                cb = secs[k] = par_secondary(VK_NULL_HANDLE);
+            }
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            par_draw_records(cb, k * N, &counted[k], true);
+            par_draw_records(cb, k * N + 1, &multi[k], false);
+            par_draw(cb, k * N + 2, N - 2);
+            if (!primaries) {
+                vkEndCommandBuffer(cb);
+                continue;
+            }
+            vkCmdEndRendering(cb);
+            if (k + 1 < 4)
+                par_attachment_barrier(cb);
+            else
+                download(cb, &color, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        }
+        if (primaries) {
+            par_submit(cbs, 4);
+        } else {
+            VkCommandBuffer cb = begin_cmd();
+            par_begin(cb, &color, &depth, true, VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT);
+            vkCmdExecuteCommands(cb, 4, secs);
+            vkCmdEndRendering(cb);
+            download(cb, &color, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+            submit(cb);
+            vkFreeCommandBuffers(device, cmd_pool, 4, secs);
+        }
+        snprintf(what, sizeof(what), "count draws in %s, round %u", primaries ? "primaries" : "secondaries", round);
+        CHECK(par_bad(&out, PAR_RECTS, what) == 0);
+    }
+    vkDestroyPipeline(device, pipeline, NULL);
+    for (k = 0; k < 4; k++) {
+        free_buf(&multi[k]);
+        free_buf(&counted[k]);
+    }
+    free_buf(&staging);
+    free_buf(&out);
+    free_img(&depth);
+    free_img(&color);
+}
+
 int main(void)
 {
     setup();
@@ -12743,8 +13571,18 @@ int main(void)
     RUN(test_output_signedness);
     RUN(test_multi_draw);
     RUN(test_multi_draw_secondary);
+    RUN(test_count_draws);
+    RUN(test_count_draws_secondary);
+    RUN(test_count_draws_idle);
+    RUN(test_count_draws_many);
+    RUN(test_multi_draw_many);
+    RUN(test_count_draws_many_drawid);
+    RUN(test_multi_draw_many_drawid);
+    RUN(test_count_draws_sample_position);
     RUN(test_indices);
     RUN(test_indices_secondary);
+    RUN(test_indices_count);
+    RUN(test_indices_count_secondary);
     RUN(test_indices_bound_before);
     RUN(test_polygon_points);
     RUN(test_polygon_points_bound_before);
@@ -12762,10 +13600,12 @@ int main(void)
     RUN(test_ds_split);
     RUN(test_ds_subpasses);
     RUN(test_depth_input_before_write);
+    RUN(test_depth_input_indirect);
     RUN(test_stencil_input);
     RUN(test_ds_resolve_stencil);
     RUN(test_alpha_to_coverage_no_color);
     RUN(test_depth_bounds);
+    RUN(test_depth_bounds_indirect);
     RUN(test_depth_bounds_later);
     RUN(test_msaa);
     RUN(test_msaa_int_resolve);
@@ -12780,6 +13620,7 @@ int main(void)
     RUN(test_stencil_view_attachment);
     RUN(test_bresenham_msaa);
     RUN(test_tile_overflow);
+    RUN(test_tile_overflow_indirect);
     RUN(test_pass_query_ranges);
     RUN(test_tile_overflow_int_resolve);
     RUN(test_tile_overflow_locations);
@@ -12793,9 +13634,11 @@ int main(void)
     RUN(test_logic_ops);
     RUN(test_logic_op_msaa);
     RUN(test_logic_op_snorm_exact);
+    RUN(test_logic_op_snorm_indirect);
     RUN(test_spec_fragment);
     RUN(test_spec_shared);
     RUN(test_spec_depth_variant);
+    RUN(test_spec_icb_variant);
     RUN(test_pipeline_cache);
     RUN(test_shader_cache_key);
     RUN(test_shader_cache);
@@ -12809,6 +13652,7 @@ int main(void)
     RUN(test_parallel_queries);
     RUN(test_parallel_order);
     RUN(test_parallel_stress);
+    RUN(test_parallel_icb);
     teardown();
     return TEST_RESULT();
 }

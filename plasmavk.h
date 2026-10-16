@@ -31662,6 +31662,17 @@ static inline void pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_verte
 static inline void pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferLength_instanceCount_baseVertex_baseInstance(id self, pvk_MTLPrimitiveType primitiveType, unsigned long indexCount, pvk_MTLIndexType indexType, pvk_MTLGPUAddress indexBuffer, unsigned long indexBufferLength, unsigned long instanceCount, long baseVertex, unsigned long baseInstance) { PVK_SEL_CACHE("drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferLength:instanceCount:baseVertex:baseInstance:"); PVK_MSG(void, (id, SEL, pvk_MTLPrimitiveType, unsigned long, pvk_MTLIndexType, pvk_MTLGPUAddress, unsigned long, unsigned long, long, unsigned long))(self, pvk_sel_, primitiveType, indexCount, indexType, indexBuffer, indexBufferLength, instanceCount, baseVertex, baseInstance); }
 static inline void pvk_MTL4RenderCommandEncoder_drawPrimitives_indirectBuffer(id self, pvk_MTLPrimitiveType primitiveType, pvk_MTLGPUAddress indirectBuffer) { PVK_SEL_CACHE("drawPrimitives:indirectBuffer:"); PVK_MSG(void, (id, SEL, pvk_MTLPrimitiveType, pvk_MTLGPUAddress))(self, pvk_sel_, primitiveType, indirectBuffer); }
 static inline void pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexType_indexBuffer_indexBufferLength_indirectBuffer(id self, pvk_MTLPrimitiveType primitiveType, pvk_MTLIndexType indexType, pvk_MTLGPUAddress indexBuffer, unsigned long indexBufferLength, pvk_MTLGPUAddress indirectBuffer) { PVK_SEL_CACHE("drawIndexedPrimitives:indexType:indexBuffer:indexBufferLength:indirectBuffer:"); PVK_MSG(void, (id, SEL, pvk_MTLPrimitiveType, pvk_MTLIndexType, pvk_MTLGPUAddress, unsigned long, pvk_MTLGPUAddress))(self, pvk_sel_, primitiveType, indexType, indexBuffer, indexBufferLength, indirectBuffer); }
+static inline void pvk_MTL4RenderCommandEncoder_executeCommandsInBuffer_indirectBuffer(id self, id indirectCommandBuffer, pvk_MTLGPUAddress indirectRangeBuffer) { PVK_SEL_CACHE("executeCommandsInBuffer:indirectBuffer:"); PVK_MSG(void, (id, SEL, id, pvk_MTLGPUAddress))(self, pvk_sel_, indirectCommandBuffer, indirectRangeBuffer); }
+static inline id pvk_MTLIndirectCommandBufferDescriptor_new(void) { PVK_CLASS_CACHE("MTLIndirectCommandBufferDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTLIndirectCommandBufferDescriptor_setCommandTypes(id self, pvk_MTLIndirectCommandType commandTypes) { PVK_SEL_CACHE("setCommandTypes:"); PVK_MSG(void, (id, SEL, pvk_MTLIndirectCommandType))(self, pvk_sel_, commandTypes); }
+static inline void pvk_MTLIndirectCommandBufferDescriptor_setInheritPipelineState(id self, bool inheritPipelineState) { PVK_SEL_CACHE("setInheritPipelineState:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, inheritPipelineState); }
+static inline void pvk_MTLIndirectCommandBufferDescriptor_setInheritBuffers(id self, bool inheritBuffers) { PVK_SEL_CACHE("setInheritBuffers:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, inheritBuffers); }
+static inline void pvk_MTLIndirectCommandBufferDescriptor_setSupportColorAttachmentMapping(id self, bool supportColorAttachmentMapping) { PVK_SEL_CACHE("setSupportColorAttachmentMapping:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, supportColorAttachmentMapping); }
+static inline void pvk_MTLIndirectCommandBufferDescriptor_setMaxVertexBufferBindCount(id self, unsigned long maxVertexBufferBindCount) { PVK_SEL_CACHE("setMaxVertexBufferBindCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, maxVertexBufferBindCount); }
+static inline void pvk_MTLIndirectCommandBufferDescriptor_setMaxFragmentBufferBindCount(id self, unsigned long maxFragmentBufferBindCount) { PVK_SEL_CACHE("setMaxFragmentBufferBindCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, maxFragmentBufferBindCount); }
+static inline id pvk_MTLDevice_newIndirectCommandBufferWithDescriptor_maxCommandCount_options(id self, id descriptor, unsigned long maxCount, pvk_MTLResourceOptions options) { PVK_SEL_CACHE("newIndirectCommandBufferWithDescriptor:maxCommandCount:options:"); return PVK_MSG(id, (id, SEL, id, unsigned long, pvk_MTLResourceOptions))(self, pvk_sel_, descriptor, maxCount, options); }
+static inline unsigned long pvk_MTLIndirectCommandBuffer_size(id self) { PVK_SEL_CACHE("size"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
+static inline pvk_MTLResourceID pvk_MTLIndirectCommandBuffer_gpuResourceID(id self) { PVK_SEL_CACHE("gpuResourceID"); return PVK_MSG(pvk_MTLResourceID, (id, SEL))(self, pvk_sel_); }
 static inline id pvk_MTLDevice_newCompilerWithDescriptor_error(id self, id descriptor, id * error) { PVK_SEL_CACHE("newCompilerWithDescriptor:error:"); return PVK_MSG(id, (id, SEL, id, id *))(self, pvk_sel_, descriptor, error); }
 static inline id pvk_MTLDevice_newDepthStencilStateWithDescriptor(id self, id descriptor) { PVK_SEL_CACHE("newDepthStencilStateWithDescriptor:"); return PVK_MSG(id, (id, SEL, id))(self, pvk_sel_, descriptor); }
 static inline bool pvk_MTLDevice_supportsVertexAmplificationCount(id self, unsigned long count) { PVK_SEL_CACHE("supportsVertexAmplificationCount:"); return PVK_MSG(bool, (id, SEL, unsigned long))(self, pvk_sel_, count); }
@@ -31684,6 +31695,7 @@ static inline void pvk_MTL4RenderPipelineDescriptor_setMaxVertexAmplificationCou
 static inline id pvk_MTL4RenderPipelineDescriptor_colorAttachments(id self) { PVK_SEL_CACHE("colorAttachments"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline void pvk_MTL4RenderPipelineDescriptor_setInputPrimitiveTopology(id self, pvk_MTLPrimitiveTopologyClass inputPrimitiveTopology) { PVK_SEL_CACHE("setInputPrimitiveTopology:"); PVK_MSG(void, (id, SEL, pvk_MTLPrimitiveTopologyClass))(self, pvk_sel_, inputPrimitiveTopology); }
 static inline void pvk_MTL4RenderPipelineDescriptor_setColorAttachmentMappingState(id self, pvk_MTL4LogicalToPhysicalColorAttachmentMappingState colorAttachmentMappingState) { PVK_SEL_CACHE("setColorAttachmentMappingState:"); PVK_MSG(void, (id, SEL, pvk_MTL4LogicalToPhysicalColorAttachmentMappingState))(self, pvk_sel_, colorAttachmentMappingState); }
+static inline void pvk_MTL4RenderPipelineDescriptor_setSupportIndirectCommandBuffers(id self, pvk_MTL4IndirectCommandBufferSupportState supportIndirectCommandBuffers) { PVK_SEL_CACHE("setSupportIndirectCommandBuffers:"); PVK_MSG(void, (id, SEL, pvk_MTL4IndirectCommandBufferSupportState))(self, pvk_sel_, supportIndirectCommandBuffers); }
 static inline id pvk_MTL4RenderPipelineColorAttachmentDescriptorArray_objectAtIndexedSubscript(id self, unsigned long attachmentIndex) { PVK_SEL_CACHE("objectAtIndexedSubscript:"); return PVK_MSG(id, (id, SEL, unsigned long))(self, pvk_sel_, attachmentIndex); }
 static inline void pvk_MTL4RenderPipelineColorAttachmentDescriptor_setPixelFormat(id self, pvk_MTLPixelFormat pixelFormat) { PVK_SEL_CACHE("setPixelFormat:"); PVK_MSG(void, (id, SEL, pvk_MTLPixelFormat))(self, pvk_sel_, pixelFormat); }
 static inline void pvk_MTL4RenderPipelineColorAttachmentDescriptor_setBlendingState(id self, pvk_MTL4BlendState blendingState) { PVK_SEL_CACHE("setBlendingState:"); PVK_MSG(void, (id, SEL, pvk_MTL4BlendState))(self, pvk_sel_, blendingState); }
@@ -32398,13 +32410,15 @@ struct pvk_physical_device {
 struct pvk_submission;
 struct pvk_names;
 struct pvk_upload_chunk;
+struct pvk_icb_chunk;
 struct pvk_deferred;
 struct pvk_cmd_event;
 struct pvk_ts_note;
 
 /* What a thread encoding a queue's submissions has of its own (section 16,
- * PARALLEL ENCODING): argument tables, command allocators and an upload
- * ring. The queue's lane is the submitting thread's. */
+ * PARALLEL ENCODING): argument tables, command allocators, an upload ring
+ * and indirect command buffer chunks. The queue's lane is the submitting
+ * thread's. */
 struct pvk_lane {
     id argument_table;    /* MTL4ArgumentTable the encoder binds (snapshotted per dispatch) */
     id render_table;      /* MTL4ArgumentTable of internal blit/resolve draws */
@@ -32413,6 +32427,13 @@ struct pvk_lane {
     struct pvk_upload_chunk *upload;               /* being filled */
     struct pvk_upload_chunk *retired, *retired_tail; /* full, in flight, oldest first */
     struct pvk_upload_chunk *free_chunks;
+    /* The same for indirect command buffer commands (pvk_icb_take): [0]
+     * inheriting the render encoder's buffers, [1] setting their own */
+    struct pvk_icb_pool {
+        struct pvk_icb_chunk *icb, *retired, *retired_tail, *free;
+        uint64_t bytes; /* its chunks' (allocatedSize) */
+        uint32_t grow;  /* the commands of the next chunk made (doubling, up to PVK_ICB_COMMANDS) */
+    } icbs[2];
 };
 
 #define PVK_ORDER_MAX 8 /* struct pvk_orders */
@@ -32461,6 +32482,9 @@ struct pvk_queue {
     uint32_t lane_count;
     bool lanes_failed; /* (then batches encode in order) */
     struct pvk_notes notes;
+    /* The memory the lanes' indirect command buffer chunks take
+     * (allocatedSize; atomic, pvk_icb_take). */
+    uint64_t icb_bytes;
     /* Batches whose semaphore waits the host resolves (section 16): the
      * queue's thread commits them in order. */
     pthread_mutex_t lock;
@@ -32556,7 +32580,7 @@ struct pvk_device {
     id compiler;                              /* MTL4Compiler of render pipelines */
     struct pvk_ds_state *ds_states[64];       /* MTLDepthStencilStates by state (hash buckets) */
     struct pvk_clear_pipeline *clear_pipelines; /* vkCmdClearAttachments draws, by formats */
-    id prepass_pipelines[4];                  /* draw preprocessing kernels (section 16) */
+    id prepass_pipelines[6];                  /* draw preprocessing kernels (section 16) */
     struct pvk_fan_buffer *fan_buffers;       /* triangle fan index patterns, newest first */
     struct pvk_shader_cache *shaders;         /* translations and libraries pipelines share (section 17) */
     struct pvk_pipeline_cache *pipeline_cache; /* the implicit one, for VK_NULL_HANDLE (section 17) */
@@ -33520,8 +33544,10 @@ static void pvk_physical_device_init_descriptor_features(struct pvk_physical_dev
  *   shaderDrawParameters   BaseVertex, BaseInstance and DrawIndex (section 13);
  *                          DrawIndex is read from a buffer the encoder points at
  *                          each draw's number (section 16, "Draw indices")
- *   multiDrawIndirect      the records drawn one by one, maxDrawIndirectCount
- *                          65535 (Vulkan's minimum: a count draw's loop length)
+ *   multiDrawIndirect      the records drawn one by one, or encoded as
+ *                          indirect command buffer commands (section 16),
+ *                          maxDrawIndirectCount 65535 (Vulkan's minimum: a
+ *                          count draw's loop length)
  *   drawIndirectCount      draw preprocessing (section 16)
  *   shaderOutputLayer, shaderOutputViewportIndex   vertex shaders write
  *                          [[render_target_array_index]] / [[viewport_array_index]]
@@ -55635,10 +55661,23 @@ struct pvk_pipeline {
  * such state, is not scanned: its draws need no preprocessing and its
  * pipelines nothing of the Metal pass. */
 #define PVK_SCAN_PIPELINE 1u /* a graphics pipeline the pass must know of (pvk_gfx_scan) */
-#define PVK_SCAN_DRAW 2u     /* triangle fans, 8-bit indices or indirect draw counts (pvk_draw_conv) */
+#define PVK_SCAN_DRAW 2u     /* triangle fans, 8-bit indices, indirect draw counts, long multi-draws (pvk_draw_conv) */
 #define PVK_SCAN_STRIP 4u    /* strips (with 16-bit indices they may be widened) */
 #define PVK_SCAN_U16 8u      /* 16-bit indices */
 #define PVK_SCAN_QUERY 16u   /* a query begins (occlusion queries: the pass's visibility buffer) */
+
+/* Multi-draws of this many records or more go through an indirect command
+ * buffer when they can, like count draws (pvk_draw_conv, PVK_CV_ICB). A
+ * record the encoder draws costs about 43 ns of CPU; as a command, some
+ * 40 ns more of GPU than as a Metal indirect draw of an application's
+ * buffer, a culled one (no instances: left out) almost nothing, and the
+ * preprocessing, which the render pass waits for, about 40 us (M4 Max). It
+ * pays for the multi-draws of GPU culling, a record per object (Sascha's
+ * computecullandlod: 65535 of them, frames 3.60 -> 2.22 ms), not for
+ * shorter ones that draw most of theirs (4096 small draws: GPU 69 -> 342
+ * us, frames 265 -> 345 us; 16384: GPU 249 -> 914 us, frames 925 -> 917
+ * us). */
+#define PVK_ICB_MIN_DRAWS 16384u
 
 /* The PVK_SCAN_* bits of drawing with topology `topology`. */
 static uint32_t pvk_topology_scan(uint32_t topology)
@@ -55756,6 +55795,7 @@ struct pvk_command_buffer {
      * (pvk_barrier_stages: before = 0, no barrier) */
     uint32_t packets, ops, par;
     pvk_MTLStages order_after, order_before;
+    const struct pvk_pipeline *gfx_bound; /* the graphics pipeline bound (pvk_gfx_icb_make) */
 };
 
 /* Debug layer: recordings begun (struct pvk_command_buffer.recording). */
@@ -55814,6 +55854,7 @@ static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release
     cb->scan_pass = NULL;
     cb->packets = cb->ops = cb->par = 0;
     cb->order_after = cb->order_before = 0;
+    cb->gfx_bound = NULL;
     if (release) {
         pvk_labels_free(&cb->labels, pvk_pool_alloc(pool));
         pvk_cb_render_free(cb);
@@ -56494,6 +56535,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBindPipeline(VkCommandBuffer commandBuffer, VkPi
         c->pipeline = (struct pvk_pipeline *)pipeline;
     if (c && pipeline)
         cb->scan |= ((struct pvk_pipeline *)pipeline)->scan;
+    if (pipelineBindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS)
+        cb->gfx_bound = (const struct pvk_pipeline *)pipeline;
 }
 
 static void pvk_cmd_push_constants(struct pvk_command_buffer *cb, uint32_t offset, uint32_t size, const void *data)
@@ -57799,6 +57842,7 @@ static void pvk_dynamic_copy(struct pvk_dynamic_state *d, const struct pvk_dynam
 enum { PVK_VARIANT_DEPTH, PVK_VARIANT_BOUNDS, PVK_VARIANT_COUNT };
 struct pvk_gfx_variants;
 struct pvk_gfx_groups;
+struct pvk_gfx_icb;
 
 /* A graphics pipeline as the commands see it (made in section 17). */
 struct pvk_gfx_pipeline {
@@ -57830,12 +57874,17 @@ struct pvk_gfx_pipeline {
     struct pvk_gfx_variants *variants; /* pipelines that write depth or test depth bounds in a pass
                                         * with a depth copy (section 17); NULL: none */
     struct pvk_gfx_groups *groups;     /* variants for passes split for tile memory; NULL: none */
+    struct pvk_gfx_icb *icb;           /* the variant indirect command buffers draw with (section 17,
+                                        * pvk_icb_draws); NULL: none */
     /* Logical color indices of SNORM attachments with logical operations:
      * the Metal pipeline renders them through SINT views of the same bits
      * (pvk_render_rebind); the pipeline's mtl_pipeline_snorm renders them
      * as they are, for passes that cannot rebind them. */
     uint32_t int_colors;
 };
+
+static void pvk_gfx_icb_make(struct pvk_device *device, const struct pvk_pipeline *p); /* section 17 */
+static id pvk_gfx_icb_ready(const struct pvk_gfx_pipeline *g);
 
 /* The PVK_SCAN_* bits of binding a graphics pipeline: those whose draws a
  * render pass's Metal pass must know of (pvk_track_pipeline, pvk_scan_draw:
@@ -59097,8 +59146,10 @@ static void pvk_cmd_draw_indirect(VkCommandBuffer commandBuffer, VkBuffer buffer
         c->stride = stride ? stride : (indexed ? 20u : 16u); /* drawCount 1 may pass stride 0 */
         c->indexed = indexed;
         c->pad = 0;
-        if (cnt)
+        if (cnt || drawCount >= PVK_ICB_MIN_DRAWS) {
             cb->scan |= PVK_SCAN_DRAW;
+            pvk_gfx_icb_make(cb->pool->device, cb->gfx_bound); /* (for its indirect command buffer, section 17) */
+        }
     }
     pvk_cmd_group_end(cb, group);
 }
@@ -59429,12 +59480,15 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   start, stores and resolves at its end; nothing follows the encoder that
  *   ends the pass in its command buffer: a copy there faulted, M4 Max,
  *   macOS 27.2). A thread encodes on a lane of the queue's (struct
- *   pvk_lane): argument tables, command allocators and upload ring of its
- *   own. A job's encoders start after the barriers of the jobs before it,
- *   recorded with their command buffers (struct
- *   pvk_command_buffer.order_after/before); a job of primaries ends with its
- *   timestamps and occlusion availability written, and its event and
- *   timestamp notes join the batch's in order. A batch encodes in order
+ *   pvk_lane): argument tables, command allocators, upload ring and
+ *   indirect command buffer chunks of its own. A job's encoders start after
+ *   the barriers of the jobs before it, recorded with their command buffers
+ *   (struct pvk_command_buffer.order_after/before); a job of primaries ends
+ *   with its timestamps and occlusion availability written, and its event
+ *   and timestamp notes join the batch's in order. A render pass instance
+ *   that is scanned (pvk_pass_scanned; among others for count draws and
+ *   long multi-draws, whose preprocessing it waits for) does not fork. A
+ *   batch encodes in order
  *   when something of it reads what the batch encoded before it, or shares
  *   it in order (PVK_PAR_SERIAL: copies of timestamp results, resolves in
  *   part of a render area; label regions, the debug layer), and on devices
@@ -59559,6 +59613,34 @@ struct pvk_upload_chunk {
     uint64_t serial; /* last submission that used it */
 };
 
+/* Indirect command buffer commands of count draws and long multi-draws
+ * ("Graphics" below, draw preprocessing), taken in a row like upload
+ * memory, from chunks of the encoding lane's (PARALLEL ENCODING), a draw's
+ * maxDrawCount (or records) of them at most maxDrawIndirectCount. A
+ * command takes about 690 bytes (1190 setting its buffers; M4 Max), 45 MB
+ * (78 MB) for a draw of 65535 (engines pass their buffers' capacity), so a
+ * lane's chunks hold PVK_ICB_MIN_COMMANDS commands, twice as many each
+ * chunk made after, up to PVK_ICB_COMMANDS (or the draw's); the chunks of
+ * a queue's lanes take PVK_ICB_BYTES at most (or 1/32 of the memory heap
+ * if less), beyond which draws are drawn without commands. Chunks no
+ * submission took commands from for PVK_ICB_IDLE_NS are released
+ * (pvk_queue_recycle), and free ones at once while the system's memory
+ * pressure is above normal. */
+#define PVK_ICB_MIN_COMMANDS 4096u
+#define PVK_ICB_COMMANDS 65536u
+#define PVK_ICB_BYTES ((uint64_t)512 << 20)
+#define PVK_ICB_IDLE_NS 1000000000u
+
+struct pvk_icb_chunk {
+    struct pvk_icb_chunk *next;
+    id icb;            /* MTLIndirectCommandBuffer (pvk_icb_take), private, resident */
+    pvk_MTLResourceID resource;
+    uint32_t used, capacity;
+    uint64_t bytes;    /* its allocatedSize */
+    uint64_t serial;   /* last submission that used it */
+    uint64_t taken;    /* when it did (CLOCK_UPTIME_RAW nanoseconds) */
+};
+
 struct pvk_submission {
     struct pvk_submission *next;
     uint64_t serial;
@@ -59656,10 +59738,11 @@ static VkResult pvk_queue_init(struct pvk_queue *queue)
     queue->timeline = pvk_MTLDevice_newSharedEvent(mtl);
     queue->batch_event = pvk_MTLDevice_newSharedEvent(mtl);
     if (pthread_mutex_init(&queue->lock, NULL) == 0) {
-        if (pthread_cond_init(&queue->cond, NULL) == 0)
-            queue->lock_ready = true;
-        else
+        if (pthread_cond_init(&queue->cond, NULL) != 0) {
             pthread_mutex_destroy(&queue->lock);
+        } else {
+            queue->lock_ready = true;
+        }
     }
     return queue->timeline && queue->batch_event && tables && queue->lock_ready ? VK_SUCCESS
                                                                                 : VK_ERROR_INITIALIZATION_FAILED;
@@ -59704,6 +59787,22 @@ static void pvk_submission_reset(struct pvk_submission *s)
     s->commit_count = 0;
 }
 
+/* Frees chunks c (a list) of a lane's pool; returns their allocatedSize. */
+static uint64_t pvk_icb_chunks_free(struct pvk_device *device, struct pvk_icb_pool *pool, struct pvk_icb_chunk *c)
+{
+    struct pvk_icb_chunk *next;
+    uint64_t bytes = 0;
+    for (; c; c = next) {
+        next = c->next;
+        bytes += c->bytes;
+        pvk_device_evict(device, c->icb);
+        pvk_release(c->icb);
+        pvk_free(pvk_device_alloc(device), c);
+    }
+    pool->bytes -= bytes;
+    return bytes;
+}
+
 static void pvk_submissions_free(struct pvk_device *device, struct pvk_submission *s)
 {
     struct pvk_submission *next;
@@ -59722,11 +59821,17 @@ static void pvk_submissions_free(struct pvk_device *device, struct pvk_submissio
 /* After pvk_device_finish: the GPU is done with everything. */
 static void pvk_lane_finish(struct pvk_device *device, struct pvk_lane *lane)
 {
+    unsigned i;
     pvk_submissions_free(device, lane->pending);
     pvk_submissions_free(device, lane->free_submissions);
     pvk_upload_chunks_free(device, lane->upload);
     pvk_upload_chunks_free(device, lane->retired);
     pvk_upload_chunks_free(device, lane->free_chunks);
+    for (i = 0; i < 2; i++) {
+        pvk_icb_chunks_free(device, &lane->icbs[i], lane->icbs[i].icb);
+        pvk_icb_chunks_free(device, &lane->icbs[i], lane->icbs[i].retired);
+        pvk_icb_chunks_free(device, &lane->icbs[i], lane->icbs[i].free);
+    }
     pvk_release(lane->argument_table);
     pvk_release(lane->render_table);
     memset(lane, 0, sizeof(*lane));
@@ -59743,6 +59848,7 @@ static void pvk_queue_finish(struct pvk_queue *queue)
     pvk_free(pvk_device_alloc(device), queue->lanes);
     queue->lanes = NULL;
     queue->lane_count = 0;
+    queue->icb_bytes = 0;
     pvk_release(queue->timeline);
     pvk_release(queue->batch_event);
     pvk_deferred_free(device, queue->deferred);
@@ -59787,14 +59893,64 @@ static void pvk_lane_recycle(struct pvk_device *device, struct pvk_lane *lane, u
         lane->retired_tail = NULL;
 }
 
-/* Takes back what finished submissions used. */
+/* Takes back the indirect command buffer chunks of a lane's submissions up
+ * to `done`, and releases those of its free chunks, and its current one
+ * once done, that no submission took commands from since `idle`
+ * (CLOCK_UPTIME_RAW nanoseconds; UINT64_MAX: all). */
+static void pvk_lane_recycle_icbs(struct pvk_queue *queue, struct pvk_lane *lane, uint64_t done, uint64_t idle)
+{
+    unsigned k;
+    for (k = 0; k < 2; k++) {
+        struct pvk_icb_pool *pool = &lane->icbs[k];
+        struct pvk_icb_chunk **at = &pool->free, *old = NULL;
+        while (pool->retired && pool->retired->serial <= done) {
+            struct pvk_icb_chunk *c = pool->retired;
+            pool->retired = c->next;
+            c->next = pool->free;
+            pool->free = c;
+        }
+        if (!pool->retired)
+            pool->retired_tail = NULL;
+        while (*at) {
+            struct pvk_icb_chunk *c = *at;
+            if (c->taken < idle) {
+                *at = c->next;
+                c->next = old;
+                old = c;
+            } else {
+                at = &c->next;
+            }
+        }
+        if (pool->icb && pool->icb->serial <= done && pool->icb->taken < idle) {
+            pool->icb->next = old;
+            old = pool->icb;
+            pool->icb = NULL;
+        }
+        if (old)
+            __atomic_sub_fetch(&queue->icb_bytes, pvk_icb_chunks_free(queue->device, pool, old), __ATOMIC_RELAXED);
+        if (!pool->bytes)
+            pool->grow = 0; /* (small chunks first again) */
+    }
+}
+
+/* Takes back what finished submissions used. Indirect command buffer
+ * chunks idle for PVK_ICB_IDLE_NS are released, and while the system's
+ * memory pressure is above normal all free ones. */
 static void pvk_queue_recycle(struct pvk_queue *queue)
 {
-    uint64_t done = pvk_MTLSharedEvent_signaledValue(queue->timeline);
+    uint64_t done = pvk_MTLSharedEvent_signaledValue(queue->timeline), idle = 0;
     uint32_t i;
     pvk_lane_recycle(queue->device, &queue->lane, done);
     for (i = 0; i < queue->lane_count; i++)
         pvk_lane_recycle(queue->device, &queue->lanes[i], done);
+    if (__atomic_load_n(&queue->icb_bytes, __ATOMIC_RELAXED)) {
+        idle = __atomic_load_n(&queue->device->memory_pressure, __ATOMIC_RELAXED)
+                   ? UINT64_MAX
+                   : pvk_clock_ns(CLOCK_UPTIME_RAW) - PVK_ICB_IDLE_NS;
+        pvk_lane_recycle_icbs(queue, &queue->lane, done, idle);
+        for (i = 0; i < queue->lane_count; i++)
+            pvk_lane_recycle_icbs(queue, &queue->lanes[i], done, idle);
+    }
 }
 
 /* A submission of the lane, with a new command buffer. */
@@ -59875,6 +60031,10 @@ struct pvk_pp_result {
     uint32_t pad;
     pvk_MTLGPUAddress points;        /* polygon points: the struct pvk_msl_points (one per record), or vertex
                                       * numbers (mode 3) of a direct draw */
+    id icb;                          /* PVK_CV_ICB: the MTLIndirectCommandBuffer of the draw's commands, and */
+    pvk_MTLGPUAddress range;         /* the pvk_MTLIndirectCommandBufferExecutionRange to execute */
+    struct pvk_icb_table *table;     /* ... the buffers they set (DrawIndex), written when the draw is encoded */
+    id pso;                          /* ... the pipeline's variant they inherit (struct pvk_gfx_icb) */
 };
 
 /* The state a draw's preprocessing depends on (pvk_draw_conv), tracked by
@@ -59913,6 +60073,15 @@ struct pvk_draw_track {
      * map, as color slots (mapped: up to date) */
     bool mapped;
     uint32_t map_only, map_writes;
+};
+
+/* An indirect draw whose preprocessing waits for the end of the scan of
+ * its render pass instance (PVK_CV_ICB, pvk_prepass_later): its result in
+ * pvk_encoder.pp, and the state it is drawn with. */
+struct pvk_pp_later {
+    uint32_t result;
+    const struct pvk_cmd_draw_indirect *cmd;
+    struct pvk_draw_track track;
 };
 
 /* Queries a render encoder makes available once it ends. */
@@ -60023,8 +60192,10 @@ struct pvk_render {
     bool stencil_dirty;         /* the stencil copy may be out of date */
     VkRect2D area;              /* the render area */
     id pso_set;                 /* the MTLRenderPipelineState set (NULL: unknown) */
+    id icb_pso;                 /* to set instead of the pipeline's own (pvk_encode_draw_indirect), NULL */
     struct pvk_msl_depth_bounds bounds_set; /* bound at buffer index 27 */
     bool bounds_valid;
+    pvk_MTLGPUAddress bounds_address, vertex_address; /* bound at indices 27 and 29 (struct pvk_icb_table) */
     /* SNORM attachments rebound through SINT views (pvk_render_rebind) */
     const struct pvk_cmd_begin_pass *begin; /* the pass instance's packet */
     struct pvk_pass_attachment pass_depth, pass_stencil; /* its depth and stencil (resolves deferred) */
@@ -60118,6 +60289,8 @@ struct pvk_encoder {
     size_t sub_at;
     struct pvk_pp_result *pp;   /* draw preprocessing results of the render pass, in draw order */
     uint32_t pp_count, pp_next, pp_capacity;
+    struct pvk_pp_later *later; /* ... and those of them made once its scan ends */
+    uint32_t later_count, later_capacity;
     /* Queries the render encoder makes available when it ends
      * (render.pending_count of them; out of struct pvk_render, which tile
      * memory replays copy) */
@@ -60129,6 +60302,7 @@ struct pvk_encoder {
     bool pipeline_dirty; /* setComputePipelineState: owed */
     bool push_dirty;     /* push constants changed since they were bound */
     uint32_t push_bound; /* bytes bound at the push-constant index */
+    pvk_MTLGPUAddress push_address; /* ... their address (struct pvk_icb_table) */
     /* push constants, then (dispatch base pipelines) the base workgroup */
     unsigned char push[PVK_MAX_PUSH_CONSTANTS_SIZE + 16];
     /* Descriptor set tables per bind point (0: graphics, 1: compute), and
@@ -61838,7 +62012,9 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
  *   indexed triangle fans  rewritten as triangle lists (a restart begins a
  *                          new fan), padded with degenerate triangles to
  *                          3 * (count - 2) indices
- *   count buffers          the records copied, those past the count zeroed
+ *   count buffers          the records below the count encoded as commands
+ *                          of an indirect command buffer (below), or the
+ *                          records copied, those past the count zeroed
  *   indirect fans          records turned into indexed draws of the
  *                          device's fan pattern (non-indexed, up to 65536
  *                          vertices per draw) or of indices rewritten per
@@ -61848,14 +62024,29 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
  * draws whose indices are widened read the whole bound index range,
  * widened. Metal draws records one by one ("Draw indices" below): at most
  * maxDrawIndirectCount per command, which Vulkan also requires of the
- * count, so a count draw encodes min(maxDrawCount, maxDrawIndirectCount)
- * draws, those past the count drawing nothing. The scan also finds what
- * the Metal pass must be made with (Bresenham lines, framebuffer fetch,
- * SNORM rebinds, depth/stencil copies, occlusion queries). A render pass
- * instance that recorded none of what it looks for (struct
- * pvk_cmd_begin_pass.scan), and begins with no such state, is not scanned:
- * walking the packets again cost as much as making the Metal encoders, in a
- * frame of a few thousand draws and 18 passes. */
+ * count. Drawn so, a count draw would cost min(maxDrawCount,
+ * maxDrawIndirectCount) Metal draws on the CPU and the GPU whatever the
+ * count (43 and 45 ns each, M4 Max), and engines pass their buffers'
+ * capacity: a kernel encodes the records as indirect command buffer
+ * commands instead (pvk_prepass_icb_msl, pvk_icb_take), which the render
+ * encoder executes for the range the kernel wrote, the commands inheriting
+ * all the encoder's state; multi-draws of PVK_ICB_MIN_DRAWS records or
+ * more too (GPU culling may leave most with no instances). That needs Metal
+ * pipelines that support it (struct pvk_gfx_icb, pvk_icb_draws), so it is
+ * decided once the scan has seen the whole pass (pvk_prepass_later), within
+ * the queue's share of memory for commands (pvk_icb_take); other count
+ * draws draw the copied records one by one, those past the count drawing
+ * nothing, other multi-draws their own. The records are read when the
+ * render pass instance begins: those of count draws and long multi-draws
+ * cannot be written by an earlier subpass of the instance (a subpass
+ * dependency into DRAW_INDIRECT; shaders of a render pass write storage
+ * memory only with fragmentStoresAndAtomics). The scan also finds what the
+ * Metal pass must be made with (Bresenham lines, framebuffer fetch, SNORM
+ * rebinds, depth/stencil copies, occlusion queries). A render pass instance
+ * that recorded none of what it looks for (struct pvk_cmd_begin_pass.scan),
+ * and begins with no such state, is not scanned: walking the packets again
+ * cost as much as making the Metal encoders, in a frame of a few thousand
+ * draws and 18 passes. */
 
 static pthread_mutex_t pvk_graphics_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -62156,7 +62347,9 @@ static const struct pvk_fan_buffer *pvk_fan_buffer(struct pvk_device *device, ui
  * one, each with buffer index 28 pointing at its number in a buffer of the
  * uints 0, 1, ..., maxDrawIndirectCount - 1 (made on first use), so a draw
  * costs one more argument table entry, nothing uploaded. Draws of other
- * commands read 0. */
+ * commands read 0. Indirect command buffer commands (count draws and long
+ * multi-draws) point index 28 there themselves, with the other buffers
+ * their pipeline reads (pvk_icb_take). */
 
 static pvk_MTLGPUAddress pvk_draw_indices(struct pvk_device *device)
 {
@@ -62253,7 +62446,7 @@ static const char pvk_prepass_msl[] =
     "{\n"
     "    if (d >= a.n) return;\n"
     "    uint count = a.has_count != 0u ? min(a.count[0], a.n) : a.n;\n"
-    "    device const uint *src = (device const uint *)(a.records + d * a.stride);\n"
+    "    device const uint *src = (device const uint *)(a.records + ulong(d) * a.stride);\n"
     "    if (a.mode == 0u) {\n"
     "        uint words = a.index_size != 0u ? 5u : 4u;\n"
     "        for (uint k = 0u; k < words; k++) a.out_records[d * words + k] = d < count ? src[k] : 0u;\n"
@@ -62309,7 +62502,7 @@ static const char pvk_prepass_points_msl[] =
     "    }\n"
     "    if (d >= a.n) return;\n"
     "    uint count = a.has_count != 0u ? min(a.count[0], a.n) : a.n;\n"
-    "    device const uint *src = (device const uint *)(a.records + d * a.stride);\n"
+    "    device const uint *src = (device const uint *)(a.records + ulong(d) * a.stride);\n"
     "    device uint *rec = a.out_records + d * 4u, *h = a.headers + d * 8u;\n"
     "    for (uint k = 0u; k < 8u; k++) h[k] = 0u;\n"
     "    if (d >= count) { for (uint k = 0u; k < 4u; k++) rec[k] = 0u; return; }\n"
@@ -62330,21 +62523,137 @@ static const char pvk_prepass_points_msl[] =
     "    rec[0] = 3u * min(tris, 0x55555555u); rec[1] = src[1]; rec[2] = 0u; rec[3] = indexed ? src[4] : src[3];\n"
     "}\n";
 
+/* Draws through an indirect command buffer. Count draws (pvk_pp_icb):
+ * thread d encodes record d as command first + d if d is below the count
+ * (no instances or vertices: a command that does nothing), thread 0 the
+ * range of them to execute. Multi-draws (pvk_pp_icb_compact), whose
+ * records GPU culling may leave mostly empty: threadgroup g encodes those
+ * of records 1024g to 1024g + 1023 that draw something, in order, after
+ * the commands of those before (it counts them again: at most 63 blocks),
+ * and the last group the range of them (a command that does nothing costs
+ * the GPU about 28 ns, M4 Max). Indexed draws read indices within the bound
+ * range, of `elements` (Vulkan's limit without robustBufferAccess2; Metal
+ * could not check a command's index reads). With a table (DrawIndex), a
+ * command sets the buffers it lists for both stages (struct pvk_icb_table)
+ * and index 28 at its DrawIndex. struct pvk_icb_args in MSL; threadgroups
+ * of 1024 threads in SIMD-groups of 32 (Apple GPUs'). */
+static const char pvk_prepass_icb_msl[] =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct pvk_icb_table {\n"
+    "    device uchar *buffers[31]; ulong mask;\n"
+    "};\n"
+    "struct pvk_icb {\n"
+    "    command_buffer icb;\n"
+    "    device const uchar *records; device const uint *count; device const uchar *indices; device uint *range;\n"
+    "    device const pvk_icb_table *table; constant uint *draw_index;\n"
+    "    uint n, first, stride, index_size, elements, prim, has_count, pad;\n"
+    "};\n"
+    /* the vertices (indices from *at) record s draws, 0: nothing */
+    "static uint pvk_icb_vertices(constant pvk_icb &a, device const uint *s, thread uint &at)\n"
+    "{\n"
+    "    if (s[1] == 0u) return 0u;\n"
+    "    if (a.index_size == 0u) return s[0];\n"
+    "    at = min(s[2], a.elements);\n"
+    "    return min(s[0], a.elements - at);\n"
+    "}\n"
+    "static device const uint *pvk_icb_record(constant pvk_icb &a, uint d)\n"
+    "{\n"
+    "    return (device const uint *)(a.records + ulong(d) * a.stride);\n"
+    "}\n"
+    "static void pvk_icb_draw(constant pvk_icb &a, uint i, uint d, device const uint *s, uint n, uint at)\n"
+    "{\n"
+    "    render_command c(a.icb, i);\n"
+    "    primitive_type p = primitive_type(a.prim);\n"
+    "    if (n != 0u && a.table) {\n"
+    "        uint mask = uint(a.table->mask);\n"
+    "        for (uint k = 0u; k < 31u; k++)\n"
+    "            if (((mask >> k) & 1u) != 0u) {\n"
+    "                c.set_vertex_buffer(a.table->buffers[k], k);\n"
+    "                c.set_fragment_buffer(a.table->buffers[k], k);\n"
+    "            }\n"
+    "        c.set_vertex_buffer(a.draw_index + d, 28u);\n"
+    "    }\n"
+    "    if (n == 0u) c.reset();\n"
+    "    else if (a.index_size == 0u) c.draw_primitives(p, s[2], n, s[1], s[3]);\n"
+    "    else if (a.index_size == 2u) c.draw_indexed_primitives(p, n, (device const ushort *)a.indices + at, s[1], s[3], s[4]);\n"
+    "    else c.draw_indexed_primitives(p, n, (device const uint *)a.indices + at, s[1], s[3], s[4]);\n"
+    "}\n"
+    "kernel void pvk_pp_icb(constant pvk_icb &a [[buffer(30)]], uint d [[thread_position_in_grid]])\n"
+    "{\n"
+    "    uint count = a.has_count != 0u ? min(a.count[0], a.n) : a.n, at = 0u;\n"
+    "    if (d == 0u) { a.range[0] = a.first; a.range[1] = count; }\n"
+    "    if (d >= count) return;\n"
+    "    device const uint *s = pvk_icb_record(a, d);\n"
+    "    pvk_icb_draw(a, a.first + d, d, s, pvk_icb_vertices(a, s, at), at);\n"
+    "}\n"
+    "kernel void pvk_pp_icb_compact(constant pvk_icb &a [[buffer(30)]], uint t [[thread_position_in_threadgroup]],\n"
+    "                               uint g [[threadgroup_position_in_grid]], uint groups [[threadgroups_per_grid]],\n"
+    "                               uint sg [[simdgroup_index_in_threadgroup]], uint sgs [[simdgroups_per_threadgroup]],\n"
+    "                               uint lane [[thread_index_in_simdgroup]])\n"
+    "{\n"
+    "    threadgroup uint sums[32];\n"
+    "    uint d, n = 0u, at = 0u, base = 0u, before = 0u, all = 0u, k;\n"
+    "    for (d = t; d < g * 1024u; d += 1024u)\n"
+    "        before += pvk_icb_vertices(a, pvk_icb_record(a, d), at) != 0u ? 1u : 0u;\n"
+    "    before = simd_sum(before);\n"
+    "    if (lane == 0u) sums[sg] = before;\n"
+    "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+    "    for (k = 0u; k < sgs; k++) base += sums[k];\n"
+    "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+    "    d = g * 1024u + t;\n"
+    "    device const uint *s = pvk_icb_record(a, d);\n"
+    "    if (d < a.n) n = pvk_icb_vertices(a, s, at);\n"
+    "    uint x = simd_prefix_exclusive_sum(n != 0u ? 1u : 0u), total = simd_sum(n != 0u ? 1u : 0u);\n"
+    "    if (lane == 0u) sums[sg] = total;\n"
+    "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+    "    before = 0u;\n"
+    "    for (k = 0u; k < sgs; k++) { before += k < sg ? sums[k] : 0u; all += sums[k]; }\n"
+    "    if (n != 0u) pvk_icb_draw(a, a.first + base + before + x, d, s, n, at);\n"
+    "    if (g == groups - 1u && t == 0u) { a.range[0] = a.first; a.range[1] = base + all; }\n"
+    "}\n";
+
 struct pvk_pp_args {
     uint64_t indices, out, records, out_records, count, headers;
     uint32_t n, first, index_size, restart, stride, region, mode, fan_max, has_count, pmode, pad[2];
 };
 
-enum { PVK_PP_WIDEN, PVK_PP_FAN, PVK_PP_RECORDS, PVK_PP_POINTS, PVK_PP_KERNEL_COUNT };
+/* The buffers commands that set their own set (struct pvk_icb_table in
+ * MSL): the argument table's at indices `mask` when the draw is encoded. */
+struct pvk_icb_table {
+    pvk_MTLGPUAddress buffers[31];
+    uint64_t mask;
+};
+
+struct pvk_icb_args {
+    pvk_MTLResourceID icb;
+    uint64_t records, count, indices, range, table, draw_index;
+    uint32_t n, first, stride, index_size, elements, prim, has_count, pad;
+};
+
+enum { PVK_PP_WIDEN, PVK_PP_FAN, PVK_PP_RECORDS, PVK_PP_POINTS, PVK_PP_ICB, PVK_PP_ICB_COMPACT, PVK_PP_KERNEL_COUNT };
 
 static id pvk_compile_compute(struct pvk_device *device, const char *msl, const char *entry, unsigned long max_threads,
                               char *error, size_t error_size);
+static pvk_MTLPrimitiveType pvk_primitive_type(uint32_t topology);
 
 /* What a draw needs preprocessed (struct pvk_pp_result.conv). */
 #define PVK_CV_WIDEN 1u   /* indices widened */
 #define PVK_CV_FAN 2u     /* a triangle fan rewritten */
 #define PVK_CV_RECORDS 4u /* indirect records rewritten */
 #define PVK_CV_POINTS 8u  /* polygon points: records and vertex numbers made (POLYGON POINTS) */
+#define PVK_CV_ICB 16u    /* or the draw's commands encoded in an indirect command buffer (pvk_prepass_later) */
+
+/* Whether count draws and long multi-draws of the pipeline tracked may go
+ * through an indirect command buffer (PVK_CV_ICB), its commands inheriting
+ * the encoder's state (with DrawIndex all but the buffers: they set those
+ * the pipeline reads, and index 28 at their numbers): it has a variant
+ * that supports them (struct pvk_gfx_icb; whether it was made is up to
+ * pvk_prepass_later). */
+static bool pvk_icb_draws(const struct pvk_draw_track *t)
+{
+    return t->gfx && t->gfx->icb;
+}
 
 static uint32_t pvk_draw_conv(const struct pvk_draw_track *t, const struct pvk_cmd *c)
 {
@@ -62370,7 +62679,10 @@ static uint32_t pvk_draw_conv(const struct pvk_draw_track *t, const struct pvk_c
             return 0;
         if (fan)
             return PVK_CV_RECORDS | PVK_CV_FAN;
-        return (d->count_address ? PVK_CV_RECORDS : 0) | (d->indexed && widen ? PVK_CV_WIDEN : 0);
+        if (d->count_address || d->draw_count >= PVK_ICB_MIN_DRAWS)
+            return (d->count_address ? PVK_CV_RECORDS : 0) | (pvk_icb_draws(t) ? PVK_CV_ICB : 0) |
+                   (d->indexed && widen ? PVK_CV_WIDEN : 0);
+        return d->indexed && widen ? PVK_CV_WIDEN : 0;
     }
     return 0;
 }
@@ -62383,14 +62695,18 @@ static uint32_t pvk_index_size(uint32_t type)
 static id pvk_prepass_pipeline(struct pvk_device *device, unsigned kernel)
 {
     static const char *const names[PVK_PP_KERNEL_COUNT] = { "pvk_pp_widen", "pvk_pp_fan", "pvk_pp_records",
-                                                            "pvk_pp_points" };
+                                                            "pvk_pp_points", "pvk_pp_icb", "pvk_pp_icb_compact" };
     static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER; /* (pvk_device_warm may hold it while compiling) */
     id pso;
     pthread_mutex_lock(&lock);
     if (!device->prepass_pipelines[kernel]) {
         char error[256];
-        device->prepass_pipelines[kernel] =
-            pvk_compile_compute(device, kernel == PVK_PP_POINTS ? pvk_prepass_points_msl : pvk_prepass_msl, names[kernel], 64, error, sizeof(error));
+        const char *msl = kernel == PVK_PP_POINTS                             ? pvk_prepass_points_msl
+                          : kernel == PVK_PP_ICB || kernel == PVK_PP_ICB_COMPACT ? pvk_prepass_icb_msl
+                                                                                  : pvk_prepass_msl;
+        device->prepass_pipelines[kernel] = pvk_compile_compute(device, msl, names[kernel],
+                                                                kernel == PVK_PP_ICB_COMPACT ? 1024 : 64, error,
+                                                                sizeof(error));
         if (!device->prepass_pipelines[kernel])
             pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
                      "internal draw preprocessing kernel %s: %s", names[kernel], error);
@@ -62428,8 +62744,10 @@ static const struct pvk_pp_result *pvk_pp_pop(struct pvk_encoder *e, uint32_t co
     return NULL;
 }
 
-/* Runs a preprocessing kernel over `threads` threads. */
-static void pvk_prepass_dispatch(struct pvk_encoder *e, unsigned kernel, const struct pvk_pp_args *args, uint32_t threads)
+/* Runs a preprocessing kernel over `threads` threads (threadgroups of 64,
+ * of 1024 for PVK_PP_ICB_COMPACT), its arguments (struct pvk_pp_args, or
+ * pvk_icb_args) `bytes` long. */
+static void pvk_prepass_dispatch(struct pvk_encoder *e, unsigned kernel, const void *args, size_t bytes, uint32_t threads)
 {
     id pso = pvk_prepass_pipeline(e->device, kernel), enc;
     pvk_MTLGPUAddress address;
@@ -62439,15 +62757,15 @@ static void pvk_prepass_dispatch(struct pvk_encoder *e, unsigned kernel, const s
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
         return;
     }
-    if (!threads || !(enc = pvk_encoder_get(e)) || !(p = pvk_upload(e, sizeof(*args), 16, NULL, NULL, &address)))
+    if (!threads || !(enc = pvk_encoder_get(e)) || !(p = pvk_upload(e, bytes, 16, NULL, NULL, &address)))
         return;
-    memcpy(p, args, sizeof(*args));
+    memcpy(p, args, bytes);
     pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
     pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, pso);
-    groups.width = (threads + 63) / 64;
-    groups.height = groups.depth = 1;
-    size.width = 64;
+    size.width = kernel == PVK_PP_ICB_COMPACT ? 1024 : 64;
     size.height = size.depth = 1;
+    groups.width = (threads + size.width - 1) / size.width;
+    groups.height = groups.depth = 1;
     pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(enc, groups, size);
     e->pipeline_dirty = true;
     e->push_bound = 0;
@@ -62461,6 +62779,227 @@ static uint64_t pvk_prepass_memory(struct pvk_encoder *e, uint64_t size)
     if (!size || size > ((uint64_t)1 << 32) || !pvk_upload(e, (size_t)size, 16, NULL, NULL, &address))
         return 0;
     return address;
+}
+
+/* n (at most PVK_ICB_COMMANDS) indirect command buffer commands in a row
+ * for this submission, from *first, of the encoder's lane; NULL when the
+ * queue's chunks would take more than their share of memory, or Metal makes
+ * none (the draw is drawn without). The commands draw or do nothing and
+ * inherit everything else from the render encoder (pvk_icb_draws), but for
+ * bound (pipelines reading DrawIndex) its buffers: they set their own, at
+ * indices up to 30. (Lanes encoding at once may each make a chunk the
+ * share then exceeds.) */
+static struct pvk_icb_chunk *pvk_icb_take(struct pvk_encoder *e, bool bound, uint32_t n, uint32_t *first)
+{
+    struct pvk_queue *q = e->queue;
+    struct pvk_icb_pool *pool = &e->lane->icbs[bound];
+    struct pvk_device *device = e->device;
+    struct pvk_icb_chunk *c = pool->icb, **at;
+    if (!c || c->used + n > c->capacity) {
+        uint64_t budget = device->physical_device->memory_properties.memoryHeaps[0].size / 32, need;
+        uint32_t capacity = pool->grow > PVK_ICB_MIN_COMMANDS ? pool->grow : PVK_ICB_MIN_COMMANDS;
+        if (c) { /* full */
+            c->next = NULL;
+            if (pool->retired_tail)
+                pool->retired_tail->next = c;
+            else
+                pool->retired = c;
+            pool->retired_tail = c;
+        }
+        pool->icb = c = NULL;
+        for (at = &pool->free; *at && (*at)->capacity < n; at = &(*at)->next)
+            ;
+        if ((c = *at)) {
+            *at = c->next;
+        } else {
+            id desc;
+            while (capacity < n)
+                capacity *= 2;
+            if (budget > PVK_ICB_BYTES)
+                budget = PVK_ICB_BYTES;
+            /* (a chunk takes about 700 or 1200 bytes a command; the free ones are too small: let them go) */
+            need = (uint64_t)capacity * (bound ? 1200 : 700);
+            if (__atomic_load_n(&q->icb_bytes, __ATOMIC_RELAXED) + need > budget) {
+                __atomic_sub_fetch(&q->icb_bytes, pvk_icb_chunks_free(device, pool, pool->free), __ATOMIC_RELAXED);
+                pool->free = NULL;
+                if (__atomic_load_n(&q->icb_bytes, __ATOMIC_RELAXED) + need > budget)
+                    return NULL;
+            }
+            if (!(c = pvk_alloc(pvk_device_alloc(device), sizeof(*c), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)))
+                return NULL;
+            c->icb = NULL;
+            if ((desc = pvk_MTLIndirectCommandBufferDescriptor_new())) {
+                pvk_MTLIndirectCommandBufferDescriptor_setCommandTypes(
+                    desc, PVK_MTLIndirectCommandTypeDraw | PVK_MTLIndirectCommandTypeDrawIndexed);
+                pvk_MTLIndirectCommandBufferDescriptor_setInheritPipelineState(desc, true);
+                pvk_MTLIndirectCommandBufferDescriptor_setInheritBuffers(desc, !bound);
+                if (bound) {
+                    pvk_MTLIndirectCommandBufferDescriptor_setMaxVertexBufferBindCount(desc, 31);
+                    pvk_MTLIndirectCommandBufferDescriptor_setMaxFragmentBufferBindCount(desc, 31);
+                }
+                pvk_MTLIndirectCommandBufferDescriptor_setSupportColorAttachmentMapping(desc, true);
+                c->icb = pvk_MTLDevice_newIndirectCommandBufferWithDescriptor_maxCommandCount_options(
+                    device->physical_device->mtl_device, desc, capacity,
+                    PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked);
+                pvk_release(desc);
+            }
+            if (!c->icb) {
+                pvk_free(pvk_device_alloc(device), c);
+                return NULL;
+            }
+            c->capacity = capacity;
+            c->bytes = pvk_MTLResource_allocatedSize(c->icb);
+            pool->bytes += c->bytes;
+            __atomic_add_fetch(&q->icb_bytes, c->bytes, __ATOMIC_RELAXED);
+            pool->grow = capacity < PVK_ICB_COMMANDS ? 2 * capacity : PVK_ICB_COMMANDS;
+            c->resource = pvk_MTLIndirectCommandBuffer_gpuResourceID(c->icb);
+            pvk_device_make_resident(device, c->icb);
+        }
+        c->next = NULL;
+        c->used = 0;
+        pool->icb = c;
+    }
+    *first = c->used;
+    c->used += n;
+    c->serial = e->serial;
+    c->taken = pvk_clock_ns(CLOCK_UPTIME_RAW);
+    return c;
+}
+
+/* An indirect draw's preprocessing (pvk_prepass_draw) into res: with icb
+ * (PVK_CV_ICB, the pass allowing it: pvk_prepass_later), its commands
+ * encoded in an indirect command buffer if its pipeline's variant was made
+ * and the queue's memory lets it (pvk_icb_take); else what res->conv asks. */
+static void pvk_prepass_indirect(struct pvk_encoder *e, const struct pvk_draw_track *t,
+                                 const struct pvk_cmd_draw_indirect *d, struct pvk_pp_result *res, bool icb)
+{
+    uint32_t conv = res->conv, isize = pvk_index_size(t->index_type);
+    uint64_t elements = t->index_size / isize;
+    struct pvk_pp_args a;
+    id pso;
+    memset(&a, 0, sizeof(a));
+    a.indices = t->index_address;
+    a.index_size = isize;
+    a.restart = t->restart;
+    if (conv & PVK_CV_WIDEN) { /* the whole bound range */
+        uint32_t osize = isize == 1 ? 2 : 4;
+        if (!elements || elements > UINT32_MAX || !(a.out = pvk_prepass_memory(e, elements * osize)))
+            return;
+        a.n = (uint32_t)elements;
+        pvk_prepass_dispatch(e, PVK_PP_WIDEN, &a, sizeof(a), a.n);
+        res->indices = a.out;
+        res->indices_size = elements * osize;
+        res->index_type = isize == 1 ? PVK_MTLIndexTypeUInt16 : PVK_MTLIndexTypeUInt32;
+        a.out = 0;
+    }
+    if (icb && (pso = pvk_gfx_icb_ready(t->gfx))) {
+        struct pvk_icb_args ia;
+        struct pvk_icb_chunk *chunk;
+        memset(&ia, 0, sizeof(ia));
+        ia.n = d->draw_count;
+        if (ia.n > e->device->physical_device->properties.limits.maxDrawIndirectCount)
+            ia.n = e->device->physical_device->properties.limits.maxDrawIndirectCount;
+        if (d->indexed && (conv & PVK_CV_WIDEN)) {
+            ia.indices = res->indices;
+            ia.index_size = res->index_type == PVK_MTLIndexTypeUInt16 ? 2 : 4;
+            elements = res->indices_size / ia.index_size;
+        } else if (d->indexed) {
+            ia.indices = t->index_address;
+            ia.index_size = isize;
+        }
+        ia.elements = elements > UINT32_MAX ? UINT32_MAX : (uint32_t)elements;
+        if (!ia.n || (d->indexed && !ia.indices))
+            return;
+        /* (else, or without commands to take, drawn as below) */
+        if ((chunk = pvk_icb_take(e, t->gfx->draw_index, ia.n, &ia.first))) {
+            if (!(ia.range = pvk_prepass_memory(e, sizeof(pvk_MTLIndirectCommandBufferExecutionRange))))
+                return;
+            if (t->gfx->draw_index) { /* (the table is written when the draw is encoded, before the GPU runs this) */
+                if (!(res->table = pvk_upload(e, sizeof(*res->table), 16, NULL, NULL, &ia.table)) ||
+                    !(ia.draw_index = pvk_draw_indices(e->device))) {
+                    e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+                    return;
+                }
+                memset(res->table, 0, sizeof(*res->table));
+            }
+            ia.icb = chunk->resource;
+            ia.records = d->address;
+            ia.count = d->count_address;
+            ia.has_count = d->count_address != 0;
+            ia.stride = d->stride;
+            ia.prim = pvk_primitive_type(t->topology);
+            pvk_prepass_dispatch(e, d->count_address ? PVK_PP_ICB : PVK_PP_ICB_COMPACT, &ia, sizeof(ia), ia.n);
+            res->icb = chunk->icb;
+            res->range = ia.range;
+            res->pso = pso;
+            return;
+        }
+    }
+    if (!(conv & PVK_CV_RECORDS))
+        return;
+    a.records = d->address;
+    a.stride = d->stride;
+    a.n = d->draw_count; /* the encoder draws at most maxDrawIndirectCount */
+    if (a.n > e->device->physical_device->properties.limits.maxDrawIndirectCount)
+        a.n = e->device->physical_device->properties.limits.maxDrawIndirectCount;
+    a.has_count = d->count_address != 0;
+    a.count = d->count_address;
+    a.index_size = d->indexed ? isize : 0;
+    if ((conv & PVK_CV_FAN) && !d->indexed) {
+        const struct pvk_fan_buffer *f = pvk_fan_buffer(e->device, PVK_FAN_MIN_VERTICES);
+        if (!f) {
+            e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+            return;
+        }
+        a.mode = 1;
+        a.fan_max = f->vertices;
+        res->indices = f->address;
+        res->indices_size = (uint64_t)(f->vertices - 2) * 12;
+        res->index_type = PVK_MTLIndexTypeUInt32;
+        res->record_stride = 20;
+    } else if (conv & PVK_CV_FAN) {
+        /* 3 * (elements - 2) indices per draw at most, 64 MB in all */
+        uint64_t region = elements >= 3 ? 3 * (elements - 2) : 3;
+        if (region * 4 * a.n > (64u << 20))
+            region = (64u << 20) / 4 / a.n / 3 * 3;
+        if (!region || !(a.out = pvk_prepass_memory(e, region * 4 * a.n)))
+            return;
+        a.mode = 2;
+        a.region = (uint32_t)region;
+        res->indices = a.out;
+        res->indices_size = region * 4 * a.n;
+        res->index_type = PVK_MTLIndexTypeUInt32;
+        res->record_stride = 20;
+    } else {
+        res->record_stride = d->indexed ? 20 : 16;
+    }
+    if (!(a.out_records = pvk_prepass_memory(e, (uint64_t)res->record_stride * a.n)))
+        return;
+    pvk_prepass_dispatch(e, PVK_PP_RECORDS, &a, sizeof(a), a.n);
+    res->records = a.out_records;
+}
+
+/* Leaves an indirect draw's preprocessing (the result just pushed) for the
+ * end of the scan (pvk_prepass_later). */
+static void pvk_prepass_defer(struct pvk_encoder *e, const struct pvk_draw_track *t, const struct pvk_cmd_draw_indirect *d)
+{
+    if (e->later_count == e->later_capacity) {
+        uint32_t n = e->later_capacity ? e->later_capacity * 2 : 8;
+        struct pvk_pp_later *l = pvk_alloc(pvk_device_alloc(e->device), sizeof(*l) * n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+        if (!l) {
+            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+            return;
+        }
+        if (e->later_count)
+            memcpy(l, e->later, sizeof(*l) * e->later_count);
+        pvk_free(pvk_device_alloc(e->device), e->later);
+        e->later = l;
+        e->later_capacity = n;
+    }
+    e->later[e->later_count].result = e->pp_count - 1;
+    e->later[e->later_count].cmd = d;
+    e->later[e->later_count].track = *t;
+    e->later_count++;
 }
 
 /* Preprocesses one draw (see "Graphics" above); the result goes to e->pp. */
@@ -62485,7 +63024,7 @@ static void pvk_prepass_draw(struct pvk_encoder *e, const struct pvk_draw_track 
                 return;
             a.n = d->index_count;
             a.first = d->first_index;
-            pvk_prepass_dispatch(e, PVK_PP_POINTS, &a, 1);
+            pvk_prepass_dispatch(e, PVK_PP_POINTS, &a, sizeof(a), 1);
             res->points = a.out;
             res->index_count = (uint32_t)total;
         } else {
@@ -62513,7 +63052,7 @@ static void pvk_prepass_draw(struct pvk_encoder *e, const struct pvk_draw_track 
             }
             if (!(a.out_records = pvk_prepass_memory(e, 16ull * a.n)) || !(a.headers = pvk_prepass_memory(e, 32ull * a.n)))
                 return;
-            pvk_prepass_dispatch(e, PVK_PP_POINTS, &a, a.n);
+            pvk_prepass_dispatch(e, PVK_PP_POINTS, &a, sizeof(a), a.n);
             res->records = a.out_records;
             res->record_stride = 16;
             res->points = a.headers;
@@ -62528,7 +63067,7 @@ static void pvk_prepass_draw(struct pvk_encoder *e, const struct pvk_draw_track 
                 return;
             a.n = d->index_count;
             a.first = d->first_index;
-            pvk_prepass_dispatch(e, PVK_PP_FAN, &a, 1);
+            pvk_prepass_dispatch(e, PVK_PP_FAN, &a, sizeof(a), 1);
             res->index_count = (uint32_t)total;
             res->index_type = PVK_MTLIndexTypeUInt32;
             res->indices_size = total * 4;
@@ -62538,7 +63077,7 @@ static void pvk_prepass_draw(struct pvk_encoder *e, const struct pvk_draw_track 
                 return;
             a.indices = t->index_address + (uint64_t)d->first_index * isize;
             a.n = d->index_count;
-            pvk_prepass_dispatch(e, PVK_PP_WIDEN, &a, a.n);
+            pvk_prepass_dispatch(e, PVK_PP_WIDEN, &a, sizeof(a), a.n);
             res->index_count = d->index_count;
             res->index_type = isize == 1 ? PVK_MTLIndexTypeUInt16 : PVK_MTLIndexTypeUInt32;
             res->indices_size = (uint64_t)d->index_count * osize;
@@ -62546,63 +63085,10 @@ static void pvk_prepass_draw(struct pvk_encoder *e, const struct pvk_draw_track 
         res->indices = a.out;
         return;
     }
-    {
-        const struct pvk_cmd_draw_indirect *d = (const struct pvk_cmd_draw_indirect *)c;
-        uint64_t elements = t->index_size / isize;
-        if (conv & PVK_CV_WIDEN) { /* the whole bound range */
-            uint32_t osize = isize == 1 ? 2 : 4;
-            if (!elements || elements > UINT32_MAX || !(a.out = pvk_prepass_memory(e, elements * osize)))
-                return;
-            a.n = (uint32_t)elements;
-            pvk_prepass_dispatch(e, PVK_PP_WIDEN, &a, a.n);
-            res->indices = a.out;
-            res->indices_size = elements * osize;
-            res->index_type = isize == 1 ? PVK_MTLIndexTypeUInt16 : PVK_MTLIndexTypeUInt32;
-            a.out = 0;
-        }
-        if (!(conv & PVK_CV_RECORDS))
-            return;
-        a.records = d->address;
-        a.stride = d->stride;
-        a.n = d->draw_count; /* the encoder draws at most maxDrawIndirectCount */
-        if (a.n > e->device->physical_device->properties.limits.maxDrawIndirectCount)
-            a.n = e->device->physical_device->properties.limits.maxDrawIndirectCount;
-        a.has_count = d->count_address != 0;
-        a.count = d->count_address;
-        a.index_size = d->indexed ? isize : 0;
-        if ((conv & PVK_CV_FAN) && !d->indexed) {
-            const struct pvk_fan_buffer *f = pvk_fan_buffer(e->device, PVK_FAN_MIN_VERTICES);
-            if (!f) {
-                e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
-                return;
-            }
-            a.mode = 1;
-            a.fan_max = f->vertices;
-            res->indices = f->address;
-            res->indices_size = (uint64_t)(f->vertices - 2) * 12;
-            res->index_type = PVK_MTLIndexTypeUInt32;
-            res->record_stride = 20;
-        } else if (conv & PVK_CV_FAN) {
-            /* 3 * (elements - 2) indices per draw at most, 64 MB in all */
-            uint64_t region = elements >= 3 ? 3 * (elements - 2) : 3;
-            if (region * 4 * a.n > (64u << 20))
-                region = (64u << 20) / 4 / a.n / 3 * 3;
-            if (!region || !(a.out = pvk_prepass_memory(e, region * 4 * a.n)))
-                return;
-            a.mode = 2;
-            a.region = (uint32_t)region;
-            res->indices = a.out;
-            res->indices_size = region * 4 * a.n;
-            res->index_type = PVK_MTLIndexTypeUInt32;
-            res->record_stride = 20;
-        } else {
-            res->record_stride = d->indexed ? 20 : 16;
-        }
-        if (!(a.out_records = pvk_prepass_memory(e, (uint64_t)res->record_stride * a.n)))
-            return;
-        pvk_prepass_dispatch(e, PVK_PP_RECORDS, &a, a.n);
-        res->records = a.out_records;
-    }
+    if (conv & PVK_CV_ICB) /* once the scan has seen the whole pass (pvk_prepass_later) */
+        pvk_prepass_defer(e, t, (const struct pvk_cmd_draw_indirect *)c);
+    else
+        pvk_prepass_indirect(e, t, (const struct pvk_cmd_draw_indirect *)c, res, false);
 }
 
 /* The scan's state tracking (struct pvk_draw_track). */
@@ -64479,6 +64965,24 @@ static bool pvk_pass_scanned(const struct pvk_encoder *e, const struct pvk_cmd_b
            pvk_scan_needed(scan);
 }
 
+/* The draws the scan of the render pass instance that BEGIN_PASS packet c
+ * begins left for later (PVK_CV_ICB), with t what it found: their commands
+ * may go in indirect command buffers (pvk_prepass_indirect), but for a pass
+ * that may draw with other Metal pipelines than theirs and their variants
+ * (struct pvk_gfx_icb), which Metal could not make support them: variants
+ * for depth/stencil copies (they would add attachments too), for colors
+ * split for tile memory (pvk_render_fits) or read from textures (t->tex:
+ * should Metal refuse the pass whole, pvk_encode_begin_pass), SNORM ones
+ * (pvk_render_rebind). */
+static void pvk_prepass_later(struct pvk_encoder *e, const struct pvk_cmd_begin_pass *c, const struct pvk_draw_track *t)
+{
+    uint32_t copies = (c->depth.texture ? PVK_HIDDEN_DEPTH : 0u) | (c->stencil.texture ? PVK_HIDDEN_STENCIL : 0u), i;
+    bool icb = !((c->hidden | t->hidden) & copies) && !t->int_colors && !t->tex && pvk_render_fits(c, ~0u);
+    for (i = 0; i < e->later_count && e->result == VK_SUCCESS; i++)
+        pvk_prepass_indirect(e, &e->later[i].track, e->later[i].cmd, &e->pp[e->later[i].result], icb);
+    e->later_count = 0;
+}
+
 static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_begin_pass *c)
 {
     struct pvk_render *r = &e->render;
@@ -64510,8 +65014,10 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     track.mapped = false;
     track.hidden = r->pipeline && r->pipeline->gfx ? r->pipeline->gfx->reads : 0; /* the depth/stencil copies needed */
     track.bounds = r->dyn.depth_bounds_test != 0;
-    if (pvk_pass_scanned(e, c, &track))
+    if (pvk_pass_scanned(e, c, &track)) {
         pvk_prepass_scan(e, &track);
+        pvk_prepass_later(e, c, &track);
+    }
     pvk_encoder_end(e);
     /* A render encoder that may suspend writes no timestamps (PARALLEL
      * ENCODING): an encoder of their own does, before the pass. Metal starts
@@ -64911,6 +65417,8 @@ static bool pvk_render_flush(struct pvk_encoder *e)
         if (gp && tex)
             pvk_render_tex_inputs(e, p);
     }
+    if (r->icb_pso && pso == p->mtl_pipeline) /* (its indirect command buffer variant) */
+        pso = r->icb_pso;
     if (pso != r->pso_set) { /* (pipelines may share a state, section 17) */
         pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
         r->pso_set = pso;
@@ -64942,6 +65450,7 @@ static bool pvk_render_flush(struct pvk_encoder *e)
             pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_DEPTH_BOUNDS_BUFFER);
             r->bounds_set = b;
             r->bounds_valid = true;
+            r->bounds_address = address;
         }
     }
     if ((r->hidden & PVK_HIDDEN_STENCIL) && r->stencil && d->stencil_test &&
@@ -65111,6 +65620,7 @@ static bool pvk_render_flush(struct pvk_encoder *e)
                 return false;
             memcpy(up, t, sizeof(t[0]) * n);
             pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_VERTEX_TABLE_BUFFER);
+            r->vertex_address = address;
             memcpy(sent->vertex, t, sizeof(t[0]) * n);
             sent->vertex_count = n;
             sent->valid |= PVK_RD_VERTEX;
@@ -65134,6 +65644,7 @@ static bool pvk_render_flush(struct pvk_encoder *e)
         memcpy(data, e->push, need);
         pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
         e->push_bound = need;
+        e->push_address = address;
         e->push_dirty = false;
     }
     if (g->draw_index && !pvk_render_draw_index(e, 0)) /* multi-draws set theirs per draw */
@@ -65328,12 +65839,50 @@ static void pvk_encode_draw_indirect(struct pvk_encoder *e, const struct pvk_cmd
     uint64_t records = c->address, stride = c->stride, indices = t.index_address, indices_size = t.index_size;
     uint32_t type = t.index_type == VK_INDEX_TYPE_UINT16 ? PVK_MTLIndexTypeUInt16 : PVK_MTLIndexTypeUInt32;
     uint32_t n = c->draw_count, max = e->device->physical_device->properties.limits.maxDrawIndirectCount, d;
-    bool indexed = c->indexed != 0;
+    bool indexed = c->indexed != 0, flushed;
 
     if (conv && !res)
         return;
-    if (!pvk_render_flush(e) || pvk_render_discards(r))
+    r->icb_pso = res && res->icb ? res->pso : NULL;
+    flushed = pvk_render_flush(e);
+    r->icb_pso = NULL;
+    if (!flushed || pvk_render_discards(r))
         return;
+    if (res && res->icb) { /* the commands its preprocessing encoded, inheriting the pipeline (pvk_prepass_later) */
+        if (res->table) { /* the buffers the pipeline reads, bound by pvk_render_flush */
+            const struct pvk_pipeline *p = r->pipeline;
+            struct pvk_icb_table *tab = res->table;
+            uint32_t left;
+            tab->mask = p->set_mask & ((1u << PVK_MAX_BOUND_SETS) - 1);
+            for (left = (uint32_t)tab->mask; left; left &= left - 1)
+                tab->buffers[__builtin_ctz(left)] = e->sets_bound[__builtin_ctz(left)];
+            if (p->push_size) {
+                tab->buffers[PVK_MSL_PUSH_CONSTANT_BUFFER] = e->push_address;
+                tab->mask |= 1ull << PVK_MSL_PUSH_CONSTANT_BUFFER;
+            }
+            if (p->gfx->vertex_bindings) {
+                tab->buffers[PVK_MSL_VERTEX_TABLE_BUFFER] = r->vertex_address;
+                tab->mask |= 1ull << PVK_MSL_VERTEX_TABLE_BUFFER;
+            }
+            if (r->bounds_valid) {
+                tab->buffers[PVK_MSL_DEPTH_BOUNDS_BUFFER] = r->bounds_address;
+                tab->mask |= 1ull << PVK_MSL_DEPTH_BOUNDS_BUFFER;
+            }
+        }
+        if (r->pso_set == res->pso) {
+            pvk_MTL4RenderCommandEncoder_executeCommandsInBuffer_indirectBuffer(r->enc, res->icb, res->range);
+        } else { /* (another Metal pipeline, which the commands could not inherit: pvk_prepass_later missed one) */
+            static int warned;
+            if (!warned) {
+                warned = 1;
+                pvk_logd(e->device, PVK_LOG_WARN, "PlasmaVK-internal-indirect-command-buffer", VK_OBJECT_TYPE_PIPELINE,
+                         (uint64_t)(uintptr_t)r->pipeline,
+                         "a count draw or long multi-draw is not drawn: its pass draws its pipeline with another "
+                         "Metal pipeline than its indirect command buffer's commands could inherit");
+            }
+        }
+        return;
+    }
     if (res && res->records) {
         records = res->records;
         stride = res->record_stride;
@@ -66391,6 +66940,7 @@ static void pvk_job_run(struct pvk_job *j, struct pvk_lane *lane, const VkSubmit
             e.result = VK_ERROR_OUT_OF_HOST_MEMORY;
     }
     pvk_free(pvk_device_alloc(device), e.pp);
+    pvk_free(pvk_device_alloc(device), e.later);
     pvk_free(pvk_device_alloc(device), e.pending);
     j->result = e.result;
     objc_autoreleasePoolPop(pool);
@@ -66723,6 +67273,7 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
     pvk_labels_batch_end(&e);
     pvk_MTL4CommandBuffer_endCommandBuffer(s->cb);
     pvk_free(pvk_device_alloc(e.device), e.pp);
+    pvk_free(pvk_device_alloc(e.device), e.later);
     pvk_free(pvk_device_alloc(e.device), e.pending);
     return e.result;
 }
@@ -68706,9 +69257,10 @@ static id pvk_library_get(struct pvk_device *device, const char *msl, bool invar
 /* The libraries of a graphics pipeline's two stages (pvk_library_get;
  * fs_msl NULL: one), compiled side by side when neither is in the cache:
  * a compile takes milliseconds, and Metal runs several at once. false
- * with a message in error[] (and nothing in *vs_lib, *fs_lib). */
+ * with a message in error[] (and nothing in *vs_lib, *fs_lib). keys (NULL:
+ * not wanted) gets their keys in the cache (pvk_library_find). */
 static bool pvk_library_get2(struct pvk_device *device, const char *vs_msl, bool invariant, const char *fs_msl,
-                             id *vs_lib, id *fs_lib, char *error, size_t error_size)
+                             id *vs_lib, id *fs_lib, struct pvk_key *keys, char *error, size_t error_size)
 {
     size_t vn = strlen(vs_msl), fn = fs_msl ? strlen(fs_msl) : 0;
     struct pvk_key vk = pvk_library_key(vs_msl, vn, invariant), fk = vk;
@@ -68732,8 +69284,13 @@ static bool pvk_library_get2(struct pvk_device *device, const char *vs_msl, bool
     } else if (fs_msl && !*fs_lib && *vs_lib && (*fs_lib = pvk_msl_library(device, fs_msl, false, error, error_size))) {
         *fs_lib = pvk_library_keep(device, &fk, fn, *fs_lib);
     }
-    if (*vs_lib && (*fs_lib || !fs_msl))
+    if (*vs_lib && (*fs_lib || !fs_msl)) {
+        if (keys) {
+            keys[0] = vk;
+            keys[1] = fk;
+        }
         return true;
+    }
     pvk_release(*vs_lib);
     pvk_release(*fs_lib);
     *vs_lib = *fs_lib = NULL;
@@ -68748,6 +69305,19 @@ static bool pvk_msl_function_constants(const char *msl)
     return msl && strstr(msl, "[[function_constant(") != NULL;
 }
 
+/* The bits map entry i of a specialization sets (pvk_spec_constant_values);
+ * false for one out of range. */
+static bool pvk_spec_entry_bits(const VkSpecializationInfo *spec, uint32_t i, uint32_t *bits)
+{
+    const VkSpecializationMapEntry *e = &spec->pMapEntries[i];
+    uint64_t v = 0;
+    if (e->constantID > 0xffffu || e->size > 8 || e->offset > spec->dataSize || e->size > spec->dataSize - e->offset)
+        return false;
+    memcpy(&v, (const char *)spec->pData + e->offset, e->size); /* little-endian */
+    *bits = (uint32_t)v;
+    return true;
+}
+
 /* The function constant values of a stage's specialization (retained), as
  * section 13 declares function constants: each map entry's bits as the
  * uint at index SpecId (a SpecId's first entry, as translation takes it;
@@ -68755,21 +69325,34 @@ static bool pvk_msl_function_constants(const char *msl)
 static id pvk_spec_constant_values(const VkSpecializationInfo *spec)
 {
     id values;
-    uint32_t i;
+    uint32_t i, bits;
     if (!spec || !spec->mapEntryCount || !spec->pMapEntries || !spec->pData)
         return NULL;
     values = pvk_MTLFunctionConstantValues_new();
-    for (i = spec->mapEntryCount; values && i-- > 0;) { /* (the first entry is set last) */
-        const VkSpecializationMapEntry *e = &spec->pMapEntries[i];
-        uint64_t v = 0;
-        uint32_t bits;
-        if (e->constantID > 0xffffu || e->size > 8 || e->offset > spec->dataSize || e->size > spec->dataSize - e->offset)
-            continue;
-        memcpy(&v, (const char *)spec->pData + e->offset, e->size); /* little-endian */
-        bits = (uint32_t)v;
-        pvk_MTLFunctionConstantValues_setConstantValue_type_atIndex(values, &bits, PVK_MTLDataTypeUInt, e->constantID);
-    }
+    for (i = spec->mapEntryCount; values && i-- > 0;) /* (the first entry is set last) */
+        if (pvk_spec_entry_bits(spec, i, &bits))
+            pvk_MTLFunctionConstantValues_setConstantValue_type_atIndex(values, &bits, PVK_MTLDataTypeUInt,
+                                                                       spec->pMapEntries[i].constantID);
     return values;
+}
+
+/* The values pvk_spec_constant_values sets, as (SpecId, bits) pairs in its
+ * order, into pairs (NULL: only counted), for values made once the
+ * specialization is gone (struct pvk_gfx_icb). Returns their count. */
+static uint32_t pvk_spec_constant_pairs(const VkSpecializationInfo *spec, uint32_t *pairs)
+{
+    uint32_t i, n = 0, bits;
+    if (!spec || !spec->mapEntryCount || !spec->pMapEntries || !spec->pData)
+        return 0;
+    for (i = spec->mapEntryCount; i-- > 0;)
+        if (pvk_spec_entry_bits(spec, i, &bits)) {
+            if (pairs) {
+                pairs[2 * n] = spec->pMapEntries[i].constantID;
+                pairs[2 * n + 1] = bits;
+            }
+            n++;
+        }
+    return n;
 }
 
 /* The function constant values a function of msl is specialized with
@@ -69620,6 +70203,17 @@ struct pvk_cache_info {
 #define PVK_GFX_FETCHES 0x8u       /* ... color attachments (framebuffer fetch) */
 #define PVK_GFX_OUTPUTS 0x10u      /* workgroup[1]: the color locations it writes, workgroup[2]: the colors it fetches */
 
+/* The libraries a graphics pipeline's Metal pipeline was made of
+ * (pvk_gfx_compile), which its indirect command buffer variant is made of
+ * too (struct pvk_gfx_icb): their keys in the shader cache
+ * (pvk_library_find; 0: unknown), and whether their functions were
+ * specialized (their MSL declares function constants,
+ * pvk_msl_function_constants). */
+struct pvk_gfx_libs {
+    struct pvk_key keys[2];
+    bool constants[2];
+};
+
 struct pvk_cache_entry {
     struct pvk_cache_entry *next, *prev; /* the cache's entries, newest (implicit: most recently used) first */
     struct pvk_cache_entry *chain;       /* in its bucket */
@@ -69628,6 +70222,7 @@ struct pvk_cache_entry {
     char entry[2][64];
     char *msl[2]; /* NUL-terminated, [1] NULL: one stage; the implicit cache's: NULL */
     id pso;       /* made in this process (retained), else NULL */
+    struct pvk_gfx_libs libs; /* with pso: what it was made of (graphics; in this process only) */
 };
 
 /* The implicit cache: every device's own, which pipelines made without a
@@ -69696,12 +70291,13 @@ static struct pvk_cache_entry *pvk_cache_find_locked(struct pvk_pipeline_cache *
 }
 
 /* What an entry holds. Returns 0: miss, 1: hit, 2: hit with a pipeline
- * state (*pso retained). msl[] points into the entry: entries of
- * application caches never change and live until the cache is destroyed,
- * which cannot happen during a command that uses it (the implicit cache
- * forgets entries, but keeps no MSL). */
+ * state (*pso retained, and in libs, NULL: not wanted, what it was made
+ * of). msl[] points into the entry: entries of application caches never
+ * change and live until the cache is destroyed, which cannot happen during
+ * a command that uses it (the implicit cache forgets entries, but keeps no
+ * MSL). */
 static int pvk_cache_lookup(struct pvk_pipeline_cache *cache, const struct pvk_key *key, struct pvk_cache_info *info,
-                            char entry[2][64], const char *msl[2], id *pso)
+                            char entry[2][64], const char *msl[2], id *pso, struct pvk_gfx_libs *libs)
 {
     struct pvk_cache_entry *e;
     int hit = 0;
@@ -69716,6 +70312,8 @@ static int pvk_cache_lookup(struct pvk_pipeline_cache *cache, const struct pvk_k
         hit = 1;
         if (e->pso) {
             *pso = pvk_retain(e->pso);
+            if (libs)
+                *libs = e->libs;
             hit = 2;
         }
     }
@@ -69784,11 +70382,12 @@ static void pvk_cache_add_locked(struct pvk_pipeline_cache *cache, struct pvk_ca
     }
 }
 
-/* Adds an entry, or the pipeline state to an entry without one. Out of
- * memory: nothing is added (a cache may forget). */
+/* Adds an entry, or the pipeline state (made of libraries libs, NULL:
+ * unknown) to an entry without one. Out of memory: nothing is added (a
+ * cache may forget). */
 static void pvk_cache_insert(struct pvk_pipeline_cache *cache, const struct pvk_key *key, const struct pvk_cache_info *info,
                              const char *entry0, const char *entry1, const char *msl0, size_t len0, const char *msl1,
-                             size_t len1, id pso)
+                             size_t len1, id pso, const struct pvk_gfx_libs *libs)
 {
     struct pvk_cache_entry *e;
     if (!cache)
@@ -69800,8 +70399,11 @@ static void pvk_cache_insert(struct pvk_pipeline_cache *cache, const struct pvk_
     }
     pthread_mutex_lock(&cache->lock);
     if ((e = pvk_cache_find_locked(cache, key))) {
-        if (!e->pso && pso)
+        if (!e->pso && pso) {
             e->pso = pvk_retain(pso);
+            if (libs)
+                e->libs = *libs;
+        }
     } else if ((e = pvk_alloc(pvk_cache_alloc(cache), sizeof(*e), VK_SYSTEM_ALLOCATION_SCOPE_CACHE))) {
         e->key = *key;
         e->info = *info;
@@ -69813,6 +70415,9 @@ static void pvk_cache_insert(struct pvk_pipeline_cache *cache, const struct pvk_
             pvk_cache_entry_free(cache, e);
         } else {
             e->pso = pso ? pvk_retain(pso) : NULL;
+            memset(&e->libs, 0, sizeof(e->libs));
+            if (pso && libs)
+                e->libs = *libs;
             pvk_cache_add_locked(cache, e);
         }
     }
@@ -69875,7 +70480,7 @@ static void pvk_cache_load(struct pvk_pipeline_cache *cache, const unsigned char
         at += (len[1] + 3) & ~3u;
         entry[0][63] = entry[1][63] = 0;
         pvk_cache_insert(cache, &key, &info, entry[0], entry[1], len[0] ? msl[0] : NULL, len[0], len[1] ? msl[1] : NULL,
-                         len[1], NULL);
+                         len[1], NULL, NULL);
     }
 }
 
@@ -70019,7 +70624,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkMergePipelineCaches(VkDevice device, VkPipeline
         pthread_mutex_lock(&src->lock);
         for (e = src->entries; e; e = e->next)
             pvk_cache_insert(dst, &e->key, &e->info, e->entry[0], e->entry[1], e->msl[0],
-                             e->msl[0] ? strlen(e->msl[0]) : 0, e->msl[1], e->msl[1] ? strlen(e->msl[1]) : 0, e->pso);
+                             e->msl[0] ? strlen(e->msl[0]) : 0, e->msl[1], e->msl[1] ? strlen(e->msl[1]) : 0, e->pso,
+                             &e->libs);
         pthread_mutex_unlock(&src->lock);
     }
     return VK_SUCCESS;
@@ -70091,7 +70697,7 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
         pvk_key_add(&key, &options.robust_images, sizeof(options.robust_images));
         if (cache->implicit)
             pvk_key_add_stage_name(&key, stage);
-        hit = pvk_cache_lookup(cache, &key, &ci, entry, msl, &pso);
+        hit = pvk_cache_lookup(cache, &key, &ci, entry, msl, &pso, NULL);
     }
     if (hit != 2 && (flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)) {
         /* only a pipeline state made in this process needs no compiler */
@@ -70151,7 +70757,7 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
         pvk_stage_put(device, translated);
         return VK_ERROR_UNKNOWN;
     }
-    pvk_cache_insert(cache, &key, &ci, name, NULL, source, source ? strlen(source) : 0, NULL, 0, pso);
+    pvk_cache_insert(cache, &key, &ci, name, NULL, source, source ? strlen(source) : 0, NULL, 0, pso, NULL);
     pvk_stage_put(device, translated);
 
     pipeline = pvk_alloc(alloc, sizeof(*pipeline), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -71045,57 +71651,41 @@ static void pvk_stencil_face_state(struct pvk_stencil_face *f, const VkStencilOp
 }
 
 /* A function descriptor of a stage's function in its library (retained),
- * specialized with the stage's function constant values (values:
- * pvk_spec_constant_values; NULL: none) if its MSL declares function
- * constants. */
-static id pvk_stage_function_descriptor(id library, const char *name, const char *msl, id values)
+ * specialized with function constant values `spec` (NULL: not specialized;
+ * pvk_msl_constant_values). */
+static id pvk_stage_function_descriptor(id library, const char *name, id spec)
 {
     id f = pvk_function_descriptor(library, name), s;
-    values = pvk_msl_constant_values(msl, values);
-    if (!f || !values) {
-        pvk_release(values);
+    if (!f || !spec)
         return f;
-    }
     s = pvk_MTL4SpecializedFunctionDescriptor_new();
     if (s) {
         pvk_MTL4SpecializedFunctionDescriptor_setFunctionDescriptor(s, f);
-        pvk_MTL4SpecializedFunctionDescriptor_setConstantValues(s, values);
+        pvk_MTL4SpecializedFunctionDescriptor_setConstantValues(s, spec);
     }
-    pvk_release(values);
     pvk_release(f);
     return s;
 }
 
-/* A render pipeline state from translated shaders (retained), labeled
- * `label` (NULL: none), NULL with a message in error[]. vs_values,
- * fs_values: the stages' function constant values (pvk_spec_constant_values;
- * NULL: none). */
-static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *d, const char *vs_msl,
-                          const char *vs_entry, const char *fs_msl, const char *fs_entry, id vs_values, id fs_values,
-                          bool layered, bool invariant, const char *label, char *error, size_t error_size)
+/* A render pipeline state of libraries (vs_lib's function vs_entry, fs_lib's
+ * fs_entry; fs_lib NULL: no fragment function), the functions specialized
+ * with vs_spec and fs_spec (NULL: not specialized; pvk_msl_constant_values)
+ * (retained), labeled `label` (NULL: none), NULL with a message in error[].
+ * With icb, one that supports indirect command buffers (struct
+ * pvk_gfx_icb). */
+static id pvk_gfx_pipeline_state(struct pvk_device *device, const struct pvk_gfx_desc *d, id vs_lib,
+                                 const char *vs_entry, id vs_spec, id fs_lib, const char *fs_entry, id fs_spec,
+                                 bool layered, bool icb, const char *label, char *error, size_t error_size)
 {
     void *pool = objc_autoreleasePoolPush();
-    id vs_lib = NULL, fs_lib = NULL, desc = NULL, vf = NULL;
-    id ff = NULL, pso = NULL;
+    id desc = pvk_MTL4RenderPipelineDescriptor_new(), vf = NULL, ff = NULL, pso = NULL;
     uint32_t l;
-    char mask_msl[512];
-    if (!fs_msl && d->sample_mask_enable) { /* no fragment shader: a fragment function applying the sample mask */
-        snprintf(mask_msl, sizeof(mask_msl),
-                 "#include <metal_stdlib>\nusing namespace metal;\n\nstruct pvk_mask_out\n{\n"
-                 "    uint mask [[sample_mask]];\n};\n\nfragment pvk_mask_out pvk_sample_mask(uint id [[sample_id]])\n{\n"
-                 "    pvk_mask_out out = { 0x%xu };\n    if ((out.mask & (1u << id)) == 0u)\n        discard_fragment();\n"
-                 "    return out;\n}\n", d->sample_mask);
-        fs_msl = mask_msl;
-        fs_entry = "pvk_sample_mask";
-    }
-    if (pvk_library_get2(device, vs_msl, invariant, fs_msl, &vs_lib, &fs_lib, error, error_size))
-        desc = pvk_MTL4RenderPipelineDescriptor_new();
     if (desc) {
         id atts = pvk_MTL4RenderPipelineDescriptor_colorAttachments(desc);
-        vf = pvk_stage_function_descriptor(vs_lib, vs_entry, vs_msl, vs_values);
+        vf = pvk_stage_function_descriptor(vs_lib, vs_entry, vs_spec);
         pvk_MTL4RenderPipelineDescriptor_setVertexFunctionDescriptor(desc, vf);
         if (fs_lib) {
-            ff = pvk_stage_function_descriptor(fs_lib, fs_entry, fs_msl, fs_values);
+            ff = pvk_stage_function_descriptor(fs_lib, fs_entry, fs_spec);
             pvk_MTL4RenderPipelineDescriptor_setFragmentFunctionDescriptor(desc, ff);
         }
         for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS; l++) {
@@ -71129,16 +71719,63 @@ static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *
             pvk_MTL4RenderPipelineDescriptor_setInputPrimitiveTopology(desc, d->topology_class);
         pvk_MTL4RenderPipelineDescriptor_setColorAttachmentMappingState(
             desc, PVK_MTL4LogicalToPhysicalColorAttachmentMappingStateInherited);
+        if (icb)
+            pvk_MTL4RenderPipelineDescriptor_setSupportIndirectCommandBuffers(
+                desc, PVK_MTL4IndirectCommandBufferSupportStateEnabled);
         if (label)
             pvk_MTL4PipelineDescriptor_setLabel(desc, pvk_NSString_stringWithUTF8String(label));
         pso = pvk_render_pipeline_compile(device, desc, error, error_size);
+    } else {
+        snprintf(error, error_size, "out of memory");
     }
     pvk_release(ff);
     pvk_release(vf);
     pvk_release(desc);
+    objc_autoreleasePoolPop(pool);
+    return pso;
+}
+
+/* A render pipeline state from translated shaders (retained), labeled
+ * `label` (NULL: none), NULL with a message in error[]. vs_values,
+ * fs_values: the stages' function constant values (pvk_spec_constant_values;
+ * NULL: none). libs (NULL: not wanted) gets what it is made of. */
+static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *d, const char *vs_msl,
+                          const char *vs_entry, const char *fs_msl, const char *fs_entry, id vs_values, id fs_values,
+                          bool layered, bool invariant, const char *label, struct pvk_gfx_libs *libs, char *error,
+                          size_t error_size)
+{
+    id vs_lib = NULL, fs_lib = NULL, values[2], spec[2] = { NULL, NULL }, pso = NULL;
+    bool constants[2];
+    uint32_t k;
+    char mask_msl[512];
+    if (!fs_msl && d->sample_mask_enable) { /* no fragment shader: a fragment function applying the sample mask */
+        snprintf(mask_msl, sizeof(mask_msl),
+                 "#include <metal_stdlib>\nusing namespace metal;\n\nstruct pvk_mask_out\n{\n"
+                 "    uint mask [[sample_mask]];\n};\n\nfragment pvk_mask_out pvk_sample_mask(uint id [[sample_id]])\n{\n"
+                 "    pvk_mask_out out = { 0x%xu };\n    if ((out.mask & (1u << id)) == 0u)\n        discard_fragment();\n"
+                 "    return out;\n}\n", d->sample_mask);
+        fs_msl = mask_msl;
+        fs_entry = "pvk_sample_mask";
+    }
+    if (!pvk_library_get2(device, vs_msl, invariant, fs_msl, &vs_lib, &fs_lib, libs ? libs->keys : NULL, error,
+                          error_size))
+        return NULL;
+    /* (as pvk_msl_constant_values, each MSL searched once) */
+    constants[0] = pvk_msl_function_constants(vs_msl);
+    constants[1] = fs_lib && pvk_msl_function_constants(fs_msl);
+    values[0] = vs_values;
+    values[1] = fs_values;
+    for (k = 0; k < 2; k++)
+        if (constants[k])
+            spec[k] = values[k] ? pvk_retain(values[k]) : pvk_MTLFunctionConstantValues_new();
+    pso = pvk_gfx_pipeline_state(device, d, vs_lib, vs_entry, spec[0], fs_lib, fs_entry, spec[1], layered, false, label,
+                                 error, error_size);
+    if (libs)
+        memcpy(libs->constants, constants, sizeof(constants));
+    pvk_release(spec[1]);
+    pvk_release(spec[0]);
     pvk_release(fs_lib);
     pvk_release(vs_lib);
-    objc_autoreleasePoolPop(pool);
     return pso;
 }
 
@@ -71292,7 +71929,7 @@ static id pvk_gfx_group_variant(struct pvk_device *device, struct pvk_pipeline *
         if (tex)
             pso = pvk_gfx_compile(device, &d, g->tex_msl[0], g->tex_entry[0], g->tex_msl[1], g->tex_entry[1],
                                   g->values[0], g->values[1], g->layered, g->invariant,
-                                  "PlasmaVK tile memory texture input variant", error, sizeof(error));
+                                  "PlasmaVK tile memory texture input variant", NULL, error, sizeof(error));
         else { /* (the colors it fetches there read 0: their outputs do not depend on them, fetch_split) */
             uint32_t drop = mask & p->gfx->fetched & 0xffu;
             size_t len = g->msl[1] ? strlen(g->msl[1]) : 0;
@@ -71304,7 +71941,7 @@ static id pvk_gfx_group_variant(struct pvk_device *device, struct pvk_pipeline *
                 memcpy(at, g->msl[1], len + 1);
             pso = pvk_gfx_compile(device, &d, g->msl[0], g->entry[0], fs ? fs : g->msl[1],
                                   g->msl[1] ? g->entry[1] : NULL, g->values[0], g->values[1], g->layered, g->invariant,
-                                  "PlasmaVK tile memory group variant", error, sizeof(error));
+                                  "PlasmaVK tile memory group variant", NULL, error, sizeof(error));
             free(fs);
         }
         if (!pso)
@@ -71400,7 +72037,7 @@ static id pvk_gfx_variant(struct pvk_device *device, struct pvk_pipeline *p, uns
         if (msl)
             v->pso[kind] = pvk_gfx_compile(device, &v->desc, v->vs->res.msl, v->vs->res.entry_point, msl, entry,
                                            v->values[0], v->values[1], v->layered, v->invariant,
-                                           "PlasmaVK depth copy variant", error, sizeof(error));
+                                           "PlasmaVK depth copy variant", NULL, error, sizeof(error));
         if (!v->pso[kind]) {
             v->failed[kind] = true;
             pvk_logd(device, PVK_LOG_ERROR, msl ? "PlasmaVK-shader-compilation" : "PlasmaVK-shader-translation",
@@ -71416,6 +72053,100 @@ static id pvk_gfx_variant(struct pvk_device *device, struct pvk_pipeline *p, uns
     pso = v->pso[kind];
     pthread_mutex_unlock(&v->lock);
     return pso;
+}
+
+/* ---- Indirect command buffer variants ----
+ *
+ * Count draws and long multi-draws may run as commands of an indirect
+ * command buffer, which inherit the render encoder's Metal pipeline
+ * (section 16, "Draw preprocessing"), and a Metal pipeline made without
+ * support for them faults them (the device is lost; macOS 27.2). Made with
+ * it, pipelines took longer to make (Metal's cache warm: 179 -> 201 us a
+ * pipeline, a new output state 15.7 -> 19.5 us; M4 Max), and most never
+ * draw so. So the support is a variant of the pipeline (struct
+ * pvk_gfx_icb), made from the libraries its own Metal pipeline was made of
+ * (the shader cache's, pvk_library_find) when a count draw or long
+ * multi-draw is first recorded with it bound (pvk_gfx_icb_make), and set
+ * for those draws only. Pipelines that could not use it have none:
+ * multiview ones (vertex amplification), polygon points and SNORM rebinds
+ * (their draws are rewritten), fragment functions taking input attachments
+ * from textures (Metal refuses them), and those of devices without
+ * drawIndirectCount and multiDrawIndirect. Those Metal fails to make
+ * (AGX: "second-level indirections not handled in EI uniform ABI", for some
+ * functions reading sample positions), or whose libraries left the cache,
+ * keep those draws on the other path (logged once a pipeline). */
+struct pvk_gfx_icb {
+    pthread_mutex_t lock;
+    struct pvk_gfx_desc desc; /* the pipeline's, with the copies it reads */
+    struct pvk_gfx_libs libs; /* what its Metal pipeline was made of ([1]: nothing without entry[1]) */
+    /* The function constant values of the stages it specializes (libs.constants):
+     * spec_count[k] (SpecId, bits) pairs each (pvk_spec_constant_pairs; in the
+     * pipeline's allocation), from spec_info[k] while the pipeline is made */
+    const uint32_t *spec[2];
+    uint32_t spec_count[2];
+    const VkSpecializationInfo *spec_info[2];
+    char entry[2][64];        /* their functions ("": no fragment function) */
+    bool layered;
+    int state;                /* 0: not made, 1: made (pso), 2: Metal could not make it */
+    id pso;
+};
+
+/* Makes the variant of pipeline p (if it has one, not made yet). No
+ * application allocator calls: this runs while recording. */
+static void pvk_gfx_icb_make(struct pvk_device *device, const struct pvk_pipeline *p)
+{
+    struct pvk_gfx_icb *v = p && p->gfx ? p->gfx->icb : NULL;
+    if (!v || __atomic_load_n(&v->state, __ATOMIC_ACQUIRE))
+        return;
+    pthread_mutex_lock(&v->lock);
+    if (!v->state) {
+        void *pool = objc_autoreleasePoolPush();
+        char error[256];
+        bool fragment = v->entry[1][0] != 0;
+        id vs = pvk_library_find(device, &v->libs.keys[0]);
+        id fs = fragment ? pvk_library_find(device, &v->libs.keys[1]) : NULL;
+        id spec[2] = { NULL, NULL };
+        uint32_t k, i;
+        for (k = 0; k < 2; k++) /* (specialized as the pipeline's own: pvk_msl_constant_values) */
+            if (v->libs.constants[k] && (spec[k] = pvk_MTLFunctionConstantValues_new()))
+                for (i = 0; i < v->spec_count[k]; i++)
+                    pvk_MTLFunctionConstantValues_setConstantValue_type_atIndex(spec[k], &v->spec[k][2 * i + 1],
+                                                                               PVK_MTLDataTypeUInt, v->spec[k][2 * i]);
+        if (vs && (fs || !fragment))
+            v->pso = pvk_gfx_pipeline_state(device, &v->desc, vs, v->entry[0], spec[0], fs,
+                                            fragment ? v->entry[1] : NULL, spec[1], v->layered, true,
+                                            "PlasmaVK indirect command buffer variant", error, sizeof(error));
+        else
+            snprintf(error, sizeof(error), "its libraries are no longer in the shader cache");
+        if (!v->pso)
+            pvk_logd(device, PVK_LOG_INFO, "PlasmaVK-indirect-command-buffer-variant", VK_OBJECT_TYPE_PIPELINE,
+                     (uint64_t)(uintptr_t)p,
+                     "a graphics pipeline has no indirect command buffer variant (its count draws and long "
+                     "multi-draws draw their records one by one): %s", error);
+        __atomic_store_n(&v->state, v->pso ? 1 : 2, __ATOMIC_RELEASE);
+        pvk_release(spec[0]);
+        pvk_release(spec[1]);
+        pvk_release(vs);
+        pvk_release(fs);
+        objc_autoreleasePoolPop(pool);
+    }
+    pthread_mutex_unlock(&v->lock);
+}
+
+/* The variant of a pipeline (not retained), NULL until it is made or when
+ * it has none. */
+static id pvk_gfx_icb_ready(const struct pvk_gfx_pipeline *g)
+{
+    const struct pvk_gfx_icb *v = g ? g->icb : NULL;
+    return v && __atomic_load_n(&v->state, __ATOMIC_ACQUIRE) == 1 ? v->pso : NULL;
+}
+
+static void pvk_gfx_icb_free(struct pvk_gfx_icb *v)
+{
+    if (!v)
+        return;
+    pvk_release(v->pso);
+    pthread_mutex_destroy(&v->lock);
 }
 
 /* The shaders and vertex input a graphics pipeline's Metal render
@@ -71494,7 +72225,9 @@ static void pvk_gfx_hidden_formats(struct pvk_gfx_desc *d, uint32_t flags)
 
 /* One Metal render pipeline of a graphics pipeline (retained in *pso), for
  * d and the translator options: from the cache, or translated, compiled and
- * cached. ci: what the pipeline keeps; *hit as pvk_cache_lookup's. */
+ * cached. ci: what the pipeline keeps; *hit as pvk_cache_lookup's; icb
+ * (NULL: not wanted) gets what its indirect command buffer variant is made
+ * of (struct pvk_gfx_icb). */
 /* The MSL a graphics pipeline's Metal pipeline was made from, kept for its
  * variants in passes split for tile memory (struct pvk_replay). */
 struct pvk_gfx_kept {
@@ -71507,7 +72240,8 @@ struct pvk_gfx_kept {
 static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cache *cache, const struct pvk_gfx_sources *src,
                               const struct pvk_gfx_desc *d, const struct pvk_msl_options *vo,
                               const struct pvk_msl_options *fo, const VkAllocationCallbacks *alloc,
-                              struct pvk_cache_info *ci, id *pso, int *hit, struct pvk_gfx_kept *kept)
+                              struct pvk_cache_info *ci, id *pso, int *hit, struct pvk_gfx_kept *kept,
+                              struct pvk_gfx_icb *icb)
 {
     static const struct pvk_msl_result none; /* (no fragment shader) */
     const VkPipelineShaderStageCreateInfo *vs = src->vs, *fs = src->fs;
@@ -71515,13 +72249,16 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
     struct pvk_shader_entry *vst = NULL, *fst = NULL;
     const struct pvk_msl_result *vres = &none, *fres = &none;
     struct pvk_key key;
+    struct pvk_gfx_libs libs;
     char error[256], entry[2][64];
+    id values[2] = { NULL, NULL }; /* the stages' function constant values (pvk_spec_constant_values) */
     const char *msl[2] = { NULL, NULL }, *sources[2], *names[2];
     VkResult result;
     uint32_t i;
 
     *pso = NULL;
     *hit = 0;
+    memset(&libs, 0, sizeof(libs));
     /* The cache key: everything the MSL and the Metal pipeline depend on */
     memset(&key, 0, sizeof(key));
     if (cache) {
@@ -71549,7 +72286,7 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
             if (fs)
                 pvk_key_add_stage_name(&key, fs);
         }
-        *hit = pvk_cache_lookup(cache, &key, ci, entry, msl, pso);
+        *hit = pvk_cache_lookup(cache, &key, ci, entry, msl, pso, &libs);
     }
     if (*hit != 2 && (src->flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT))
         return VK_PIPELINE_COMPILE_REQUIRED; /* only a pipeline state made in this process needs no compiler */
@@ -71599,8 +72336,8 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
     if (!*pso) {
         struct pvk_gfx_desc dc = *d;
         char label[600], fs_label[300];
-        id vsv = pvk_spec_constant_values(vs->pSpecializationInfo);
-        id fsv = fs ? pvk_spec_constant_values(fs->pSpecializationInfo) : NULL;
+        values[0] = pvk_spec_constant_values(vs->pSpecializationInfo);
+        values[1] = fs ? pvk_spec_constant_values(fs->pSpecializationInfo) : NULL;
         pvk_stage_label(label, sizeof(label), vs);
         if (fs) {
             pvk_stage_label(fs_label, sizeof(fs_label), fs);
@@ -71608,10 +72345,9 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
             strncat(label, fs_label, sizeof(label) - strlen(label) - 1);
         }
         pvk_gfx_hidden_formats(&dc, ci->workgroup[0]); /* the depth/stencil copies the shader reads */
-        *pso = pvk_gfx_compile(device, &dc, sources[0], names[0], sources[1], names[1], vsv, fsv,
-                               ci->dispatch_base != 0, ci->dispatch_base_offset != 0, label, error, sizeof(error));
-        pvk_release(vsv);
-        pvk_release(fsv);
+        *pso = pvk_gfx_compile(device, &dc, sources[0], names[0], sources[1], names[1], values[0], values[1],
+                               ci->dispatch_base != 0, ci->dispatch_base_offset != 0, label, &libs, error,
+                               sizeof(error));
     }
     if (!*pso) {
         pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-compilation", VK_OBJECT_TYPE_SHADER_MODULE,
@@ -71623,10 +72359,24 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
                      (uint64_t)(uintptr_t)fs->module, "fragment MSL:\n%s", sources[1]);
         pvk_stage_put(device, vst);
         pvk_stage_put(device, fst);
+        pvk_release(values[0]);
+        pvk_release(values[1]);
         return VK_ERROR_UNKNOWN;
     }
     pvk_cache_insert(cache, &key, ci, names[0], names[1], sources[0], sources[0] ? strlen(sources[0]) : 0, sources[1],
-                     sources[1] ? strlen(sources[1]) : 0, *pso);
+                     sources[1] ? strlen(sources[1]) : 0, *pso, &libs);
+    if (icb) {
+        icb->desc = *d;
+        pvk_gfx_hidden_formats(&icb->desc, ci->workgroup[0]);
+        icb->libs = libs;
+        icb->spec_info[0] = libs.constants[0] ? vs->pSpecializationInfo : NULL;
+        icb->spec_info[1] = libs.constants[1] && fs ? fs->pSpecializationInfo : NULL;
+        snprintf(icb->entry[0], sizeof(icb->entry[0]), "%s", names[0] ? names[0] : "");
+        /* (no fragment shader: pvk_gfx_compile's function applying the sample mask, or none) */
+        snprintf(icb->entry[1], sizeof(icb->entry[1]), "%s",
+                 names[1] && names[1][0] ? names[1] : d->sample_mask_enable ? "pvk_sample_mask" : "");
+        icb->layered = ci->dispatch_base != 0;
+    }
     if (kept) { /* (msl NULL when out of memory: no variants) */
         /* the dependencies of fetched colors (pvk_spv_fetch_deps), and the
          * MSL the implicit cache does not keep: translated again */
@@ -71649,6 +72399,8 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
     }
     pvk_stage_put(device, vst);
     pvk_stage_put(device, fst);
+    pvk_release(values[0]);
+    pvk_release(values[1]);
     return VK_SUCCESS;
 }
 
@@ -71704,6 +72456,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     uint32_t i, view_mask = 0, dynamic = 0, color_count = 0, readable = 0, reads, want = 0, eager = 0, k, tile = 0;
     uint32_t tex_inputs = 0;
     struct pvk_gfx_kept kept;
+    struct pvk_gfx_icb icb;
+    bool want_icb;
     uint32_t undecorated = 0;
     uint8_t hidden_logical[2];
     bool discard;
@@ -72044,12 +72798,22 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     fo_snorm = fo;
     pvk_gfx_fragment_options(&fo, &d);
     memset(&kept, 0, sizeof(kept));
+    /* Count draws and long multi-draws through indirect command buffers
+     * (struct pvk_gfx_icb): what the variant is made of */
+    want_icb = !discard && !view_mask && !gfx.points && !gfx.int_colors &&
+               (device->features.v12.drawIndirectCount || device->extensions[PVK_DEVICE_EXT_KHR_draw_indirect_count] ||
+                device->features.core.multiDrawIndirect);
+    for (i = 0; i < PVK_MAX_INPUT_ATTACHMENTS; i++)
+        if (input_colors[i] == PVK_MSL_IA_TEXTURE || input_colors[i] == PVK_MSL_IA_TEXTURE_DS)
+            want_icb = false;
+    memset(&icb, 0, sizeof(icb));
     result = pvk_gfx_build(device, cache, &src, &d, &vo, &fo, alloc, &ci, &pso, &hit,
-                           tile > PVK_TILE_BYTES || tile * d.samples > PVK_TILE_PIXEL_BYTES ? &kept : NULL);
+                           tile > PVK_TILE_BYTES || tile * d.samples > PVK_TILE_PIXEL_BYTES ? &kept : NULL,
+                           want_icb ? &icb : NULL);
     if (result == VK_SUCCESS && gfx.int_colors) {
         pvk_gfx_fragment_options(&fo_snorm, &d_snorm);
         result = pvk_gfx_build(device, cache, &src, &d_snorm, &vo, &fo_snorm, alloc, &ci_snorm, &pso_snorm, &hit_snorm,
-                               NULL);
+                               NULL, NULL);
         if (!hit_snorm)
             hit = 0;
     }
@@ -72208,7 +72972,26 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     pvk_free(alloc, tex_msl[0]);
     pvk_free(alloc, tex_msl[1]);
 
-    pipeline = pvk_alloc(alloc, sizeof(*pipeline) + sizeof(gfx), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    for (k = 0; want_icb && k < 2; k++) /* (the variant's specializations: after it) */
+        icb.spec_count[k] = pvk_spec_constant_pairs(icb.spec_info[k], NULL);
+    pipeline = pvk_alloc(alloc,
+                         sizeof(*pipeline) + sizeof(gfx) +
+                             (want_icb ? sizeof(icb) + 8 * (size_t)(icb.spec_count[0] + icb.spec_count[1]) : 0),
+                         VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (pipeline && want_icb) {
+        uint32_t *pairs;
+        gfx.icb = (struct pvk_gfx_icb *)((struct pvk_gfx_pipeline *)(pipeline + 1) + 1);
+        *gfx.icb = icb;
+        pairs = (uint32_t *)(gfx.icb + 1);
+        for (k = 0; k < 2; k++) {
+            gfx.icb->spec[k] = pairs;
+            pvk_spec_constant_pairs(icb.spec_info[k], pairs);
+            pairs += 2 * icb.spec_count[k];
+            gfx.icb->spec_info[k] = NULL;
+        }
+        if (pthread_mutex_init(&gfx.icb->lock, NULL) != 0)
+            gfx.icb = NULL;
+    }
     if (!pipeline) {
         pvk_release(pso);
         pvk_release(pso_snorm);
@@ -72280,6 +73063,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
     if (pipeline->gfx) {
         pvk_gfx_variants_free((struct pvk_device *)device, alloc, pipeline->gfx->variants);
         pvk_gfx_groups_free(alloc, pipeline->gfx->groups);
+        pvk_gfx_icb_free(pipeline->gfx->icb);
     }
     pvk_free(alloc, pipeline);
 }
