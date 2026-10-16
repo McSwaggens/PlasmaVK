@@ -10296,43 +10296,63 @@ static const uint32_t spv_flat_derivs_fs[] = {
     0x000100fd, 0x00010038,
 };
 
-/* Derivatives stay within a triangle: an indexed quad of two triangles with
- * a different w at each vertex, and a flat input of the provoking vertex's
- * index (0 and 2), whose derivatives are 0 in a triangle. Apple GPUs pack
- * fragments of both triangles into 2x2 quads along the diagonal unless the
- * shader reads its barycentric coordinates: their derivatives were 2. */
+/* Derivatives stay within a triangle: a quad of two triangles with a
+ * different w at each vertex, and a flat input of the provoking vertex's
+ * index, whose derivatives are 0 in a triangle. Apple GPUs pack fragments of
+ * both triangles into 2x2 quads along the diagonal unless the shader reads
+ * its barycentric coordinates (the derivatives were the provoking vertices'
+ * difference). They pack triangles that share vertices (on an M4 Max,
+ * non-indexed lists did not): an indexed list (provoking vertices 0 and 2),
+ * a strip (0 and 1) and an indexed fan (1 and 3) each packed without it. */
 static void test_derivatives_per_triangle(void)
 {
     static const float clear[4] = { 0, 0, -1, 0 };
-    static const uint16_t indices[6] = { 0, 1, 2, 2, 1, 3 };
+    static const uint16_t indices[10] = { 0, 1, 2, 2, 1, 3, /* the fan: */ 0, 1, 3, 2 };
+    static const struct {
+        VkPrimitiveTopology topology;
+        uint32_t first_index, index_count; /* no indices: vkCmdDraw of the 4 vertices */
+        float provoking[2];
+    } draws[3] = {
+        { VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, 6, { 0, 2 } },
+        { VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP, 0, 0, { 0, 1 } },
+        { VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN, 6, 4, { 1, 3 } },
+    };
     struct img target = make_img(VK_FORMAT_R32G32B32A32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
     struct buf out = make_buf(W * H * 16), ib = make_buf(sizeof(indices));
     VkPipeline pipeline;
     struct pipe p;
     VkCommandBuffer cb;
-    uint32_t i, bad = 0;
+    uint32_t d, i, bad;
 
     memcpy(ib.data, indices, sizeof(indices));
-    pipe_init(&p, spv_quad_w_vs, sizeof(spv_quad_w_vs), spv_flat_derivs_fs, sizeof(spv_flat_derivs_fs));
-    p.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    p.color_formats[0] = VK_FORMAT_R32G32B32A32_SFLOAT;
-    pipeline = make_pipe(&p);
-    REQUIRE(pipeline);
-    cb = begin_cmd();
-    begin_rendering(cb, &target, 1, clear, NULL);
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdBindIndexBuffer(cb, ib.buffer, 0, VK_INDEX_TYPE_UINT16);
-    vkCmdDrawIndexed(cb, 6, 1, 0, 0, 0);
-    vkCmdEndRendering(cb);
-    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
-    submit(cb);
-    for (i = 0; i < W * H; i++) {
-        const float *t = (const float *)out.data + 4 * i;
-        if ((t[0] != 0.0f || t[1] != 0.0f || (t[2] != 0.0f && t[2] != 2.0f)) && bad++ < 4)
-            fprintf(stderr, "derivatives per triangle: pixel (%u, %u) is %g %g %g\n", i % W, i / W, t[0], t[1], t[2]);
+    for (d = 0; d < 3; d++) {
+        pipe_init(&p, spv_quad_w_vs, sizeof(spv_quad_w_vs), spv_flat_derivs_fs, sizeof(spv_flat_derivs_fs));
+        p.topology = draws[d].topology;
+        p.color_formats[0] = VK_FORMAT_R32G32B32A32_SFLOAT;
+        pipeline = make_pipe(&p);
+        REQUIRE(pipeline);
+        cb = begin_cmd();
+        begin_rendering(cb, &target, 1, clear, NULL);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        if (draws[d].index_count) {
+            vkCmdBindIndexBuffer(cb, ib.buffer, 0, VK_INDEX_TYPE_UINT16);
+            vkCmdDrawIndexed(cb, draws[d].index_count, 1, draws[d].first_index, 0, 0);
+        } else {
+            vkCmdDraw(cb, 4, 1, 0, 0);
+        }
+        vkCmdEndRendering(cb);
+        download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        for (i = bad = 0; i < W * H; i++) {
+            const float *t = (const float *)out.data + 4 * i;
+            if ((t[0] != 0.0f || t[1] != 0.0f || (t[2] != draws[d].provoking[0] && t[2] != draws[d].provoking[1])) &&
+                bad++ < 4)
+                fprintf(stderr, "derivatives per triangle (topology %d): pixel (%u, %u) is %g %g %g\n",
+                        (int)draws[d].topology, i % W, i / W, t[0], t[1], t[2]);
+        }
+        CHECK(bad == 0);
+        vkDestroyPipeline(device, pipeline, NULL);
     }
-    CHECK(bad == 0);
-    vkDestroyPipeline(device, pipeline, NULL);
     free_buf(&ib);
     free_buf(&out);
     free_img(&target);
