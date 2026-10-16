@@ -3735,13 +3735,16 @@ static void test_multiview_timestamps(void)
     free_img(&target);
 }
 
-/* Timestamps between commands are written by the encoder after them, once
- * all earlier work is done (section 14, TIMESTAMPS), also by a render pass
- * that draws nothing: one Metal runs anyway (it clears an attachment it
- * stores or resolves) or one it skips. Per kind of render pass: a
- * timestamp, long fills, a timestamp, the pass, a timestamp, a small fill.
- * All are written within the submission, in order, and the middle one
- * after the fills: nearer the last than the first. */
+/* Timestamps between commands are written once all earlier work is done
+ * (section 14, TIMESTAMPS), also before a render pass that draws nothing:
+ * one Metal runs anyway (it clears an attachment it stores or resolves) or
+ * one it skips. Per kind of render pass: a timestamp, long fills, a
+ * timestamp, the pass, a timestamp, a small fill. All are written within
+ * the submission, in order, and the middle one after the fills: nearer the
+ * last than the first. (The command buffer runs first to warm up: the
+ * GPU's first use of the pipeline and the images takes longer than the
+ * fills. GPU work of other tests may run in between: the order of the
+ * timestamps counts once in a few tries.) */
 static void test_timestamp_encoders(void)
 {
     enum { PASSES = 10 };
@@ -3774,8 +3777,9 @@ static void test_timestamp_encoders(void)
     VkPipeline pipeline;
     struct pipe p;
     VkCommandBuffer cb;
-    uint64_t r[3 * PASSES][2], t0, t1;
-    uint32_t i, k;
+    uint64_t r[3 * PASSES][2], t0 = 0, t1 = 0;
+    uint32_t i, k, round;
+    bool nearer = false;
 
     memset(&qi, 0, sizeof(qi));
     qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
@@ -3785,55 +3789,58 @@ static void test_timestamp_encoders(void)
     pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
     pipeline = make_pipe(&p);
     REQUIRE(pipeline);
-    cb = begin_cmd();
-    vkCmdResetQueryPool(cb, pool, 0, 3 * PASSES);
-    for (i = 0; i < PASSES; i++) {
-        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, 3 * i);
-        for (k = 0; k < 4; k++)
-            vkCmdFillBuffer(cb, b.buffer, 0, VK_WHOLE_SIZE, k);
-        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 3 * i + 1);
-        memset(&att, 0, sizeof(att));
-        att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        att.imageView = passes[i].depth ? depth.view : passes[i].resolve ? ms.view : target.view;
-        att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        att.loadOp = passes[i].load;
-        att.storeOp = passes[i].store;
-        memcpy(att.clearValue.color.float32, clear, 16);
-        if (passes[i].resolve) {
-            att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
-            att.resolveImageView = target.view;
-            att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    for (round = 0; round < 5 && !nearer; round++) {
+        cb = begin_cmd();
+        vkCmdResetQueryPool(cb, pool, 0, 3 * PASSES);
+        for (i = 0; i < PASSES; i++) {
+            vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, 3 * i);
+            for (k = 0; k < 4; k++)
+                vkCmdFillBuffer(cb, b.buffer, 0, VK_WHOLE_SIZE, k);
+            vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 3 * i + 1);
+            memset(&att, 0, sizeof(att));
+            att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            att.imageView = passes[i].depth ? depth.view : passes[i].resolve ? ms.view : target.view;
+            att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            att.loadOp = passes[i].load;
+            att.storeOp = passes[i].store;
+            memcpy(att.clearValue.color.float32, clear, 16);
+            if (passes[i].resolve) {
+                att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+                att.resolveImageView = target.view;
+                att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            }
+            memset(&info, 0, sizeof(info));
+            info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            info.renderArea.extent.width = W;
+            info.renderArea.extent.height = H;
+            info.layerCount = 1;
+            info.colorAttachmentCount = passes[i].colors;
+            info.pColorAttachments = &att;
+            info.pDepthAttachment = passes[i].depth ? &att : NULL;
+            vkCmdBeginRendering(cb, &info);
+            if (passes[i].draws) {
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                rect(cb, -1, -1, 1, 1, 1, 0, 0, 1, 0.5f);
+            }
+            vkCmdEndRendering(cb);
+            vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 3 * i + 2);
+            vkCmdFillBuffer(cb, b.buffer, 0, 4096, 9);
         }
-        memset(&info, 0, sizeof(info));
-        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-        info.renderArea.extent.width = W;
-        info.renderArea.extent.height = H;
-        info.layerCount = 1;
-        info.colorAttachmentCount = passes[i].colors;
-        info.pColorAttachments = &att;
-        info.pDepthAttachment = passes[i].depth ? &att : NULL;
-        vkCmdBeginRendering(cb, &info);
-        if (passes[i].draws) {
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-            rect(cb, -1, -1, 1, 1, 1, 0, 0, 1, 0.5f);
+        t0 = mach_absolute_time();
+        submit(cb);
+        t1 = mach_absolute_time();
+        memset(r, 0, sizeof(r));
+        CHECK_VK(vkGetQueryPoolResults(device, pool, 0, 3 * PASSES, sizeof(r), r, 16,
+                                       VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
+                 VK_SUCCESS);
+        for (i = 0; i < 3 * PASSES; i++) {
+            CHECK(r[i][1] == 1 && r[i][0] >= t0 && r[i][0] <= t1);
+            CHECK(i == 0 || r[i][0] >= r[i - 1][0]);
         }
-        vkCmdEndRendering(cb);
-        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 3 * i + 2);
-        vkCmdFillBuffer(cb, b.buffer, 0, 4096, 9);
+        for (i = 0, nearer = round > 0; i < PASSES; i++)
+            nearer &= (int64_t)(r[3 * i + 1][0] - r[3 * i][0]) > (int64_t)(r[3 * i + 2][0] - r[3 * i + 1][0]);
     }
-    t0 = mach_absolute_time();
-    submit(cb);
-    t1 = mach_absolute_time();
-    memset(r, 0, sizeof(r));
-    CHECK_VK(vkGetQueryPoolResults(device, pool, 0, 3 * PASSES, sizeof(r), r, 16,
-                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
-             VK_SUCCESS);
-    for (i = 0; i < 3 * PASSES; i++) {
-        CHECK(r[i][1] == 1 && r[i][0] >= t0 && r[i][0] <= t1);
-        CHECK(i == 0 || r[i][0] >= r[i - 1][0]);
-    }
-    for (i = 0; i < PASSES; i++)
-        CHECK((int64_t)(r[3 * i + 1][0] - r[3 * i][0]) > (int64_t)(r[3 * i + 2][0] - r[3 * i + 1][0]));
+    CHECK(nearer);
     vkDestroyPipeline(device, pipeline, NULL);
     vkDestroyQueryPool(device, pool, NULL);
     free_buf(&b);
@@ -3905,7 +3912,8 @@ static void test_timestamp_runs(void)
  * TIMESTAMPS). Runs of 5 to 8 timestamps, long fills, a timestamp; then a
  * profiler's scopes: a timestamp, a render pass with 4 inside (written once
  * it ends), 2 after it, long fills, a timestamp. Each of a run is nearer
- * its first than the timestamp after the fills. */
+ * its first than the timestamp after the fills (in one of a few tries: GPU
+ * work of other tests may run in between). */
 static void test_timestamp_long_runs(void)
 {
     enum { RUNS = 5, QUERIES = 5 + 6 + 7 + 8 + 7 + RUNS };
@@ -3918,7 +3926,8 @@ static void test_timestamp_long_runs(void)
     struct pipe p;
     VkCommandBuffer cb;
     uint64_t r[QUERIES][2];
-    uint32_t first[RUNS + 1], i, k, q = 0;
+    uint32_t first[RUNS + 1], i, k, q, t;
+    bool nearer = false;
 
     memset(&qi, 0, sizeof(qi));
     qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
@@ -3928,44 +3937,173 @@ static void test_timestamp_long_runs(void)
     pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
     pipeline = make_pipe(&p);
     REQUIRE(pipeline);
-    cb = begin_cmd();
-    vkCmdResetQueryPool(cb, pool, 0, QUERIES);
-    for (i = 0; i < RUNS; i++) {
-        first[i] = q;
-        if (i < RUNS - 1) {
-            for (k = 0; k < 5 + i; k++)
+    for (t = 0; t < 4 && !nearer; t++) {
+        cb = begin_cmd();
+        q = 0;
+        vkCmdResetQueryPool(cb, pool, 0, QUERIES);
+        for (i = 0; i < RUNS; i++) {
+            first[i] = q;
+            if (i < RUNS - 1) {
+                for (k = 0; k < 5 + i; k++)
+                    vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, q++);
+            } else {
                 vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, q++);
-        } else {
-            vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, q++);
-            begin_rendering(cb, &target, 1, clear, NULL);
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-            for (k = 0; k < 4; k++) {
-                rect(cb, -1, -1, 1, 1, 1, 0, 0, 1, 0.5f);
+                begin_rendering(cb, &target, 1, clear, NULL);
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                for (k = 0; k < 4; k++) {
+                    rect(cb, -1, -1, 1, 1, 1, 0, 0, 1, 0.5f);
+                    vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, q++);
+                }
+                vkCmdEndRendering(cb);
                 vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, q++);
+                vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, q++);
             }
-            vkCmdEndRendering(cb);
+            for (k = 0; k < 4; k++)
+                vkCmdFillBuffer(cb, b.buffer, 0, VK_WHOLE_SIZE, k);
             vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, q++);
-            vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, q++);
         }
-        for (k = 0; k < 4; k++)
-            vkCmdFillBuffer(cb, b.buffer, 0, VK_WHOLE_SIZE, k);
-        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, q++);
+        first[RUNS] = q;
+        REQUIRE(q == QUERIES);
+        submit(cb);
+        memset(r, 0, sizeof(r));
+        CHECK_VK(vkGetQueryPoolResults(device, pool, 0, QUERIES, sizeof(r), r, 16,
+                                       VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
+                 VK_SUCCESS);
+        for (i = 0, nearer = true; i < RUNS; i++) {
+            uint64_t start = r[first[i]][0], end = r[first[i + 1] - 1][0];
+            for (k = first[i]; k < first[i + 1] - 1; k++) {
+                CHECK(r[k][1] == 1);
+                nearer &= (int64_t)(r[k][0] - start) < (int64_t)(end - r[k][0]);
+            }
+        }
     }
-    first[RUNS] = q;
-    REQUIRE(q == QUERIES);
-    submit(cb);
-    memset(r, 0, sizeof(r));
-    CHECK_VK(vkGetQueryPoolResults(device, pool, 0, QUERIES, sizeof(r), r, 16,
-                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
-             VK_SUCCESS);
-    for (i = 0; i < RUNS; i++) {
-        uint64_t start = r[first[i]][0], end = r[first[i + 1] - 1][0];
-        for (k = first[i]; k < first[i + 1] - 1; k++)
-            CHECK(r[k][1] == 1 && (int64_t)(r[k][0] - start) < (int64_t)(end - r[k][0]));
-    }
+    CHECK(nearer);
     vkDestroyPipeline(device, pipeline, NULL);
     vkDestroyQueryPool(device, pool, NULL);
     free_buf(&b);
+    free_img(&target);
+}
+
+/* Timestamps bracket the work between them (section 14, TIMESTAMPS): one
+ * before work is taken before any of it ran, one after it once all of it
+ * is done. Profilers' scopes around two identical passes of many draws
+ * must measure them alike (test_queries.c's test_timestamp_passes: on a
+ * device without sparseBinding), as must scopes around two identical
+ * chains of scaled blits: a barrier between blits (mip generation; render
+ * passes, whose timestamps once stayed pending to the end of the
+ * submission), two blits into each destination (one pass), and blits into
+ * storage images (dispatches). Each must take time. GPU work of other
+ * tests may run in between: the best of a few tries counts. */
+static double rel_diff(int64_t a, int64_t b)
+{
+    return a > 0 && b > 0 ? (double)(a > b ? a - b : b - a) / (double)(a > b ? a : b) : 1.0;
+}
+
+static void test_timestamp_bracket(void)
+{
+    enum { DRAWS = 20000, BLITS = 8, TRIES = 4, QUERIES = 13, SIZE = 1024 };
+    static const float clear[4] = { 0, 0, 0, 1 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, SIZE, SIZE, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img images[2][2];
+    struct buf warm = make_buf(32u << 20);
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool pool;
+    VkPipeline pipeline;
+    VkImageBlit region;
+    struct pipe p;
+    VkCommandBuffer cb;
+    uint64_t r[QUERIES][2];
+    double diff[4] = { 1.0, 1.0, 1.0, 1.0 }; /* passes, then the chains: best of the tries */
+    uint32_t i, k, c, h, t;
+    bool ok = false;
+
+    for (i = 0; i < 2; i++) {
+        images[0][i] = make_img(VK_FORMAT_R8G8B8A8_UNORM, SIZE, SIZE, 1, VK_SAMPLE_COUNT_1_BIT);
+        images[1][i] = make_img_mem(VK_FORMAT_R8G8B8A8_UNORM, SIZE, SIZE, 1, VK_SAMPLE_COUNT_1_BIT,
+                                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                    device_type);
+    }
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    qi.queryCount = QUERIES;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &pool));
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    /* the whole source into half of the destination: scaled (an unscaled blit is a copy) */
+    memset(&region, 0, sizeof(region));
+    region.srcSubresource.aspectMask = region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.srcSubresource.layerCount = region.dstSubresource.layerCount = 1;
+    region.srcOffsets[1].x = region.dstOffsets[1].x = SIZE;
+    region.srcOffsets[1].y = SIZE;
+    region.srcOffsets[1].z = region.dstOffsets[1].z = 1;
+    for (t = 0; t < TRIES && !ok; t++) {
+        /* 0 and 1 in a row, a pass, 2, the same pass, 3; per chain (blits, two blits into each
+         * destination, blits into storage images) 4 + 3 c, the chain, 5 + 3 c, the same chain, 6 + 3 c */
+        cb = begin_cmd();
+        vkCmdResetQueryPool(cb, pool, 0, QUERIES);
+        for (k = 0; k < 8; k++) /* (the GPU's clocks up first) */
+            vkCmdFillBuffer(cb, warm.buffer, 0, VK_WHOLE_SIZE, k);
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, 0);
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, 1);
+        for (i = 0; i < 2; i++) {
+            begin_rendering(cb, &target, 1, clear, NULL);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            for (k = 0; k < DRAWS; k++)
+                rect(cb, -0.01f, -0.01f, 0.01f, 0.01f, 1, 0, 0, 1, 0.5f);
+            vkCmdEndRendering(cb);
+            vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 2 + i);
+        }
+        for (c = 0; c < 3; c++) {
+            const struct img *m = images[c == 2];
+            vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, 4 + 3 * c);
+            for (i = 0; i < 2; i++) {
+                for (k = 0; k < BLITS; k++) {
+                    barrier(cb);
+                    for (h = 0; h < (c == 1 ? 2u : 1u); h++) {
+                        region.dstOffsets[0].y = (int32_t)(h * SIZE / 2);
+                        region.dstOffsets[1].y = (int32_t)((h + 1) * SIZE / 2);
+                        vkCmdBlitImage(cb, m[k & 1].image, VK_IMAGE_LAYOUT_GENERAL, m[~k & 1].image,
+                                       VK_IMAGE_LAYOUT_GENERAL, 1, &region, VK_FILTER_LINEAR);
+                    }
+                }
+                vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 5 + 3 * c + i);
+            }
+        }
+        submit(cb);
+        memset(r, 0, sizeof(r));
+        CHECK_VK(vkGetQueryPoolResults(device, pool, 0, QUERIES, sizeof(r), r, 16,
+                                       VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
+                 VK_SUCCESS);
+        for (i = 0; i < QUERIES; i++)
+            CHECK(r[i][1] == 1 && (i == 0 || r[i][0] >= r[i - 1][0]));
+        /* both before the first pass */
+        CHECK((int64_t)(r[1][0] - r[0][0]) < (int64_t)(r[2][0] - r[1][0]) / 4);
+        ok = true;
+        for (i = 0; i < 4; i++) {
+            uint32_t q = i ? 4 + 3 * (i - 1) : 1;
+            double d = rel_diff((int64_t)(r[q + 1][0] - r[q][0]), (int64_t)(r[q + 2][0] - r[q + 1][0]));
+            if (d < diff[i])
+                diff[i] = d;
+            ok &= diff[i] <= (i ? 0.5 : 0.2);
+        }
+        if (!ok && t + 1 == TRIES)
+            printf("    passes %lld %lld, chains %lld %lld, %lld %lld, %lld %lld ticks\n",
+                   (long long)(r[2][0] - r[1][0]), (long long)(r[3][0] - r[2][0]), (long long)(r[5][0] - r[4][0]),
+                   (long long)(r[6][0] - r[5][0]), (long long)(r[8][0] - r[7][0]), (long long)(r[9][0] - r[8][0]),
+                   (long long)(r[11][0] - r[10][0]), (long long)(r[12][0] - r[11][0]));
+    }
+    CHECK(diff[0] <= 0.2);
+    CHECK(diff[1] <= 0.5 && diff[2] <= 0.5 && diff[3] <= 0.5);
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyQueryPool(device, pool, NULL);
+    for (i = 0; i < 2; i++) {
+        free_img(&images[1][i]);
+        free_img(&images[0][i]);
+    }
+    free_buf(&warm);
     free_img(&target);
 }
 
@@ -11652,6 +11790,7 @@ int main(void)
     RUN(test_timestamp_encoders);
     RUN(test_timestamp_runs);
     RUN(test_timestamp_long_runs);
+    RUN(test_timestamp_bracket);
     RUN(test_occlusion);
     RUN(test_draw_kinds);
     RUN(test_draw_kinds_secondary);

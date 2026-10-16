@@ -5,6 +5,7 @@
 
 #include <mach/mach_time.h>
 #include <pthread.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -80,6 +81,7 @@ static void setup(void)
     v13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     v13.pNext = &v12;
     v13.synchronization2 = VK_TRUE;
+    v13.dynamicRendering = VK_TRUE;
     memset(queue_info, 0, sizeof(queue_info));
     for (i = 0; i < 2; i++) {
         queue_info[i].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -461,6 +463,328 @@ static void test_timestamp_many(void)
         if (r[2 * i] < r[N - 1 - 2 * (i - 1)] || r[N - 1 - 2 * i] < r[2 * i])
             bad++;
     CHECK(bad == 0);
+    free_buf(&a);
+    free_buf(&b);
+    vkDestroyQueryPool(device, p, NULL);
+}
+
+/*
+ * #version 450
+ * // A small triangle per draw, at a place picked by its first instance.
+ * void main()
+ * {
+ *     uint i = uint(gl_InstanceIndex);
+ *     vec2 at = vec2(float(i % 64u), float(i / 64u % 64u)) / 32.0 - 1.0;
+ *     vec2 corner = vec2(float(gl_VertexIndex == 1), float(gl_VertexIndex == 2)) / 64.0;
+ *     gl_Position = vec4(at + corner, 0.0, 1.0);
+ * }
+ */
+static const uint32_t spv_spread_vs[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x00000040, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0008000f, 0x00000000, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000b, 0x00000022, 0x00000036,
+    0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005,
+    0x00000008, 0x00000069, 0x00070005, 0x0000000b, 0x495f6c67, 0x6174736e, 0x4965636e, 0x7865646e,
+    0x00000000, 0x00030005, 0x00000011, 0x00007461, 0x00040005, 0x00000021, 0x6e726f63, 0x00007265,
+    0x00060005, 0x00000022, 0x565f6c67, 0x65747265, 0x646e4978, 0x00007865, 0x00060005, 0x00000034,
+    0x505f6c67, 0x65567265, 0x78657472, 0x00000000, 0x00060006, 0x00000034, 0x00000000, 0x505f6c67,
+    0x7469736f, 0x006e6f69, 0x00070006, 0x00000034, 0x00000001, 0x505f6c67, 0x746e696f, 0x657a6953,
+    0x00000000, 0x00070006, 0x00000034, 0x00000002, 0x435f6c67, 0x4470696c, 0x61747369, 0x0065636e,
+    0x00070006, 0x00000034, 0x00000003, 0x435f6c67, 0x446c6c75, 0x61747369, 0x0065636e, 0x00030005,
+    0x00000036, 0x00000000, 0x00040047, 0x0000000b, 0x0000000b, 0x0000002b, 0x00040047, 0x00000022,
+    0x0000000b, 0x0000002a, 0x00030047, 0x00000034, 0x00000002, 0x00050048, 0x00000034, 0x00000000,
+    0x0000000b, 0x00000000, 0x00050048, 0x00000034, 0x00000001, 0x0000000b, 0x00000001, 0x00050048,
+    0x00000034, 0x00000002, 0x0000000b, 0x00000003, 0x00050048, 0x00000034, 0x00000003, 0x0000000b,
+    0x00000004, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00040015, 0x00000006,
+    0x00000020, 0x00000000, 0x00040020, 0x00000007, 0x00000007, 0x00000006, 0x00040015, 0x00000009,
+    0x00000020, 0x00000001, 0x00040020, 0x0000000a, 0x00000001, 0x00000009, 0x0004003b, 0x0000000a,
+    0x0000000b, 0x00000001, 0x00030016, 0x0000000e, 0x00000020, 0x00040017, 0x0000000f, 0x0000000e,
+    0x00000002, 0x00040020, 0x00000010, 0x00000007, 0x0000000f, 0x0004002b, 0x00000006, 0x00000013,
+    0x00000040, 0x0004002b, 0x0000000e, 0x0000001b, 0x42000000, 0x0004002b, 0x0000000e, 0x0000001e,
+    0x3f800000, 0x0004003b, 0x0000000a, 0x00000022, 0x00000001, 0x0004002b, 0x00000009, 0x00000024,
+    0x00000001, 0x00020014, 0x00000025, 0x0004002b, 0x0000000e, 0x00000027, 0x00000000, 0x0004002b,
+    0x00000009, 0x0000002a, 0x00000002, 0x0004002b, 0x0000000e, 0x0000002e, 0x42800000, 0x00040017,
+    0x00000031, 0x0000000e, 0x00000004, 0x0004002b, 0x00000006, 0x00000032, 0x00000001, 0x0004001c,
+    0x00000033, 0x0000000e, 0x00000032, 0x0006001e, 0x00000034, 0x00000031, 0x0000000e, 0x00000033,
+    0x00000033, 0x00040020, 0x00000035, 0x00000003, 0x00000034, 0x0004003b, 0x00000035, 0x00000036,
+    0x00000003, 0x0004002b, 0x00000009, 0x00000037, 0x00000000, 0x00040020, 0x0000003e, 0x00000003,
+    0x00000031, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005,
+    0x0004003b, 0x00000007, 0x00000008, 0x00000007, 0x0004003b, 0x00000010, 0x00000011, 0x00000007,
+    0x0004003b, 0x00000010, 0x00000021, 0x00000007, 0x0004003d, 0x00000009, 0x0000000c, 0x0000000b,
+    0x0004007c, 0x00000006, 0x0000000d, 0x0000000c, 0x0003003e, 0x00000008, 0x0000000d, 0x0004003d,
+    0x00000006, 0x00000012, 0x00000008, 0x00050089, 0x00000006, 0x00000014, 0x00000012, 0x00000013,
+    0x00040070, 0x0000000e, 0x00000015, 0x00000014, 0x0004003d, 0x00000006, 0x00000016, 0x00000008,
+    0x00050086, 0x00000006, 0x00000017, 0x00000016, 0x00000013, 0x00050089, 0x00000006, 0x00000018,
+    0x00000017, 0x00000013, 0x00040070, 0x0000000e, 0x00000019, 0x00000018, 0x00050050, 0x0000000f,
+    0x0000001a, 0x00000015, 0x00000019, 0x00050050, 0x0000000f, 0x0000001c, 0x0000001b, 0x0000001b,
+    0x00050088, 0x0000000f, 0x0000001d, 0x0000001a, 0x0000001c, 0x00050050, 0x0000000f, 0x0000001f,
+    0x0000001e, 0x0000001e, 0x00050083, 0x0000000f, 0x00000020, 0x0000001d, 0x0000001f, 0x0003003e,
+    0x00000011, 0x00000020, 0x0004003d, 0x00000009, 0x00000023, 0x00000022, 0x000500aa, 0x00000025,
+    0x00000026, 0x00000023, 0x00000024, 0x000600a9, 0x0000000e, 0x00000028, 0x00000026, 0x0000001e,
+    0x00000027, 0x0004003d, 0x00000009, 0x00000029, 0x00000022, 0x000500aa, 0x00000025, 0x0000002b,
+    0x00000029, 0x0000002a, 0x000600a9, 0x0000000e, 0x0000002c, 0x0000002b, 0x0000001e, 0x00000027,
+    0x00050050, 0x0000000f, 0x0000002d, 0x00000028, 0x0000002c, 0x00050050, 0x0000000f, 0x0000002f,
+    0x0000002e, 0x0000002e, 0x00050088, 0x0000000f, 0x00000030, 0x0000002d, 0x0000002f, 0x0003003e,
+    0x00000021, 0x00000030, 0x0004003d, 0x0000000f, 0x00000038, 0x00000011, 0x0004003d, 0x0000000f,
+    0x00000039, 0x00000021, 0x00050081, 0x0000000f, 0x0000003a, 0x00000038, 0x00000039, 0x00050051,
+    0x0000000e, 0x0000003b, 0x0000003a, 0x00000000, 0x00050051, 0x0000000e, 0x0000003c, 0x0000003a,
+    0x00000001, 0x00070050, 0x00000031, 0x0000003d, 0x0000003b, 0x0000003c, 0x00000027, 0x0000001e,
+    0x00050041, 0x0000003e, 0x0000003f, 0x00000036, 0x00000037, 0x0003003e, 0x0000003f, 0x0000003d,
+    0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 450
+ * layout(location = 0) out vec4 color;
+ * void main()
+ * {
+ *     color = vec4(1.0);
+ * }
+ */
+static const uint32_t spv_white_fs[] = {
+    0x07230203, 0x00010000, 0x0008000b, 0x0000000c, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0006000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x00030010, 0x00000004,
+    0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000,
+    0x00040005, 0x00000009, 0x6f6c6f63, 0x00000072, 0x00040047, 0x00000009, 0x0000001e, 0x00000000,
+    0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020,
+    0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007,
+    0x0004003b, 0x00000008, 0x00000009, 0x00000003, 0x0004002b, 0x00000006, 0x0000000a, 0x3f800000,
+    0x0007002c, 0x00000007, 0x0000000b, 0x0000000a, 0x0000000a, 0x0000000a, 0x0000000a, 0x00050036,
+    0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0003003e, 0x00000009,
+    0x0000000b, 0x000100fd, 0x00010038,
+};
+
+/* A render pass of `draws` small triangles spread over the target, cleared
+ * and stored. */
+static void record_spread_pass(VkCommandBuffer cb, VkImageView view, uint32_t size, VkPipeline pipeline,
+                               uint32_t draws)
+{
+    VkRenderingAttachmentInfo att;
+    VkRenderingInfo info;
+    uint32_t i;
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = view;
+    att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = info.renderArea.extent.height = size;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &att;
+    vkCmdBeginRendering(cb, &info);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    for (i = 0; i < draws; i++)
+        vkCmdDraw(cb, 3, 1, 0, i);
+    vkCmdEndRendering(cb);
+}
+
+/* Timestamps bracket render passes (section 14, TIMESTAMPS). A pass of many
+ * draws begins with work that its render encoder's timestamps leave out:
+ * written there, a profiler's scopes around two identical passes measured
+ * the second one short and the first one with the start of the second in
+ * it (without sparseBinding, as on this device: with it every barrier also
+ * flushes aliased addresses, and that left less out). Here they must
+ * measure alike, after a pass that ran the pipeline once. GPU work of
+ * other tests may run in between: the best of a few tries counts. */
+static void test_timestamp_passes(void)
+{
+    enum { SIZE = 1024, DRAWS = 10000, TRIES = 5 };
+    VkQueryPool p = make_pool(VK_QUERY_TYPE_TIMESTAMP, 3);
+    VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkShaderModule modules[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkImageCreateInfo ii;
+    VkImageViewCreateInfo vi;
+    VkMemoryRequirements req;
+    VkMemoryAllocateInfo alloc;
+    VkShaderModuleCreateInfo si;
+    VkPipelineLayoutCreateInfo li;
+    VkPipelineShaderStageCreateInfo stages[2];
+    VkPipelineVertexInputStateCreateInfo vertex;
+    VkPipelineInputAssemblyStateCreateInfo assembly;
+    VkViewport viewport;
+    VkRect2D scissor;
+    VkPipelineViewportStateCreateInfo vp;
+    VkPipelineRasterizationStateCreateInfo raster;
+    VkPipelineMultisampleStateCreateInfo ms;
+    VkPipelineColorBlendAttachmentState blend;
+    VkPipelineColorBlendStateCreateInfo cbs;
+    VkPipelineRenderingCreateInfo rendering;
+    VkGraphicsPipelineCreateInfo gi;
+    uint64_t r[3];
+    double diff = 1.0;
+    uint32_t t, i;
+
+    memset(&ii, 0, sizeof(ii));
+    ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ii.imageType = VK_IMAGE_TYPE_2D;
+    ii.format = format;
+    ii.extent.width = ii.extent.height = SIZE;
+    ii.extent.depth = 1;
+    ii.mipLevels = ii.arrayLayers = 1;
+    ii.samples = VK_SAMPLE_COUNT_1_BIT;
+    ii.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    REQUIRE_VK(vkCreateImage(device, &ii, NULL, &image));
+    vkGetImageMemoryRequirements(device, image, &req);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = private_type;
+    REQUIRE_VK(vkAllocateMemory(device, &alloc, NULL, &memory));
+    REQUIRE_VK(vkBindImageMemory(device, image, memory, 0));
+    memset(&vi, 0, sizeof(vi));
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = format;
+    vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    vi.subresourceRange.levelCount = vi.subresourceRange.layerCount = 1;
+    REQUIRE_VK(vkCreateImageView(device, &vi, NULL, &view));
+
+    for (i = 0; i < 2; i++) {
+        memset(&si, 0, sizeof(si));
+        si.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        si.codeSize = i ? sizeof(spv_white_fs) : sizeof(spv_spread_vs);
+        si.pCode = i ? spv_white_fs : spv_spread_vs;
+        REQUIRE_VK(vkCreateShaderModule(device, &si, NULL, &modules[i]));
+        memset(&stages[i], 0, sizeof(stages[i]));
+        stages[i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[i].stage = i ? VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT;
+        stages[i].module = modules[i];
+        stages[i].pName = "main";
+    }
+    memset(&li, 0, sizeof(li));
+    li.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    REQUIRE_VK(vkCreatePipelineLayout(device, &li, NULL, &layout));
+    memset(&vertex, 0, sizeof(vertex));
+    vertex.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    memset(&assembly, 0, sizeof(assembly));
+    assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    memset(&viewport, 0, sizeof(viewport));
+    viewport.width = viewport.height = (float)SIZE;
+    viewport.maxDepth = 1.0f;
+    memset(&scissor, 0, sizeof(scissor));
+    scissor.extent.width = scissor.extent.height = SIZE;
+    memset(&vp, 0, sizeof(vp));
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = vp.scissorCount = 1;
+    vp.pViewports = &viewport;
+    vp.pScissors = &scissor;
+    memset(&raster, 0, sizeof(raster));
+    raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.lineWidth = 1.0f;
+    memset(&ms, 0, sizeof(ms));
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    memset(&blend, 0, sizeof(blend));
+    blend.colorWriteMask = 0xf;
+    memset(&cbs, 0, sizeof(cbs));
+    cbs.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cbs.attachmentCount = 1;
+    cbs.pAttachments = &blend;
+    memset(&rendering, 0, sizeof(rendering));
+    rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachmentFormats = &format;
+    memset(&gi, 0, sizeof(gi));
+    gi.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    gi.pNext = &rendering;
+    gi.stageCount = 2;
+    gi.pStages = stages;
+    gi.pVertexInputState = &vertex;
+    gi.pInputAssemblyState = &assembly;
+    gi.pViewportState = &vp;
+    gi.pRasterizationState = &raster;
+    gi.pMultisampleState = &ms;
+    gi.pColorBlendState = &cbs;
+    gi.layout = layout;
+    REQUIRE_VK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gi, NULL, &pipeline));
+
+    for (t = 0; t < TRIES && diff > 0.2; t++) {
+        VkCommandBuffer cb = begin();
+        int64_t a, b;
+        vkCmdResetQueryPool(cb, p, 0, 3);
+        record_spread_pass(cb, view, SIZE, pipeline, DRAWS);
+        vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, p, 0);
+        record_spread_pass(cb, view, SIZE, pipeline, DRAWS);
+        vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, p, 1);
+        record_spread_pass(cb, view, SIZE, pipeline, DRAWS);
+        vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, p, 2);
+        run(cb);
+        vkFreeCommandBuffers(device, pool, 1, &cb);
+        CHECK_VK(get64(p, 0, 3, r, 0), VK_SUCCESS);
+        a = (int64_t)(r[1] - r[0]);
+        b = (int64_t)(r[2] - r[1]);
+        CHECK(a > 0 && b > 0);
+        if (a > 0 && b > 0 && (double)(a > b ? a - b : b - a) / (double)(a > b ? a : b) < diff)
+            diff = (double)(a > b ? a - b : b - a) / (double)(a > b ? a : b);
+        if (diff > 0.2 && t + 1 == TRIES)
+            printf("    passes %lld and %lld ticks\n", (long long)a, (long long)b);
+    }
+    CHECK(diff <= 0.2);
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyPipelineLayout(device, layout, NULL);
+    vkDestroyShaderModule(device, modules[0], NULL);
+    vkDestroyShaderModule(device, modules[1], NULL);
+    vkDestroyImageView(device, view, NULL);
+    vkDestroyImage(device, image, NULL);
+    vkFreeMemory(device, memory, NULL);
+    vkDestroyQueryPool(device, p, NULL);
+}
+
+static int cmp_i64(const void *a, const void *b)
+{
+    int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+/* Timestamps bracket copies too (section 14, TIMESTAMPS): written at the
+ * start of the encoder of the copies after them, they came late in some
+ * runs (Metal takes an encoder's timestamps together, at its start or
+ * later), and one of two identical chains of copies between three
+ * timestamps measured a fraction of the other. GPU work of other tests
+ * only makes a chain measure longer: of all tries, the shortest must
+ * measure at least 0.4 of the median. */
+static void test_timestamp_copies(void)
+{
+    enum { TRIES = 12, COPIES = 8 };
+    VkQueryPool p = make_pool(VK_QUERY_TYPE_TIMESTAMP, 3);
+    struct buf a = make_buf(64u << 20, private_type), b = make_buf(64u << 20, private_type);
+    int64_t d[2 * TRIES], sorted[2 * TRIES];
+    uint64_t r[3];
+    uint32_t t;
+
+    for (t = 0; t < TRIES; t++) {
+        VkCommandBuffer cb = begin();
+        vkCmdResetQueryPool(cb, p, 0, 3);
+        record_work(cb, &a, &b, 64u << 20, 2);
+        vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, p, 0);
+        record_work(cb, &a, &b, 64u << 20, COPIES);
+        vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, p, 1);
+        record_work(cb, &a, &b, 64u << 20, COPIES);
+        vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, p, 2);
+        run(cb);
+        vkFreeCommandBuffers(device, pool, 1, &cb);
+        CHECK_VK(get64(p, 0, 3, r, 0), VK_SUCCESS);
+        d[2 * t] = (int64_t)(r[1] - r[0]);
+        d[2 * t + 1] = (int64_t)(r[2] - r[1]);
+    }
+    memcpy(sorted, d, sizeof(d));
+    qsort(sorted, 2 * TRIES, sizeof(sorted[0]), cmp_i64);
+    CHECK(sorted[0] > 0 && (double)sorted[0] >= 0.4 * (double)sorted[TRIES]);
+    if (sorted[0] <= 0 || (double)sorted[0] < 0.4 * (double)sorted[TRIES])
+        for (t = 0; t < TRIES; t++)
+            printf("    chains %lld and %lld ticks\n", (long long)d[2 * t], (long long)d[2 * t + 1]);
     free_buf(&a);
     free_buf(&b);
     vkDestroyQueryPool(device, p, NULL);
@@ -923,6 +1247,8 @@ int main(void)
     RUN(test_calibrated_timestamps);
     RUN(test_timestamp_order);
     RUN(test_timestamp_many);
+    RUN(test_timestamp_passes);
+    RUN(test_timestamp_copies);
     RUN(test_results_flags);
     RUN(test_results_resets);
     RUN(test_results_wait);

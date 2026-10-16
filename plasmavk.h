@@ -31599,7 +31599,6 @@ static inline void pvk_MTLRenderPassAttachmentDescriptor_setSlice(id self, unsig
 static inline void pvk_MTLRenderPassAttachmentDescriptor_setDepthPlane(id self, unsigned long depthPlane) { PVK_SEL_CACHE("setDepthPlane:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, depthPlane); }
 static inline void pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(id self, pvk_MTLLoadAction loadAction) { PVK_SEL_CACHE("setLoadAction:"); PVK_MSG(void, (id, SEL, pvk_MTLLoadAction))(self, pvk_sel_, loadAction); }
 static inline id pvk_MTLRenderPassAttachmentDescriptor_texture(id self) { PVK_SEL_CACHE("texture"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
-static inline pvk_MTLLoadAction pvk_MTLRenderPassAttachmentDescriptor_loadAction(id self) { PVK_SEL_CACHE("loadAction"); return PVK_MSG(pvk_MTLLoadAction, (id, SEL))(self, pvk_sel_); }
 static inline pvk_MTLStoreAction pvk_MTLRenderPassAttachmentDescriptor_storeAction(id self) { PVK_SEL_CACHE("storeAction"); return PVK_MSG(pvk_MTLStoreAction, (id, SEL))(self, pvk_sel_); }
 static inline void pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(id self, pvk_MTLStoreAction storeAction) { PVK_SEL_CACHE("setStoreAction:"); PVK_MSG(void, (id, SEL, pvk_MTLStoreAction))(self, pvk_sel_, storeAction); }
 static inline void pvk_MTLRenderPassColorAttachmentDescriptor_setClearColor(id self, pvk_MTLClearColor clearColor) { PVK_SEL_CACHE("setClearColor:"); PVK_MSG(void, (id, SEL, pvk_MTLClearColor))(self, pvk_sel_, clearColor); }
@@ -54433,17 +54432,16 @@ static inline VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_
  *   A timestamp pool is an MTL4CounterHeap with one entry per query, and a
  *   host word per query (`state`, PVK_TS_*) that says what the last write
  *   or reset of the query in submission order did, in which batch of which
- *   queue. vkCmdWriteTimestamp is written by the next encoder of the
- *   batch at its start, behind a barrier against all earlier work of the
- *   queue (-writeTimestampWithGranularity:...; a render encoder's before its
- *   vertex stage begins), or by an encoder of its own: where none follows,
- *   where a copy must see it, and for the 4 waiting when a fifth comes
- *   (pvk_encoder_stamp, pvk_encode_stamps, pvk_encode_stamp_later); inside
- *   a render pass, once the pass ends (section 16). That is an execution
- *   dependency on everything earlier in submission order, whatever its
- *   stage. Nothing else of a query runs on the GPU: a submission notes its
- *   writes and resets while it is encoded, and stores them in the states
- *   once it is sure to go ahead
+ *   queue. vkCmdWriteTimestamp is written by a compute encoder of its own
+ *   (-writeTimestampWithGranularity:intoHeap:atIndex:), with up to 3 written
+ *   right before or after it, behind a barrier against all earlier work of
+ *   the queue, and the next encoder for commands waits for it
+ *   (pvk_encode_stamps, pvk_encode_stamp_later); inside a render pass, once
+ *   the pass ends (section 16). That is an execution dependency on
+ *   everything earlier in submission order, whatever its stage, and the
+ *   work after it starts after it. Nothing else of a query runs on the GPU:
+ *   a submission notes its writes and resets while it is encoded, and
+ *   stores them in the states once it is sure to go ahead
  *   (pvk_queue_publish_queries). A written query is available once its
  *   batch is done: its queue's timeline reaches the submission (section 16,
  *   TIMELINE), or, for a batch before the submission's last (those after it
@@ -54461,23 +54459,42 @@ static inline VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_
  *   as submitted by then. (A copy that waits for another queue's later
  *   submission to write a query, a wait before its signal, sees the query
  *   unavailable.) Measured on M4 Max, macOS 27.2:
- *   - An encoder's timestamp at its start, behind a barrier against all
- *     earlier work of the queue, is taken once that is done, also that of
- *     earlier command buffers, and before the encoder's own work; without
- *     the barrier it came out before the earlier work was done. An encoder
- *     writes at most 4 (its fifth and later are dropped, at either
- *     granularity, also with work between them); one without work writes
- *     none. A render pass that draws nothing is skipped, and its
- *     timestamps come out right away, unless it clears an attachment that
- *     it stores or resolves (color, also multisampled, depth, stencil): one
- *     that loads its attachments or leaves them undefined is skipped,
- *     whether it stores, resolves or neither, as is one that clears them
- *     without storing, and one without attachments.
+ *   - The timestamps of a compute encoder of their own (with a 4-byte fill),
+ *     behind a barrier against all earlier work of the queue, are taken
+ *     once that is done, also that of earlier command buffers, and before
+ *     the work of an encoder after it that waits for it: around 16 copies
+ *     of 32 MB, a heavy dispatch, a pass of heavy vertex work or of 10000
+ *     small draws, they measured what ran between them in each of 30 runs.
+ *     Without the barrier they came out before the earlier work was done.
+ *     An encoder writes at most 4 (its fifth and later are dropped, at
+ *     either granularity, also with work between them); one without work
+ *     writes none.
+ *   - An encoder's timestamps among its own work are taken together, at its
+ *     start or later, Relaxed or Precise. At the start of a compute encoder
+ *     of 16 copies of 32 MB (1750 us) one came up to 1620 us late, of a
+ *     heavy dispatch (1380 us) up to 1120 us; one at the end of an encoder
+ *     of such copies, behind them, came at its start in most runs.
+ *   - A render encoder's timestamps are taken after part of its pass ran:
+ *     a pass begins with work that its encoder's timestamps (and a commit's
+ *     GPUStartTime) leave out, before its vertex stage, growing with its
+ *     draws. 10000 small draws: 274 us from such a timestamp at the start
+ *     (afterStage vertex, Relaxed or Precise) to a compute encoder's after
+ *     the pass, 467 us from a compute encoder's before it, and 457 us a
+ *     pass when 20 such command buffers run back to back; afterStage
+ *     fragment comes after the vertex stage of the whole pass (heavy vertex
+ *     work: 7 us of 1070). So profilers' scopes moved that part of each
+ *     pass into the one before it, and a frame's timestamps left out its
+ *     first pass's (on devices without sparseBinding; barriers that also
+ *     flush aliased addresses leave out less, about 50 of 500 us). Metal
+ *     also skips a render pass that draws nothing, barrier and timestamps
+ *     and all, unless it clears an attachment that it stores or resolves.
  *   - The command buffer's timestamp (-[MTL4CommandBuffer
  *     writeTimestampIntoHeap:atIndex:]) is taken once all earlier work of
- *     the queue finished too, but a few microseconds later: after the
- *     timestamps of the encoders behind it, in it or in the next command
- *     buffer (100 of 100 runs). It is not used.
+ *     the queue finished too, but late: after the timestamps of the
+ *     encoders behind it, in it or in the next command buffer (100 of 100
+ *     runs), and at the start of a command buffer after part of the render
+ *     pass behind it, or all of it (a pass of 17 us that samples a texture:
+ *     2 us from it to a timestamp after the pass). It is not used.
  *   - A resolve encoded after a timestamp gets the value written: the
  *     command buffer's (900 runs, also behind long dispatches and under
  *     MTL_DEBUG_LAYER; 900 runs in a later command buffer, behind 4 fills
@@ -54494,7 +54511,10 @@ static inline VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_
  *   26 timestamps: 705 -> 460 us a frame); an encoder's barrier keeps its
  *   work from overlapping the work before the timestamp, which they did not
  *   (two timestamps around 4 fills of 64 MB per command buffer, back to
- *   back: 974 -> 983 us each).
+ *   back: 974 -> 983 us each). A compute encoder of their own costs about 3
+ *   us of GPU time (12 small passes behind a long dispatch, a timestamp
+ *   before each: 1512 -> 1546 us; in the passes' render encoders 1514 us,
+ *   but wrong).
  *
  * OCCLUSION (for the render pass code)
  *   `buffer` is the visibility result buffer: MTL4RenderPassDescriptor's
@@ -59299,16 +59319,15 @@ struct pvk_encoder {
     /* Occlusion queries made available since the last pvk_encode_query_flush */
     struct pvk_query_range queries[16];
     uint32_t query_count;
-    /* Timestamps the next encoder writes when it starts (section 14,
-     * TIMESTAMPS; pvk_encoder_stamp). The open render encoder wrote the
-     * first stamps_written of them: they stay pending until it ends, to be
-     * written again if it drew nothing. */
+    /* Timestamps a compute encoder of their own writes before the next
+     * encoder (section 14, TIMESTAMPS; pvk_encode_stamps); stamp_wait: it
+     * did, and the next encoder for commands waits for all earlier work */
     struct pvk_stamp {
         struct pvk_query_pool *pool;
         uint32_t query;
     } stamps[PVK_ENCODER_STAMPS];
-    uint32_t stamp_count, stamps_written;
-    bool drew; /* the open render encoder issued a draw, or runs without (pvk_pass_stores_ms) */
+    uint32_t stamp_count;
+    bool stamp_wait;
     /* Debug labels (DEBUG LABELS): the open encoder, and how many of
      * queue->cmd_labels are debug groups on it */
     id label_enc;
@@ -59484,26 +59503,14 @@ static void pvk_encoder_close(struct pvk_encoder *e, id enc)
     pvk_MTL4CommandEncoder_endEncoding(enc);
 }
 
-/* The first n pending timestamps are written (pvk_encoder_stamp). */
-static void pvk_stamps_done(struct pvk_encoder *e, uint32_t n)
-{
-    e->stamp_count -= n;
-    memmove(e->stamps, e->stamps + n, sizeof(e->stamps[0]) * e->stamp_count);
-}
-
 /* Ends a render encoder: later encoders wait for its work when it stored
- * multisampled attachments (BARRIERS). The timestamps it wrote at its start
- * are done with if it ran, else the next encoder writes them again
- * (pvk_encoder_stamp). */
+ * multisampled attachments (BARRIERS). */
 static void pvk_render_close(struct pvk_encoder *e, id enc)
 {
     if (e->ms_store)
         pvk_MTL4CommandEncoder_barrierAfterStages_beforeQueueStages_visibilityOptions(
             enc, PVK_STAGES_RENDER, PVK_STAGES_ALL, e->queue->device->visibility);
     pvk_encoder_close(e, enc);
-    if (e->drew)
-        pvk_stamps_done(e, e->stamps_written);
-    e->stamps_written = 0;
 }
 
 /* The last blit's render encoder ends (before any other encoder or command
@@ -59517,78 +59524,78 @@ static void pvk_blit_end(struct pvk_encoder *e)
     e->blit_enc = NULL;
 }
 
-/* Whether a pass stores a multisampled attachment (e->ms_store), and
- * whether Metal runs it if it draws nothing (*runs): some attachment is
- * cleared, and stored or resolved. It skips one whose attachments are only
- * loaded or not stored, also resolved after a load (section 14, TIMESTAMPS). */
-static bool pvk_pass_stores_ms(id pass, bool *runs)
+/* Whether a pass stores a multisampled attachment. */
+static bool pvk_pass_stores_ms(id pass)
 {
     id att[PVK_MAX_COLOR_ATTACHMENTS + 2];
     uint32_t i;
-    bool ms = false;
     for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
         att[i] = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
             pvk_MTL4RenderPassDescriptor_colorAttachments(pass), i);
     att[i++] = pvk_MTL4RenderPassDescriptor_depthAttachment(pass);
     att[i++] = pvk_MTL4RenderPassDescriptor_stencilAttachment(pass);
-    *runs = false;
     while (i-- > 0) {
         id tex = pvk_MTLRenderPassAttachmentDescriptor_texture(att[i]);
         pvk_MTLStoreAction store = tex ? pvk_MTLRenderPassAttachmentDescriptor_storeAction(att[i]) : 0;
-        if (!tex || store == PVK_MTLStoreActionDontCare)
-            continue;
-        if (pvk_MTLRenderPassAttachmentDescriptor_loadAction(att[i]) == PVK_MTLLoadActionClear)
-            *runs = true;
-        if (store != PVK_MTLStoreActionMultisampleResolve && pvk_MTLTexture_sampleCount(tex) > 1)
-            ms = true;
+        if (tex && store != PVK_MTLStoreActionDontCare && store != PVK_MTLStoreActionMultisampleResolve &&
+            pvk_MTLTexture_sampleCount(tex) > 1)
+            return true;
     }
-    return ms;
+    return false;
 }
 
-/* A new encoder of `stages` (PVK_STAGES_RENDER or PVK_STAGES_COMPUTE)
- * writes the pending timestamps (section 14, TIMESTAMPS), at most
- * PVK_ENCODER_STAMPS (pvk_encode_stamp_later). It writes them before its
- * work (a render encoder: before its vertex stage begins) and behind a
- * barrier against all earlier work: it waits for that, else they came out
- * before it was done. A compute encoder always gets work (commands that do
- * nothing are not recorded), but Metal skips a render pass that draws
- * nothing and clears no attachment it stores or resolves, barrier and all,
- * and writes its timestamps right away: they stay pending until the render
- * encoder ends, and the next encoder writes them again if it drew nothing
- * and did not run anyway (pvk_render_close, pvk_pass_stores_ms). Whether
- * there were any. */
-static bool pvk_encoder_stamp(struct pvk_encoder *e, id enc, pvk_MTLStages stages)
+/* The pending timestamps, now (section 14, TIMESTAMPS): before the next
+ * encoder, where none follows them, before something must see them
+ * written, or before more (pvk_encode_stamp_later). A compute encoder of
+ * their own writes them, behind a barrier against all earlier work (else
+ * they came out before it was done), with a fill of 4 bytes of upload
+ * memory, as Metal skips an encoder without work; the next encoder for
+ * commands waits for it (stamp_wait). An encoder's timestamps among its own
+ * work would not do: they are taken together, at its start or later, and a
+ * render encoder's after part of its pass ran. Nor would the command
+ * buffer's -writeTimestampIntoHeap:atIndex:, taken late too. No encoder may
+ * be open, and none is after. */
+static void pvk_encode_stamps(struct pvk_encoder *e)
 {
-    uint32_t i, n = e->stamp_count;
-    if (!n)
-        return false;
-    pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(enc, PVK_STAGES_ALL, stages,
-                                                                                 e->queue->device->visibility);
-    for (i = 0; i < n; i++) {
-        if (stages == PVK_STAGES_RENDER)
-            pvk_MTL4RenderCommandEncoder_writeTimestampWithGranularity_afterStage_intoHeap_atIndex(
-                enc, PVK_MTL4TimestampGranularityRelaxed, PVK_MTLRenderStageVertex, e->stamps[i].pool->heap,
-                e->stamps[i].query);
-        else
-            pvk_MTL4ComputeCommandEncoder_writeTimestampWithGranularity_intoHeap_atIndex(
-                enc, PVK_MTL4TimestampGranularityRelaxed, e->stamps[i].pool->heap, e->stamps[i].query);
+    pvk_MTLGPUAddress address;
+    pvk_NSRange range;
+    VkDeviceSize offset;
+    uint32_t i;
+    id enc, buffer;
+    if (!e->stamp_count || e->result != VK_SUCCESS || !pvk_upload(e, 4, 4, &buffer, &offset, &address))
+        return;
+    if (!(enc = pvk_MTL4CommandBuffer_computeCommandEncoder(e->cb))) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return;
     }
-    if (stages == PVK_STAGES_RENDER)
-        e->stamps_written = n;
-    else
-        pvk_stamps_done(e, n);
-    return true;
+    pvk_labels_open(e, enc, "Timestamps");
+    pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(enc, PVK_STAGES_ALL, PVK_STAGES_COMPUTE,
+                                                                                 e->queue->device->visibility);
+    for (i = 0; i < e->stamp_count; i++)
+        pvk_MTL4ComputeCommandEncoder_writeTimestampWithGranularity_intoHeap_atIndex(
+            enc, PVK_MTL4TimestampGranularityRelaxed, e->stamps[i].pool->heap, e->stamps[i].query);
+    range.location = offset;
+    range.length = 4;
+    pvk_MTL4ComputeCommandEncoder_fillBuffer_range_value(enc, buffer, range, 0);
+    pvk_encoder_close(e, enc);
+    e->stamp_count = 0;
+    e->stamp_wait = true;
 }
 
-/* A render encoder for a pass (NULL on failure). */
+/* A render encoder for a pass (NULL on failure), after the pending
+ * timestamps (pvk_encode_stamps). No other encoder may be open. */
 static id pvk_render_encoder_new(struct pvk_encoder *e, id pass)
 {
     id enc;
     pvk_blit_end(e);
-    e->ms_store = pvk_pass_stores_ms(pass, &e->drew); /* (a pass that runs counts as drawn) */
+    pvk_encode_stamps(e);
+    e->ms_store = pvk_pass_stores_ms(pass);
     enc = pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass);
-    if (enc)
-        pvk_encoder_stamp(e, enc, PVK_STAGES_RENDER);
+    if (enc && e->stamp_wait) {
+        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
+            enc, PVK_STAGES_ALL, PVK_STAGES_RENDER, e->queue->device->visibility);
+        e->stamp_wait = false;
+    }
     return enc;
 }
 
@@ -59736,6 +59743,7 @@ static id pvk_encoder_get(struct pvk_encoder *e)
         pvk_render_end(e);
     if (!e->enc && e->result == VK_SUCCESS) {
         pvk_blit_end(e);
+        pvk_encode_stamps(e);
         e->enc = pvk_MTL4CommandBuffer_computeCommandEncoder(e->cb);
         if (!e->enc) {
             e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -59749,9 +59757,9 @@ static id pvk_encoder_get(struct pvk_encoder *e)
         /* after earlier barriers, and for the batch's semaphore waits */
         before = pvk_queue_ordered(e, PVK_STAGES_COMPUTE, &after);
         pvk_encoder_consume(e, after, before);
-        if (pvk_encoder_stamp(e, e->enc, PVK_STAGES_COMPUTE)) { /* (that barrier is all of them) */
-            e->consumer_after = PVK_STAGES_ALL;
-            e->consumer_before = PVK_STAGES_COMPUTE;
+        if (e->stamp_wait) { /* after the timestamps */
+            pvk_encoder_consume(e, PVK_STAGES_ALL, PVK_STAGES_COMPUTE);
+            e->stamp_wait = false;
         }
     }
     return e->enc;
@@ -59766,32 +59774,9 @@ static void pvk_encoder_end(struct pvk_encoder *e)
     e->enc = NULL;
 }
 
-/* The pending timestamps, now: where no encoder follows them, before
- * something must see them written, or before more. An encoder of its own
- * writes them (pvk_encoder_stamp), with a fill of 4 bytes of upload memory, as
- * Metal skips an encoder without work. The command buffer's
- * -writeTimestampIntoHeap:atIndex: does not do: its timestamp is taken a
- * few microseconds after the work before it is done, after the next
- * command buffer's first encoder has written its own. No encoder may be
- * open, and none is after. */
-static void pvk_encode_stamps(struct pvk_encoder *e)
-{
-    pvk_MTLGPUAddress address;
-    pvk_NSRange range;
-    VkDeviceSize offset;
-    id enc, buffer;
-    if (e->stamp_count && pvk_upload(e, 4, 4, &buffer, &offset, &address) && (enc = pvk_encoder_get(e))) {
-        range.location = offset;
-        range.length = 4;
-        pvk_MTL4ComputeCommandEncoder_fillBuffer_range_value(enc, buffer, range, 0);
-        pvk_encoder_end(e);
-    }
-}
-
-/* A timestamp the next encoder writes. With PVK_ENCODER_STAMPS pending
- * already, those are written now: the next encoder could not write it, and
- * the one after it would, behind the next one's work. No encoder may be
- * open. */
+/* A timestamp written before the next encoder (pvk_encode_stamps), with at
+ * most PVK_ENCODER_STAMPS - 1 others: with that many pending already, those
+ * are written now. No encoder may be open. */
 static void pvk_encode_stamp_later(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t query)
 {
     if (e->stamp_count == PVK_ENCODER_STAMPS)
@@ -60676,7 +60661,6 @@ static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
         } else { /* each destination layer reads its own, a 3D destination's planes the one */
             a.layer[0] = (float)c->src_layer;
             a.layer[1] = c->dst_3d ? 0.0f : 1.0f;
-            e->drew = true;
         }
     }
     for (i = 0; i < 4; i++)
@@ -62203,7 +62187,6 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
         pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->render_table, address, 0);
         pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
             enc, PVK_MTLPrimitiveTypeTriangle, 0, 3, instances, 0);
-        e->drew = true;
     }
     pvk_render_internal_end(e);
 }
@@ -62516,7 +62499,6 @@ static void pvk_render_internal_draw(struct pvk_encoder *e, id ds, uint32_t ref,
     pvk_MTL4RenderCommandEncoder_setStencilFrontReferenceValue_backReferenceValue(r->enc, ref, ref);
     pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
         r->enc, PVK_MTLPrimitiveTypeTriangle, 0, 3, r->layers ? r->layers : 1, 0);
-    e->drew = true;
 }
 
 /* Rebuilds the stencil copy from the stencil attachment, bit by bit. */
@@ -62998,7 +62980,6 @@ static id pvk_render_seed_depth(struct pvk_encoder *e, const struct pvk_pass_att
         pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->render_table, address, 0);
         pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
             enc, PVK_MTLPrimitiveTypeTriangle, 0, 3, layered && layers ? layers : 1, 0);
-        e->drew = true;
         ok = true;
     }
     if (enc) {
@@ -64227,11 +64208,9 @@ static void pvk_encode_draw(struct pvk_encoder *e, const struct pvk_cmd_draw *c)
         memset(&g, 0, sizeof(g));
         g.mode = pvk_points_mode(r->dyn.topology);
         g.first = c->first_vertex;
-        if (n && pvk_render_points_bind(e, &g)) {
+        if (n && pvk_render_points_bind(e, &g))
             pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
                 r->enc, PVK_MTLPrimitiveTypePoint, 0, 3 * n, c->instance_count, c->first_instance);
-            e->drew = true;
-        }
         return;
     }
     if (r->dyn.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
@@ -64245,13 +64224,11 @@ static void pvk_encode_draw(struct pvk_encoder *e, const struct pvk_cmd_draw *c)
         pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferLength_instanceCount_baseVertex_baseInstance(
             r->enc, PVK_MTLPrimitiveTypeTriangle, 3ul * (c->vertex_count - 2), PVK_MTLIndexTypeUInt32, f->address,
             (unsigned long)(f->vertices - 2) * 12, c->instance_count, (long)c->first_vertex, c->first_instance);
-        e->drew = true;
         return;
     }
     pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
         r->enc, pvk_primitive_type(r->dyn.topology), c->first_vertex, c->vertex_count, c->instance_count,
         c->first_instance);
-    e->drew = true;
 }
 
 static void pvk_encode_draw_indexed(struct pvk_encoder *e, const struct pvk_cmd_draw_indexed *c)
@@ -64297,20 +64274,16 @@ static void pvk_encode_draw_indexed(struct pvk_encoder *e, const struct pvk_cmd_
                 g.first = c->first_index;
             }
         }
-        if (n && pvk_render_points_bind(e, &g)) {
+        if (n && pvk_render_points_bind(e, &g))
             pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
                 r->enc, PVK_MTLPrimitiveTypePoint, 0, 3 * n, c->instance_count, c->first_instance);
-            e->drew = true;
-        }
         return;
     }
     if (conv) {
-        if (res && res->index_count) {
+        if (res && res->index_count)
             pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferLength_instanceCount_baseVertex_baseInstance(
                 r->enc, prim, res->index_count, res->index_type, res->indices, res->indices_size, c->instance_count,
                 c->vertex_offset, c->first_instance);
-            e->drew = true;
-        }
         return;
     }
     if (!t.index_address) { /* maintenance6: no index buffer reads index 0 */
@@ -64322,7 +64295,6 @@ static void pvk_encode_draw_indexed(struct pvk_encoder *e, const struct pvk_cmd_
         pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferLength_instanceCount_baseVertex_baseInstance(
             r->enc, prim, c->index_count, PVK_MTLIndexTypeUInt32, address, (unsigned long)c->index_count * 4,
             c->instance_count, c->vertex_offset, c->first_instance);
-        e->drew = true;
         return;
     }
     if (at >= t.index_size)
@@ -64330,7 +64302,6 @@ static void pvk_encode_draw_indexed(struct pvk_encoder *e, const struct pvk_cmd_
     pvk_MTL4RenderCommandEncoder_drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferLength_instanceCount_baseVertex_baseInstance(
         r->enc, prim, c->index_count, t.index_type == VK_INDEX_TYPE_UINT16 ? PVK_MTLIndexTypeUInt16 : PVK_MTLIndexTypeUInt32,
         t.index_address + at, t.index_size - at, c->instance_count, c->vertex_offset, c->first_instance);
-    e->drew = true;
 }
 
 static void pvk_encode_draw_indirect(struct pvk_encoder *e, const struct pvk_cmd_draw_indirect *c)
@@ -64373,7 +64344,6 @@ static void pvk_encode_draw_indirect(struct pvk_encoder *e, const struct pvk_cmd
                                                      PVK_MSL_POINTS_BUFFER);
             pvk_MTL4RenderCommandEncoder_drawPrimitives_indirectBuffer(r->enc, PVK_MTLPrimitiveTypePoint,
                                                                        res->records + 16ull * d);
-            e->drew = true;
         }
         return;
     }
@@ -64387,7 +64357,6 @@ static void pvk_encode_draw_indirect(struct pvk_encoder *e, const struct pvk_cmd
                 r->enc, prim, type, indices, indices_size, records + d * stride);
         else
             pvk_MTL4RenderCommandEncoder_drawPrimitives_indirectBuffer(r->enc, prim, records + d * stride);
-        e->drew = true;
     }
 }
 
@@ -64506,6 +64475,7 @@ static id pvk_encoder_alone(struct pvk_encoder *e)
     if (e->result != VK_SUCCESS)
         return NULL;
     pvk_encoder_end(e);
+    pvk_encode_stamps(e);
     enc = pvk_MTL4CommandBuffer_computeCommandEncoder(e->cb);
     if (!enc) {
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -64514,7 +64484,6 @@ static id pvk_encoder_alone(struct pvk_encoder *e)
     pvk_labels_open(e, enc, "Query and event writes");
     pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
         enc, PVK_STAGES_ALL, PVK_MTLStageBlit, e->queue->device->visibility);
-    pvk_encoder_stamp(e, enc, PVK_STAGES_COMPUTE);
     return enc;
 }
 
