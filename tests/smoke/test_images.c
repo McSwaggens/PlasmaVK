@@ -1894,6 +1894,182 @@ static void test_blit_batched(void)
     free_buf(&out);
 }
 
+/* One region of test_blit_cover: a nearest blit from [0, s1) of a source
+ * layer into a rectangle of a destination level and layer whose sides are
+ * whole multiples of the source's (flipped where d1 < d0). */
+struct cover_blit {
+    uint32_t level, layer;
+    int32_t s1[2], d0[2], d1[2];
+};
+
+/* The source texel (x, y) of a destination texel inside the blit's
+ * rectangle, or -1 outside it. */
+static int32_t cover_texel(const struct cover_blit *b, uint32_t x, uint32_t y, uint32_t sw)
+{
+    int32_t at[2] = { (int32_t)x, (int32_t)y }, s[2];
+    unsigned i;
+    for (i = 0; i < 2; i++) {
+        int32_t lo = b->d0[i] < b->d1[i] ? b->d0[i] : b->d1[i], n = b->d0[i] < b->d1[i] ? b->d1[i] - lo : b->d0[i] - lo;
+        int32_t k = at[i] - lo;
+        if (k < 0 || k >= n)
+            return -1;
+        s[i] = (b->d0[i] < b->d1[i] ? k : n - 1 - k) / (n / b->s1[i]);
+    }
+    return s[1] * (int32_t)sw + s[0];
+}
+
+/* Blits and resolves into destinations of several tiles, where texels a pass
+ * neither loads nor draws come out undefined (pvk_blit_encoder): a region a
+ * texel short of an edge keeps the texels it leaves out, other layers, levels
+ * and depth planes keep theirs, and one over all of a level writes it all. */
+static void test_blit_cover(void)
+{
+    enum { SW = 50, SH = 37, DW = 100, DH = 75 };
+    static const struct cover_blit first[] = {
+        { 0, 0, { 50, 37 }, { 0, 0 }, { 100, 74 } }, /* a row short */
+        { 0, 1, { 33, 25 }, { 1, 0 }, { 100, 75 } }, /* a column short */
+        { 1, 0, { 25, 37 }, { 50, 37 }, { 0, 0 } },  /* all of level 1 (50x37), mirrored */
+        { 1, 1, { 25, 36 }, { 0, 1 }, { 50, 37 } },  /* a row short at the top */
+    }, second[] = {
+        { 0, 0, { 50, 25 }, { 0, 0 }, { 100, 75 } },  /* all of level 0, each layer */
+        { 0, 1, { 50, 25 }, { 0, 0 }, { 100, 75 } },
+        { 1, 0, { 25, 18 }, { 0, 0 }, { 50, 18 } },   /* level 1 in two blits that share a pass */
+        { 1, 0, { 25, 19 }, { 0, 18 }, { 50, 37 } },
+    };
+    static const uint8_t ee[4] = { 0xee, 0xee, 0xee, 0xee };
+    VkImageUsageFlags xfer = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    struct buf out = make_buf(DW * DH * 2 * 4, shared_type, 0);
+    uint8_t px[SW * SH * 2 * 4], *o;
+    VkImageSubresourceRange range;
+    VkClearColorValue fill;
+    VkImageCreateInfo info;
+    VkBufferImageCopy dl;
+    VkCommandBuffer cb;
+    VkImageBlit r;
+    struct img a, b;
+    uint32_t k, l, x, y, z, w, h;
+
+    REQUIRE(out.data);
+    o = out.data;
+    fill.float32[0] = fill.float32[1] = fill.float32[2] = fill.float32[3] = 238.0f / 255.0f; /* 0xee */
+    fill_pattern(px, sizeof(px), 3);
+    a = image_with(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, SW, SH, 1, 1, 2, px, sizeof(px));
+    b = image_with(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, DW, DH, 1, 2, 2, NULL, 0);
+    clear_range(&range, VK_IMAGE_ASPECT_COLOR_BIT, 0, 2, 0, 2);
+    for (k = 0; k < 2; k++) {
+        const struct cover_blit *bl = k ? second : first;
+        uint32_t n = k ? PVK_ARRAY_SIZE(second) : PVK_ARRAY_SIZE(first), i;
+        cb = begin();
+        vkCmdClearColorImage(cb, b.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &fill, 1, &range);
+        barrier(cb, b.image);
+        for (i = 0; i < n; i++) { /* (no barriers: those into one subresource share a pass) */
+            const struct cover_blit *c = &bl[i];
+            r = blit_region(0, c->layer, 0, 0, 0, c->s1[0], c->s1[1], 1, c->level, c->layer, c->d0[0], c->d0[1], 0,
+                            c->d1[0], c->d1[1], 1, 1);
+            vkCmdBlitImage(cb, a.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r, VK_FILTER_NEAREST);
+        }
+        CHECK_VK(finish(cb), VK_SUCCESS);
+        for (l = 0; l < 2; l++) {
+            w = DW >> l;
+            h = DH >> l;
+            dl = region(VK_IMAGE_ASPECT_COLOR_BIT, l, 0, 2, 0, 0, 0, w, h, 1);
+            download(b.image, &dl, &out);
+            for (z = 0; z < 2; z++)
+                for (y = 0; y < h; y++)
+                    for (x = 0; x < w; x++) {
+                        const uint8_t *want = ee;
+                        int32_t t = -1;
+                        for (i = 0; i < n; i++)
+                            if (bl[i].level == l && bl[i].layer == z && (t = cover_texel(&bl[i], x, y, SW)) >= 0)
+                                break;
+                        if (t >= 0)
+                            want = px + ((size_t)z * SW * SH + (size_t)t) * 4;
+                        if (memcmp(o + ((z * h + y) * w + x) * 4, want, 4)) {
+                            PVK_TEST_FAIL("blits %u: level %u layer %u texel (%u, %u)", k, l, z, x, y);
+                            z = 2;
+                            y = h;
+                            break;
+                        }
+                    }
+        }
+    }
+    free_image(&a);
+    free_image(&b);
+
+    /* 3D: all of planes 1-2 (a layered pass of two planes); planes 0 and 3 keep theirs */
+    {
+        uint8_t src3[32 * 24 * 2 * 4];
+        fill_pattern(src3, sizeof(src3), 4);
+        a = image_with(VK_IMAGE_TYPE_3D, VK_FORMAT_R8G8B8A8_UNORM, 32, 24, 2, 1, 1, src3, sizeof(src3));
+        b = image_with(VK_IMAGE_TYPE_3D, VK_FORMAT_R8G8B8A8_UNORM, 64, 48, 4, 1, 1, NULL, 0);
+        clear_range(&range, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1);
+        cb = begin();
+        vkCmdClearColorImage(cb, b.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &fill, 1, &range);
+        barrier(cb, b.image);
+        r = blit_region(0, 0, 0, 0, 0, 32, 24, 2, 0, 0, 0, 0, 1, 64, 48, 3, 1);
+        vkCmdBlitImage(cb, a.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &r, VK_FILTER_NEAREST);
+        CHECK_VK(finish(cb), VK_SUCCESS);
+        dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, 64, 48, 4);
+        download(b.image, &dl, &out);
+        for (z = 0; z < 4; z++)
+            for (y = 0; y < 48; y++)
+                for (x = 0; x < 64; x++) {
+                    const uint8_t *want = z == 1 || z == 2 ? src3 + (((z - 1) * 24 + y / 2) * 32 + x / 2) * 4 : ee;
+                    if (memcmp(o + ((z * 48 + y) * 64 + x) * 4, want, 4)) {
+                        PVK_TEST_FAIL("3D plane %u texel (%u, %u)", z, x, y);
+                        z = 4;
+                        y = 48;
+                        break;
+                    }
+                }
+        free_image(&a);
+        free_image(&b);
+    }
+
+    /* vkCmdResolveImage: a row short, then all of it */
+    info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, DW, DH, 1, 1, 1,
+                      xfer | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+    info.samples = VK_SAMPLE_COUNT_4_BIT;
+    a = make_image(&info);
+    b = image_with(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, DW, DH, 1, 1, 1, NULL, 0);
+    clear_range(&range, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1);
+    for (k = 0; k < 2; k++) {
+        static const uint8_t drawn[4] = { 0x33, 0x66, 0x99, 0xff };
+        VkClearColorValue color;
+        VkImageResolve res;
+        memset(&color, 0, sizeof(color));
+        color.float32[0] = 0.2f;
+        color.float32[1] = 0.4f;
+        color.float32[2] = 0.6f;
+        color.float32[3] = 1.0f;
+        memset(&res, 0, sizeof(res));
+        res.srcSubresource.aspectMask = res.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        res.srcSubresource.layerCount = res.dstSubresource.layerCount = 1;
+        res.extent.width = DW;
+        res.extent.height = DH - (k ? 0 : 1);
+        res.extent.depth = 1;
+        cb = begin();
+        vkCmdClearColorImage(cb, a.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
+        vkCmdClearColorImage(cb, b.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &fill, 1, &range);
+        barrier(cb, VK_NULL_HANDLE);
+        vkCmdResolveImage(cb, a.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.image,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &res);
+        CHECK_VK(finish(cb), VK_SUCCESS);
+        dl = region(VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1, 0, 0, 0, DW, DH, 1);
+        download(b.image, &dl, &out);
+        for (y = 0; y < DH; y++)
+            if (!all_texels(o + y * DW * 4, DW, y < res.extent.height ? drawn : ee, 4)) {
+                PVK_TEST_FAIL("resolve %u: row %u", k, y);
+                break;
+            }
+    }
+    free_image(&a);
+    free_image(&b);
+    free_buf(&out);
+}
+
 /* ---- Resolves ---- */
 
 static void test_resolve(void)
@@ -3228,6 +3404,7 @@ int main(void)
     RUN(test_clear_depth_stencil);
     RUN(test_blit);
     RUN(test_blit_batched);
+    RUN(test_blit_cover);
     RUN(test_resolve);
     RUN(test_transfer_timestamps);
     RUN(test_view_swizzle);

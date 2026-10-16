@@ -8915,6 +8915,73 @@ static void test_msaa_int_resolve(void)
     free_img(&resolved);
 }
 
+/* The draws resolving integer attachments when the pass ends write the
+ * render area of the resolve image (pvk_render_resolve_int): the texels
+ * beyond it keep theirs, where the area covers the whole color attachment
+ * but not the larger resolve image, or only part of both. The images span
+ * several tiles (texels a pass neither loads nor draws come out undefined). */
+static void test_msaa_int_resolve_area(void)
+{
+    struct img ms = make_img(VK_FORMAT_R32_UINT, 64, 48, 1, VK_SAMPLE_COUNT_4_BIT);
+    struct img resolved = make_img(VK_FORMAT_R32_UINT, 100, 75, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(100 * 75 * 4);
+    const uint32_t cleared = 0x13572468u, kept = 0xeeeeeeeeu;
+    VkRenderingAttachmentInfo att;
+    VkImageSubresourceRange range;
+    VkClearColorValue fill;
+    VkRenderingInfo info;
+    VkCommandBuffer cb;
+    uint32_t k, x, y;
+
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = ms.view;
+    att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att.clearValue.color.uint32[0] = cleared;
+    att.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+    att.resolveImageView = resolved.view;
+    att.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    memset(&range, 0, sizeof(range));
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = range.layerCount = 1;
+    memset(&fill, 0, sizeof(fill));
+    fill.uint32[0] = kept;
+    for (k = 0; k < 2; k++) { /* all of the color attachment, then part of it */
+        int bad = 0;
+        memset(&info, 0, sizeof(info));
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        info.renderArea.offset.x = k ? 5 : 0;
+        info.renderArea.offset.y = k ? 3 : 0;
+        info.renderArea.extent.width = k ? 40 : 64;
+        info.renderArea.extent.height = k ? 33 : 48;
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &att;
+        cb = begin_cmd();
+        vkCmdClearColorImage(cb, resolved.image, VK_IMAGE_LAYOUT_GENERAL, &fill, 1, &range);
+        barrier(cb);
+        vkCmdBeginRendering(cb, &info);
+        vkCmdEndRendering(cb);
+        download(cb, &resolved, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        for (y = 0; y < 75; y++)
+            for (x = 0; x < 100; x++) {
+                bool in = x >= (uint32_t)info.renderArea.offset.x && y >= (uint32_t)info.renderArea.offset.y &&
+                          x < info.renderArea.offset.x + info.renderArea.extent.width &&
+                          y < info.renderArea.offset.y + info.renderArea.extent.height;
+                uint32_t got = ((const uint32_t *)out.data)[y * 100 + x];
+                if (got != (in ? cleared : kept) && bad++ < 4)
+                    fprintf(stderr, "integer resolve, area %u: pixel (%u, %u) is %08x\n", k, x, y, got);
+            }
+        CHECK(bad == 0);
+    }
+    free_buf(&out);
+    free_img(&ms);
+    free_img(&resolved);
+}
+
 /* Suspending and resuming dynamic render pass instances across command
  * buffers of one batch, and secondaries continuing render passes (a
  * subpass, and dynamic rendering). */
@@ -13704,6 +13771,7 @@ int main(void)
     RUN(test_depth_bounds_later);
     RUN(test_msaa);
     RUN(test_msaa_int_resolve);
+    RUN(test_msaa_int_resolve_area);
     RUN(test_suspend_secondary);
     RUN(test_imageless_noattachment);
     RUN(test_dual_source);
