@@ -24,7 +24,7 @@ reports an error instead of fast-but-wrong numbers.
 | `bench_pipeline_compile` | Pipeline creation: the stutter of each call, with and without caches | `create_us` p99 and max, `total_ms` |
 | `bench_render_passes` | A deferred frame whose variants change what leaves tile memory | `gpu_us` |
 | `bench_render_area` | Render areas smaller than their attachments | `gpu_us` |
-| `bench_transfers` | Clears, blit mip chains, atlas blits and fills, as frames and level loads record them | `gpu_us` |
+| `bench_transfers` | Clears, blit mip chains, atlas blits, fills, an upscale and a resolve, as frames and level loads record them | `gpu_us` |
 | `bench_compute` | Small dispatches with and without barriers, and a bandwidth-bound prefix sum | `cpu_ns_per_dispatch`, `gelements_per_s` |
 | `bench_shaders_gpu` | Full-screen passes whose cost is their fragment shader's own code | `gpu_us` |
 
@@ -245,6 +245,9 @@ must survive.
 - `stream16_512`: 16 sRGB textures streamed in: a copy into level 0, then 9
   blitted mips each.
 - `fill_x128`: 128 `vkCmdFillBuffer` back to back into one buffer.
+- `upscale_2160p`: render scaling, a linear `vkCmdBlitImage` of a
+  2560x1440 RGBA16F scene into a 3840x2160 BGRA8 image.
+- `resolve_1080p`: `vkCmdResolveImage` of a 4x 1920x1080 RGBA16F target.
 
 `bench_compute`:
 - `chain_100`, `chain_1000`: dependent dispatches of 4096 elements with a
@@ -468,7 +471,8 @@ its other configurations have run:
   lighting in `render_passes` and `shaders_gpu` (fp16 rounding), the 5-way
   texture product in `descriptor_churn` and the material shader in
   `pipeline_compile` (±1 per channel), blitted mips in `transfers` (the
-  rounding of the format), the tonemapped frame in `present` (±1), and
+  rounding of the format) and its upscale (±1), the tonemapped frame in
+  `present` (±1), and
   `frame`'s final image, lit, bloomed and tonemapped in float (±2; its
   G-buffer, light lists and UI glyphs are exact).
 - `pipeline_compile` mixes a per-run salt into the shader code: into

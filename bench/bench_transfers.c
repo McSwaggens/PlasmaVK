@@ -21,16 +21,25 @@
  *   fill_x128            128 vkCmdFillBuffer back to back into one 2 MB
  *                        buffer, 16 KB each, alternately 0 and 1.0f (counters,
  *                        indirect arguments, min/max bounds)
+ *   upscale_2160p        a linear vkCmdBlitImage of a 2560x1440 RGBA16F scene
+ *                        into a 3840x2160 BGRA8 image (render scaling: the
+ *                        output a UI pass then draws over and presents)
+ *   resolve_1080p        vkCmdResolveImage of a 4x 1920x1080 RGBA16F target
+ *                        into a sampled image (an MSAA scene before its
+ *                        post-processing)
  *
  * GPU time is the number to watch. The first frame of each configuration is
- * read back. Clears, copies and fills must be exact; each blitted level must
- * be the 2x2 average of the level above it (as read back) within the
- * rounding of the format: 1 per channel for 8-bit formats (sRGB averaged in
- * linear), 2^-10 relative for half floats.
+ * read back. Clears, copies, fills and resolves must be exact; each blitted
+ * level must be the 2x2 average of the level above it (as read back) within
+ * the rounding of the format: 1 per channel for 8-bit formats (sRGB averaged
+ * in linear), 2^-10 relative for half floats; the upscale must be the
+ * bilinear filtering of the scene within 1 per channel. The scene and the
+ * multisampled target hold a texture-like rendering (noise.frag), drawn once.
  */
 #include <math.h>
 
 #include "bench_vk.h"
+#include "bench_shaders.h"
 
 #define BIG 2048          /* mipgen_2048, the atlas */
 #define BIG_MIPS 12
@@ -50,11 +59,28 @@
 #define FILLS 128
 #define FILL_BYTES (16u << 10)
 #define FILL_FLOAT 0x3F800000u /* 1.0f */
+#define SCENE_W 2560 /* upscale_2160p */
+#define SCENE_H 1440
+#define OUT_W 3840
+#define OUT_H 2160
+#define MS_W 1920 /* resolve_1080p */
+#define MS_H 1080
 
 static const float clear3d_color[4] = { 0.2f, 0.4f, 0.6f, 1.0f }; /* 51, 102, 153, 255 */
 static const float atlas_clear[4] = { 0.0f, 0.0f, 1.0f, 1.0f };   /* verify frames: cells not blitted */
 
-enum mode { MODE_CLEAR3D, MODE_MIPGEN, MODE_MIPGEN_STORAGE, MODE_CUBE, MODE_WARP, MODE_ATLAS, MODE_STREAM, MODE_FILL };
+enum mode {
+    MODE_CLEAR3D,
+    MODE_MIPGEN,
+    MODE_MIPGEN_STORAGE,
+    MODE_CUBE,
+    MODE_WARP,
+    MODE_ATLAS,
+    MODE_STREAM,
+    MODE_FILL,
+    MODE_UPSCALE,
+    MODE_RESOLVE
+};
 
 struct config {
     const char *name;
@@ -71,6 +97,8 @@ static const struct config configs[] = {
     { "blit_atlas64", MODE_ATLAS, 100 },
     { "stream16_512", MODE_STREAM, 60 },
     { "fill_x128", MODE_FILL, 200 },
+    { "upscale_2160p", MODE_UPSCALE, 200 },
+    { "resolve_1080p", MODE_RESOLVE, 200 },
 };
 
 /* An image with any type, layers and mips; transfers need no views. */
@@ -85,6 +113,8 @@ struct scene {
     struct bench_vk *vk;
     const struct config *cfg;
     struct img volume, mips[2], storage_mips[2], cube, warps[WARPS], atlas, sprite, streams[STREAMS];
+    struct img output, resolved;  /* upscale_2160p, resolve_1080p destinations */
+    struct bench_image hdr, msaa; /* their sources */
     struct bench_buffer staging, fills, readback;
     uint32_t *big_texels, *sprite_texels, *warp_texels, *stream_texels; /* level 0 contents */
     uint16_t *cube_texels;
@@ -175,6 +205,18 @@ static uint32_t level_size(uint32_t size, uint32_t level)
 static VkDeviceSize texel_bytes(VkFormat format)
 {
     return format == VK_FORMAT_R16G16B16A16_SFLOAT ? 8 : 4;
+}
+
+/* noise.frag's color at pixel (x, y), in 256ths. */
+static void noise_texel(uint32_t x, uint32_t y, uint32_t c[4])
+{
+    uint32_t n = (x * 0x9e3779b1u) ^ (y * 0x85ebca77u);
+    n = (n ^ (n >> 15)) * 0x2c1b3c6du;
+    n ^= n >> 12;
+    c[0] = x / 16 + (n & 15);
+    c[1] = y / 8 + ((n >> 4) & 15);
+    c[2] = (x + y) / 32 + ((n >> 8) & 31);
+    c[3] = 255 - ((n >> 16) & 63);
 }
 
 /* Bytes of one level (all layers) of a 2D image. */
@@ -395,6 +437,62 @@ static void record(void *user, const struct bench_frame *f)
                                  VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
         }
         break;
+    case MODE_UPSCALE: {
+        /* The scene as its passes left it, into the output as a frame's last
+         * pass begins (the output's old texels not needed: UNDEFINED, as a
+         * swapchain image just acquired). */
+        VkImageBlit blit = {
+            .srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+            .srcOffsets = { { 0, 0, 0 }, { SCENE_W, SCENE_H, 1 } },
+            .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+            .dstOffsets = { { 0, 0, 0 }, { OUT_W, OUT_H, 1 } },
+        };
+        bench_image_barrier(cmd, &s->hdr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                            VK_ACCESS_2_TRANSFER_READ_BIT);
+        img_barrier(cmd, &s->output, 0, 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        vkd.CmdBlitImage(cmd, s->hdr.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s->output.image,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+        img_barrier(cmd, &s->output, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        bench_image_barrier(cmd, &s->hdr, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT, 0,
+                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        if (f->verify)
+            img_read_back(s, cmd, &s->output, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 1);
+        break;
+    }
+    case MODE_RESOLVE: {
+        VkImageResolve resolve = {
+            .srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+            .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+            .extent = { MS_W, MS_H, 1 },
+        };
+        bench_image_barrier(cmd, &s->msaa, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_RESOLVE_BIT,
+                            VK_ACCESS_2_TRANSFER_READ_BIT);
+        img_barrier(cmd, &s->resolved, 0, 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0, VK_PIPELINE_STAGE_2_RESOLVE_BIT,
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        vkd.CmdResolveImage(cmd, s->msaa.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s->resolved.image,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &resolve);
+        img_barrier(cmd, &s->resolved, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_RESOLVE_BIT,
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        bench_image_barrier(cmd, &s->msaa, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_RESOLVE_BIT, 0,
+                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        if (f->verify)
+            img_read_back(s, cmd, &s->resolved, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1);
+        break;
+    }
     }
 }
 
@@ -507,6 +605,40 @@ static int check_chain(const char *config, const struct img *im, const uint8_t *
     return 1;
 }
 
+/* The upscale: each output texel (B8G8R8A8) the scene's noise.frag colors
+ * filtered bilinearly at its center, edges clamped, within 1 per channel. */
+static int check_upscale(const char *config, const uint8_t *got)
+{
+    static const int bgra[4] = { 2, 1, 0, 3 }; /* the byte of each RGBA channel */
+    uint32_t x, y;
+    int c;
+    for (y = 0; y < OUT_H; y++)
+        for (x = 0; x < OUT_W; x++) {
+            float u = ((float)x + 0.5f) * SCENE_W / OUT_W - 0.5f, v = ((float)y + 0.5f) * SCENE_H / OUT_H - 0.5f;
+            float fu = u - floorf(u), fv = v - floorf(v);
+            int32_t u0 = (int32_t)floorf(u), v0 = (int32_t)floorf(v);
+            uint32_t x0 = u0 < 0 ? 0 : (uint32_t)u0, y0 = v0 < 0 ? 0 : (uint32_t)v0;
+            uint32_t x1 = u0 + 1 < SCENE_W ? (uint32_t)(u0 + 1) : SCENE_W - 1;
+            uint32_t y1 = v0 + 1 < SCENE_H ? (uint32_t)(v0 + 1) : SCENE_H - 1;
+            uint32_t t00[4], t10[4], t01[4], t11[4];
+            noise_texel(x0, y0, t00);
+            noise_texel(x1, y0, t10);
+            noise_texel(x0, y1, t01);
+            noise_texel(x1, y1, t11);
+            for (c = 0; c < 4; c++) {
+                float top = (float)t00[c] + ((float)t10[c] - (float)t00[c]) * fu;
+                float bottom = (float)t01[c] + ((float)t11[c] - (float)t01[c]) * fu;
+                float want = (top + (bottom - top) * fv) / 256.0f * 255.0f;
+                float g = (float)got[((size_t)y * OUT_W + x) * 4 + (size_t)bgra[c]], d = g - want;
+                if ((d < 0 ? -d : d) > 1.0f) {
+                    bench_error(config, "texel (%u,%u) channel %d: %g, want %g", x, y, c, (double)g, (double)want);
+                    return 0;
+                }
+            }
+        }
+    return 1;
+}
+
 static int verify(struct scene *s)
 {
     const struct config *cfg = s->cfg;
@@ -581,6 +713,27 @@ static int verify(struct scene *s)
             }
         }
         return 1;
+    case MODE_UPSCALE:
+        return check_upscale(cfg->name, got);
+    case MODE_RESOLVE: {
+        /* Each pixel's samples are the same: the resolve is noise.frag exactly. */
+        uint32_t x, y;
+        int c;
+        for (y = 0; y < MS_H; y++)
+            for (x = 0; x < MS_W; x++) {
+                uint32_t want[4];
+                noise_texel(x, y, want);
+                for (c = 0; c < 4; c++) {
+                    uint16_t h = ((const uint16_t *)got)[((size_t)y * MS_W + x) * 4 + (size_t)c];
+                    if (h != float_to_half((float)want[c] / 256.0f)) {
+                        bench_error(cfg->name, "texel (%u,%u) channel %d: %g, want %g", x, y, c,
+                                    (double)half_to_float(h), want[c] / 256.0);
+                        return 0;
+                    }
+                }
+            }
+        return 1;
+    }
     }
     return 0;
 }
@@ -624,6 +777,60 @@ static uint32_t *texels(uint32_t size, uint64_t seed)
     return t;
 }
 
+/* Draws noise.frag over the scene and the multisampled target, once (left
+ * in COLOR_ATTACHMENT_OPTIMAL, as the passes that render them would). */
+static void render_noise(struct scene *s)
+{
+    struct bench_vk *vk = s->vk;
+    struct bench_image *targets[2] = { &s->hdr, &s->msaa };
+    struct bench_gfx_desc d;
+    VkPipeline pipelines[2];
+    VkCommandBuffer cmd;
+    uint32_t i;
+
+    memset(&d, 0, sizeof(d));
+    d.vs = BENCH_SHADER(vk, fullscreen_vert);
+    d.fs = BENCH_SHADER(vk, noise_frag);
+    d.layout = bench_pipeline_layout(vk, 0, NULL, 0, 0);
+    d.color_count = 1;
+    d.color_formats[0] = VK_FORMAT_R16G16B16A16_SFLOAT;
+    for (i = 0; i < 2; i++) {
+        d.samples = targets[i]->samples;
+        pipelines[i] = bench_gfx_pipeline(vk, &d);
+    }
+    cmd = bench_cmd_begin(vk);
+    for (i = 0; i < 2; i++) {
+        VkRenderingAttachmentInfo color = {
+            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .imageView = targets[i]->view,
+            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        };
+        VkRenderingInfo info = {
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .renderArea = { { 0, 0 }, { targets[i]->width, targets[i]->height } },
+            .layerCount = 1,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &color,
+        };
+        bench_image_barrier(cmd, targets[i], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        vkd.CmdBeginRendering(cmd, &info);
+        bench_cmd_viewport(cmd, targets[i]->width, targets[i]->height);
+        vkd.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[i]);
+        vkd.CmdDraw(cmd, 3, 1, 0, 0);
+        vkd.CmdEndRendering(cmd);
+    }
+    bench_cmd_finish(vk, cmd);
+    for (i = 0; i < 2; i++)
+        vkd.DestroyPipeline(vk->device, pipelines[i], NULL);
+    vkd.DestroyPipelineLayout(vk->device, d.layout, NULL);
+    vkd.DestroyShaderModule(vk->device, d.vs, NULL);
+    vkd.DestroyShaderModule(vk->device, d.fs, NULL);
+}
+
 static void setup(struct scene *s)
 {
     struct bench_vk *vk = s->vk;
@@ -631,8 +838,8 @@ static void setup(struct scene *s)
     uint32_t i, x, y, face;
 
     bench_buffer_create(vk, &s->staging, STREAM_BYTES + UPLOAD_BYTES, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, BENCH_HOST, 0);
-    bench_buffer_create(vk, &s->readback, (VkDeviceSize)BIG * BIG * 4 * 4 / 3 + (1u << 20),
-                        VK_BUFFER_USAGE_TRANSFER_DST_BIT, BENCH_HOST, VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+    bench_buffer_create(vk, &s->readback, (VkDeviceSize)OUT_W * OUT_H * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                        BENCH_HOST, VK_MEMORY_PROPERTY_HOST_CACHED_BIT); /* (the largest: the upscale's output) */
     bench_buffer_create(vk, &s->fills, (VkDeviceSize)FILLS * FILL_BYTES,
                         VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
@@ -685,6 +892,14 @@ static void setup(struct scene *s)
     for (i = 0; i < STREAMS; i++)
         img_create(vk, &s->streams[i], VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_SRGB, STREAM, STREAM, 1, STREAM_MIPS, 1,
                    sampled, 0);
+    bench_image_create(vk, &s->hdr, VK_FORMAT_R16G16B16A16_SFLOAT, SCENE_W, SCENE_H, 1, VK_SAMPLE_COUNT_1_BIT,
+                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | sampled | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 0);
+    bench_image_create(vk, &s->msaa, VK_FORMAT_R16G16B16A16_SFLOAT, MS_W, MS_H, 1, VK_SAMPLE_COUNT_4_BIT,
+                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 0);
+    img_create(vk, &s->output, VK_IMAGE_TYPE_2D, VK_FORMAT_B8G8R8A8_UNORM, OUT_W, OUT_H, 1, 1, 1,
+               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 0);
+    img_create(vk, &s->resolved, VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16B16A16_SFLOAT, MS_W, MS_H, 1, 1, 1, sampled, 0);
+    render_noise(s);
 }
 
 static void teardown(struct scene *s)
@@ -704,6 +919,10 @@ static void teardown(struct scene *s)
     img_destroy(vk, &s->sprite);
     for (i = 0; i < STREAMS; i++)
         img_destroy(vk, &s->streams[i]);
+    img_destroy(vk, &s->output);
+    img_destroy(vk, &s->resolved);
+    bench_image_destroy(vk, &s->hdr);
+    bench_image_destroy(vk, &s->msaa);
     bench_buffer_destroy(vk, &s->staging);
     bench_buffer_destroy(vk, &s->fills);
     bench_buffer_destroy(vk, &s->readback);
@@ -733,6 +952,9 @@ static int commands(const struct config *cfg)
         return STREAMS * STREAM_MIPS; /* a copy and 9 blits each */
     case MODE_FILL:
         return FILLS;
+    case MODE_UPSCALE:
+    case MODE_RESOLVE:
+        return 1;
     }
     return 0;
 }
@@ -745,7 +967,7 @@ int main(void)
     size_t c;
 
     bench_begin("transfers");
-    bench_vk_init(&vk, BENCH_NEED_SYNC2);
+    bench_vk_init(&vk, BENCH_NEED_DYNAMIC_RENDERING | BENCH_NEED_SYNC2);
     s = bench_alloc(sizeof(*s));
     s->vk = &vk;
     setup(s);
