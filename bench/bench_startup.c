@@ -22,7 +22,8 @@
  *                     (frameworks, the Metal device) is done.
  *
  * Like a real application it enumerates device extensions to find (and
- * enable) VK_KHR_portability_subset.
+ * enable) VK_KHR_portability_subset, and it has a bundle identifier
+ * (startup_info_plist).
  */
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
@@ -34,6 +35,21 @@
 #include "pvk_bench.h"
 
 extern char **environ;
+
+/* An Info.plist section: with a bundle identifier, Metal keeps the shader
+ * cache of this program in files of its own
+ * ($DARWIN_USER_CACHE_DIR/plasmavk.bench.startup), as it does an installed
+ * application's, which the unmeasured launches fill. Programs without one
+ * share $DARWIN_USER_CACHE_DIR/com.apple.metal, each process taking the
+ * first file no other process holds, and conformance runs (deqp-vk has no
+ * bundle identifier) fill those to gigabytes. The GPU driver looks up the
+ * first render pass's clear program there, so the first vkQueueSubmit then
+ * opened that file's index (23 MB) on M4 Max: about 520 or 600 ms instead of
+ * 0.9 ms (MoltenVK: 460), which of the two set by the build's code signature
+ * alone (the same binary signed again under other identifiers). */
+static const char startup_info_plist[] __attribute__((used, section("__TEXT,__info_plist"))) =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    "<plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>plasmavk.bench.startup</string></dict></plist>\n";
 
 #define FRAME_WIDTH 1920
 #define FRAME_HEIGHT 1080

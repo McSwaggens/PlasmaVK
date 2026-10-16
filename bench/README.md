@@ -387,9 +387,12 @@ to stderr.
   `first_frame_us` and `teardown_us`; `first_submit_us`, the first frame
   until `vkQueueSubmit` returns; `to_first_frame_us`, from `posix_spawn` to
   the first frame's fence; and `process_us`, until the process exited. The
-  first `vkQueueSubmit` of a process waits for Metal's first commit, which
-  depends on the machine's state (displays asleep or not, for one), so
-  compare drivers within one session.
+  program has a bundle identifier, so Metal keeps its shader cache apart
+  from other programs', as an installed application's, and the unmeasured
+  launches fill it. Without one, the first render pass of a process opens
+  the cache that every program without a bundle identifier shares: after
+  conformance runs, hundreds of milliseconds, by tens more or less with the
+  build's code signature.
 - `pipeline_compile`: `create_us` per pipeline and `total_ms`, their sum;
   `cold_parallel4` adds `wall_ms`, and `batch_cold` reports only the call's
   `total_ms` and `ms_per_pipeline`. `permutations_` add per-bucket
