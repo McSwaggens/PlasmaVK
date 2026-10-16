@@ -199,6 +199,18 @@ cache.
 - `spec_variants_cold`: 16 pipelines that differ only in specialization
   constants.
 
+The cache phases keep an application `VkPipelineCache` the way engines that
+save it as it grows do (Godot 4 after every pipeline): after each creation,
+under the application's own lock, a size query, and a save whenever the
+data has grown by 3 MB. 32 shader pairs (2 vertex shaders, 16 fragment
+variants) times 64 states (blend, color format, write mask), 2048
+pipelines.
+- `cache_polled_cold`: a fresh device and an empty cache.
+- `cache_polled_warm`: a fresh device whose cache starts from the cold
+  phase's final data: the next launch.
+- `cache_polled_cold_parallel4`, `cache_polled_warm_parallel4`: the same
+  from 4 threads sharing the cache and the lock.
+
 `bench_render_passes`: a G-buffer pass (RGBA8, 2x RGBA16F, D32, about 2000
 objects), then 32-light shading.
 - `clear_store_1080p`, `load_store_1080p`, `dontcare_store_1080p`: the
@@ -381,7 +393,13 @@ to stderr.
   statistics and totals: `new_fragment_us` and `new_fragment_ms`,
   `new_vertex_`, `new_state_`, `new_pair_` and `repeat_`. Where a driver
   compiles only some of a bucket's pipelines, the bucket's median hides
-  them, so compare its total.
+  them, so compare its total. `cache_polled_` report `pipeline_us`, what
+  the engine's call costs (the creation, waiting for the lock, the size
+  query and any save), and each part: `create_us`, `query_us`, `saves` and
+  their `save_ms`; then `total_ms` (the creations), `wall_ms`,
+  `cache_bytes` (the final size), `merge_ms` (`vkMergePipelineCaches` of
+  the final cache into an empty one) and, when warm, `load_ms`
+  (`vkCreatePipelineCache` with the data).
 - `descriptor_churn`'s `pool_` and `array_` configurations report
   `round_us` (the wall time of a round of `ops_per_round` operations, on
   every thread at once for `pool_threads_N`) and `ns_per_op`. An operation

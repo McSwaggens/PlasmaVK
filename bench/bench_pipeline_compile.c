@@ -61,6 +61,26 @@
  *                         shaders and state that differ only in the values of
  *                         specialization constants
  *
+ * The cache_polled phases keep an application VkPipelineCache the way
+ * engines that save it as it grows do (Godot 4 after every render and
+ * compute pipeline): after each creation, under the application's own lock,
+ * a size query (vkGetPipelineCacheData without data), and a save (with data)
+ * whenever the data has grown by 3 MB since the last save. 32 shader pairs
+ * (2 vertex shaders x 16 feature sets) x 64 states (blend, color format,
+ * write mask: all part of the pipeline), 2048 pipelines, pair by pair:
+ *
+ *   cache_polled_cold      fresh device, new salt, empty cache
+ *   cache_polled_warm      a fresh device, the same salt, the cache loaded
+ *                          from cold's final data: the next launch
+ *   cache_polled_cold_parallel4, cache_polled_warm_parallel4
+ *                          the same (a new salt) from 4 threads sharing the
+ *                          cache and the lock
+ *
+ * pipeline_us is what the engine's call costs: the creation, waiting for
+ * the lock, the query and any save. load_ms (warm) is vkCreatePipelineCache
+ * with the data, merge_ms a vkMergePipelineCaches of the final cache into
+ * an empty one.
+ *
  * The salt also replaces a constant in both vertex shaders (the depth they
  * output), so their modules are new in every run too.
  * These draw with every pipeline too; nearest sampling at texel centres lets
@@ -675,11 +695,14 @@ static void run_phase(const char *name, uint32_t salt, int use_cache, const void
 
 #define MAT_PAIRS 16  /* 2 vertex shaders x 8 feature sets */
 #define MAT_STATES 32 /* the STATE_* bits */
-#define MAT_MAX (MAT_PAIRS * MAT_STATES)
 #define MAT_SPEC_VARIANTS 16
+#define POLL_PAIRS 32  /* 2 vertex shaders x 16 feature sets */
+#define POLL_STATES 64 /* blend, color format, 16 write masks */
+#define POLL_SAVE_CHUNK (3u << 20)
+#define MAT_MAX (POLL_PAIRS * POLL_STATES)
 #define TEX 64      /* material textures: TEX x TEX RGBA8, nearest, repeat */
 #define GROUP_W 64  /* one target per (color format, depth) group of pipelines */
-#define GROUP_H 32
+#define GROUP_H 32  /* at least; as many rows of cells as the largest group needs */
 #define GROUP_COLS (GROUP_W / CELL)
 #define GROUPS 4
 
@@ -708,11 +731,15 @@ static const VkSpecializationMapEntry mat_entries[2] = {
 struct mat_pipeline {
     struct mat_spec spec;
     int mesh_vs, state;
+    uint32_t mask; /* VkColorComponentFlags */
 };
+
+enum mat_kind { MAT_PERMUTATIONS, MAT_SPEC, MAT_POLLED };
 
 struct mat_phase {
     struct bench_vk vk;
     int count;
+    VkPipelineCache cache; /* MAT_POLLED */
     VkShaderModule vs_quad, vs_mesh, fs;
     VkDescriptorSetLayout set_layout;
     VkPipelineLayout layout;
@@ -727,6 +754,12 @@ struct mat_phase {
     struct bench_gfx_state states[MAT_MAX];
     VkPipeline pipelines[MAT_MAX];
     double us[MAT_MAX];
+    /* MAT_POLLED: the application's lock, around its queries and saves */
+    pthread_mutex_t poll_lock;
+    size_t saved; /* the size at the last save */
+    int saves;
+    double save_us;
+    double step_us[MAT_MAX], query_us[MAT_MAX];
 };
 
 static int mat_group(int state)
@@ -762,10 +795,11 @@ static VkShaderModule mat_vertex_shader(struct bench_vk *vk, const uint32_t *cod
     return module;
 }
 
-/* permutations: MAT_MAX pipelines, pair-major (pair = vertex shader x
- * feature set, then its 32 states); otherwise MAT_SPEC_VARIANTS pipelines
- * with one vertex shader and state, features 0-15. */
-static void mat_setup(struct mat_phase *m, uint32_t salt, int permutations)
+/* MAT_PERMUTATIONS: MAT_PAIRS x MAT_STATES pipelines, pair-major (pair =
+ * vertex shader x feature set, then its 32 states); MAT_SPEC:
+ * MAT_SPEC_VARIANTS pipelines with one vertex shader and state, features
+ * 0-15; MAT_POLLED: POLL_PAIRS x POLL_STATES, pair-major. */
+static void mat_setup(struct mat_phase *m, uint32_t salt, enum mat_kind kind)
 {
     struct bench_vk *vk = &m->vk;
     VkDescriptorSetLayoutBinding bindings[3] = {
@@ -852,15 +886,24 @@ static void mat_setup(struct mat_phase *m, uint32_t salt, int permutations)
     }
     vkd.UpdateDescriptorSets(vk->device, 3, writes, 0, NULL);
 
-    m->count = permutations ? MAT_MAX : MAT_SPEC_VARIANTS;
+    m->count = kind == MAT_PERMUTATIONS ? MAT_PAIRS * MAT_STATES : kind == MAT_POLLED ? MAT_MAX : MAT_SPEC_VARIANTS;
     for (i = 0; i < m->count; i++) {
         struct mat_pipeline *p = &m->info[i];
         struct bench_gfx_desc d;
-        if (permutations) {
+        p->mask = 15;
+        if (kind == MAT_PERMUTATIONS) {
             int pair = i / MAT_STATES;
             p->mesh_vs = pair / 8;
             p->spec.features = (uint32_t)pair % 8;
             p->state = i % MAT_STATES;
+            if (p->state & STATE_NO_ALPHA_WRITE)
+                p->mask = 7;
+        } else if (kind == MAT_POLLED) {
+            int pair = i / POLL_STATES, s = i % POLL_STATES;
+            p->mesh_vs = pair / 16;
+            p->spec.features = (uint32_t)pair % 16;
+            p->state = ((s & 1) ? STATE_BLEND : 0) | ((s & 2) ? STATE_BGRA : 0);
+            p->mask = (uint32_t)s >> 2;
         } else {
             p->mesh_vs = 0;
             p->spec.features = (uint32_t)i;
@@ -890,8 +933,7 @@ static void mat_setup(struct mat_phase *m, uint32_t salt, int permutations)
             d.attributes[0] = (VkVertexInputAttributeDescription){ 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 };
         }
         bench_gfx_state_init(&m->states[i], &d);
-        if (p->state & STATE_NO_ALPHA_WRITE)
-            m->states[i].attachments[0].colorWriteMask &= ~(VkColorComponentFlags)VK_COLOR_COMPONENT_A_BIT;
+        m->states[i].attachments[0].colorWriteMask = p->mask;
     }
 }
 
@@ -920,6 +962,8 @@ static void mat_teardown(struct mat_phase *m)
 {
     struct bench_vk *vk = &m->vk;
     mat_destroy_pipelines(m);
+    if (m->cache)
+        vkd.DestroyPipelineCache(vk->device, m->cache, NULL);
     vkd.DestroyDescriptorPool(vk->device, m->pool, NULL);
     vkd.DestroyPipelineLayout(vk->device, m->layout, NULL);
     vkd.DestroyDescriptorSetLayout(vk->device, m->set_layout, NULL);
@@ -933,12 +977,14 @@ static void mat_teardown(struct mat_phase *m)
     bench_vk_destroy(vk);
 }
 
-/* pc_material.frag on the CPU, as stored in the pipeline's color format. */
+/* pc_material.frag on the CPU, as stored in the pipeline's color format
+ * over the clear color (its alpha is 1, so blending changes nothing; the
+ * write mask keeps the clear's components). */
 static uint32_t mat_pixel(const struct mat_phase *m, const struct mat_pipeline *p, int x, int y)
 {
     uint32_t sx = p->spec.salt & 63u, sy = (p->spec.salt >> 6) & 63u, features = p->spec.features;
     uint32_t a = m->albedo_texels[((uint32_t)y + sy) % TEX * TEX + ((uint32_t)x + sx) % TEX];
-    uint32_t d = m->detail_texels[(y >> 1) * TEX + (x >> 1)];
+    uint32_t d = m->detail_texels[(y >> 1) % TEX * TEX + (x >> 1) % TEX];
     uint32_t out = 0xFF000000u;
     float c[3];
     int k;
@@ -958,7 +1004,7 @@ static uint32_t mat_pixel(const struct mat_phase *m, const struct mat_pipeline *
         }
     }
     for (k = 0; k < 3; k++) {
-        float v = c[k] < 0.0f ? 0.0f : c[k] > 1.0f ? 1.0f : c[k];
+        float v = !(p->mask >> k & 1u) ? mat_clear[k] : c[k] < 0.0f ? 0.0f : c[k] > 1.0f ? 1.0f : c[k];
         out |= (uint32_t)(v * 255.0f + 0.5f) << (8 * ((p->state & STATE_BGRA) ? 2 - k : k));
     }
     return out;
@@ -975,18 +1021,23 @@ static int mat_verify(struct mat_phase *m, const char *config)
     VkDeviceSize zero = 0;
     VkCommandBuffer cmd;
     uint32_t *want;
-    int g, i, ok = 1;
+    int cells[GROUPS] = { 0 }, g, i, h = GROUP_H, ok = 1;
 
-    bench_image_create(vk, &depth, VK_FORMAT_D32_SFLOAT, GROUP_W, GROUP_H, 1, VK_SAMPLE_COUNT_1_BIT,
+    for (i = 0; i < m->count; i++)
+        cells[mat_group(m->info[i].state)]++;
+    for (g = 0; g < GROUPS; g++)
+        if ((cells[g] + GROUP_COLS - 1) / GROUP_COLS * CELL > h)
+            h = (cells[g] + GROUP_COLS - 1) / GROUP_COLS * CELL;
+    bench_image_create(vk, &depth, VK_FORMAT_D32_SFLOAT, GROUP_W, h, 1, VK_SAMPLE_COUNT_1_BIT,
                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 0);
     bench_buffer_create(vk, &vertices, sizeof(corners), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                         0, BENCH_DEVICE_LOCAL);
     bench_buffer_upload(vk, &vertices, 0, corners, sizeof(corners));
     for (g = 0; g < GROUPS; g++) {
         bench_image_create(vk, &targets[g], (g & 2) ? VK_FORMAT_B8G8R8A8_UNORM : VK_FORMAT_R8G8B8A8_UNORM, GROUP_W,
-                           GROUP_H, 1, VK_SAMPLE_COUNT_1_BIT,
+                           h, 1, VK_SAMPLE_COUNT_1_BIT,
                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 0);
-        bench_buffer_create(vk, &readback[g], GROUP_W * GROUP_H * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, BENCH_HOST,
+        bench_buffer_create(vk, &readback[g], GROUP_W * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, BENCH_HOST,
                             VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
     }
 
@@ -1008,7 +1059,7 @@ static int mat_verify(struct mat_phase *m, const char *config)
         };
         VkRenderingInfo rendering = {
             .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-            .renderArea = { { 0, 0 }, { GROUP_W, GROUP_H } },
+            .renderArea = { { 0, 0 }, { GROUP_W, h } },
             .layerCount = 1,
             .colorAttachmentCount = 1,
             .pColorAttachments = &color_attachment,
@@ -1029,7 +1080,7 @@ static int mat_verify(struct mat_phase *m, const char *config)
                                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
                                     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
         vkd.CmdBeginRendering(cmd, &rendering);
-        bench_cmd_viewport(cmd, GROUP_W, GROUP_H);
+        bench_cmd_viewport(cmd, GROUP_W, h);
         vkd.CmdBindVertexBuffers(cmd, 0, 1, &vertices.buffer, &zero);
         vkd.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m->layout, 0, 1, &m->set, 0, NULL);
         for (i = 0; i < m->count; i++) {
@@ -1042,7 +1093,7 @@ static int mat_verify(struct mat_phase *m, const char *config)
             r.x1 = r.x0 + CELL;
             r.y1 = r.y0 + CELL;
             cell++;
-            bench_rect_ndc(&r, GROUP_W, GROUP_H, 0, 0, push);
+            bench_rect_ndc(&r, GROUP_W, h, 0, 0, push);
             push[4] = (float)r.x0 / TEX;
             push[5] = (float)r.y0 / TEX;
             push[6] = (float)r.x1 / TEX;
@@ -1058,13 +1109,13 @@ static int mat_verify(struct mat_phase *m, const char *config)
     }
     bench_cmd_finish(vk, cmd);
 
-    want = bench_alloc(sizeof(uint32_t) * GROUP_W * GROUP_H);
+    want = bench_alloc(sizeof(uint32_t) * GROUP_W * h);
     for (g = 0; g < GROUPS && ok; g++) {
         int cell = 0, x, y;
         uint32_t clear = 0xFF000000u;
         for (i = 0; i < 3; i++)
             clear |= (uint32_t)(mat_clear[i] * 255.0f + 0.5f) << (8 * ((g & 2) ? 2 - i : i));
-        for (i = 0; i < GROUP_W * GROUP_H; i++)
+        for (i = 0; i < GROUP_W * h; i++)
             want[i] = clear;
         for (i = 0; i < m->count; i++) {
             int x0, y0;
@@ -1077,7 +1128,7 @@ static int mat_verify(struct mat_phase *m, const char *config)
                 for (x = x0; x < x0 + CELL; x++)
                     want[y * GROUP_W + x] = mat_pixel(m, &m->info[i], x, y);
         }
-        ok = bench_check_rgba8_tolerance(config, readback[g].map, want, GROUP_W, GROUP_H, 1);
+        ok = bench_check_rgba8_tolerance(config, readback[g].map, want, GROUP_W, h, 1);
     }
     free(want);
 
@@ -1160,7 +1211,7 @@ static void run_permutations(void)
         return;
     m = bench_alloc(sizeof(*m));
     bench_config = "permutations_cold";
-    mat_setup(m, salt, 1);
+    mat_setup(m, salt, MAT_PERMUTATIONS);
     mat_create(m);
     if (mat_verify(m, "permutations_cold") && cold)
         mat_report(m, "permutations_cold", 1);
@@ -1175,7 +1226,7 @@ static void run_permutations(void)
     if (warm) {
         memset(m, 0, sizeof(*m));
         bench_config = "permutations_warm";
-        mat_setup(m, salt, 1);
+        mat_setup(m, salt, MAT_PERMUTATIONS);
         mat_create(m);
         if (mat_verify(m, "permutations_warm"))
             mat_report(m, "permutations_warm", 1);
@@ -1192,13 +1243,169 @@ static void run_spec_variants(void)
         return;
     m = bench_alloc(sizeof(*m));
     bench_config = "spec_variants_cold";
-    mat_setup(m, new_salt(), 0);
+    mat_setup(m, new_salt(), MAT_SPEC);
     mat_create(m);
     if (mat_verify(m, "spec_variants_cold"))
         mat_report(m, "spec_variants_cold", 0);
     mat_teardown(m);
     bench_config = NULL;
     free(m);
+}
+
+/* ---- An application cache polled after every creation ---- */
+
+/* Creates pipelines first, first + stride, ...; after each, under the
+ * application's lock, queries the cache's size and saves it once it has
+ * grown by POLL_SAVE_CHUNK (into a buffer of the queried size, as engines
+ * do: VK_INCOMPLETE if it grew meanwhile). */
+static void poll_range(struct mat_phase *m, int first, int stride)
+{
+    VkDevice dev = m->vk.device;
+    int i;
+    for (i = first; i < m->count; i += stride) {
+        double t0 = bench_now_us(), t1, t2;
+        size_t size = 0;
+        BENCH_VK(vkd.CreateGraphicsPipelines(dev, m->cache, 1, &m->states[i].info, NULL, &m->pipelines[i]));
+        t1 = bench_now_us();
+        pthread_mutex_lock(&m->poll_lock);
+        t2 = bench_now_us();
+        BENCH_VK(vkd.GetPipelineCacheData(dev, m->cache, &size, NULL));
+        m->query_us[i] = bench_now_us() - t2;
+        if (size >= m->saved + POLL_SAVE_CHUNK) {
+            void *data = bench_alloc(size);
+            double t3 = bench_now_us();
+            VkResult r = vkd.GetPipelineCacheData(dev, m->cache, &size, data);
+            if (r != VK_SUCCESS && r != VK_INCOMPLETE)
+                bench_fatal("vkGetPipelineCacheData: %d", (int)r);
+            m->save_us += bench_now_us() - t3;
+            m->saved = size;
+            m->saves++;
+            free(data);
+        }
+        pthread_mutex_unlock(&m->poll_lock);
+        m->us[i] = t1 - t0;
+        m->step_us[i] = bench_now_us() - t0;
+    }
+}
+
+struct poll_worker {
+    struct mat_phase *m;
+    int index;
+};
+
+static void *poll_worker_main(void *arg)
+{
+    struct poll_worker *w = arg;
+    poll_range(w->m, w->index, THREADS);
+    return NULL;
+}
+
+/* Returns the wall time in microseconds. */
+static double poll_create(struct mat_phase *m, int threads)
+{
+    double t0 = bench_now_us();
+    if (threads == 1) {
+        poll_range(m, 0, 1);
+    } else {
+        pthread_t ids[THREADS];
+        struct poll_worker workers[THREADS];
+        int i;
+        for (i = 0; i < THREADS; i++) {
+            workers[i].m = m;
+            workers[i].index = i;
+            if (pthread_create(&ids[i], NULL, poll_worker_main, &workers[i]) != 0)
+                bench_fatal("pthread_create failed");
+        }
+        for (i = 0; i < THREADS; i++)
+            pthread_join(ids[i], NULL);
+    }
+    return bench_now_us() - t0;
+}
+
+/* One cache_polled phase on a fresh device: its cache loaded from data
+ * (size 0: empty); returns the final data in *out (caller frees) when out
+ * is set. */
+static void run_polled(const char *config, uint32_t salt, int threads, const void *data, size_t size, void **out,
+                       size_t *out_size)
+{
+    struct mat_phase *m = bench_alloc(sizeof(*m));
+    VkPipelineCacheCreateInfo info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+        .initialDataSize = size,
+        .pInitialData = data,
+    };
+    VkPipelineCacheCreateInfo empty_info = { .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
+    VkPipelineCache merged;
+    double load_us, wall_us, merge_us, total = 0.0;
+    struct bench_json j;
+    size_t final = 0;
+    int i;
+
+    bench_config = config;
+    mat_setup(m, salt, MAT_POLLED);
+    if (pthread_mutex_init(&m->poll_lock, NULL) != 0)
+        bench_fatal("pthread_mutex_init failed");
+    load_us = bench_now_us();
+    BENCH_VK(vkd.CreatePipelineCache(m->vk.device, &info, NULL, &m->cache));
+    load_us = bench_now_us() - load_us;
+    BENCH_VK(vkd.GetPipelineCacheData(m->vk.device, m->cache, &m->saved, NULL)); /* (what it started from) */
+    wall_us = poll_create(m, threads);
+    BENCH_VK(vkd.GetPipelineCacheData(m->vk.device, m->cache, &final, NULL));
+    BENCH_VK(vkd.CreatePipelineCache(m->vk.device, &empty_info, NULL, &merged));
+    merge_us = bench_now_us();
+    BENCH_VK(vkd.MergePipelineCaches(m->vk.device, merged, 1, &m->cache));
+    merge_us = bench_now_us() - merge_us;
+    vkd.DestroyPipelineCache(m->vk.device, merged, NULL);
+    if (mat_verify(m, config) && bench_selected(config)) {
+        for (i = 0; i < m->count; i++)
+            total += m->us[i];
+        bench_json_begin(&j, config);
+        bench_json_int(&j, "pipelines", m->count);
+        bench_json_int(&j, "threads", threads);
+        bench_json_str(&j, "cache", size ? "loaded" : "empty");
+        bench_json_int(&j, "cache_bytes", (long long)final);
+        if (size)
+            bench_json_num(&j, "load_ms", load_us / 1000.0);
+        bench_json_num(&j, "merge_ms", merge_us / 1000.0);
+        bench_json_stats(&j, "pipeline_us", m->step_us, m->count);
+        bench_json_stats(&j, "create_us", m->us, m->count);
+        bench_json_stats(&j, "query_us", m->query_us, m->count);
+        bench_json_int(&j, "saves", m->saves);
+        bench_json_num(&j, "save_ms", m->save_us / 1000.0);
+        bench_json_num(&j, "total_ms", total / 1000.0);
+        bench_json_num(&j, "wall_ms", wall_us / 1000.0);
+        bench_json_end(&j);
+    }
+    if (out) { /* the save at exit */
+        *out = bench_alloc(final);
+        *out_size = final;
+        BENCH_VK(vkd.GetPipelineCacheData(m->vk.device, m->cache, out_size, *out));
+    }
+    mat_teardown(m);
+    pthread_mutex_destroy(&m->poll_lock);
+    bench_config = NULL;
+    free(m);
+}
+
+static void run_cache_polled(void)
+{
+    static const char *const names[2][2] = {
+        { "cache_polled_cold", "cache_polled_warm" },
+        { "cache_polled_cold_parallel4", "cache_polled_warm_parallel4" },
+    };
+    int t;
+    for (t = 0; t < 2; t++) {
+        uint32_t salt = new_salt();
+        int warm = bench_selected(names[t][1]);
+        void *data = NULL;
+        size_t size = 0;
+        if (!bench_selected(names[t][0]) && !warm)
+            continue;
+        run_polled(names[t][0], salt, t ? THREADS : 1, NULL, 0, warm ? &data : NULL, &size);
+        if (warm)
+            run_polled(names[t][1], salt, t ? THREADS : 1, data, size, NULL, NULL);
+        free(data);
+    }
 }
 
 static int phase_selected(const char *name)
@@ -1235,5 +1442,6 @@ int main(void)
     free(cache);
     run_permutations();
     run_spec_variants();
+    run_cache_polled();
     return bench_exit_code();
 }
