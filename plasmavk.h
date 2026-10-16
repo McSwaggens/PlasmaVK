@@ -60526,24 +60526,12 @@ static void pvk_blit_end(struct pvk_encoder *e)
     e->blit_enc = NULL;
 }
 
-/* Whether a pass stores a multisampled attachment. */
-static bool pvk_pass_stores_ms(id pass)
+/* Whether an attachment of `samples` samples (0: none) with store action
+ * `store` stores its samples (then its render encoder ends with a producer
+ * barrier: pvk_render_close). */
+static bool pvk_stores_ms(uint32_t samples, pvk_MTLStoreAction store)
 {
-    id att[PVK_MAX_COLOR_ATTACHMENTS + 2];
-    uint32_t i;
-    for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
-        att[i] = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
-            pvk_MTL4RenderPassDescriptor_colorAttachments(pass), i);
-    att[i++] = pvk_MTL4RenderPassDescriptor_depthAttachment(pass);
-    att[i++] = pvk_MTL4RenderPassDescriptor_stencilAttachment(pass);
-    while (i-- > 0) {
-        id tex = pvk_MTLRenderPassAttachmentDescriptor_texture(att[i]);
-        pvk_MTLStoreAction store = tex ? pvk_MTLRenderPassAttachmentDescriptor_storeAction(att[i]) : 0;
-        if (tex && store != PVK_MTLStoreActionDontCare && store != PVK_MTLStoreActionMultisampleResolve &&
-            pvk_MTLTexture_sampleCount(tex) > 1)
-            return true;
-    }
-    return false;
+    return samples > 1 && store != PVK_MTLStoreActionDontCare && store != PVK_MTLStoreActionMultisampleResolve;
 }
 
 /* The pending timestamps, now (section 14, TIMESTAMPS): before the next
@@ -60586,14 +60574,18 @@ static void pvk_encode_stamps(struct pvk_encoder *e)
 
 /* A render encoder for a pass (NULL on failure), after the pending
  * timestamps (pvk_encode_stamps); one that suspends with options
- * PVK_MTL4RenderEncoderOptionSuspending (PARALLEL ENCODING). No other
- * encoder may be open. */
-static id pvk_render_encoder_new_options(struct pvk_encoder *e, id pass, pvk_MTL4RenderEncoderOptions options)
+ * PVK_MTL4RenderEncoderOptionSuspending (PARALLEL ENCODING). ms_store: the
+ * pass stores a multisampled attachment (pvk_stores_ms of each; the caller
+ * knows its attachments: reading the descriptor back took a third of a
+ * microsecond, the descriptor making its 8 color attachments on first
+ * access, also for a pass of one). No other encoder may be open. */
+static id pvk_render_encoder_new_options(struct pvk_encoder *e, id pass, pvk_MTL4RenderEncoderOptions options,
+                                         bool ms_store)
 {
     id enc;
     pvk_blit_end(e);
     pvk_encode_stamps(e);
-    e->ms_store = pvk_pass_stores_ms(pass);
+    e->ms_store = ms_store;
     enc = options ? pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor_options(e->cb, pass, options)
                   : pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(e->cb, pass);
     if (enc && e->stamp_wait) {
@@ -60604,9 +60596,9 @@ static id pvk_render_encoder_new_options(struct pvk_encoder *e, id pass, pvk_MTL
     return enc;
 }
 
-static id pvk_render_encoder_new(struct pvk_encoder *e, id pass)
+static id pvk_render_encoder_new(struct pvk_encoder *e, id pass, bool ms_store)
 {
-    return pvk_render_encoder_new_options(e, pass, 0);
+    return pvk_render_encoder_new_options(e, pass, 0, ms_store);
 }
 
 /* A label region begins (text in a packet: owned at the end of the batch
@@ -61589,8 +61581,9 @@ static void pvk_device_finish_images(struct pvk_device *device)
 }
 
 /* A render encoder for one internal pass, after the compute encoder (ended
- * here; the next compute command starts a new one). The caller ends it. */
-static id pvk_encoder_render(struct pvk_encoder *e, id pass)
+ * here; the next compute command starts a new one); ms_store as
+ * pvk_render_encoder_new's. The caller ends it. */
+static id pvk_encoder_render(struct pvk_encoder *e, id pass, bool ms_store)
 {
     pvk_MTLStages after, before;
     id enc;
@@ -61599,7 +61592,7 @@ static id pvk_encoder_render(struct pvk_encoder *e, id pass)
     if (e->render.enc) /* not inside a render pass: Vulkan allows no transfer there */
         pvk_render_end(e);
     pvk_encoder_end(e);
-    enc = pvk_render_encoder_new(e, pass);
+    enc = pvk_render_encoder_new(e, pass, ms_store);
     if (!enc) {
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
         return NULL;
@@ -61758,7 +61751,8 @@ static id pvk_blit_encoder(struct pvk_encoder *e, id dst, uint32_t level, uint32
     pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
     if (layers > 1)
         pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, layers);
-    enc = pvk_encoder_render(e, pass); /* (the last blit's ends) */
+    enc = pvk_encoder_render(e, pass, /* (the last blit's ends) */
+                             pvk_stores_ms((uint32_t)pvk_MTLTexture_sampleCount(dst), PVK_MTLStoreActionStore));
     pvk_release(pass);
     if (enc) {
         e->blit_enc = pvk_retain(enc);
@@ -61981,7 +61975,10 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
         }
         if (layers > 1)
             pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, layers);
-        enc = pvk_encoder_render(e, pass);
+        enc = pvk_encoder_render(e, pass,
+                                 (c->color || c->has_depth || c->has_stencil) &&
+                                     pvk_stores_ms((uint32_t)pvk_MTLTexture_sampleCount(c->texture),
+                                                   PVK_MTLStoreActionStore));
         pvk_release(pass);
         if (enc)
             pvk_render_close(e, enc);
@@ -64215,7 +64212,10 @@ static void pvk_render_resolve_ds(struct pvk_encoder *e)
                 pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(pass, r->height);
             }
         }
-        enc = pvk_render_encoder_new(e, pass);
+        enc = pvk_render_encoder_new(
+            e, pass,
+            (r->resolve_depth.texture && pvk_stores_ms(r->resolve_depth.samples, r->resolve_depth.store)) ||
+                (r->resolve_stencil.texture && pvk_stores_ms(r->resolve_stencil.samples, r->resolve_stencil.store)));
         pvk_release(pass);
     }
     if (enc) { /* after the pass's stores */
@@ -64449,7 +64449,7 @@ static id pvk_render_seed_depth(struct pvk_encoder *e, const struct pvk_pass_att
         pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(pass, height);
     }
     pvk_MTL4RenderPassDescriptor_setSupportColorAttachmentMapping(pass, true);
-    enc = pvk_retain(pvk_render_encoder_new(e, pass));
+    enc = pvk_retain(pvk_render_encoder_new(e, pass, pvk_stores_ms(samples, PVK_MTLStoreActionStore)));
     pvk_release(pass);
     if (enc && (map = pvk_MTLLogicalToPhysicalColorAttachmentMap_new())) {
         pvk_MTLLogicalToPhysicalColorAttachmentMap_setPhysicalIndex_forLogicalIndex(map, 0, 0);
@@ -64480,6 +64480,7 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
 {
     struct pvk_render *r = &e->render;
     uint32_t s, width = UINT32_MAX, height = UINT32_MAX, samples = 0, k, full_width, full_height;
+    bool ms_store = false;
     id pass, enc;
     void *pool = objc_autoreleasePoolPush();
 
@@ -64568,6 +64569,7 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
                 r->resolve_wait |= busy;
             }
         }
+        ms_store |= pvk_stores_ms(pa.samples, pa.store);
         att = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(
             pvk_MTL4RenderPassDescriptor_colorAttachments(pass), s);
         if ((int_slots & (1u << s)) && pa.int_texture) { /* the SNORM bits as integers */
@@ -64594,6 +64596,7 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
             pa.load = PVK_MTLLoadActionLoad;
         if (store_all)
             pa.store = PVK_MTLStoreActionStore;
+        ms_store |= pvk_stores_ms(pa.samples, pa.store);
         if (s) {
             att = pvk_MTL4RenderPassDescriptor_stencilAttachment(pass);
             pvk_pass_set_attachment(att, &pa);
@@ -64662,9 +64665,11 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
         r->hidden_slot[k] = (uint8_t)s++;
     }
     pvk_MTL4RenderPassDescriptor_setSupportColorAttachmentMapping(pass, true);
-    /* autoreleased: kept until it ends; one other threads' encoders resume
-     * suspends, and keeps its descriptor for them (PARALLEL ENCODING) */
-    enc = pvk_retain(pvk_render_encoder_new_options(e, pass, r->forks ? PVK_MTL4RenderEncoderOptionSuspending : 0));
+    /* autoreleased: kept until it ends (the depth and stencil copies are not
+     * stored); one other threads' encoders resume suspends, and keeps its
+     * descriptor for them (PARALLEL ENCODING) */
+    enc = pvk_retain(
+        pvk_render_encoder_new_options(e, pass, r->forks ? PVK_MTL4RenderEncoderOptionSuspending : 0, ms_store));
     if (enc && r->forks)
         r->pass = pvk_retain(pass);
     pvk_release(pass);
