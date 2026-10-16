@@ -12060,7 +12060,10 @@ static VkPipeline par_pipeline(VkRenderPass rp)
     return make_pipe(&p);
 }
 
-/* Dynamic rendering into color and depth, cleared (black, 1) or loaded. */
+/* Dynamic rendering into color and depth, cleared (black, 1) or loaded;
+ * the depth stored unless it is the transient one. */
+static struct img par_transient;
+
 static void par_begin(VkCommandBuffer cb, const struct img *color, const struct img *depth, bool clear,
                       VkRenderingFlags flags)
 {
@@ -12072,7 +12075,8 @@ static void par_begin(VkCommandBuffer cb, const struct img *color, const struct 
     att[1].imageView = depth->view;
     att[0].imageLayout = att[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     att[0].loadOp = att[1].loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-    att[0].storeOp = att[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    att[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    att[1].storeOp = depth == &par_transient ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
     att[0].clearValue.color.float32[3] = 1.0f;
     att[1].clearValue.depthStencil.depth = 1.0f;
     memset(&info, 0, sizeof(info));
@@ -12193,6 +12197,156 @@ static void test_parallel_primaries(void)
             snprintf(what, sizeof(what), "parallel primaries, %u, seed %u", n, seed);
             CHECK(par_bad(&out, at, what) == 0);
         }
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&depth);
+    free_img(&color);
+}
+
+/* Secondaries a render pass instance executes, encoded by other threads
+ * between the parts of its Metal pass: 4 large ones, 64 small ones (in
+ * jobs of several), two vkCmdExecuteCommands of 2, and with a transient
+ * (memoryless) depth attachment, which only one stitched Metal pass keeps;
+ * dynamic rendering, then a render pass. */
+static void test_parallel_secondaries(void)
+{
+    struct img color = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkAttachmentDescription a[2];
+    VkAttachmentReference refs[2];
+    VkSubpassDescription sp;
+    VkRenderPassCreateInfo rpi;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    VkFramebuffer fb;
+    VkImageView views[2];
+    VkPipeline pipeline = par_pipeline(VK_NULL_HANDLE), rp_pipeline;
+    VkCommandBuffer cb, secs[64];
+    uint32_t c, k, n;
+
+    memset(&par_transient, 0, sizeof(par_transient));
+    if (lazy_type != UINT32_MAX)
+        par_transient = make_img_mem(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT,
+                                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+                                 lazy_type);
+    memset(a, 0, sizeof(a));
+    a[0].format = VK_FORMAT_R8G8B8A8_UNORM;
+    a[1].format = VK_FORMAT_D32_SFLOAT;
+    for (k = 0; k < 2; k++) {
+        a[k].samples = VK_SAMPLE_COUNT_1_BIT;
+        a[k].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        a[k].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        a[k].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        a[k].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        a[k].initialLayout = a[k].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        refs[k].attachment = k;
+        refs[k].layout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    memset(&sp, 0, sizeof(sp));
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &refs[0];
+    sp.pDepthStencilAttachment = &refs[1];
+    memset(&rpi, 0, sizeof(rpi));
+    rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpi.attachmentCount = 2;
+    rpi.pAttachments = a;
+    rpi.subpassCount = 1;
+    rpi.pSubpasses = &sp;
+    vkCreateRenderPass(device, &rpi, NULL, &rp);
+    views[0] = color.view;
+    views[1] = depth.view;
+    fb = make_fb(rp, views, 2, W, H, 1);
+    rp_pipeline = par_pipeline(rp);
+    REQUIRE(pipeline && rp_pipeline);
+    for (c = 0; c < 6; c++) {
+        static const char *const what[6] = { "4 secondaries", "64 secondaries", "2 + 2 secondaries",
+                                             "transient depth", "render pass", "render pass, 64" };
+        bool pass = c >= 4;
+        n = c == 1 || c == 5 ? 64 : 4;
+        if (c == 3 && !par_transient.view)
+            continue;
+        par_scene(100 + c);
+        for (k = 0; k < n; k++) {
+            secs[k] = par_secondary(pass ? rp : VK_NULL_HANDLE);
+            vkCmdBindPipeline(secs[k], VK_PIPELINE_BIND_POINT_GRAPHICS, pass ? rp_pipeline : pipeline);
+            par_draw(secs[k], k * (PAR_RECTS / n), PAR_RECTS / n);
+            vkEndCommandBuffer(secs[k]);
+        }
+        cb = begin_cmd();
+        if (pass) {
+            VkClearValue clears[2];
+            memset(clears, 0, sizeof(clears));
+            clears[0].color.float32[3] = 1.0f;
+            clears[1].depthStencil.depth = 1.0f;
+            begin_pass(cb, rp, fb, 0, 0, W, H, clears, 2);
+        } else {
+            par_begin(cb, &color, c == 3 ? &par_transient : &depth, true,
+                      VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT);
+        }
+        if (c == 2) {
+            vkCmdExecuteCommands(cb, 2, secs);
+            vkCmdExecuteCommands(cb, 2, secs + 2);
+        } else {
+            vkCmdExecuteCommands(cb, n, secs);
+        }
+        if (pass)
+            vkCmdEndRenderPass(cb);
+        else
+            vkCmdEndRendering(cb);
+        download(cb, &color, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        submit(cb);
+        vkFreeCommandBuffers(device, cmd_pool, n, secs);
+        CHECK(par_bad(&out, PAR_RECTS, what[c]) == 0);
+    }
+    vkDestroyPipeline(device, rp_pipeline, NULL);
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyFramebuffer(device, fb, NULL);
+    vkDestroyRenderPass(device, rp, NULL);
+    free_buf(&out);
+    if (par_transient.view)
+        free_img(&par_transient);
+    free_img(&depth);
+    free_img(&color);
+}
+
+/* Render pass instances that each execute one large secondary (shadow
+ * cascades): each forks, so a command buffer where one resumed has the next
+ * one's begin in a command buffer of its own; then primaries that each do
+ * so, encoded in parallel too. */
+static void test_parallel_passes(void)
+{
+    struct img color = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkPipeline pipeline = par_pipeline(VK_NULL_HANDLE);
+    VkCommandBuffer cbs[4], secs[4];
+    uint32_t k, primaries;
+
+    REQUIRE(pipeline);
+    for (primaries = 1; primaries <= 4; primaries += 3) {
+        par_scene(200 + primaries);
+        for (k = 0; k < 4; k++) {
+            secs[k] = par_secondary(VK_NULL_HANDLE);
+            vkCmdBindPipeline(secs[k], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            par_draw(secs[k], k * (PAR_RECTS / 4), PAR_RECTS / 4);
+            vkEndCommandBuffer(secs[k]);
+        }
+        for (k = 0; k < primaries; k++)
+            cbs[k] = begin_cmd();
+        for (k = 0; k < 4; k++) {
+            VkCommandBuffer cb = cbs[primaries == 1 ? 0 : k];
+            if (k)
+                par_attachment_barrier(cbs[primaries == 1 ? 0 : k - 1]);
+            par_begin(cb, &color, &depth, k == 0, VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT);
+            vkCmdExecuteCommands(cb, 1, &secs[k]);
+            vkCmdEndRendering(cb);
+        }
+        download(cbs[primaries - 1], &color, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        par_submit(cbs, primaries);
+        vkFreeCommandBuffers(device, cmd_pool, 4, secs);
+        CHECK(par_bad(&out, PAR_RECTS, primaries == 1 ? "passes forking" : "primaries of passes forking") == 0);
+    }
     vkDestroyPipeline(device, pipeline, NULL);
     free_buf(&out);
     free_img(&depth);
@@ -12649,6 +12803,8 @@ int main(void)
     RUN(test_implicit_cache);
     RUN(test_ycbcr_fragment);
     RUN(test_parallel_primaries);
+    RUN(test_parallel_secondaries);
+    RUN(test_parallel_passes);
     RUN(test_parallel_suspend);
     RUN(test_parallel_queries);
     RUN(test_parallel_order);
