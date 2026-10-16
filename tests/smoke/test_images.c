@@ -2009,6 +2009,91 @@ static void test_resolve(void)
     free_buf(&out);
 }
 
+/* Timestamps around blits and resolves, which draw in render encoders that
+ * write the timestamps pending before them at their start (section 14,
+ * TIMESTAMPS): per transfer - a blit, one of two regions into one
+ * destination (an encoder they share), one from a 3D source, a resolve - a
+ * timestamp, the transfer, a timestamp, a small fill. The transfer draws
+ * millions of fragments (95-350 us on M4 Max): the timestamp before it is
+ * written at its start, not again after it, with the one after it (0 us). */
+static void test_transfer_timestamps(void)
+{
+    enum { KINDS = 4, N = 2048, M = 1024 };
+    VkImageUsageFlags xfer = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    struct buf small = make_buf(4096, private_type, 0);
+    VkPhysicalDeviceProperties props;
+    VkQueryPoolCreateInfo qi;
+    VkImageCreateInfo info;
+    VkImageBlit b[2];
+    VkImageResolve res;
+    VkQueryPool qp;
+    VkCommandBuffer cb;
+    struct img src, dst, src3d, ms;
+    uint64_t r[2 * KINDS][2];
+    uint32_t k;
+
+    vkGetPhysicalDeviceProperties(pd, &props);
+    info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, N, N, 1, 1, 1, xfer | VK_IMAGE_USAGE_SAMPLED_BIT);
+    src = make_image(&info);
+    dst = make_image(&info);
+    info = image_info(VK_IMAGE_TYPE_3D, VK_FORMAT_R8G8B8A8_UNORM, 64, 64, 8, 1, 1, xfer | VK_IMAGE_USAGE_SAMPLED_BIT);
+    src3d = make_image(&info);
+    info = image_info(VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, M, M, 1, 1, 1, xfer | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+    info.samples = VK_SAMPLE_COUNT_4_BIT;
+    ms = make_image(&info);
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    qi.queryCount = 2 * KINDS;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &qp));
+    REQUIRE(src.image && dst.image && src3d.image && ms.image && small.buffer);
+    memset(&res, 0, sizeof(res));
+    res.srcSubresource.aspectMask = res.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    res.srcSubresource.layerCount = res.dstSubresource.layerCount = 1;
+    res.extent.width = res.extent.height = M;
+    res.extent.depth = 1;
+    cb = begin();
+    vkCmdResetQueryPool(cb, qp, 0, 2 * KINDS);
+    for (k = 0; k < KINDS; k++) {
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, qp, 2 * k);
+        if (k == 0) {
+            b[0] = blit_region(0, 0, 0, 0, 0, N, N, 1, 0, 0, 0, 0, 0, N, N, 1, 1);
+            vkCmdBlitImage(cb, src.image, VK_IMAGE_LAYOUT_GENERAL, dst.image, VK_IMAGE_LAYOUT_GENERAL, 1, b,
+                           VK_FILTER_LINEAR);
+        } else if (k == 1) {
+            b[0] = blit_region(0, 0, 0, 0, 0, N, N / 2, 1, 0, 0, 0, 0, 0, N, N / 2, 1, 1);
+            b[1] = blit_region(0, 0, 0, N / 2, 0, N, N, 1, 0, 0, 0, N / 2, 0, N, N, 1, 1);
+            vkCmdBlitImage(cb, src.image, VK_IMAGE_LAYOUT_GENERAL, dst.image, VK_IMAGE_LAYOUT_GENERAL, 2, b,
+                           VK_FILTER_NEAREST);
+        } else if (k == 2) {
+            b[0] = blit_region(0, 0, 0, 0, 0, 64, 64, 8, 0, 0, 0, 0, 0, N, N, 1, 1);
+            vkCmdBlitImage(cb, src3d.image, VK_IMAGE_LAYOUT_GENERAL, dst.image, VK_IMAGE_LAYOUT_GENERAL, 1, b,
+                           VK_FILTER_LINEAR);
+        } else {
+            vkCmdResolveImage(cb, ms.image, VK_IMAGE_LAYOUT_GENERAL, dst.image, VK_IMAGE_LAYOUT_GENERAL, 1, &res);
+        }
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, qp, 2 * k + 1);
+        vkCmdFillBuffer(cb, small.buffer, 0, VK_WHOLE_SIZE, k);
+    }
+    CHECK_VK(finish(cb), VK_SUCCESS);
+    memset(r, 0, sizeof(r));
+    CHECK_VK(vkGetQueryPoolResults(device, qp, 0, 2 * KINDS, sizeof(r), r, 16,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
+             VK_SUCCESS);
+    for (k = 0; k < KINDS; k++) {
+        double us = (double)(r[2 * k + 1][0] - r[2 * k][0]) * props.limits.timestampPeriod / 1000.0;
+        CHECK(r[2 * k][1] == 1 && r[2 * k + 1][1] == 1 && r[2 * k + 1][0] >= r[2 * k][0]);
+        if (us < 5.0)
+            PVK_TEST_FAIL("transfer %u: %.2f us between its timestamps", k, us);
+    }
+    vkDestroyQueryPool(device, qp, NULL);
+    free_image(&ms);
+    free_image(&src3d);
+    free_image(&dst);
+    free_image(&src);
+    free_buf(&small);
+}
+
 /* ---- Sampling through Metal ----
  *
  * A kernel reads a view (and a sampler) bound by MTLResourceID in an
@@ -3144,6 +3229,7 @@ int main(void)
     RUN(test_blit);
     RUN(test_blit_batched);
     RUN(test_resolve);
+    RUN(test_transfer_timestamps);
     RUN(test_view_swizzle);
     RUN(test_view_types);
     RUN(test_depth_stencil_views);
