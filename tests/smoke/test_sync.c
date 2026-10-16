@@ -542,13 +542,13 @@ static void test_barrier_order(void)
     vkEndCommandBuffer(cb);
     REQUIRE_VK(vkQueueWaitIdle(queues[0]));
     REQUIRE_VK(submit(queues[0], VK_NULL_HANDLE, 0, cb, VK_NULL_HANDLE, 0, f));
-    REQUIRE(q->order_count >= 1);
-    CHECK(q->order[q->order_count - 1].after == PVK_STAGES_ALL &&
-          q->order[q->order_count - 1].before == (PVK_MTLStageFragment | PVK_MTLStageTile));
+    REQUIRE(q->orders.count >= 1);
+    CHECK(q->orders.at[q->orders.count - 1].after == PVK_STAGES_ALL &&
+          q->orders.at[q->orders.count - 1].before == (PVK_MTLStageFragment | PVK_MTLStageTile));
     REQUIRE_VK(vkWaitForFences(device, 1, &f, VK_TRUE, 10000000000ull));
     fill = record_fill(&a, 2);
     REQUIRE_VK(submit(queues[0], VK_NULL_HANDLE, 0, fill, VK_NULL_HANDLE, 0, VK_NULL_HANDLE)); /* (done: dropped) */
-    CHECK(q->order_count == 0);
+    CHECK(q->orders.count == 0);
     CHECK_VK(vkQueueWaitIdle(queues[0]), VK_SUCCESS);
     CHECK(((uint32_t *)a.data)[0] == 2);
     vkFreeCommandBuffers(device, pool, 1, &cb);
@@ -619,9 +619,9 @@ static void test_render_pass_external_dependencies(void)
     vkEndCommandBuffer(cb);
     REQUIRE_VK(vkQueueWaitIdle(queues[0]));
     REQUIRE_VK(submit(queues[0], VK_NULL_HANDLE, 0, cb, VK_NULL_HANDLE, 0, f));
-    REQUIRE(q->order_count >= 1);
-    CHECK(q->order[q->order_count - 1].after == fragment);
-    CHECK(q->order[q->order_count - 1].before == (fragment | PVK_MTLStageDispatch));
+    REQUIRE(q->orders.count >= 1);
+    CHECK(q->orders.at[q->orders.count - 1].after == fragment);
+    CHECK(q->orders.at[q->orders.count - 1].before == (fragment | PVK_MTLStageDispatch));
     CHECK_VK(vkWaitForFences(device, 1, &f, VK_TRUE, 10000000000ull), VK_SUCCESS);
     vkFreeCommandBuffers(device, pool, 1, &cb);
     vkDestroyFence(device, f, NULL);

@@ -11954,6 +11954,605 @@ static void test_ycbcr_fragment(void)
     free_img(&target);
 }
 
+/* ==========================================================================
+ * Parallel encoding (plasmavk.h section 16, PARALLEL ENCODING)
+ * ========================================================================== */
+
+/* A scene of rectangles drawn in order, depth tested (LESS_OR_EQUAL,
+ * written) at one of 8 depths, each in a color of its own: the image says
+ * which drew last where, and whether the depth carried over. A rectangle
+ * is 2 packets (push constants, draw): 1024 of them make a job. */
+#define PAR_RECTS 4096
+
+struct par_rect {
+    uint32_t x0, y0, x1, y1; /* pixels [x0, x1) x [y0, y1) */
+    float depth;
+    uint32_t rgba;
+};
+
+static struct par_rect par_rects[PAR_RECTS];
+static uint32_t par_seed;
+
+static uint32_t par_random(void)
+{
+    par_seed = par_seed * 1664525u + 1013904223u;
+    return par_seed >> 8;
+}
+
+static void par_scene(uint32_t seed)
+{
+    uint32_t i;
+    par_seed = seed;
+    for (i = 0; i < PAR_RECTS; i++) {
+        struct par_rect *r = &par_rects[i];
+        uint32_t a = par_random() % W, b = par_random() % W, c = par_random() % H, d = par_random() % H;
+        r->x0 = a < b ? a : b;
+        r->x1 = (a < b ? b : a) + 1;
+        r->y0 = c < d ? c : d;
+        r->y1 = (c < d ? d : c) + 1;
+        r->depth = (float)(1 + par_random() % 8) / 16.0f;
+        r->rgba = RGBA(i & 255, (i >> 8) & 255, 128 + (seed & 127), 255);
+    }
+}
+
+/* What rectangles [first, first + count) leave in color and depth; the
+ * samples they pass (*passed, NULL: not counted). */
+static void par_expect(uint32_t first, uint32_t count, uint32_t *color, float *depth, uint64_t *passed)
+{
+    uint32_t i, x, y;
+    for (i = first; i < first + count; i++) {
+        const struct par_rect *r = &par_rects[i];
+        for (y = r->y0; y < r->y1; y++)
+            for (x = r->x0; x < r->x1; x++)
+                if (r->depth <= depth[y * W + x]) {
+                    color[y * W + x] = r->rgba;
+                    depth[y * W + x] = r->depth;
+                    if (passed)
+                        ++*passed;
+                }
+    }
+}
+
+static void par_draw(VkCommandBuffer cb, uint32_t first, uint32_t count)
+{
+    uint32_t i;
+    for (i = first; i < first + count; i++) {
+        const struct par_rect *r = &par_rects[i];
+        rect(cb, -1.0f + 2.0f * (float)r->x0 / W, -1.0f + 2.0f * (float)r->y0 / H, -1.0f + 2.0f * (float)r->x1 / W,
+             -1.0f + 2.0f * (float)r->y1 / H, (float)(r->rgba & 255) / 255.0f, (float)((r->rgba >> 8) & 255) / 255.0f,
+             (float)((r->rgba >> 16) & 255) / 255.0f, 1.0f, r->depth);
+    }
+}
+
+/* Counts pixels of a download that differ from the scene's rectangles
+ * [0, count) over black. */
+static int par_bad(const struct buf *out, uint32_t count, const char *what)
+{
+    uint32_t color[W * H], x, y;
+    float depth[W * H];
+    int bad = 0;
+    for (x = 0; x < W * H; x++) {
+        color[x] = BLACK;
+        depth[x] = 1.0f;
+    }
+    par_expect(0, count, color, depth, NULL);
+    for (y = 0; y < H; y++)
+        for (x = 0; x < W; x++)
+            if (px(out, x, y) != color[y * W + x]) {
+                if (bad < 4)
+                    fprintf(stderr, "%s: pixel (%u, %u) is %08x, expected %08x\n", what, x, y, px(out, x, y),
+                            color[y * W + x]);
+                bad++;
+            }
+    return bad;
+}
+
+static VkPipeline par_pipeline(VkRenderPass rp)
+{
+    struct pipe p;
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.depth_format = VK_FORMAT_D32_SFLOAT;
+    p.has_ds = true;
+    p.ds.depthTestEnable = VK_TRUE;
+    p.ds.depthWriteEnable = VK_TRUE;
+    p.ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    p.rp = rp;
+    return make_pipe(&p);
+}
+
+/* Dynamic rendering into color and depth, cleared (black, 1) or loaded. */
+static void par_begin(VkCommandBuffer cb, const struct img *color, const struct img *depth, bool clear,
+                      VkRenderingFlags flags)
+{
+    VkRenderingAttachmentInfo att[2];
+    VkRenderingInfo info;
+    memset(att, 0, sizeof(att));
+    att[0].sType = att[1].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att[0].imageView = color->view;
+    att[1].imageView = depth->view;
+    att[0].imageLayout = att[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att[0].loadOp = att[1].loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+    att[0].storeOp = att[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    att[0].clearValue.color.float32[3] = 1.0f;
+    att[1].clearValue.depthStencil.depth = 1.0f;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.flags = flags;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &att[0];
+    info.pDepthAttachment = &att[1];
+    vkCmdBeginRendering(cb, &info);
+}
+
+/* Attachment writes before, against attachment reads and writes after. */
+static void par_attachment_barrier(VkCommandBuffer cb)
+{
+    VkMemoryBarrier2 mb;
+    VkDependencyInfo dep;
+    memset(&mb, 0, sizeof(mb));
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                       VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    memset(&dep, 0, sizeof(dep));
+    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers = &mb;
+    vkCmdPipelineBarrier2(cb, &dep);
+}
+
+/* A secondary that continues dynamic rendering into color and depth (rp:
+ * or subpass 0 of render pass rp). */
+static VkCommandBuffer par_secondary(VkRenderPass rp)
+{
+    static const VkFormat color = VK_FORMAT_R8G8B8A8_UNORM;
+    VkCommandBufferInheritanceRenderingInfo rendering;
+    VkCommandBufferInheritanceInfo inh;
+    VkCommandBufferAllocateInfo alloc;
+    VkCommandBufferBeginInfo begin;
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    memset(&rendering, 0, sizeof(rendering));
+    rendering.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachmentFormats = &color;
+    rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+    rendering.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    memset(&inh, 0, sizeof(inh));
+    inh.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+    inh.pNext = rp ? NULL : &rendering;
+    inh.renderPass = rp;
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc.commandPool = cmd_pool;
+    alloc.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+    alloc.commandBufferCount = 1;
+    vkAllocateCommandBuffers(device, &alloc, &cb);
+    memset(&begin, 0, sizeof(begin));
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT | VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    begin.pInheritanceInfo = &inh;
+    vkBeginCommandBuffer(cb, &begin);
+    return cb;
+}
+
+/* Submits command buffers [0, n) in one batch and waits; frees them. */
+static void par_submit(VkCommandBuffer *cbs, uint32_t n)
+{
+    VkSubmitInfo si;
+    uint32_t i;
+    for (i = 0; i < n; i++)
+        vkEndCommandBuffer(cbs[i]);
+    memset(&si, 0, sizeof(si));
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = n;
+    si.pCommandBuffers = cbs;
+    CHECK_VK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE), VK_SUCCESS);
+    CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+    vkFreeCommandBuffers(device, cmd_pool, n, cbs);
+}
+
+/* Primaries of a batch, each a render pass instance that loads what the one
+ * before stored, which ends with the barrier for it (so a primary encoded
+ * in parallel starts after the barriers of those before it): 4 and 8 jobs,
+ * and 16 primaries, some of 3 rectangles (jobs of several primaries). */
+static void test_parallel_primaries(void)
+{
+    static const uint32_t layouts[3] = { 4, 8, 16 };
+    struct img color = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkPipeline pipeline = par_pipeline(VK_NULL_HANDLE);
+    VkCommandBuffer cbs[16];
+    uint32_t l, k, seed;
+
+    REQUIRE(pipeline);
+    for (seed = 1; seed <= 3; seed++)
+        for (l = 0; l < 3; l++) {
+            uint32_t n = layouts[l], at = 0;
+            char what[64];
+            par_scene(seed * 10 + l);
+            for (k = 0; k < n; k++) {
+                uint32_t count = n == 16 ? (k % 3 == 1 ? 3 : 250) : PAR_RECTS / n;
+                cbs[k] = begin_cmd();
+                par_begin(cbs[k], &color, &depth, k == 0, 0);
+                vkCmdBindPipeline(cbs[k], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                par_draw(cbs[k], at, count);
+                at += count;
+                vkCmdEndRendering(cbs[k]);
+                if (k + 1 < n)
+                    par_attachment_barrier(cbs[k]);
+                else
+                    download(cbs[k], &color, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+            }
+            par_submit(cbs, n);
+            snprintf(what, sizeof(what), "parallel primaries, %u, seed %u", n, seed);
+            CHECK(par_bad(&out, at, what) == 0);
+        }
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&depth);
+    free_img(&color);
+}
+
+/* A render pass instance suspended and resumed across the primaries of a
+ * batch (one job), and two instances over four primaries (two jobs). */
+static void test_parallel_suspend(void)
+{
+    struct img color = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkPipeline pipeline = par_pipeline(VK_NULL_HANDLE);
+    VkCommandBuffer cbs[4];
+    uint32_t k, c;
+
+    REQUIRE(pipeline);
+    for (c = 0; c < 2; c++) {
+        par_scene(300 + c);
+        for (k = 0; k < 4; k++) {
+            bool first = c ? k % 2 == 0 : k == 0, last = c ? k % 2 == 1 : k == 3;
+            cbs[k] = begin_cmd();
+            par_begin(cbs[k], &color, &depth, k == 0,
+                      (first ? 0 : VK_RENDERING_RESUMING_BIT) | (last ? 0 : VK_RENDERING_SUSPENDING_BIT));
+            vkCmdBindPipeline(cbs[k], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            par_draw(cbs[k], k * (PAR_RECTS / 4), PAR_RECTS / 4);
+            vkCmdEndRendering(cbs[k]);
+            if (last && k < 3)
+                par_attachment_barrier(cbs[k]);
+        }
+        download(cbs[3], &color, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        par_submit(cbs, 4);
+        CHECK(par_bad(&out, PAR_RECTS, c ? "two suspended instances" : "one suspended instance") == 0);
+    }
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&depth);
+    free_img(&color);
+}
+
+/* Queries and events in primaries encoded in parallel: timestamps at each
+ * one's start and end (available, in order), occlusion queries (reset in
+ * the first, counted in the third: its samples exactly; the reset orders
+ * the third's pass after it), an event set in the last, reset in the
+ * second. */
+static void test_parallel_queries(void)
+{
+    struct img color = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkPipeline pipeline = par_pipeline(VK_NULL_HANDLE);
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool stamps = VK_NULL_HANDLE, occlusion = VK_NULL_HANDLE;
+    VkEventCreateInfo ei;
+    VkEvent set = VK_NULL_HANDLE, reset = VK_NULL_HANDLE;
+    VkCommandBuffer cbs[4];
+    uint64_t times[8], counted = 0, passed = 0;
+    uint32_t colors[W * H], k, i;
+    float depths[W * H];
+
+    REQUIRE(pipeline);
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    qi.queryCount = 8;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &stamps));
+    qi.queryType = VK_QUERY_TYPE_OCCLUSION;
+    qi.queryCount = 1;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &occlusion));
+    memset(&ei, 0, sizeof(ei));
+    ei.sType = VK_STRUCTURE_TYPE_EVENT_CREATE_INFO;
+    REQUIRE_VK(vkCreateEvent(device, &ei, NULL, &set));
+    REQUIRE_VK(vkCreateEvent(device, &ei, NULL, &reset));
+    vkSetEvent(device, reset);
+    par_scene(400);
+    for (k = 0; k < 4; k++) {
+        cbs[k] = begin_cmd();
+        if (k == 0) {
+            vkCmdResetQueryPool(cbs[k], stamps, 0, 8);
+            vkCmdResetQueryPool(cbs[k], occlusion, 0, 1);
+        }
+        vkCmdWriteTimestamp2(cbs[k], VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, stamps, 2 * k);
+        if (k == 2)
+            vkCmdBeginQuery(cbs[k], occlusion, 0, VK_QUERY_CONTROL_PRECISE_BIT);
+        par_begin(cbs[k], &color, &depth, k == 0, 0);
+        vkCmdBindPipeline(cbs[k], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        par_draw(cbs[k], k * (PAR_RECTS / 4), PAR_RECTS / 4);
+        vkCmdEndRendering(cbs[k]);
+        if (k == 2)
+            vkCmdEndQuery(cbs[k], occlusion, 0);
+        vkCmdWriteTimestamp2(cbs[k], VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, stamps, 2 * k + 1);
+        if (k == 1)
+            vkCmdResetEvent2(cbs[k], reset, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+        if (k == 3) {
+            vkCmdSetEvent(cbs[k], set, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+            download(cbs[k], &color, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        } else {
+            par_attachment_barrier(cbs[k]);
+        }
+    }
+    par_submit(cbs, 4);
+    CHECK(par_bad(&out, PAR_RECTS, "parallel queries") == 0);
+    CHECK_VK(vkGetQueryPoolResults(device, stamps, 0, 8, sizeof(times), times, 8,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+             VK_SUCCESS);
+    for (i = 1; i < 8; i++)
+        if (times[i] < times[i - 1]) {
+            fprintf(stderr, "parallel timestamps: %u is %llu, %u was %llu\n", i, (unsigned long long)times[i], i - 1,
+                    (unsigned long long)times[i - 1]);
+            CHECK(times[i] >= times[i - 1]);
+        }
+    CHECK_VK(vkGetQueryPoolResults(device, occlusion, 0, 1, sizeof(counted), &counted, 8,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+             VK_SUCCESS);
+    for (i = 0; i < W * H; i++) {
+        colors[i] = BLACK;
+        depths[i] = 1.0f;
+    }
+    par_expect(0, PAR_RECTS / 2, colors, depths, NULL);
+    par_expect(PAR_RECTS / 2, PAR_RECTS / 4, colors, depths, &passed);
+    CHECK(counted == passed);
+    if (counted != passed)
+        fprintf(stderr, "parallel occlusion: %llu samples, expected %llu\n", (unsigned long long)counted,
+                (unsigned long long)passed);
+    CHECK_VK(vkGetEventStatus(device, set), VK_EVENT_SET);
+    CHECK_VK(vkGetEventStatus(device, reset), VK_EVENT_RESET);
+    vkDestroyEvent(device, set, NULL);
+    vkDestroyEvent(device, reset, NULL);
+    vkDestroyQueryPool(device, stamps, NULL);
+    vkDestroyQueryPool(device, occlusion, NULL);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&depth);
+    free_img(&color);
+}
+
+/* What jobs leave for later work: a batch of primaries whose last ends with
+ * a barrier, then a submission that copies what they drew without one of its
+ * own (the jobs' barriers joined the queue's order); and an occlusion query
+ * reset after a long fill in the first primary, counted in a pass of the
+ * third that nothing else orders after the first (only the reset does):
+ * 0 draws into third, 1 and 3 into color (3 after a barrier), 2 into other. */
+static void test_parallel_order(void)
+{
+    struct img color = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img other = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img other_depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img third = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img third_depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4), big = make_buf(256u << 20);
+    VkPipeline pipeline = par_pipeline(VK_NULL_HANDLE);
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool occlusion = VK_NULL_HANDLE;
+    VkCommandBuffer cbs[4], copy;
+    VkBufferImageCopy region;
+    VkSubmitInfo si;
+    uint64_t counted, passed;
+    uint32_t colors[W * H], k, i, round, x, y;
+    float depths[W * H];
+
+    REQUIRE(pipeline && big.data);
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_OCCLUSION;
+    qi.queryCount = 1;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &occlusion));
+    memset(&region, 0, sizeof(region));
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent.width = W;
+    region.imageExtent.height = H;
+    region.imageExtent.depth = 1;
+    for (round = 0; round < 3; round++) {
+        int bad = 0;
+        par_scene(600 + round);
+        for (k = 0; k < 4; k++) {
+            const struct img *target = k == 0 ? &third : k == 2 ? &other : &color;
+            const struct img *target_depth = k == 0 ? &third_depth : k == 2 ? &other_depth : &depth;
+            cbs[k] = begin_cmd();
+            if (k == 0) {
+                vkCmdFillBuffer(cbs[k], big.buffer, 0, VK_WHOLE_SIZE, round);
+                vkCmdResetQueryPool(cbs[k], occlusion, 0, 1);
+            }
+            if (k == 2)
+                vkCmdBeginQuery(cbs[k], occlusion, 0, VK_QUERY_CONTROL_PRECISE_BIT);
+            if (k == 3)
+                par_attachment_barrier(cbs[k]);
+            par_begin(cbs[k], target, target_depth, k != 3, 0);
+            vkCmdBindPipeline(cbs[k], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            par_draw(cbs[k], k * (PAR_RECTS / 4), PAR_RECTS / 4);
+            vkCmdEndRendering(cbs[k]);
+            if (k == 2)
+                vkCmdEndQuery(cbs[k], occlusion, 0);
+            if (k == 3)
+                barrier(cbs[k]);
+            vkEndCommandBuffer(cbs[k]);
+        }
+        memset(&si, 0, sizeof(si));
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 4;
+        si.pCommandBuffers = cbs;
+        CHECK_VK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE), VK_SUCCESS);
+        copy = begin_cmd(); /* (after the barrier that ended the batch) */
+        vkCmdCopyImageToBuffer(copy, color.image, VK_IMAGE_LAYOUT_GENERAL, out.buffer, 1, &region);
+        vkEndCommandBuffer(copy);
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &copy;
+        CHECK_VK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE), VK_SUCCESS);
+        CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+        vkFreeCommandBuffers(device, cmd_pool, 4, cbs);
+        vkFreeCommandBuffers(device, cmd_pool, 1, &copy);
+        for (i = 0; i < W * H; i++) {
+            colors[i] = BLACK;
+            depths[i] = 1.0f;
+        }
+        par_expect(PAR_RECTS / 4, PAR_RECTS / 4, colors, depths, NULL);
+        par_expect(3 * (PAR_RECTS / 4), PAR_RECTS / 4, colors, depths, NULL);
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++)
+                if (px(&out, x, y) != colors[y * W + x]) {
+                    if (bad < 4)
+                        fprintf(stderr, "parallel order, round %u: pixel (%u, %u) is %08x, expected %08x\n", round, x,
+                                y, px(&out, x, y), colors[y * W + x]);
+                    bad++;
+                }
+        CHECK(bad == 0);
+        for (i = 0; i < W * H; i++) {
+            colors[i] = BLACK;
+            depths[i] = 1.0f;
+        }
+        counted = passed = 0;
+        par_expect(PAR_RECTS / 2, PAR_RECTS / 4, colors, depths, &passed);
+        CHECK_VK(vkGetQueryPoolResults(device, occlusion, 0, 1, sizeof(counted), &counted, 8,
+                                       VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+                 VK_SUCCESS);
+        CHECK(counted == passed);
+        if (counted != passed)
+            fprintf(stderr, "parallel order, round %u: %llu samples, expected %llu\n", round,
+                    (unsigned long long)counted, (unsigned long long)passed);
+    }
+    vkDestroyQueryPool(device, occlusion, NULL);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&big);
+    free_buf(&out);
+    free_img(&third_depth);
+    free_img(&third);
+    free_img(&other_depth);
+    free_img(&other);
+    free_img(&depth);
+    free_img(&color);
+}
+
+/* Frames of two in flight, each a batch of a random number of primaries,
+ * some executing secondaries in their render pass instances, with uploads
+ * (push constants and vkCmdUpdateBuffer of 64 KB, more than an upload chunk
+ * a frame): what parallel encoding takes and gives back (lanes, command
+ * allocators, upload chunks) over 40 frames. */
+static void test_parallel_stress(void)
+{
+    enum { FRAMES = 40, SLOTS = 2 };
+    struct img color[SLOTS], depth[SLOTS];
+    struct buf out[SLOTS], updated[SLOTS];
+    VkPipeline pipeline = par_pipeline(VK_NULL_HANDLE);
+    VkFence fences[SLOTS];
+    VkFenceCreateInfo fi;
+    VkCommandBuffer cbs[SLOTS][8], secs[SLOTS][8];
+    uint32_t ncbs[SLOTS], nsecs[SLOTS], counts[SLOTS], seeds[SLOTS], written[SLOTS], frame, s, k, i;
+    static uint32_t data[16384];
+
+    REQUIRE(pipeline);
+    memset(&fi, 0, sizeof(fi));
+    fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    for (s = 0; s < SLOTS; s++) {
+        color[s] = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+        depth[s] = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+        out[s] = make_buf(W * H * 4);
+        updated[s] = make_buf(sizeof(data) * 8);
+        vkCreateFence(device, &fi, NULL, &fences[s]);
+        ncbs[s] = nsecs[s] = 0;
+    }
+    for (frame = 0; frame < FRAMES + SLOTS; frame++) {
+        VkSubmitInfo si;
+        uint32_t primaries, at = 0;
+        s = frame % SLOTS;
+        if (frame >= SLOTS) { /* the frame before in this slot */
+            uint32_t bad = 0;
+            char what[64];
+            CHECK_VK(vkWaitForFences(device, 1, &fences[s], VK_TRUE, UINT64_MAX), VK_SUCCESS);
+            vkResetFences(device, 1, &fences[s]);
+            par_scene(seeds[s]);
+            snprintf(what, sizeof(what), "parallel stress, frame %u", frame - SLOTS);
+            CHECK(par_bad(&out[s], counts[s], what) == 0);
+            for (k = 0; k < written[s]; k++)
+                for (i = 0; i < 16384; i += 997)
+                    bad += ((const uint32_t *)updated[s].data)[k * 16384 + i] != (seeds[s] ^ (k * 16384 + i));
+            CHECK(bad == 0);
+            vkFreeCommandBuffers(device, cmd_pool, ncbs[s], cbs[s]);
+            if (nsecs[s])
+                vkFreeCommandBuffers(device, cmd_pool, nsecs[s], secs[s]);
+            ncbs[s] = nsecs[s] = 0;
+        }
+        if (frame >= FRAMES)
+            continue;
+        seeds[s] = 500 + frame;
+        par_scene(seeds[s]);
+        primaries = 1 + frame % 7;
+        for (k = 0; k < primaries; k++) {
+            uint32_t count = 256 + par_random() % 512;
+            VkCommandBuffer cb = cbs[s][ncbs[s]++] = begin_cmd();
+            if (k < 4) { /* 128 KB of updates in each of the first four */
+                for (i = 0; i < 16384; i++)
+                    data[i] = seeds[s] ^ (k * 2 * 16384 + i);
+                vkCmdUpdateBuffer(cb, updated[s].buffer, (VkDeviceSize)k * 2 * sizeof(data), 65536, data);
+                for (i = 0; i < 16384; i++)
+                    data[i] = seeds[s] ^ ((k * 2 + 1) * 16384 + i);
+                vkCmdUpdateBuffer(cb, updated[s].buffer, (VkDeviceSize)(k * 2 + 1) * sizeof(data), 65536, data);
+            }
+            if (at + count > PAR_RECTS)
+                count = PAR_RECTS - at;
+            if ((frame + k) % 3 == 0) { /* through a secondary */
+                VkCommandBuffer sec = secs[s][nsecs[s]++] = par_secondary(VK_NULL_HANDLE);
+                vkCmdBindPipeline(sec, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                par_draw(sec, at, count);
+                vkEndCommandBuffer(sec);
+                par_begin(cb, &color[s], &depth[s], k == 0, VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT);
+                vkCmdExecuteCommands(cb, 1, &sec);
+            } else {
+                par_begin(cb, &color[s], &depth[s], k == 0, 0);
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                par_draw(cb, at, count);
+            }
+            at += count;
+            vkCmdEndRendering(cb);
+            if (k + 1 < primaries)
+                par_attachment_barrier(cb);
+            else
+                download(cb, &color[s], 0, VK_IMAGE_ASPECT_COLOR_BIT, &out[s]);
+            vkEndCommandBuffer(cb);
+        }
+        counts[s] = at;
+        written[s] = 2 * (primaries < 4 ? primaries : 4);
+        memset(&si, 0, sizeof(si));
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = ncbs[s];
+        si.pCommandBuffers = cbs[s];
+        CHECK_VK(vkQueueSubmit(queue, 1, &si, fences[s]), VK_SUCCESS);
+    }
+    CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+    for (s = 0; s < SLOTS; s++) {
+        vkDestroyFence(device, fences[s], NULL);
+        free_buf(&updated[s]);
+        free_buf(&out[s]);
+        free_img(&depth[s]);
+        free_img(&color[s]);
+    }
+    vkDestroyPipeline(device, pipeline, NULL);
+}
+
 int main(void)
 {
     setup();
@@ -12049,6 +12648,11 @@ int main(void)
     RUN(test_shader_cache_threads);
     RUN(test_implicit_cache);
     RUN(test_ycbcr_fragment);
+    RUN(test_parallel_primaries);
+    RUN(test_parallel_suspend);
+    RUN(test_parallel_queries);
+    RUN(test_parallel_order);
+    RUN(test_parallel_stress);
     teardown();
     return TEST_RESULT();
 }

@@ -29947,6 +29947,15 @@ extern id pvk_dispatch_semaphore_create(intptr_t value) __asm__("_dispatch_semap
 extern intptr_t pvk_dispatch_semaphore_signal(id semaphore) __asm__("_dispatch_semaphore_signal");
 extern intptr_t pvk_dispatch_semaphore_wait(id semaphore, uint64_t timeout) __asm__("_dispatch_semaphore_wait");
 
+/* ---- Thread quality of service (libpthread, in libSystem) ----
+ * <pthread/qos.h>'s, bound the same way (_POSIX_C_SOURCE leaves its
+ * declarations out); qos_class_t is an unsigned int. A new pthread does
+ * not inherit its creator's class (it starts at QOS_CLASS_DEFAULT, 0x15,
+ * macOS 27.2). */
+extern unsigned int pvk_qos_class_self(void) __asm__("_qos_class_self");
+extern int pvk_pthread_set_qos_class_self_np(unsigned int qos_class, int relative_priority)
+    __asm__("_pthread_set_qos_class_self_np");
+
 /* ==========================================================================
  * 4. Metal API declarations
  *
@@ -32389,8 +32398,44 @@ struct pvk_names;
 struct pvk_upload_chunk;
 struct pvk_deferred;
 struct pvk_cmd_event;
+struct pvk_ts_note;
 
-#define PVK_ORDER_MAX 8 /* struct pvk_queue.order */
+/* What a thread encoding a queue's submissions has of its own (section 16,
+ * PARALLEL ENCODING): argument tables, command allocators and an upload
+ * ring. The queue's lane is the submitting thread's. */
+struct pvk_lane {
+    id argument_table;    /* MTL4ArgumentTable the encoder binds (snapshotted per dispatch) */
+    id render_table;      /* MTL4ArgumentTable of internal blit/resolve draws */
+    struct pvk_submission *pending, *pending_tail; /* in flight, oldest first */
+    struct pvk_submission *free_submissions;
+    struct pvk_upload_chunk *upload;               /* being filled */
+    struct pvk_upload_chunk *retired, *retired_tail; /* full, in flight, oldest first */
+    struct pvk_upload_chunk *free_chunks;
+};
+
+#define PVK_ORDER_MAX 8 /* struct pvk_orders */
+
+/* Barriers of submissions that may still run (section 16, BARRIERS): an
+ * encoder started later waits for earlier work at `after` stages before its
+ * `before` stages. One entry per submission, oldest first. */
+struct pvk_orders {
+    struct pvk_order {
+        uint64_t serial;
+        pvk_MTLStages after, before;
+    } at[PVK_ORDER_MAX];
+    uint32_t count;
+};
+
+/* The event signals and resets of the submission being encoded, made
+ * pending on their events once it is sure to go ahead (section 16, EVENTS),
+ * and its timestamp writes and resets, stored in their pools' states then
+ * (section 14, TIMESTAMPS; pvk_queue_publish_queries). */
+struct pvk_notes {
+    const struct pvk_cmd_event **events;
+    uint32_t event_count, event_capacity;
+    struct pvk_ts_note *ts;
+    uint32_t ts_count, ts_capacity;
+};
 
 struct pvk_queue {
     struct pvk_device *device;
@@ -32407,20 +32452,13 @@ struct pvk_queue {
      * (section 14, TIMESTAMPS) */
     id batch_event;
     uint64_t batch_value; /* the last one taken */
-    id argument_table;    /* MTL4ArgumentTable the encoder binds (snapshotted per dispatch) */
-    struct pvk_submission *pending, *pending_tail; /* in flight, oldest first */
-    struct pvk_submission *free_submissions;
-    struct pvk_upload_chunk *upload;               /* being filled */
-    struct pvk_upload_chunk *retired, *retired_tail; /* full, in flight, oldest first */
-    struct pvk_upload_chunk *free_chunks;
-    /* The event signals and resets of the submission being encoded, made
-     * pending on their events once it is sure to go ahead (section 16, EVENTS) */
-    const struct pvk_cmd_event **event_cmds;
-    uint32_t event_cmd_count, event_cmd_capacity;
-    /* ... and its timestamp writes and resets, stored in their pools' states
-     * then (section 14, TIMESTAMPS; pvk_queue_publish_queries) */
-    struct pvk_ts_note *ts_notes;
-    uint32_t ts_note_count, ts_note_capacity;
+    struct pvk_lane lane;
+    /* the lanes of the device's encoding threads (lanes[i]: thread i's),
+     * made by the first submission they encode */
+    struct pvk_lane *lanes;
+    uint32_t lane_count;
+    bool lanes_failed; /* (then batches encode in order) */
+    struct pvk_notes notes;
     /* Batches whose semaphore waits the host resolves (section 16): the
      * queue's thread commits them in order. */
     pthread_mutex_t lock;
@@ -32429,16 +32467,7 @@ struct pvk_queue {
     pthread_t thread;
     struct pvk_deferred *deferred, *deferred_tail; /* to do; the head is in progress */
     struct pvk_deferred *done;                     /* done, freed by vkQueueSubmit */
-    /* Image transfers (section 16): */
-    id render_table;   /* MTL4ArgumentTable of internal blit/resolve draws */
-    /* Barriers of submissions that may still run (BARRIERS): an encoder
-     * started later waits for earlier work at `after` stages before its
-     * `before` stages. One entry per submission, oldest first. */
-    struct pvk_order {
-        uint64_t serial;
-        pvk_MTLStages after, before;
-    } order[PVK_ORDER_MAX];
-    uint32_t order_count;
+    struct pvk_orders orders;
     const void *sparse_issued; /* the texture whose mappings the queue updated last (pvk_sparse_drain) */
     /* VK_EXT_debug_utils (section 16, DEBUG LABELS), externally synchronized
      * like vkQueueSubmit: the queue's label regions, and the command buffer
@@ -32456,6 +32485,20 @@ struct pvk_cached_heap {
     uint64_t freed; /* CLOCK_UPTIME_RAW nanoseconds */
     uint32_t type;
     bool sparse; /* maxCompatiblePlacementSparsePageSize 64 KB */
+};
+
+/* The encoding threads of a device (section 16, PARALLEL ENCODING): each
+ * encodes jobs on its lane of their queue, lanes[index]. */
+#define PVK_PAR_THREADS 4u
+
+struct pvk_job;
+struct pvk_device;
+
+struct pvk_par_thread {
+    struct pvk_device *device;
+    uint32_t index;
+    pthread_t thread;
+    unsigned int qos; /* its QoS class (it takes that of the submitting thread) */
 };
 
 #define PVK_HEAP_CACHE_SLOTS 16
@@ -32490,6 +32533,15 @@ struct pvk_device {
     pvk_MTL4VisibilityOptions visibility;
     int lost;              /* a command buffer failed: VK_ERROR_DEVICE_LOST (atomic) */
     long feedback_pending; /* commit feedback handlers still to run (atomic) */
+    /* Parallel encoding (section 16, PARALLEL ENCODING): the encoding
+     * threads, started by the first batch with jobs for them, and the jobs
+     * to do, oldest first; under par_lock (par_ready: it was made) */
+    pthread_mutex_t par_lock;
+    pthread_cond_t par_work, par_done; /* jobs to do (or par_stop); a batch's jobs done, or more */
+    bool par_ready, par_stop, par_failed;
+    uint32_t par_threads;
+    struct pvk_par_thread par_thread[PVK_PAR_THREADS];
+    struct pvk_job *par_head, *par_tail;
     id fill_pipeline;      /* internal kernel of vkCmdFillBuffer, made on first use */
     /* Images (sections 11, 15 and 16) */
     struct pvk_sampler_state *sampler_states; /* MTLSamplerStates shared by equal VkSamplers */
@@ -36677,6 +36729,11 @@ static void pvk_device_free(struct pvk_device *device)
     pvk_release(device->residency_set);
     pthread_mutex_destroy(&device->residency_lock);
     pthread_mutex_destroy(&device->pool_lock);
+    if (device->par_ready) {
+        pthread_cond_destroy(&device->par_done);
+        pthread_cond_destroy(&device->par_work);
+        pthread_mutex_destroy(&device->par_lock);
+    }
     pvk_names_free(device);
     pvk_free(pvk_device_alloc(device), device);
 }
@@ -36858,6 +36915,16 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice,
         pthread_mutex_destroy(&device->residency_lock);
         pvk_free(alloc, device);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    if (pthread_mutex_init(&device->par_lock, NULL) == 0) { /* (without: batches encode in order) */
+        if (pthread_cond_init(&device->par_work, NULL) == 0) {
+            if (pthread_cond_init(&device->par_done, NULL) == 0)
+                device->par_ready = true;
+            else
+                pthread_cond_destroy(&device->par_work);
+        }
+        if (!device->par_ready)
+            pthread_mutex_destroy(&device->par_lock);
     }
     device->physical_device = pd;
     device->features = features;
@@ -55593,6 +55660,19 @@ static bool pvk_scan_needed(uint32_t scan)
            (scan & (PVK_SCAN_STRIP | PVK_SCAN_U16)) == (PVK_SCAN_STRIP | PVK_SCAN_U16);
 }
 
+/* What a command buffer recorded that parallel encoding (section 16,
+ * PARALLEL ENCODING) must know of (struct pvk_command_buffer.par): */
+#define PVK_PAR_SERIAL 1u   /* what encodes only in order: a copy of timestamp results, a resolve in part of the
+                             * render area (label regions: struct pvk_command_buffer.ops) */
+#define PVK_PAR_RESETS 2u   /* a reset of occlusion queries (a barrier, pvk_encode_query_reset) */
+#define PVK_PAR_SUSPENDS 4u /* its last render pass instance is suspended (resumed by the next command buffer) */
+
+/* The fewest packets worth a job of their own (section 16, PARALLEL
+ * ENCODING). Batches of 4 primaries of 36 packets (push constants and a
+ * draw each) took 31-34 us to submit in parallel and 27-28 us in order, of
+ * 132 packets 37-40 against 50 (M4 Max, macOS 27.2). */
+#define PVK_PAR_PACKETS 128u
+
 /* The encoder tracks PVK_MAX_PUSH_CONSTANTS_SIZE (section 7) bytes of push
  * constants, the base workgroup of vkCmdDispatchBase after them. */
 
@@ -55663,6 +55743,12 @@ struct pvk_command_buffer {
      * when it ends), scan_outer of the rest */
     uint32_t scan, scan_outer;
     struct pvk_cmd_begin_pass *scan_pass;
+    /* For parallel encoding (section 16, PARALLEL ENCODING), with its
+     * secondaries': the packets recorded, their kinds (bits 1 << op),
+     * PVK_PAR_*, and the Metal stages of its barriers together
+     * (pvk_barrier_stages: before = 0, no barrier) */
+    uint32_t packets, ops, par;
+    pvk_MTLStages order_after, order_before;
 };
 
 /* Debug layer: recordings begun (struct pvk_command_buffer.recording). */
@@ -55719,6 +55805,8 @@ static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release
     cb->executes = false;
     cb->scan = cb->scan_outer = 0;
     cb->scan_pass = NULL;
+    cb->packets = cb->ops = cb->par = 0;
+    cb->order_after = cb->order_before = 0;
     if (release) {
         pvk_labels_free(&cb->labels, pvk_pool_alloc(pool));
         pvk_cb_render_free(cb);
@@ -56107,6 +56195,8 @@ static void *pvk_cmd_append(struct pvk_command_buffer *cb, enum pvk_cmd_op op, s
     b->used += size;
     c->op = op;
     c->size = (uint32_t)size;
+    cb->packets++;
+    cb->ops |= 1u << op;
     return c;
 }
 
@@ -56302,12 +56392,19 @@ VKAPI_ATTR void VKAPI_CALL vkCmdUpdateBuffer(VkCommandBuffer commandBuffer, VkBu
 
 /* ---- Synchronization commands ---- */
 
+static pvk_MTLStages pvk_barrier_stages(VkPipelineStageFlags2 stages, bool src);
+
 static void pvk_cmd_barrier(struct pvk_command_buffer *cb, VkPipelineStageFlags2 src_stages,
                             VkPipelineStageFlags2 dst_stages, VkAccessFlags2 src_access, VkAccessFlags2 dst_access)
 {
     struct pvk_cmd_barrier *c = pvk_cmd_append(cb, PVK_CMD_BARRIER, sizeof(*c));
+    pvk_MTLStages src = pvk_barrier_stages(src_stages, true), dst = pvk_barrier_stages(dst_stages, false);
     if (!c)
         return;
+    if (src && dst) { /* (what pvk_encode_barrier orders) */
+        cb->order_after |= src;
+        cb->order_before |= dst;
+    }
     c->src_stages = src_stages;
     c->dst_stages = dst_stages;
     c->src_access = src_access;
@@ -56476,7 +56573,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdExecuteCommands(VkCommandBuffer commandBuffer, u
     struct pvk_cmd_execute *c;
     struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
     uint64_t *recordings;
-    uint32_t i;
+    uint32_t i, packets = 0, ops = 0, par = 0;
     if (!commandBufferCount)
         return;
     c = pvk_cmd_append(cb, PVK_CMD_EXECUTE_COMMANDS,
@@ -56490,7 +56587,17 @@ VKAPI_ATTR void VKAPI_CALL vkCmdExecuteCommands(VkCommandBuffer commandBuffer, u
         const struct pvk_command_buffer *secondary = (const struct pvk_command_buffer *)pCommandBuffers[i];
         cb->scan |= secondary->scan;
         recordings[i] = secondary->recording;
+        packets += secondary->packets;
+        ops |= secondary->ops;
+        par |= secondary->par & ~(uint32_t)PVK_PAR_SUSPENDS;
+        if (secondary->par & PVK_PAR_SUSPENDS) /* (perhaps the instance a later command buffer resumes) */
+            cb->par |= PVK_PAR_SUSPENDS;
+        cb->order_after |= secondary->order_after;
+        cb->order_before |= secondary->order_before;
     }
+    cb->packets += packets;
+    cb->ops |= ops;
+    cb->par |= par;
     cb->executes = true;
 }
 
@@ -58146,10 +58253,15 @@ static uint32_t pvk_rp_fresh_views(const struct pvk_render_pass *pass, uint32_t 
  * bits recorded since, and the command buffer has them too. */
 static void pvk_cmd_scan_end(struct pvk_command_buffer *cb)
 {
-    if (!cb->scan_pass)
+    struct pvk_cmd_begin_pass *c = cb->scan_pass;
+    uint32_t s;
+    if (!c)
         return;
-    cb->scan_pass->scan = cb->scan;
+    c->scan = cb->scan;
     cb->scan |= cb->scan_outer;
+    for (s = 0; s < c->color_count; s++) /* (its resolve textures are the queue's, in order) */
+        if (c->colors[s].resolve_in_area)
+            cb->par |= PVK_PAR_SERIAL;
     cb->scan_pass = NULL;
 }
 
@@ -58297,6 +58409,10 @@ static void pvk_cmd_end_pass(struct pvk_command_buffer *cb, uint32_t flags)
         c->pad = 0;
     }
     pvk_cmd_scan_end(cb);
+    if (flags & VK_RENDERING_SUSPENDING_BIT)
+        cb->par |= PVK_PAR_SUSPENDS;
+    else
+        cb->par &= ~PVK_PAR_SUSPENDS;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass2(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo *pRenderPassBegin,
@@ -59072,6 +59188,10 @@ static struct pvk_cmd_query *pvk_cmd_query(VkCommandBuffer cb, enum pvk_query_op
     c->pool = (struct pvk_query_pool *)pool;
     if (op == PVK_QUERY_BEGIN)
         ((struct pvk_command_buffer *)cb)->scan |= PVK_SCAN_QUERY;
+    if (op == PVK_QUERY_RESET && !c->pool->heap)
+        ((struct pvk_command_buffer *)cb)->par |= PVK_PAR_RESETS;
+    if (op == PVK_QUERY_COPY && c->pool->heap) /* (it reads what the batch noted before it, pvk_ts_encoded) */
+        ((struct pvk_command_buffer *)cb)->par |= PVK_PAR_SERIAL;
     return c;
 }
 
@@ -59208,7 +59328,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *
  * SUBMISSION
  *   Each batch (VkSubmitInfo) with command buffers is encoded into one
- *   MTL4CommandBuffer from an MTL4CommandAllocator, with one compute encoder
+ *   MTL4CommandBuffer from an MTL4CommandAllocator (or several, committed
+ *   together: PARALLEL ENCODING), with one compute encoder
  *   (Metal 4 compute encoders also blit). All batches are encoded, and
  *   everything allocated, before anything reaches the queue, so a failure
  *   leaves no trace. Then, per batch: commit, signalEvent: for its signal
@@ -59246,6 +59367,27 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   memory bypass the cache. In write-combined chunks a draw after new
  *   push constants, vertex buffers or tables took 45 to 90 ns longer to
  *   encode (M4 Max, macOS 27.2).
+ *
+ * PARALLEL ENCODING
+ *   Recording only appends packets, so applications that record on several
+ *   threads would wait for vkQueueSubmit to encode it all on one. A batch
+ *   with enough work (pvk_par_plan) is encoded in jobs, by the submitting
+ *   thread and the device's encoding threads (PVK_PAR_THREADS, started by
+ *   the first such batch), into MTL4CommandBuffers committed together in
+ *   order: jobs of consecutive primaries (PVK_PAR_PACKETS packets or more;
+ *   one that suspends a render pass instance goes with the next). A thread
+ *   encodes on a lane of the queue's (struct pvk_lane): argument tables,
+ *   command allocators and upload ring of its own. A job's encoders start after the barriers of the jobs before it,
+ *   recorded with their command buffers (struct
+ *   pvk_command_buffer.order_after/before); a job of primaries ends with its
+ *   timestamps and occlusion availability written, and its event and
+ *   timestamp notes join the batch's in order. A batch encodes in order
+ *   when something of it reads what the batch encoded before it, or shares
+ *   it in order (PVK_PAR_SERIAL: copies of timestamp results, resolves in
+ *   part of a render area; label regions, the debug layer), and on devices
+ *   made with allocation callbacks, which Vulkan calls only on the thread of
+ *   the command. The submitting thread, done with its own job, takes the
+ *   jobs no thread began, then waits for the others.
  *
  * BARRIERS
  *   Metal 4 does not track resources: commands in an encoder and across
@@ -59370,6 +59512,11 @@ struct pvk_submission {
     uint64_t batch_value; /* queue->batch_event's value once it is done (0: none) */
     id allocator;   /* MTL4CommandAllocator */
     id cb;          /* MTL4CommandBuffer */
+    /* The first job's of a batch encoded in parallel (PARALLEL ENCODING):
+     * the batch's command buffers in commit order (not
+     * retained; commit_count 0: cb alone) */
+    id *commit;
+    uint32_t commit_count, commit_capacity;
 };
 
 struct pvk_event_value {
@@ -59405,6 +59552,8 @@ struct pvk_sparse_binds {
  * signals its semaphores, then signals the timeline. One allocation. */
 struct pvk_deferred_batch {
     id cb;            /* NULL: no command buffers */
+    const id *cbs;    /* NULL: cb alone; else count of them (a batch encoded in parallel), cb the first */
+    uint32_t cb_count;
     uint32_t first;   /* in ops: nwaits waits, then nsignals signals */
     uint32_t nwaits, nsignals;
     id drawable;      /* presentation (section 18): cb copies into it, then it is presented; owned */
@@ -59422,34 +59571,41 @@ struct pvk_deferred {
 
 /* ---- Queues ---- */
 
-static VkResult pvk_queue_init(struct pvk_queue *queue)
+/* A lane's argument tables; false when Metal made none. */
+static bool pvk_lane_init(struct pvk_device *device, struct pvk_lane *lane)
 {
-    id mtl = queue->device->physical_device->mtl_device;
+    id mtl = device->physical_device->mtl_device;
     void *pool = objc_autoreleasePoolPush(); /* the NSError, on failure */
     id desc = pvk_MTL4ArgumentTableDescriptor_new();
-
-    queue->timeline = pvk_MTLDevice_newSharedEvent(mtl);
-    queue->batch_event = pvk_MTLDevice_newSharedEvent(mtl);
     if (desc) {
         pvk_MTL4ArgumentTableDescriptor_setMaxBufferBindCount(desc, 31);
         pvk_MTL4ArgumentTableDescriptor_setMaxTextureBindCount(desc, 2 * PVK_MAX_INPUT_ATTACHMENTS); /* (section 16) */
-        queue->argument_table = pvk_MTLDevice_newArgumentTableWithDescriptor_error(mtl, desc, NULL);
+        lane->argument_table = pvk_MTLDevice_newArgumentTableWithDescriptor_error(mtl, desc, NULL);
         /* Internal draws (blits, resolves): arguments and one texture. */
         pvk_MTL4ArgumentTableDescriptor_setMaxBufferBindCount(desc, 1);
         pvk_MTL4ArgumentTableDescriptor_setMaxTextureBindCount(desc, 1);
-        queue->render_table = pvk_MTLDevice_newArgumentTableWithDescriptor_error(mtl, desc, NULL);
+        lane->render_table = pvk_MTLDevice_newArgumentTableWithDescriptor_error(mtl, desc, NULL);
         pvk_release(desc);
     }
     objc_autoreleasePoolPop(pool);
+    return lane->argument_table && lane->render_table;
+}
+
+static VkResult pvk_queue_init(struct pvk_queue *queue)
+{
+    id mtl = queue->device->physical_device->mtl_device;
+    bool tables = pvk_lane_init(queue->device, &queue->lane);
+
+    queue->timeline = pvk_MTLDevice_newSharedEvent(mtl);
+    queue->batch_event = pvk_MTLDevice_newSharedEvent(mtl);
     if (pthread_mutex_init(&queue->lock, NULL) == 0) {
         if (pthread_cond_init(&queue->cond, NULL) == 0)
             queue->lock_ready = true;
         else
             pthread_mutex_destroy(&queue->lock);
     }
-    return queue->timeline && queue->batch_event && queue->argument_table && queue->render_table && queue->lock_ready
-               ? VK_SUCCESS
-               : VK_ERROR_INITIALIZATION_FAILED;
+    return queue->timeline && queue->batch_event && tables && queue->lock_ready ? VK_SUCCESS
+                                                                                : VK_ERROR_INITIALIZATION_FAILED;
 }
 
 static void pvk_deferred_free(struct pvk_device *device, struct pvk_deferred *d)
@@ -59476,51 +59632,6 @@ static void pvk_upload_chunks_free(struct pvk_device *device, struct pvk_upload_
     }
 }
 
-static void pvk_submissions_free(struct pvk_device *device, struct pvk_submission *s)
-{
-    struct pvk_submission *next;
-    for (; s; s = next) {
-        next = s->next;
-        pvk_release(s->cb);
-        pvk_release(s->allocator);
-        pvk_free(pvk_device_alloc(device), s);
-    }
-}
-
-/* After pvk_device_finish: the GPU is done with everything. */
-static void pvk_queue_finish(struct pvk_queue *queue)
-{
-    struct pvk_device *device = queue->device;
-    void *pool = objc_autoreleasePoolPush();
-    pvk_submissions_free(device, queue->pending);
-    pvk_submissions_free(device, queue->free_submissions);
-    pvk_upload_chunks_free(device, queue->upload);
-    pvk_upload_chunks_free(device, queue->retired);
-    pvk_upload_chunks_free(device, queue->free_chunks);
-    pvk_release(queue->argument_table);
-    pvk_release(queue->render_table);
-    pvk_release(queue->timeline);
-    pvk_release(queue->batch_event);
-    pvk_deferred_free(device, queue->deferred);
-    pvk_deferred_free(device, queue->done);
-    pvk_free_raw(pvk_device_alloc(device), (void *)queue->event_cmds);
-    queue->event_cmds = NULL;
-    queue->event_cmd_count = queue->event_cmd_capacity = 0;
-    pvk_free_raw(pvk_device_alloc(device), queue->ts_notes);
-    queue->ts_notes = NULL;
-    queue->ts_note_count = queue->ts_note_capacity = 0;
-    if (queue->lock_ready) {
-        pthread_cond_destroy(&queue->cond);
-        pthread_mutex_destroy(&queue->lock);
-    }
-    queue->pending = queue->pending_tail = queue->free_submissions = NULL;
-    queue->upload = queue->retired = queue->retired_tail = queue->free_chunks = NULL;
-    queue->argument_table = queue->render_table = queue->timeline = queue->batch_event = NULL;
-    queue->deferred = queue->deferred_tail = queue->done = NULL;
-    queue->lock_ready = false;
-    objc_autoreleasePoolPop(pool);
-}
-
 /* A submission is reusable (allocator reset) once the GPU is done. Its
  * MTL4CommandBuffer is not: Metal's GPU validation layer
  * (MTL_SHADER_VALIDATION=1, macOS 27.2) messages heaps a reused command
@@ -59531,43 +59642,106 @@ static void pvk_submission_reset(struct pvk_submission *s)
     pvk_MTL4CommandAllocator_reset(s->allocator);
     pvk_release(s->cb);
     s->cb = NULL;
+    s->commit_count = 0;
+}
+
+static void pvk_submissions_free(struct pvk_device *device, struct pvk_submission *s)
+{
+    struct pvk_submission *next;
+    for (; s; s = next) {
+        next = s->next;
+        pvk_free(pvk_device_alloc(device), s->commit);
+        pvk_release(s->cb);
+        pvk_release(s->allocator);
+        pvk_free(pvk_device_alloc(device), s);
+    }
+}
+
+/* After pvk_device_finish: the GPU is done with everything. */
+static void pvk_lane_finish(struct pvk_device *device, struct pvk_lane *lane)
+{
+    pvk_submissions_free(device, lane->pending);
+    pvk_submissions_free(device, lane->free_submissions);
+    pvk_upload_chunks_free(device, lane->upload);
+    pvk_upload_chunks_free(device, lane->retired);
+    pvk_upload_chunks_free(device, lane->free_chunks);
+    pvk_release(lane->argument_table);
+    pvk_release(lane->render_table);
+    memset(lane, 0, sizeof(*lane));
+}
+
+static void pvk_queue_finish(struct pvk_queue *queue)
+{
+    struct pvk_device *device = queue->device;
+    void *pool = objc_autoreleasePoolPush();
+    uint32_t i;
+    pvk_lane_finish(device, &queue->lane);
+    for (i = 0; i < queue->lane_count; i++)
+        pvk_lane_finish(device, &queue->lanes[i]);
+    pvk_free(pvk_device_alloc(device), queue->lanes);
+    queue->lanes = NULL;
+    queue->lane_count = 0;
+    pvk_release(queue->timeline);
+    pvk_release(queue->batch_event);
+    pvk_deferred_free(device, queue->deferred);
+    pvk_deferred_free(device, queue->done);
+    pvk_free_raw(pvk_device_alloc(device), (void *)queue->notes.events);
+    pvk_free_raw(pvk_device_alloc(device), queue->notes.ts);
+    memset(&queue->notes, 0, sizeof(queue->notes));
+    if (queue->lock_ready) {
+        pthread_cond_destroy(&queue->cond);
+        pthread_mutex_destroy(&queue->lock);
+    }
+    queue->timeline = queue->batch_event = NULL;
+    queue->deferred = queue->deferred_tail = queue->done = NULL;
+    queue->lock_ready = false;
+    objc_autoreleasePoolPop(pool);
+}
+
+/* Takes back what a lane's submissions up to `done` used. */
+static void pvk_lane_recycle(struct pvk_device *device, struct pvk_lane *lane, uint64_t done)
+{
+    while (lane->pending && lane->pending->serial <= done) {
+        struct pvk_submission *s = lane->pending;
+        lane->pending = s->next;
+        pvk_submission_reset(s);
+        s->next = lane->free_submissions;
+        lane->free_submissions = s;
+    }
+    if (!lane->pending)
+        lane->pending_tail = NULL;
+    while (lane->retired && lane->retired->serial <= done) {
+        struct pvk_upload_chunk *c = lane->retired;
+        lane->retired = c->next;
+        if (c->size != PVK_UPLOAD_CHUNK_SIZE) { /* a large upload's own chunk */
+            c->next = NULL;
+            pvk_upload_chunks_free(device, c);
+            continue;
+        }
+        c->next = lane->free_chunks;
+        lane->free_chunks = c;
+    }
+    if (!lane->retired)
+        lane->retired_tail = NULL;
 }
 
 /* Takes back what finished submissions used. */
 static void pvk_queue_recycle(struct pvk_queue *queue)
 {
     uint64_t done = pvk_MTLSharedEvent_signaledValue(queue->timeline);
-    while (queue->pending && queue->pending->serial <= done) {
-        struct pvk_submission *s = queue->pending;
-        queue->pending = s->next;
-        pvk_submission_reset(s);
-        s->next = queue->free_submissions;
-        queue->free_submissions = s;
-    }
-    if (!queue->pending)
-        queue->pending_tail = NULL;
-    while (queue->retired && queue->retired->serial <= done) {
-        struct pvk_upload_chunk *c = queue->retired;
-        queue->retired = c->next;
-        if (c->size != PVK_UPLOAD_CHUNK_SIZE) { /* a large upload's own chunk */
-            c->next = NULL;
-            pvk_upload_chunks_free(queue->device, c);
-            continue;
-        }
-        c->next = queue->free_chunks;
-        queue->free_chunks = c;
-    }
-    if (!queue->retired)
-        queue->retired_tail = NULL;
+    uint32_t i;
+    pvk_lane_recycle(queue->device, &queue->lane, done);
+    for (i = 0; i < queue->lane_count; i++)
+        pvk_lane_recycle(queue->device, &queue->lanes[i], done);
 }
 
-static struct pvk_submission *pvk_queue_get_submission(struct pvk_queue *queue)
+/* A submission of the lane, with a new command buffer. */
+static struct pvk_submission *pvk_lane_get_submission(struct pvk_device *device, struct pvk_lane *lane)
 {
-    struct pvk_device *device = queue->device;
     id mtl = device->physical_device->mtl_device;
-    struct pvk_submission *s = queue->free_submissions;
+    struct pvk_submission *s = lane->free_submissions;
     if (s) {
-        queue->free_submissions = s->next;
+        lane->free_submissions = s->next;
         s->next = NULL;
     } else {
         s = pvk_alloc(pvk_device_alloc(device), sizeof(*s), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
@@ -59581,11 +59755,16 @@ static struct pvk_submission *pvk_queue_get_submission(struct pvk_queue *queue)
     }
     s->cb = pvk_MTLDevice_newCommandBuffer(mtl);
     if (!s->cb) {
-        s->next = queue->free_submissions;
-        queue->free_submissions = s;
+        s->next = lane->free_submissions;
+        lane->free_submissions = s;
         return NULL;
     }
     return s;
+}
+
+static struct pvk_submission *pvk_queue_get_submission(struct pvk_queue *queue)
+{
+    return pvk_lane_get_submission(queue->device, &queue->lane);
 }
 
 /* Returns submissions that were encoded but not committed. */
@@ -59595,8 +59774,8 @@ static void pvk_queue_put_submissions(struct pvk_queue *queue, struct pvk_submis
     for (; list; list = next) {
         next = list->next;
         pvk_submission_reset(list);
-        list->next = queue->free_submissions;
-        queue->free_submissions = list;
+        list->next = queue->lane.free_submissions;
+        queue->lane.free_submissions = list;
     }
 }
 
@@ -59841,6 +60020,15 @@ struct pvk_replay {
 struct pvk_encoder {
     struct pvk_device *device;
     struct pvk_queue *queue;
+    /* What it has of its own or of the queue's (PARALLEL ENCODING): a lane
+     * (its argument tables, table and render_table, and upload ring), the
+     * barriers' order and the notes of event and timestamp commands; the job
+     * it encodes (NULL: the batch, in order) */
+    struct pvk_lane *lane;
+    id table, render_table;
+    struct pvk_orders *orders;
+    struct pvk_notes *notes;
+    struct pvk_job *job;
     uint64_t serial;  /* timeline value of this submission */
     id cb;            /* MTL4CommandBuffer */
     id enc;           /* MTL4ComputeCommandEncoder, made by the first command that needs it */
@@ -59933,14 +60121,14 @@ static struct pvk_upload_chunk *pvk_upload_chunk_new(struct pvk_encoder *e, size
 }
 
 /* A chunk is reusable once its last user finished. */
-static void pvk_upload_retire(struct pvk_queue *queue, struct pvk_upload_chunk *c)
+static void pvk_upload_retire(struct pvk_lane *lane, struct pvk_upload_chunk *c)
 {
     c->next = NULL;
-    if (queue->retired_tail)
-        queue->retired_tail->next = c;
+    if (lane->retired_tail)
+        lane->retired_tail->next = c;
     else
-        queue->retired = c;
-    queue->retired_tail = c;
+        lane->retired = c;
+    lane->retired_tail = c;
 }
 
 /* Upload-ring memory for this submission: size bytes at an align-aligned
@@ -59949,8 +60137,8 @@ static void pvk_upload_retire(struct pvk_queue *queue, struct pvk_upload_chunk *
 static void *pvk_upload(struct pvk_encoder *e, size_t size, size_t align, id *buffer, VkDeviceSize *offset,
                         pvk_MTLGPUAddress *address)
 {
-    struct pvk_queue *queue = e->queue;
-    struct pvk_upload_chunk *c = queue->upload;
+    struct pvk_lane *lane = e->lane;
+    struct pvk_upload_chunk *c = lane->upload;
     size_t at = c ? (c->used + align - 1) & ~(align - 1) : 0;
 
     if (size > PVK_UPLOAD_CHUNK_SIZE) {
@@ -59959,7 +60147,7 @@ static void *pvk_upload(struct pvk_encoder *e, size_t size, size_t align, id *bu
             return NULL;
         c->used = size;
         c->serial = e->serial;
-        pvk_upload_retire(queue, c);
+        pvk_upload_retire(lane, c);
         if (buffer)
             *buffer = c->buffer;
         if (offset)
@@ -59969,16 +60157,16 @@ static void *pvk_upload(struct pvk_encoder *e, size_t size, size_t align, id *bu
     }
     if (!c || at + size > PVK_UPLOAD_CHUNK_SIZE) {
         if (c) /* full */
-            pvk_upload_retire(queue, c);
-        queue->upload = NULL;
-        c = queue->free_chunks;
+            pvk_upload_retire(lane, c);
+        lane->upload = NULL;
+        c = lane->free_chunks;
         if (c)
-            queue->free_chunks = c->next;
+            lane->free_chunks = c->next;
         else if (!(c = pvk_upload_chunk_new(e, PVK_UPLOAD_CHUNK_SIZE)))
             return NULL;
         c->next = NULL;
         c->used = 0;
-        queue->upload = c;
+        lane->upload = c;
         at = 0;
     }
     c->used = at + size;
@@ -60314,7 +60502,7 @@ static id pvk_encoder_get(struct pvk_encoder *e)
             return NULL;
         }
         pvk_labels_open(e, e->enc, "Compute and transfer commands");
-        pvk_MTL4ComputeCommandEncoder_setArgumentTable(e->enc, e->queue->argument_table);
+        pvk_MTL4ComputeCommandEncoder_setArgumentTable(e->enc, e->table);
         e->consumer_after = e->consumer_before = 0;
         e->pipeline_dirty = true;
         e->push_bound = 0;
@@ -60393,29 +60581,35 @@ static pvk_MTLStages pvk_barrier_stages(VkPipelineStageFlags2 stages, bool src)
     return m;
 }
 
+/* Barriers of submission `serial` at `after` stages before `before`
+ * stages, in an order. */
+static void pvk_orders_add(struct pvk_orders *q, uint64_t serial, pvk_MTLStages after, pvk_MTLStages before)
+{
+    struct pvk_order *o;
+    if (!after || !before)
+        return;
+    if (q->count && q->at[q->count - 1].serial == serial) {
+        o = &q->at[q->count - 1];
+    } else {
+        if (q->count == PVK_ORDER_MAX) { /* the oldest two become one, done with the later */
+            q->at[1].after |= q->at[0].after;
+            q->at[1].before |= q->at[0].before;
+            memmove(q->at, q->at + 1, sizeof(q->at[0]) * --q->count);
+        }
+        o = &q->at[q->count++];
+        o->serial = serial;
+        o->after = o->before = 0;
+    }
+    o->after |= after;
+    o->before |= before;
+}
+
 /* A barrier (or a dependency like one) recorded in the submission being
  * encoded: encoders started later wait for earlier work at `after` stages
  * before their `before` stages. */
 static void pvk_queue_order(struct pvk_encoder *e, pvk_MTLStages after, pvk_MTLStages before)
 {
-    struct pvk_queue *q = e->queue;
-    struct pvk_order *o;
-    if (!after || !before)
-        return;
-    if (q->order_count && q->order[q->order_count - 1].serial == e->serial) {
-        o = &q->order[q->order_count - 1];
-    } else {
-        if (q->order_count == PVK_ORDER_MAX) { /* the oldest two become one, done with the later */
-            q->order[1].after |= q->order[0].after;
-            q->order[1].before |= q->order[0].before;
-            memmove(q->order, q->order + 1, sizeof(q->order[0]) * --q->order_count);
-        }
-        o = &q->order[q->order_count++];
-        o->serial = e->serial;
-        o->after = o->before = 0;
-    }
-    o->after |= after;
-    o->before |= before;
+    pvk_orders_add(e->orders, e->serial, after, before);
 }
 
 /* What an encoder of `stages` started now waits for: the barriers of
@@ -60425,12 +60619,12 @@ static void pvk_queue_order(struct pvk_encoder *e, pvk_MTLStages after, pvk_MTLS
  * encoder's stages in the second (0: no barrier). */
 static pvk_MTLStages pvk_queue_ordered(const struct pvk_encoder *e, pvk_MTLStages stages, pvk_MTLStages *after)
 {
-    const struct pvk_queue *q = e->queue;
+    const struct pvk_orders *q = e->orders;
     pvk_MTLStages a = e->wait_before ? PVK_STAGES_ALL : 0, b = e->wait_before;
     uint32_t i;
-    for (i = 0; i < q->order_count; i++) {
-        a |= q->order[i].after;
-        b |= q->order[i].before;
+    for (i = 0; i < q->count; i++) {
+        a |= q->at[i].after;
+        b |= q->at[i].before;
     }
     *after = a;
     return a ? b & stages : 0;
@@ -60523,7 +60717,7 @@ static void pvk_encode_fill(struct pvk_encoder *e, const struct pvk_cmd_fill *c)
         a->count = n;
         a->tail_count = done + n == vecs ? (uint32_t)tail : 0;
         a->value = c->data;
-        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
         groups.width = ((n > 3 ? n : 3) + 255) / 256; /* (the head and tail words: 3 at most) */
         groups.height = groups.depth = 1;
         threads.width = 256;
@@ -60605,7 +60799,7 @@ static id pvk_encode_compute_state(struct pvk_encoder *e, const uint32_t base[3]
     for (left = p->set_mask & ((1u << PVK_MAX_BOUND_SETS) - 1); left; left &= left - 1) {
         n = (uint32_t)__builtin_ctz(left);
         if (e->sets_bound[n] != e->sets[1][n]) {
-            pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, e->sets[1][n], n);
+            pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, e->sets[1][n], n);
             e->sets_bound[n] = e->sets[1][n];
         }
     }
@@ -60623,7 +60817,7 @@ static id pvk_encode_compute_state(struct pvk_encoder *e, const uint32_t base[3]
         if (!data)
             return NULL;
         memcpy(data, e->push, need);
-        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
         e->push_bound = need;
         e->push_dirty = false;
     }
@@ -61383,10 +61577,10 @@ static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
         memcpy(args, &a, sizeof(a));
         pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, pso);
         e->pipeline_dirty = true;
-        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
         e->push_bound = 0;
-        pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->argument_table, pvk_MTLTexture_gpuResourceID(c->src), 0);
-        pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->argument_table, pvk_MTLTexture_gpuResourceID(c->dst), 1);
+        pvk_MTL4ArgumentTable_setTexture_atIndex(e->table, pvk_MTLTexture_gpuResourceID(c->src), 0);
+        pvk_MTL4ArgumentTable_setTexture_atIndex(e->table, pvk_MTLTexture_gpuResourceID(c->dst), 1);
         groups.width = ((unsigned long)vp.width + 15) / 16;
         groups.height = ((unsigned long)vp.height + 15) / 16;
         groups.depth = layers;
@@ -61406,10 +61600,10 @@ static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
         memcpy(args, &a, sizeof(a));
         pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
         pvk_MTL4RenderCommandEncoder_setViewport(enc, vp);
-        pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->render_table,
+        pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->render_table,
                                                                PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
-        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->render_table, address, 0);
-        pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->render_table, pvk_MTLTexture_gpuResourceID(c->src), 0);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->render_table, address, 0);
+        pvk_MTL4ArgumentTable_setTexture_atIndex(e->render_table, pvk_MTLTexture_gpuResourceID(c->src), 0);
         pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
             enc, PVK_MTLPrimitiveTypeTriangle, 0, 3, layers, 0);
     }
@@ -61457,7 +61651,7 @@ static void pvk_encode_clear_compute(struct pvk_encoder *e, const struct pvk_cmd
     pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, pso);
     e->pipeline_dirty = true;
     e->push_bound = 0;
-    pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->argument_table, pvk_MTLTexture_gpuResourceID(c->texture), 0);
+    pvk_MTL4ArgumentTable_setTexture_atIndex(e->table, pvk_MTLTexture_gpuResourceID(c->texture), 0);
     for (l = c->level; l < c->level + c->levels; l++) {
         pvk_MTLGPUAddress address;
         pvk_MTLSize groups, threads;
@@ -61469,7 +61663,7 @@ static void pvk_encode_clear_compute(struct pvk_encoder *e, const struct pvk_cmd
         a.at[2] = c->depth ? 0 : c->layer;
         a.at[3] = l;
         memcpy(args, &a, sizeof(a));
-        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
         groups.width = (a.at[0] + 15) / 16;
         groups.height = (a.at[1] + 15) / 16;
         groups.depth = c->depth ? pvk_mip_extent(c->depth, l) : c->layers;
@@ -61919,7 +62113,7 @@ static bool pvk_render_draw_index(struct pvk_encoder *e, uint32_t d)
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
         return false;
     }
-    pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, e->draw_indices + 4ull * d,
+    pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, e->draw_indices + 4ull * d,
                                              PVK_MSL_DRAW_INDEX_BUFFER);
     r->draw_index = d;
     return true;
@@ -62168,7 +62362,7 @@ static void pvk_prepass_dispatch(struct pvk_encoder *e, unsigned kernel, const s
     if (!threads || !(enc = pvk_encoder_get(e)) || !(p = pvk_upload(e, sizeof(*args), 16, NULL, NULL, &address)))
         return;
     memcpy(p, args, sizeof(*args));
-    pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+    pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
     pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, pso);
     groups.width = (threads + 63) / 64;
     groups.height = groups.depth = 1;
@@ -62749,14 +62943,14 @@ static void pvk_render_internal_state(struct pvk_encoder *e, id pso, const uint8
         pvk_MTL4RenderCommandEncoder_setVertexAmplificationCount_viewMappings(enc, 1, NULL);
         r->views_set = 0;
     }
-    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->render_table,
+    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->render_table,
                                                            PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
 }
 
 static void pvk_render_internal_end(struct pvk_encoder *e)
 {
     struct pvk_render *r = &e->render;
-    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(r->enc, e->queue->argument_table,
+    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(r->enc, e->table,
                                                            PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
     r->ds_state = NULL;
     r->pso_set = NULL;
@@ -62888,7 +63082,7 @@ static void pvk_render_clear(struct pvk_encoder *e, uint32_t colors, const uint3
                 args->colors[s][0] = copy_bits;
             else if (key.formats[s])
                 memcpy(args->colors[s], vals[s], sizeof(args->colors[s]));
-        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->render_table, address, 0);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->render_table, address, 0);
         pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
             enc, PVK_MTLPrimitiveTypeTriangle, 0, 3, instances, 0);
     }
@@ -63198,7 +63392,7 @@ static void pvk_render_internal_draw(struct pvk_encoder *e, id ds, uint32_t ref,
         return;
     memset(args, 0, sizeof(*args));
     args->bit = bit;
-    pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->render_table, address, 0);
+    pvk_MTL4ArgumentTable_setAddress_atIndex(e->render_table, address, 0);
     pvk_MTL4RenderCommandEncoder_setDepthStencilState(r->enc, ds);
     pvk_MTL4RenderCommandEncoder_setStencilFrontReferenceValue_backReferenceValue(r->enc, ref, ref);
     pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
@@ -63678,10 +63872,10 @@ static id pvk_render_seed_depth(struct pvk_encoder *e, const struct pvk_pass_att
         pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
             enc, PVK_STAGES_ALL, PVK_STAGES_RENDER, e->queue->device->visibility);
         pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
-        pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->render_table,
+        pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->render_table,
                                                                PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
-        pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->render_table, pvk_MTLTexture_gpuResourceID(pa->texture), 0);
-        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->render_table, address, 0);
+        pvk_MTL4ArgumentTable_setTexture_atIndex(e->render_table, pvk_MTLTexture_gpuResourceID(pa->texture), 0);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->render_table, address, 0);
         pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
             enc, PVK_MTLPrimitiveTypeTriangle, 0, 3, layered && layers ? layers : 1, 0);
         ok = true;
@@ -63901,7 +64095,7 @@ static void pvk_render_takeover(struct pvk_encoder *e, id enc)
 {
     struct pvk_render *r = &e->render;
     pvk_labels_open(e, enc, pvk_labels_synthetic(e, "vkCmdBeginRender"));
-    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->queue->argument_table,
+    pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, e->table,
                                                            PVK_MTLRenderStageVertex | PVK_MTLRenderStageFragment);
     r->enc = enc;
     r->dirty = PVK_RD_ALL;
@@ -64317,8 +64511,7 @@ static void pvk_encode_subpass(struct pvk_encoder *e, const struct pvk_cmd_subpa
     r->dirty |= PVK_RD_MAP | PVK_RD_DS | PVK_RD_DEPTH_BOUNDS | PVK_RD_AMPLIFICATION;
     for (i = 0; i < 2 * PVK_MAX_INPUT_ATTACHMENTS; i++) /* input attachments read from textures, at index i */
         if (c->inputs[i])
-            pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->argument_table, pvk_MTLTexture_gpuResourceID(c->inputs[i]),
-                                                    i);
+            pvk_MTL4ArgumentTable_setTexture_atIndex(e->table, pvk_MTLTexture_gpuResourceID(c->inputs[i]), i);
 }
 
 /* ---- State ---- */
@@ -64629,7 +64822,7 @@ static bool pvk_render_flush(struct pvk_encoder *e)
             if (!data)
                 return false;
             memcpy(data, &b, sizeof(b));
-            pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_DEPTH_BOUNDS_BUFFER);
+            pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_DEPTH_BOUNDS_BUFFER);
             r->bounds_set = b;
             r->bounds_valid = true;
         }
@@ -64800,7 +64993,7 @@ static bool pvk_render_flush(struct pvk_encoder *e)
             if (!(up = pvk_upload(e, sizeof(*t) * n, 16, NULL, NULL, &address)))
                 return false;
             memcpy(up, t, sizeof(t[0]) * n);
-            pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_VERTEX_TABLE_BUFFER);
+            pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_VERTEX_TABLE_BUFFER);
             memcpy(sent->vertex, t, sizeof(t[0]) * n);
             sent->vertex_count = n;
             sent->valid |= PVK_RD_VERTEX;
@@ -64811,7 +65004,7 @@ static bool pvk_render_flush(struct pvk_encoder *e)
     for (left = p->set_mask & ((1u << PVK_MAX_BOUND_SETS) - 1); left; left &= left - 1) {
         n = (uint32_t)__builtin_ctz(left);
         if (e->sets_bound[n] != e->sets[0][n]) {
-            pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, e->sets[0][n], n);
+            pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, e->sets[0][n], n);
             e->sets_bound[n] = e->sets[0][n];
         }
     }
@@ -64822,7 +65015,7 @@ static bool pvk_render_flush(struct pvk_encoder *e)
         if (!data)
             return false;
         memcpy(data, e->push, need);
-        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
         e->push_bound = need;
         e->push_dirty = false;
     }
@@ -64886,7 +65079,7 @@ static bool pvk_render_points_bind(struct pvk_encoder *e, const struct pvk_msl_p
         if (!(p = pvk_upload(e, sizeof(s), 16, NULL, NULL, &address)))
             return false;
         memcpy(p, &s, sizeof(s));
-        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_POINTS_STATE_BUFFER);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_POINTS_STATE_BUFFER);
         e->points_state_set = s;
         e->points_valid |= 1u;
     }
@@ -64894,7 +65087,7 @@ static bool pvk_render_points_bind(struct pvk_encoder *e, const struct pvk_msl_p
         if (!(p = pvk_upload(e, sizeof(*g), 16, NULL, NULL, &address)))
             return false;
         memcpy(p, g, sizeof(*g));
-        pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_POINTS_BUFFER);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_POINTS_BUFFER);
         e->points_set = *g;
         e->points_valid |= 2u;
     }
@@ -65044,7 +65237,7 @@ static void pvk_encode_draw_indirect(struct pvk_encoder *e, const struct pvk_cmd
         for (d = 0; d < n; d++) {
             if (r->pipeline->gfx->draw_index && !pvk_render_draw_index(e, d))
                 return;
-            pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, res->points + 32ull * d,
+            pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, res->points + 32ull * d,
                                                      PVK_MSL_POINTS_BUFFER);
             pvk_MTL4RenderCommandEncoder_drawPrimitives_indirectBuffer(r->enc, PVK_MTLPrimitiveTypePoint,
                                                                        res->records + 16ull * d);
@@ -65242,29 +65435,39 @@ struct pvk_ts_note {
     uint64_t batch; /* its batch's batch_value (0: the batch being encoded, or the submission's last) */
 };
 
+/* Room for n more timestamp notes; false when out of memory. */
+static bool pvk_notes_ts_room(const VkAllocationCallbacks *alloc, struct pvk_notes *q, uint32_t n)
+{
+    struct pvk_ts_note *ts;
+    uint32_t capacity = q->ts_capacity ? q->ts_capacity : 64;
+    if (q->ts_count + n <= q->ts_capacity)
+        return true;
+    while (capacity < q->ts_count + n)
+        capacity *= 2;
+    if (!(ts = pvk_alloc(alloc, sizeof(*ts) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)))
+        return false;
+    if (q->ts_count)
+        memcpy(ts, q->ts, sizeof(*ts) * q->ts_count);
+    pvk_free_raw(alloc, q->ts);
+    q->ts = ts;
+    q->ts_capacity = capacity;
+    return true;
+}
+
 static void pvk_encode_ts_note(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t first, uint32_t count,
                                enum pvk_ts_op op)
 {
-    struct pvk_queue *q = e->queue;
-    struct pvk_ts_note *n = q->ts_note_count ? &q->ts_notes[q->ts_note_count - 1] : NULL;
+    struct pvk_notes *q = e->notes;
+    struct pvk_ts_note *n = q->ts_count ? &q->ts[q->ts_count - 1] : NULL;
     if (n && n->pool == pool && n->op == op && n->first + n->count == first && !n->batch) {
         n->count += count;
         return;
     }
-    if (q->ts_note_count == q->ts_note_capacity) {
-        uint32_t capacity = q->ts_note_capacity ? 2 * q->ts_note_capacity : 64;
-        n = pvk_alloc(pvk_device_alloc(e->device), sizeof(*n) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
-        if (!n) {
-            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
-            return;
-        }
-        if (q->ts_note_count)
-            memcpy(n, q->ts_notes, sizeof(*n) * q->ts_note_count);
-        pvk_free_raw(pvk_device_alloc(e->device), q->ts_notes);
-        q->ts_notes = n;
-        q->ts_note_capacity = capacity;
+    if (!pvk_notes_ts_room(pvk_device_alloc(e->device), q, 1)) {
+        e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        return;
     }
-    n = &q->ts_notes[q->ts_note_count++];
+    n = &q->ts[q->ts_count++];
     n->pool = pool;
     n->first = first;
     n->count = count;
@@ -65278,13 +65481,13 @@ static void pvk_encode_ts_note(struct pvk_encoder *e, struct pvk_query_pool *poo
 static void pvk_queue_publish_queries(struct pvk_queue *queue, uint64_t serial)
 {
     uint32_t index = (uint32_t)(queue - queue->device->queues), i, k;
-    for (i = 0; i < queue->ts_note_count; i++) {
-        const struct pvk_ts_note *n = &queue->ts_notes[i];
+    for (i = 0; i < queue->notes.ts_count; i++) {
+        const struct pvk_ts_note *n = &queue->notes.ts[i];
         uint64_t s = pvk_ts_state(n->op, n->batch ? n->batch : serial, index, n->batch != 0);
         for (k = 0; k < n->count; k++)
             __atomic_store_n(&n->pool->state[n->first + k], s, __ATOMIC_RELEASE);
     }
-    queue->ts_note_count = 0;
+    queue->notes.ts_count = 0;
 }
 
 /* What the last writes or resets in submission order of timestamp queries
@@ -65293,12 +65496,12 @@ static void pvk_queue_publish_queries(struct pvk_queue *queue, uint64_t serial)
 static void pvk_ts_encoded(const struct pvk_encoder *e, const struct pvk_query_pool *pool, uint32_t first,
                            uint32_t count, uint8_t *ops)
 {
-    const struct pvk_queue *queue = e->queue;
+    const struct pvk_notes *notes = e->notes;
     uint32_t i, k;
     for (i = 0; i < count; i++)
         ops[i] = (uint8_t)(__atomic_load_n(&pool->state[first + i], __ATOMIC_ACQUIRE) & 3);
-    for (k = 0; k < queue->ts_note_count; k++) {
-        const struct pvk_ts_note *n = &queue->ts_notes[k];
+    for (k = 0; k < notes->ts_count; k++) {
+        const struct pvk_ts_note *n = &notes->ts[k];
         uint32_t from = n->first > first ? n->first : first;
         uint32_t to = n->first + n->count < first + count ? n->first + n->count : first + count;
         for (i = from; n->pool == pool && i < to; i++)
@@ -65418,7 +65621,7 @@ static void pvk_encode_query_copy(struct pvk_encoder *e, const struct pvk_cmd_qu
     args->flags = c->flags;
     pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, pso);
     e->pipeline_dirty = true;
-    pvk_MTL4ArgumentTable_setAddress_atIndex(e->queue->argument_table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+    pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
     e->push_bound = 0;
     groups.width = (c->count + 63) / 64;
     groups.height = groups.depth = 1;
@@ -65449,25 +65652,34 @@ static void pvk_encode_query(struct pvk_encoder *e, const struct pvk_cmd_query *
     }
 }
 
+/* Room for n more event notes; false when out of memory. */
+static bool pvk_notes_event_room(const VkAllocationCallbacks *alloc, struct pvk_notes *q, uint32_t n)
+{
+    const struct pvk_cmd_event **events;
+    uint32_t capacity = q->event_capacity ? q->event_capacity : 16;
+    if (q->event_count + n <= q->event_capacity)
+        return true;
+    while (capacity < q->event_count + n)
+        capacity *= 2;
+    if (!(events = pvk_alloc(alloc, sizeof(*events) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)))
+        return false;
+    if (q->event_count)
+        memcpy(events, q->events, sizeof(*events) * q->event_count);
+    pvk_free_raw(alloc, (void *)q->events);
+    q->events = events;
+    q->event_capacity = capacity;
+    return true;
+}
+
 /* Noted for pvk_queue_publish_events. */
 static void pvk_encode_event(struct pvk_encoder *e, const struct pvk_cmd_event *c)
 {
-    struct pvk_queue *q = e->queue;
-    if (q->event_cmd_count == q->event_cmd_capacity) {
-        uint32_t capacity = q->event_cmd_capacity ? 2 * q->event_cmd_capacity : 16;
-        const struct pvk_cmd_event **cmds =
-            pvk_alloc(pvk_device_alloc(e->device), sizeof(*cmds) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
-        if (!cmds) {
-            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
-            return;
-        }
-        if (q->event_cmd_count)
-            memcpy(cmds, q->event_cmds, sizeof(*cmds) * q->event_cmd_count);
-        pvk_free_raw(pvk_device_alloc(e->device), (void *)q->event_cmds);
-        q->event_cmds = cmds;
-        q->event_cmd_capacity = capacity;
+    struct pvk_notes *q = e->notes;
+    if (!pvk_notes_event_room(pvk_device_alloc(e->device), q, 1)) {
+        e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        return;
     }
-    q->event_cmds[q->event_cmd_count++] = c;
+    q->events[q->event_count++] = c;
 }
 
 /* The event's pending operations whose submissions are done take effect, in
@@ -65495,8 +65707,8 @@ static VkResult pvk_queue_publish_events(struct pvk_queue *queue, uint64_t seria
     const VkAllocationCallbacks *alloc = pvk_device_alloc(queue->device);
     uint32_t i;
     pthread_mutex_lock(&pvk_events_lock);
-    for (i = 0; i < queue->event_cmd_count; i++) { /* room for one more operation */
-        struct pvk_event *event = queue->event_cmds[i]->event;
+    for (i = 0; i < queue->notes.event_count; i++) { /* room for one more operation */
+        struct pvk_event *event = queue->notes.events[i]->event;
         pvk_event_drain(event);
         if (event->count == event->capacity) {
             uint32_t capacity = event->capacity ? 2 * event->capacity : 4;
@@ -65512,8 +65724,8 @@ static VkResult pvk_queue_publish_events(struct pvk_queue *queue, uint64_t seria
             event->capacity = capacity;
         }
     }
-    for (i = 0; i < queue->event_cmd_count; i++) {
-        const struct pvk_cmd_event *c = queue->event_cmds[i];
+    for (i = 0; i < queue->notes.event_count; i++) {
+        const struct pvk_cmd_event *c = queue->notes.events[i];
         struct pvk_event *event = c->event;
         struct pvk_event_op *op = event->count ? &event->ops[event->count - 1] : NULL;
         if (!op || op->queue != queue || op->serial != serial) {
@@ -65709,27 +65921,509 @@ static void pvk_encode_cb(struct pvk_encoder *e, const struct pvk_command_buffer
         }
 }
 
+/* ---- Parallel encoding (PARALLEL ENCODING) ---- */
+
+/* A part of a batch that a thread may encode while others encode the rest:
+ * primaries [0, count) of `primaries`. Its memory is the system's: jobs run
+ * only for devices without allocation callbacks. */
+struct pvk_job {
+    struct pvk_job *next; /* in the device's jobs to do */
+    struct pvk_batch *batch;
+    const VkCommandBufferSubmitInfo *primaries;
+    uint32_t count;
+    struct pvk_orders orders;           /* the barriers its encoders start after */
+    struct pvk_notes own_notes, *notes; /* (the first job's: the queue's) */
+    struct pvk_submission *s;           /* its command allocator and buffer */
+    /* its command buffers and the jobs between them (job, cb NULL), in
+     * commit order */
+    struct pvk_piece {
+        id cb;
+        struct pvk_job *job;
+    } *pieces;
+    uint32_t piece_count, piece_capacity;
+    VkResult result;
+};
+
+/* A batch that several threads encode: its jobs (to free), and how many
+ * that were handed to the threads are not done, under the device's
+ * par_lock. */
+struct pvk_batch {
+    struct pvk_queue *queue;
+    uint64_t serial, completed;
+    pvk_MTLStages wait_before;
+    unsigned int qos; /* the submitting thread's QoS class, for the threads that take its jobs */
+    struct pvk_job **jobs;
+    uint32_t job_count, job_capacity;
+    uint32_t pending;
+    bool waiting; /* its submitting thread waits for par_done */
+};
+
+/* A new job of batch b; NULL when out of memory. */
+static struct pvk_job *pvk_job_new(struct pvk_batch *b)
+{
+    struct pvk_device *device = b->queue->device;
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(device);
+    struct pvk_job *j = pvk_alloc(alloc, sizeof(*j), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND), **jobs;
+    bool ok = true;
+    if (!j)
+        return NULL;
+    j->batch = b;
+    j->notes = &j->own_notes;
+    pthread_mutex_lock(&device->par_lock);
+    if (b->job_count == b->job_capacity) {
+        uint32_t capacity = b->job_capacity ? 2 * b->job_capacity : 16;
+        if ((ok = (jobs = pvk_alloc(alloc, sizeof(*jobs) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND)) != NULL)) {
+            if (b->job_count)
+                memcpy(jobs, b->jobs, sizeof(*jobs) * b->job_count);
+            pvk_free_raw(alloc, b->jobs);
+            b->jobs = jobs;
+            b->job_capacity = capacity;
+        }
+    }
+    if (ok)
+        b->jobs[b->job_count++] = j;
+    pthread_mutex_unlock(&device->par_lock);
+    if (!ok) {
+        pvk_free(alloc, j);
+        return NULL;
+    }
+    return j;
+}
+
+/* Command buffer cb, or (cb NULL) job `job`, is j's next piece; false when
+ * out of memory. */
+static bool pvk_job_piece(struct pvk_job *j, id cb, struct pvk_job *job)
+{
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(j->batch->queue->device);
+    if (j->piece_count == j->piece_capacity) {
+        uint32_t capacity = j->piece_capacity ? 2 * j->piece_capacity : 8;
+        struct pvk_piece *p = pvk_alloc(alloc, sizeof(*p) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+        if (!p)
+            return false;
+        if (j->piece_count)
+            memcpy(p, j->pieces, sizeof(*p) * j->piece_count);
+        pvk_free_raw(alloc, j->pieces);
+        j->pieces = p;
+        j->piece_capacity = capacity;
+    }
+    j->pieces[j->piece_count].cb = cb;
+    j->pieces[j->piece_count++].job = job;
+    return true;
+}
+
+/* Jobs [0, n) of a batch, for the device's threads (and the batch's
+ * submitting thread, which waits for them). */
+static void pvk_par_push(struct pvk_device *device, struct pvk_job *const *jobs, uint32_t n)
+{
+    uint32_t i;
+    if (!n)
+        return;
+    pthread_mutex_lock(&device->par_lock);
+    for (i = 0; i < n; i++) {
+        jobs[i]->next = NULL;
+        if (device->par_tail)
+            device->par_tail->next = jobs[i];
+        else
+            device->par_head = jobs[i];
+        device->par_tail = jobs[i];
+    }
+    jobs[0]->batch->pending += n;
+    if (n == 1)
+        pthread_cond_signal(&device->par_work);
+    else
+        pthread_cond_broadcast(&device->par_work);
+    if (jobs[0]->batch->waiting) /* (the submitting thread takes jobs too) */
+        pthread_cond_broadcast(&device->par_done);
+    pthread_mutex_unlock(&device->par_lock);
+}
+
+/* The oldest job to do, of batch b (NULL: of any), taken; NULL: none.
+ * Under par_lock. */
+static struct pvk_job *pvk_par_take(struct pvk_device *device, const struct pvk_batch *b)
+{
+    struct pvk_job *prev = NULL, *j = device->par_head;
+    while (j && b && j->batch != b) {
+        prev = j;
+        j = j->next;
+    }
+    if (!j)
+        return NULL;
+    if (prev)
+        prev->next = j->next;
+    else
+        device->par_head = j->next;
+    if (device->par_tail == j)
+        device->par_tail = prev;
+    j->next = NULL;
+    return j;
+}
+
+/* Encodes job j with a lane's argument tables, command allocators and
+ * upload ring (one job at a time per lane); submit: the batch, for the
+ * labels of its first job's first command buffer. */
+static void pvk_job_run(struct pvk_job *j, struct pvk_lane *lane, const VkSubmitInfo2 *submit)
+{
+    struct pvk_batch *b = j->batch;
+    struct pvk_device *device = b->queue->device;
+    struct pvk_encoder e;
+    void *pool = objc_autoreleasePoolPush();
+    uint32_t i;
+
+    memset(&e, 0, sizeof(e));
+    e.device = device;
+    e.queue = b->queue;
+    e.lane = lane;
+    e.table = lane->argument_table;
+    e.render_table = lane->render_table;
+    e.orders = &j->orders;
+    e.notes = j->notes;
+    e.job = j;
+    e.serial = b->serial;
+    e.completed = b->completed;
+    e.wait_before = b->wait_before;
+    if (!j->s && (j->s = pvk_lane_get_submission(device, lane))) { /* (the first job's: the batch's) */
+        j->s->serial = b->serial;
+        if (lane->pending_tail)
+            lane->pending_tail->next = j->s;
+        else
+            lane->pending = j->s;
+        lane->pending_tail = j->s;
+    }
+    if (j->s) {
+        e.cb = j->s->cb;
+        pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(e.cb, j->s->allocator);
+        if (submit)
+            pvk_labels_batch_begin(&e, submit);
+    } else {
+        e.result = VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    e.cursor.cbs = j->primaries;
+    e.cursor.count = j->count;
+    for (i = 0; i < j->count && e.result == VK_SUCCESS; i++) {
+        e.cursor.index = i;
+        pvk_encode_cb(&e, (const struct pvk_command_buffer *)j->primaries[i].commandBuffer, 0);
+    }
+    pvk_render_end(&e);
+    pvk_encode_query_flush(&e);
+    pvk_encoder_end(&e);
+    pvk_encode_stamps(&e);
+    if (e.cb) {
+        pvk_MTL4CommandBuffer_endCommandBuffer(e.cb);
+        if (!pvk_job_piece(j, e.cb, NULL))
+            e.result = VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    pvk_free(pvk_device_alloc(device), e.pp);
+    pvk_free(pvk_device_alloc(device), e.pending);
+    j->result = e.result;
+    objc_autoreleasePoolPop(pool);
+}
+
+/* An encoding thread of the device: it takes the oldest job of any queue
+ * and encodes it on its lane of that queue, at the QoS class of the thread
+ * that submitted it. At the default class, below a render thread's user
+ * interactive one, jobs now and then took 3 times as long, and batches of
+ * bench_frame's mt4_secondary 240 to 570 us instead of 210 to 225 (M4 Max,
+ * macOS 27.2). */
+static void *pvk_par_main(void *arg)
+{
+    struct pvk_par_thread *t = arg;
+    struct pvk_device *device = t->device;
+    struct pvk_job *j;
+    pthread_mutex_lock(&device->par_lock);
+    for (;;) {
+        while (!device->par_head && !device->par_stop)
+            pthread_cond_wait(&device->par_work, &device->par_lock);
+        if (device->par_stop)
+            break;
+        j = pvk_par_take(device, NULL);
+        pthread_mutex_unlock(&device->par_lock);
+        if (j->batch->qos != t->qos && pvk_pthread_set_qos_class_self_np(j->batch->qos, 0) == 0)
+            t->qos = j->batch->qos;
+        pvk_job_run(j, &j->batch->queue->lanes[t->index], NULL);
+        pthread_mutex_lock(&device->par_lock);
+        if (!--j->batch->pending) /* (then its submitting thread frees it) */
+            pthread_cond_broadcast(&device->par_done);
+    }
+    pthread_mutex_unlock(&device->par_lock);
+    return NULL;
+}
+
+/* The device's encoding threads, started once, and the queue's lanes for
+ * them; false when there are none. */
+static bool pvk_par_ready(struct pvk_queue *queue)
+{
+    struct pvk_device *device = queue->device;
+    struct pvk_lane *lanes;
+    uint32_t i, threads;
+    bool ok = true;
+    if (queue->lane_count)
+        return true;
+    if (queue->lanes_failed)
+        return false;
+    pthread_mutex_lock(&device->par_lock);
+    for (i = device->par_threads; i < PVK_PAR_THREADS && !device->par_failed; i++) {
+        struct pvk_par_thread *t = &device->par_thread[i];
+        t->device = device;
+        t->index = i;
+        if (pthread_create(&t->thread, NULL, pvk_par_main, t) != 0)
+            device->par_failed = true;
+        else
+            device->par_threads = i + 1;
+    }
+    threads = device->par_threads;
+    pthread_mutex_unlock(&device->par_lock);
+    lanes = threads ? pvk_alloc(pvk_device_alloc(device), sizeof(*lanes) * PVK_PAR_THREADS,
+                                VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)
+                    : NULL;
+    for (i = 0; lanes && i < PVK_PAR_THREADS; i++)
+        ok &= pvk_lane_init(device, &lanes[i]);
+    if (!lanes || !ok) {
+        for (i = 0; lanes && i < PVK_PAR_THREADS; i++)
+            pvk_lane_finish(device, &lanes[i]);
+        pvk_free(pvk_device_alloc(device), lanes);
+        queue->lanes_failed = true;
+        return false;
+    }
+    queue->lanes = lanes;
+    queue->lane_count = PVK_PAR_THREADS;
+    return true;
+}
+
+/* Primaries of batch `submit` in jobs of at most `cap` packets (a primary
+ * alone may have more; one that suspends a render pass instance goes with
+ * the next): starts[] their first ones. Returns their count, or limit + 1
+ * when there would be more than limit. */
+static uint32_t pvk_par_split(const VkSubmitInfo2 *submit, uint64_t cap, uint32_t limit, uint32_t *starts)
+{
+    const struct pvk_command_buffer *cb, *prev = NULL;
+    uint32_t i, count = 1;
+    uint64_t job = 0;
+    starts[0] = 0;
+    for (i = 0; i < submit->commandBufferInfoCount; i++, prev = cb) {
+        cb = (const struct pvk_command_buffer *)submit->pCommandBufferInfos[i].commandBuffer;
+        if (job && job + cb->packets > cap && !(prev->par & PVK_PAR_SUSPENDS)) {
+            if (count == limit)
+                return limit + 1;
+            starts[count++] = i;
+            job = 0;
+        }
+        job += cb->packets;
+    }
+    return count;
+}
+
+/* Whether batch `submit` is encoded in parallel, and (true) into which jobs
+ * of consecutive primaries: starts[0, *count) their first ones (at most
+ * PVK_PAR_THREADS + 1). In parallel when it has primaries of
+ * PVK_PAR_PACKETS packets or more for two jobs, and nothing of it must
+ * encode in order (PVK_PAR_SERIAL, label regions;
+ * the debug layer and queue label regions, whose debug groups go with
+ * command buffers); and never for devices with allocation callbacks, which
+ * Vulkan calls only on the thread of the command. The jobs' largest is as
+ * small as it can be (the fewest packets per job that make no more jobs
+ * than threads: a binary search). */
+static bool pvk_par_plan(const struct pvk_queue *queue, const VkSubmitInfo2 *submit, uint32_t *starts,
+                         uint32_t *count)
+{
+    const struct pvk_device *device = queue->device;
+    uint32_t i, n = submit->commandBufferInfoCount, jobs;
+    uint64_t total = 0, lo, hi;
+    if (!device->par_ready || device->has_alloc || device->debug || queue->queue_labels.count ||
+        queue->queue_inserts.count)
+        return false;
+    for (i = 0; i < n; i++) {
+        const struct pvk_command_buffer *cb = (const struct pvk_command_buffer *)submit->pCommandBufferInfos[i].commandBuffer;
+        if ((cb->ops & (1u << PVK_CMD_LABEL)) || (cb->par & PVK_PAR_SERIAL))
+            return false;
+        total += cb->packets;
+    }
+    jobs = (uint32_t)(total / PVK_PAR_PACKETS);
+    jobs = jobs > PVK_PAR_THREADS + 1 ? PVK_PAR_THREADS + 1 : jobs > n ? n : jobs;
+    if (jobs < 2)
+        return false;
+    for (lo = (total + jobs - 1) / jobs, hi = total; lo < hi;) {
+        uint64_t cap = lo + (hi - lo) / 2;
+        if (pvk_par_split(submit, cap, jobs, starts) <= jobs)
+            hi = cap;
+        else
+            lo = cap + 1;
+    }
+    *count = pvk_par_split(submit, lo, jobs, starts);
+    /* (worth it when the jobs other than the largest have PVK_PAR_PACKETS) */
+    for (i = 0, hi = 0; i < *count; i++) {
+        uint64_t job = 0;
+        uint32_t k, end = i + 1 < *count ? starts[i + 1] : n;
+        for (k = starts[i]; k < end; k++)
+            job += ((const struct pvk_command_buffer *)submit->pCommandBufferInfos[k].commandBuffer)->packets;
+        hi = job > hi ? job : hi;
+    }
+    if (total - hi < PVK_PAR_PACKETS)
+        *count = 1;
+    return *count > 1;
+}
+
+/* Job j's command buffers, and those of the jobs between them, in commit
+ * order, after s->commit's; false when out of memory. */
+static bool pvk_job_flatten(struct pvk_submission *s, const struct pvk_job *j, const VkAllocationCallbacks *alloc)
+{
+    uint32_t i;
+    for (i = 0; i < j->piece_count; i++) {
+        if (j->pieces[i].job) {
+            if (!pvk_job_flatten(s, j->pieces[i].job, alloc))
+                return false;
+            continue;
+        }
+        if (s->commit_count == s->commit_capacity) {
+            uint32_t capacity = s->commit_capacity ? 2 * s->commit_capacity : 16;
+            id *commit = pvk_alloc(alloc, sizeof(*commit) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+            if (!commit)
+                return false;
+            if (s->commit_count)
+                memcpy(commit, s->commit, sizeof(*commit) * s->commit_count);
+            pvk_free_raw(alloc, s->commit);
+            s->commit = commit;
+            s->commit_capacity = capacity;
+        }
+        s->commit[s->commit_count++] = j->pieces[i].cb;
+    }
+    return true;
+}
+
+/* The batch submit of submission `serial` encoded in parallel (s: its
+ * first job's allocator and command buffer), in jobs of primaries from
+ * starts[0, count) (pvk_par_plan). Each job starts after the barriers of
+ * those before it (its primaries' recorded, struct
+ * pvk_command_buffer.order_after/before); the submitting thread encodes
+ * the first, then those no thread took yet, and waits for the others. Its
+ * jobs' barriers join the queue's order, their notes the queue's in order,
+ * and their command buffers s->commit in order. */
+static VkResult pvk_encode_parallel(struct pvk_queue *queue, struct pvk_submission *s, const VkSubmitInfo2 *submit,
+                                    uint64_t serial, pvk_MTLStages wait_before, uint64_t completed,
+                                    const uint32_t *starts, uint32_t count)
+{
+    struct pvk_device *device = queue->device;
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(device);
+    struct pvk_job *root[PVK_PAR_THREADS + 1], *j;
+    pvk_MTLStages after = 0, before = 0;
+    VkResult result = VK_SUCCESS;
+    struct pvk_encoder e;
+    struct pvk_batch b;
+    uint32_t i, k, m;
+
+    memset(&b, 0, sizeof(b));
+    b.queue = queue;
+    b.serial = serial;
+    b.completed = completed;
+    b.wait_before = wait_before;
+    b.qos = pvk_qos_class_self();
+    for (k = 0; k < count && result == VK_SUCCESS; k++) {
+        uint32_t end = k + 1 < count ? starts[k + 1] : submit->commandBufferInfoCount;
+        if (!(root[k] = pvk_job_new(&b))) {
+            result = VK_ERROR_OUT_OF_HOST_MEMORY;
+            break;
+        }
+        root[k]->primaries = submit->pCommandBufferInfos + starts[k];
+        root[k]->count = end - starts[k];
+        root[k]->orders = queue->orders;
+        pvk_orders_add(&root[k]->orders, serial, after, before);
+        for (i = starts[k]; i < end; i++) {
+            const struct pvk_command_buffer *cb =
+                (const struct pvk_command_buffer *)submit->pCommandBufferInfos[i].commandBuffer;
+            after |= cb->order_after;
+            before |= cb->order_before;
+            if (cb->par & PVK_PAR_RESETS) { /* (pvk_encode_query_reset) */
+                after |= PVK_STAGES_COMPUTE;
+                before |= PVK_STAGES_RENDER;
+            }
+        }
+    }
+    if (result == VK_SUCCESS) {
+        root[0]->s = s;
+        root[0]->notes = &queue->notes;
+        pvk_par_push(device, root + 1, count - 1);
+        pvk_job_run(root[0], &queue->lane, submit);
+        pthread_mutex_lock(&device->par_lock);
+        while (b.pending) {
+            if ((j = pvk_par_take(device, &b))) {
+                pthread_mutex_unlock(&device->par_lock);
+                pvk_job_run(j, &queue->lane, NULL);
+                pthread_mutex_lock(&device->par_lock);
+                b.pending--;
+            } else {
+                b.waiting = true;
+                pthread_cond_wait(&device->par_done, &device->par_lock);
+                b.waiting = false;
+            }
+        }
+        pthread_mutex_unlock(&device->par_lock);
+    }
+    for (i = 0; i < b.job_count && result == VK_SUCCESS; i++)
+        result = b.jobs[i]->result;
+    for (i = 0; i < b.job_count && result == VK_SUCCESS; i++) /* (their entries of this submission) */
+        for (m = 0; m < b.jobs[i]->orders.count; m++)
+            if (b.jobs[i]->orders.at[m].serial == serial)
+                pvk_orders_add(&queue->orders, serial, b.jobs[i]->orders.at[m].after, b.jobs[i]->orders.at[m].before);
+    for (k = 1; k < count && result == VK_SUCCESS; k++) {
+        const struct pvk_notes *n = root[k]->notes;
+        if (!pvk_notes_ts_room(alloc, &queue->notes, n->ts_count) ||
+            !pvk_notes_event_room(alloc, &queue->notes, n->event_count)) {
+            result = VK_ERROR_OUT_OF_HOST_MEMORY;
+            break;
+        }
+        if (n->ts_count)
+            memcpy(queue->notes.ts + queue->notes.ts_count, n->ts, sizeof(*n->ts) * n->ts_count);
+        queue->notes.ts_count += n->ts_count;
+        if (n->event_count)
+            memcpy((void *)(queue->notes.events + queue->notes.event_count), (const void *)n->events,
+                   sizeof(*n->events) * n->event_count);
+        queue->notes.event_count += n->event_count;
+    }
+    for (k = 0; k < count && result == VK_SUCCESS; k++)
+        if (!pvk_job_flatten(s, root[k], alloc))
+            result = VK_ERROR_OUT_OF_HOST_MEMORY;
+    memset(&e, 0, sizeof(e));
+    e.device = device;
+    e.queue = queue;
+    pvk_labels_batch_end(&e);
+    for (i = 0; i < b.job_count; i++) {
+        j = b.jobs[i];
+        pvk_free_raw(alloc, j->pieces);
+        pvk_free_raw(alloc, j->own_notes.ts);
+        pvk_free_raw(alloc, (void *)j->own_notes.events);
+        pvk_free(alloc, j);
+    }
+    pvk_free_raw(alloc, b.jobs);
+    return result;
+}
+
 static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission *s, const VkSubmitInfo2 *submit,
                                  uint64_t serial)
 {
     struct pvk_encoder e;
-    uint32_t i;
+    uint32_t i, starts[PVK_PAR_THREADS + 1], jobs;
 
     memset(&e, 0, sizeof(e));
     e.device = queue->device;
     e.queue = queue;
+    e.lane = &queue->lane;
+    e.table = queue->lane.argument_table;
+    e.render_table = queue->lane.render_table;
+    e.orders = &queue->orders;
+    e.notes = &queue->notes;
     e.serial = serial;
     e.cb = s->cb;
     for (i = 0; i < submit->waitSemaphoreInfoCount; i++)
         e.wait_before |= pvk_barrier_stages(submit->pWaitSemaphoreInfos[i].stageMask, false);
     /* barriers of submissions done since: nothing waits for them */
     e.completed = pvk_MTLSharedEvent_signaledValue(queue->timeline);
-    for (i = 0; i < queue->order_count && queue->order[i].serial <= e.completed; i++)
+    for (i = 0; i < queue->orders.count && queue->orders.at[i].serial <= e.completed; i++)
         ;
     if (i) {
-        queue->order_count -= i;
-        memmove(queue->order, queue->order + i, sizeof(queue->order[0]) * queue->order_count);
+        queue->orders.count -= i;
+        memmove(queue->orders.at, queue->orders.at + i, sizeof(queue->orders.at[0]) * queue->orders.count);
     }
+    if (pvk_par_plan(queue, submit, starts, &jobs) && pvk_par_ready(queue))
+        return pvk_encode_parallel(queue, s, submit, serial, e.wait_before, e.completed, starts, jobs);
     e.cursor.cbs = submit->pCommandBufferInfos;
     e.cursor.count = submit->commandBufferInfoCount;
     pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(s->cb, s->allocator);
@@ -65794,7 +66488,8 @@ static void pvk_commit_feedback(void *user, id feedback)
     __atomic_sub_fetch(&device->feedback_pending, 1, __ATOMIC_ACQ_REL);
 }
 
-static void pvk_queue_commit(struct pvk_queue *queue, id cb)
+/* Commits command buffers [0, count) together, in order. */
+static void pvk_queue_commit_all(struct pvk_queue *queue, const id *cbs, uint32_t count)
 {
     struct pvk_device *device = queue->device;
     struct pvk_block block = pvk_block_make(pvk_commit_feedback, device);
@@ -65802,8 +66497,22 @@ static void pvk_queue_commit(struct pvk_queue *queue, id cb)
     pvk_MTL4CommitOptions_addFeedbackHandler(options, &block);
     __atomic_add_fetch(&device->feedback_pending, 1, __ATOMIC_ACQ_REL);
     pvk_device_commit_residency(device);
-    pvk_MTL4CommandQueue_commit_count_options(queue->mtl_queue, &cb, 1, options);
+    pvk_MTL4CommandQueue_commit_count_options(queue->mtl_queue, cbs, count, options);
     pvk_release(options);
+}
+
+static void pvk_queue_commit(struct pvk_queue *queue, id cb)
+{
+    pvk_queue_commit_all(queue, &cb, 1);
+}
+
+/* A submission's command buffers: cb, or the batch's encoded in parallel. */
+static void pvk_queue_commit_submission(struct pvk_queue *queue, const struct pvk_submission *s)
+{
+    if (s->commit_count)
+        pvk_queue_commit_all(queue, s->commit, s->commit_count);
+    else
+        pvk_queue_commit(queue, s->cb);
 }
 
 /* "Presentation" below: commits a present's copy and presents the drawable. */
@@ -66039,6 +66748,8 @@ static void *pvk_queue_thread(void *arg)
                     pvk_present_commit(queue, db->cb, db->drawable);
                     pvk_release(db->drawable);
                     db->drawable = NULL;
+                } else if (db->cbs) {
+                    pvk_queue_commit_all(queue, db->cbs, db->cb_count);
                 } else if (db->cb) {
                     pvk_queue_commit(queue, db->cb);
                 }
@@ -66093,6 +66804,8 @@ static struct pvk_deferred *pvk_deferred_make(struct pvk_queue *queue, uint32_t 
         while (list && list->batch < i)
             list = list->next;
         db->cb = list && list->batch == i ? list->cb : NULL;
+        db->cbs = db->cb && list->commit_count ? list->commit : NULL;
+        db->cb_count = db->cbs ? list->commit_count : 0;
         db->sparse = binds ? &binds->batches[i] : NULL;
         db->first = n;
         for (k = 0; k < submits[i].waitSemaphoreInfoCount; k++) {
@@ -66146,8 +66859,8 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
     pvk_queue_recycle(queue);
     pvk_heap_cache_flush(device, false, false); /* old freed heaps leave (section 10, HEAP CACHE) */
     serial = queue->serial + 1;
-    queue->event_cmd_count = 0;
-    queue->ts_note_count = 0;
+    queue->notes.event_count = 0;
+    queue->notes.ts_count = 0;
 
     /* Encode every batch before the queue sees any of them. */
     for (i = 0; i < count && result == VK_SUCCESS; i++) {
@@ -66163,14 +66876,14 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
         s->batch_value = 0;
         *tail = s;
         tail = &s->next;
-        notes = queue->ts_note_count;
+        notes = queue->notes.ts_count;
         result = pvk_encode_batch(queue, s, &submits[i], serial);
-        if (queue->ts_note_count > notes && i + 1 < count) {
+        if (queue->notes.ts_count > notes && i + 1 < count) {
             /* its timestamps are available once it is done, not once the
              * batches after it are (they may wait for the host) */
             s->batch_value = ++queue->batch_value;
-            for (j = notes; j < queue->ts_note_count; j++)
-                queue->ts_notes[j].batch = s->batch_value;
+            for (j = notes; j < queue->notes.ts_count; j++)
+                queue->notes.ts[j].batch = s->batch_value;
         }
     }
 
@@ -66199,7 +66912,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
         else
             result = VK_ERROR_OUT_OF_HOST_MEMORY;
     }
-    if (result == VK_SUCCESS && queue->event_cmd_count)
+    if (result == VK_SUCCESS && queue->notes.event_count)
         result = pvk_queue_publish_events(queue, serial);
     if (result != VK_SUCCESS) {
         pvk_deferred_free(device, deferred);
@@ -66224,7 +66937,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
         if (binds)
             pvk_sparse_execute(queue, binds, &binds->batches[i]);
         if (s && s->batch == i) {
-            pvk_queue_commit(queue, s->cb);
+            pvk_queue_commit_submission(queue, s);
             if (s->batch_value)
                 pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, queue->batch_event, s->batch_value);
             s = s->next;
@@ -66260,13 +66973,13 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
     }
     queue->serial = serial;
     if (list) {
-        if (queue->pending_tail)
-            queue->pending_tail->next = list;
+        if (queue->lane.pending_tail)
+            queue->lane.pending_tail->next = list;
         else
-            queue->pending = list;
+            queue->lane.pending = list;
         for (s = list; s->next; s = s->next)
             ;
-        queue->pending_tail = s;
+        queue->lane.pending_tail = s;
     }
     if (fence) {
         __atomic_store_n(&fence->signaled, 0, __ATOMIC_RELAXED);
@@ -66951,11 +67664,11 @@ static VkResult pvk_queue_present(struct pvk_queue *queue, uint32_t nwaits, cons
             continue;
         s->serial = *serial;
         s->next = NULL;
-        if (queue->pending_tail)
-            queue->pending_tail->next = s;
+        if (queue->lane.pending_tail)
+            queue->lane.pending_tail->next = s;
         else
-            queue->pending = s;
-        queue->pending_tail = s;
+            queue->lane.pending = s;
+        queue->lane.pending_tail = s;
     }
     return VK_SUCCESS;
 }
@@ -67077,6 +67790,15 @@ static void pvk_device_finish(struct pvk_device *device)
             pthread_join(queue->thread, NULL);
             queue->thread_running = false;
         }
+    }
+    if (device->par_ready) { /* the encoding threads (idle: no submission is being encoded) */
+        pthread_mutex_lock(&device->par_lock);
+        device->par_stop = true;
+        pthread_cond_broadcast(&device->par_work);
+        pthread_mutex_unlock(&device->par_lock);
+        for (i = 0; i < device->par_threads; i++)
+            pthread_join(device->par_thread[i].thread, NULL);
+        device->par_threads = 0;
     }
     while (__atomic_load_n(&device->feedback_pending, __ATOMIC_ACQUIRE) > 0 && pvk_now_ns() - start < 10000000000ull) {
         struct timespec ts;
@@ -70332,7 +71054,7 @@ static void pvk_render_tex_inputs(struct pvk_encoder *e, const struct pvk_pipeli
         uint32_t c = g->desc.input_colors[i];
         uint8_t s = c < PVK_MAX_COLOR_ATTACHMENTS ? r->map[c] : PVK_NO_SLOT;
         if ((g->tex_inputs & (1u << i)) && s != PVK_NO_SLOT && r->begin && r->begin->colors[s].input)
-            pvk_MTL4ArgumentTable_setTexture_atIndex(e->queue->argument_table,
+            pvk_MTL4ArgumentTable_setTexture_atIndex(e->table,
                                                     pvk_MTLTexture_gpuResourceID(r->begin->colors[s].input), i);
     }
 }
@@ -72006,8 +72728,8 @@ static VkResult pvk_present_encode(struct pvk_queue *queue, const struct pvk_swa
             enc, PVK_STAGES_ALL, PVK_MTLStageFragment, queue->device->visibility);
         pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, sc->present_pso);
         pvk_MTL4RenderCommandEncoder_setViewport(enc, vp);
-        pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, queue->render_table, PVK_MTLRenderStageFragment);
-        pvk_MTL4ArgumentTable_setTexture_atIndex(queue->render_table,
+        pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, queue->lane.render_table, PVK_MTLRenderStageFragment);
+        pvk_MTL4ArgumentTable_setTexture_atIndex(queue->lane.render_table,
                                                  pvk_MTLTexture_gpuResourceID(image->mtl_texture), 0);
         pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount(enc, PVK_MTLPrimitiveTypeTriangle, 0, 3);
         pvk_MTL4CommandEncoder_endEncoding(enc);
