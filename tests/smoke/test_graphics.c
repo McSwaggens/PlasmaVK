@@ -4826,6 +4826,53 @@ static void test_count_draws_idle(void)
     count_draws(false);
 }
 
+/* While the system's memory pressure is above normal, count draws in
+ * submission after submission keep taking commands from one indirect
+ * command buffer chunk (it is not made again for each), and a submission
+ * after it was idle for over PVK_ICB_PRESSED_NS lets go of it. */
+static void test_count_draws_pressure(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    struct pvk_device *d = (struct pvk_device *)device;
+    struct pvk_queue *q = (struct pvk_queue *)queue;
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct timespec ts;
+    struct pipe p;
+    VkPipeline pipeline;
+    VkCommandBuffer cb;
+    id chunk = NULL;
+    uint32_t k;
+
+    REQUIRE(features.multiDrawIndirect);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    __atomic_store_n(&d->memory_pressure, true, __ATOMIC_RELAXED);
+    for (k = 0; k < 4; k++) {
+        via = 1; /* (a count draw) */
+        cb = begin_cmd();
+        begin_rendering(cb, &target, 1, black, NULL);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        rect(cb, -1, -1, 1, 1, 1, 0, 0, 1, 0);
+        vkCmdEndRendering(cb);
+        submit(cb);
+        CHECK(q->lane.icbs[0].icb != NULL);
+        if (!k && q->lane.icbs[0].icb)
+            chunk = q->lane.icbs[0].icb->icb;
+        else if (q->lane.icbs[0].icb)
+            CHECK(q->lane.icbs[0].icb->icb == chunk);
+    }
+    via_end();
+    ts.tv_sec = 0;
+    ts.tv_nsec = PVK_ICB_PRESSED_NS + 50 * 1000000;
+    nanosleep(&ts, NULL);
+    submit(begin_cmd());
+    CHECK(__atomic_load_n(&q->icb_bytes, __ATOMIC_RELAXED) == 0);
+    __atomic_store_n(&d->memory_pressure, false, __ATOMIC_RELAXED);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_img(&target);
+}
+
 /* maxDrawIndirectCount (65535) draws in order, counted or a multi-draw:
  * draw i a point at vertex i % 256 with firstInstance i (drawid: 0, the
  * pipeline outputting DrawIndex instead), so pixel v shows the last draw
@@ -13574,6 +13621,7 @@ int main(void)
     RUN(test_count_draws);
     RUN(test_count_draws_secondary);
     RUN(test_count_draws_idle);
+    RUN(test_count_draws_pressure);
     RUN(test_count_draws_many);
     RUN(test_multi_draw_many);
     RUN(test_count_draws_many_drawid);

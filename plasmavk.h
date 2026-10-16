@@ -55668,15 +55668,14 @@ struct pvk_pipeline {
 
 /* Multi-draws of this many records or more go through an indirect command
  * buffer when they can, like count draws (pvk_draw_conv, PVK_CV_ICB). A
- * record the encoder draws costs about 43 ns of CPU; as a command, some
- * 40 ns more of GPU than as a Metal indirect draw of an application's
- * buffer, a culled one (no instances: left out) almost nothing, and the
- * preprocessing, which the render pass waits for, about 40 us (M4 Max). It
- * pays for the multi-draws of GPU culling, a record per object (Sascha's
- * computecullandlod: 65535 of them, frames 3.60 -> 2.22 ms), not for
- * shorter ones that draw most of theirs (4096 small draws: GPU 69 -> 342
- * us, frames 265 -> 345 us; 16384: GPU 249 -> 914 us, frames 925 -> 917
- * us). */
+ * record drawn one by one costs a frame about 46 ns (the CPU encoding it,
+ * Metal starting it), as a command about 48 ns where it draws and nothing
+ * where it does not (no instances: left out), and the preprocessing, which
+ * the render pass waits for, some 40 us (M4 Max). It pays for the
+ * multi-draws of GPU culling, a record per object (Sascha's
+ * computecullandlod: 65535 of them, frames 3.85 -> 2.09 ms), not for short
+ * ones that draw most of theirs (4096 small draws: frames 265 -> 345 us,
+ * measured on 426cef6). */
 #define PVK_ICB_MIN_DRAWS 16384u
 
 /* The PVK_SCAN_* bits of drawing with topology `topology`. */
@@ -59624,12 +59623,17 @@ struct pvk_upload_chunk {
  * a queue's lanes take PVK_ICB_BYTES at most (or 1/32 of the memory heap
  * if less), beyond which draws are drawn without commands. Chunks no
  * submission took commands from for PVK_ICB_IDLE_NS are released
- * (pvk_queue_recycle), and free ones at once while the system's memory
- * pressure is above normal. */
+ * (pvk_queue_recycle), and while the system's memory pressure is above
+ * normal for PVK_ICB_PRESSED_NS: a call site that draws every frame takes
+ * from its chunks every frame, and releasing free ones at every
+ * submission, as the heap cache does its heaps, had each such frame make a
+ * chunk again (65535 counted records: 3.3 -> 5.1 ms a frame, most of it
+ * making a 45 MB chunk; M4 Max). */
 #define PVK_ICB_MIN_COMMANDS 4096u
 #define PVK_ICB_COMMANDS 65536u
 #define PVK_ICB_BYTES ((uint64_t)512 << 20)
 #define PVK_ICB_IDLE_NS 1000000000u
+#define PVK_ICB_PRESSED_NS 100000000u
 
 struct pvk_icb_chunk {
     struct pvk_icb_chunk *next;
@@ -59896,7 +59900,7 @@ static void pvk_lane_recycle(struct pvk_device *device, struct pvk_lane *lane, u
 /* Takes back the indirect command buffer chunks of a lane's submissions up
  * to `done`, and releases those of its free chunks, and its current one
  * once done, that no submission took commands from since `idle`
- * (CLOCK_UPTIME_RAW nanoseconds; UINT64_MAX: all). */
+ * (CLOCK_UPTIME_RAW nanoseconds). */
 static void pvk_lane_recycle_icbs(struct pvk_queue *queue, struct pvk_lane *lane, uint64_t done, uint64_t idle)
 {
     unsigned k;
@@ -59934,8 +59938,8 @@ static void pvk_lane_recycle_icbs(struct pvk_queue *queue, struct pvk_lane *lane
 }
 
 /* Takes back what finished submissions used. Indirect command buffer
- * chunks idle for PVK_ICB_IDLE_NS are released, and while the system's
- * memory pressure is above normal all free ones. */
+ * chunks idle for PVK_ICB_IDLE_NS are released, while the system's memory
+ * pressure is above normal for PVK_ICB_PRESSED_NS. */
 static void pvk_queue_recycle(struct pvk_queue *queue)
 {
     uint64_t done = pvk_MTLSharedEvent_signaledValue(queue->timeline), idle = 0;
@@ -59944,9 +59948,9 @@ static void pvk_queue_recycle(struct pvk_queue *queue)
     for (i = 0; i < queue->lane_count; i++)
         pvk_lane_recycle(queue->device, &queue->lanes[i], done);
     if (__atomic_load_n(&queue->icb_bytes, __ATOMIC_RELAXED)) {
-        idle = __atomic_load_n(&queue->device->memory_pressure, __ATOMIC_RELAXED)
-                   ? UINT64_MAX
-                   : pvk_clock_ns(CLOCK_UPTIME_RAW) - PVK_ICB_IDLE_NS;
+        idle = pvk_clock_ns(CLOCK_UPTIME_RAW) - (__atomic_load_n(&queue->device->memory_pressure, __ATOMIC_RELAXED)
+                                                     ? PVK_ICB_PRESSED_NS
+                                                     : PVK_ICB_IDLE_NS);
         pvk_lane_recycle_icbs(queue, &queue->lane, done, idle);
         for (i = 0; i < queue->lane_count; i++)
             pvk_lane_recycle_icbs(queue, &queue->lanes[i], done, idle);
@@ -62036,17 +62040,26 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
  * decided once the scan has seen the whole pass (pvk_prepass_later), within
  * the queue's share of memory for commands (pvk_icb_take); other count
  * draws draw the copied records one by one, those past the count drawing
- * nothing, other multi-draws their own. The records are read when the
- * render pass instance begins: those of count draws and long multi-draws
- * cannot be written by an earlier subpass of the instance (a subpass
- * dependency into DRAW_INDIRECT; shaders of a render pass write storage
- * memory only with fragmentStoresAndAtomics). The scan also finds what the
- * Metal pass must be made with (Bresenham lines, framebuffer fetch, SNORM
- * rebinds, depth/stencil copies, occlusion queries). A render pass instance
- * that recorded none of what it looks for (struct pvk_cmd_begin_pass.scan),
- * and begins with no such state, is not scanned: walking the packets again
- * cost as much as making the Metal encoders, in a frame of a few thousand
- * draws and 18 passes. */
+ * nothing, other multi-draws their own. Commands are taken however many
+ * of the records draw: drawn one by one, a record costs a frame about 46
+ * ns whether it draws or not (the CPU encoding it, then Metal starting each
+ * of the pass's draws), a command about 48 ns where it draws and nothing
+ * where it does not. Where every record draws the two come within a few
+ * percent of each other, either way (frame time, M4 Max: 65535 records of
+ * six vertices, all drawing, 3.28 ms as commands against 3.09 ms one by
+ * one; a GPU-driven frame drawing 65535 meshes twice 6.20 against 6.96
+ * ms; 16384 records 0.82 against 1.15 ms); wherever fewer draw, commands
+ * are faster. The records are read when the render pass instance begins:
+ * those of count draws and long multi-draws cannot be written by an
+ * earlier subpass of the instance (a subpass dependency into DRAW_INDIRECT;
+ * shaders of a render pass write storage memory only with
+ * fragmentStoresAndAtomics). The scan also finds what the Metal pass must be
+ * made with (Bresenham lines, framebuffer fetch, SNORM rebinds,
+ * depth/stencil copies, occlusion queries). A render pass instance that
+ * recorded none of what it looks for (struct pvk_cmd_begin_pass.scan), and
+ * begins with no such state, is not scanned: walking the packets again cost
+ * as much as making the Metal encoders, in a frame of a few thousand draws
+ * and 18 passes. */
 
 static pthread_mutex_t pvk_graphics_lock = PTHREAD_MUTEX_INITIALIZER;
 
