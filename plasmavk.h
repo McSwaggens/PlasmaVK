@@ -57957,6 +57957,10 @@ struct pvk_rp_pass {
     VkResolveModeFlagBits depth_resolve_mode, stencil_resolve_mode;
     uint32_t view_mask, samples;
     uint32_t hidden; /* PVK_HIDDEN_* copies its subpasses read */
+    /* After the first: its stages that wait for the earlier passes' render
+     * stages (pvk_render_begin_group), as it loads what they stored and the
+     * subpass dependencies from their subpasses into its ask */
+    pvk_MTLStages after;
 };
 
 struct pvk_render_pass {
@@ -57966,7 +57970,8 @@ struct pvk_render_pass {
     struct pvk_rp_pass *passes;
     /* Its dependencies on work outside (VK_SUBPASS_EXTERNAL), together:
      * barriers before the instance (in) and after it (out). The implicit
-     * ones (TOP_OF_PIPE first, BOTTOM_OF_PIPE second) order nothing. */
+     * ones (TOP_OF_PIPE first, BOTTOM_OF_PIPE second) order nothing. Those
+     * between its Metal passes: struct pvk_rp_pass.after. */
     VkPipelineStageFlags2 in_src, in_dst, out_src, out_dst;
     VkAccessFlags2 in_src_access, in_dst_access, out_src_access, out_dst_access;
 };
@@ -58249,7 +58254,7 @@ struct pvk_cmd_begin_pass {
     uint32_t flags;       /* VkRenderingFlags of vkCmdBeginRendering */
     uint32_t hidden;      /* render passes: PVK_HIDDEN_* copies the subpasses read */
     uint32_t view_mask;   /* multiview: the views (load-op clears clear their layers only) */
-    uint32_t after;       /* render passes: a Metal pass after the instance's first (it waits for those before) */
+    uint32_t after;       /* render passes: a Metal pass after the instance's first: struct pvk_rp_pass.after */
     /* Render passes: the aspects of the depth/stencil resolve attachment
      * that its load ops clear and the subpass does not resolve (mode NONE),
      * cleared in the render area when the pass ends (pvk_render_resolve_clear) */
@@ -58730,7 +58735,7 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
     c->view_mask = mp->view_mask;
     c->color_count = mp->color_count;
     c->hidden = mp->hidden;
-    c->after = p > 0;
+    c->after = mp->after;
     if (mp->depth_resolve != VK_ATTACHMENT_UNUSED && r->views[mp->depth_resolve] &&
         pass->attachments[mp->depth_resolve].first_use >= mp->first) {
         const struct pvk_rp_attachment *ra = &pass->attachments[mp->depth_resolve];
@@ -65441,7 +65446,7 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
     struct pvk_pass_attachment depth, stencil, resolve_depth, resolve_stencil;
     uint32_t s, i, clears = 0, ds_clears, values[PVK_MAX_COLOR_ATTACHMENTS][4];
     bool memoryless = false, resolves = false;
-    pvk_MTLStages waits[PVK_ORDER_STAGES];
+    pvk_MTLStages waits[PVK_ORDER_STAGES], after;
     id enc;
 
     if (group) {
@@ -65453,7 +65458,7 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
             masked.depth.store = masked.stencil.store = PVK_MTLStoreActionDontCare;
             masked.depth.resolve = masked.stencil.resolve = NULL;
         }
-        masked.after |= !first;
+        masked.after |= first ? 0u : PVK_MTLStageFragment | PVK_MTLStageTile; /* (stores before loads) */
         c = &masked;
     }
     depth = c->depth;
@@ -65522,6 +65527,7 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
     enc = pvk_render_open(e, c, &depth, &stencil, false, r->split, r->int_slots);
     if (!enc)
         return;
+    after = c->after | (c->flags & VK_RENDERING_RESUMING_BIT ? PVK_MTLStageFragment | PVK_MTLStageTile : 0u);
     pvk_queue_waits(e, PVK_STAGES_RENDER, waits);
     for (i = 0; i < PVK_ORDER_STAGES; i++) {
         if (!(pvk_order_stages[i] & PVK_STAGES_RENDER))
@@ -65532,10 +65538,16 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
          * in work that follows their vertices (fragments) */
         if (e->prepassed && pvk_order_stages[i] == PVK_MTLStageVertex)
             waits[i] |= PVK_MTLStageDispatch;
-        /* (a later part of a render pass instance loads what the earlier
-         * stored; depth copies are loaded) */
-        if (e->seeded || c->after || (c->flags & VK_RENDERING_RESUMING_BIT))
+        /* A later part of a render pass instance (c->after) or a resumed
+         * one loads what the earlier stored, at their fragment and tile
+         * stages (the vertex stage stores nothing), and the subpass
+         * dependencies between them may name more of its stages; what came
+         * before the instance, the queue's barriers order. Depth copies are
+         * loaded. */
+        if (e->seeded)
             waits[i] = PVK_STAGES_ALL;
+        else if (after & pvk_order_stages[i])
+            waits[i] |= PVK_STAGES_RENDER;
     }
     pvk_encoder_waits(e, enc, waits);
     e->prepassed = e->seeded = r->resolve_wait = false;
@@ -71776,31 +71788,6 @@ static VkResult pvk_render_pass_create(struct pvk_device *device, const VkRender
     rp->attachments = (struct pvk_rp_attachment *)(rp + 1);
     rp->subpasses = (struct pvk_subpass *)(rp->attachments + na);
     rp->passes = (struct pvk_rp_pass *)(rp->subpasses + ns);
-    for (i = 0; i < info->dependencyCount; i++) {
-        const VkSubpassDependency2 *d = &info->pDependencies[i];
-        VkPipelineStageFlags2 src = d->srcStageMask, dst = d->dstStageMask;
-        VkAccessFlags2 src_access = d->srcAccessMask, dst_access = d->dstAccessMask;
-        const VkBaseInStructure *ext;
-        for (ext = d->pNext; ext; ext = ext->pNext)
-            if (ext->sType == VK_STRUCTURE_TYPE_MEMORY_BARRIER_2) { /* (it replaces the masks) */
-                const VkMemoryBarrier2 *b = (const VkMemoryBarrier2 *)ext;
-                src = b->srcStageMask;
-                dst = b->dstStageMask;
-                src_access = b->srcAccessMask;
-                dst_access = b->dstAccessMask;
-            }
-        if (d->srcSubpass == VK_SUBPASS_EXTERNAL && d->dstSubpass != VK_SUBPASS_EXTERNAL) {
-            rp->in_src |= src;
-            rp->in_dst |= dst;
-            rp->in_src_access |= src_access;
-            rp->in_dst_access |= dst_access;
-        } else if (d->dstSubpass == VK_SUBPASS_EXTERNAL && d->srcSubpass != VK_SUBPASS_EXTERNAL) {
-            rp->out_src |= src;
-            rp->out_dst |= dst;
-            rp->out_src_access |= src_access;
-            rp->out_dst_access |= dst_access;
-        }
-    }
     for (i = 0; i < na; i++) {
         const VkAttachmentDescription2 *a = &info->pAttachments[i];
         struct pvk_rp_attachment *ra = &rp->attachments[i];
@@ -71883,6 +71870,36 @@ static VkResult pvk_render_pass_create(struct pvk_device *device, const VkRender
         pvk_rp_pass_add(rp, mp, i);
         rp->subpasses[i].pass = rp->pass_count - 1;
     }
+    for (i = 0; i < info->dependencyCount; i++) {
+        const VkSubpassDependency2 *d = &info->pDependencies[i];
+        VkPipelineStageFlags2 src = d->srcStageMask, dst = d->dstStageMask;
+        VkAccessFlags2 src_access = d->srcAccessMask, dst_access = d->dstAccessMask;
+        const VkBaseInStructure *ext;
+        for (ext = d->pNext; ext; ext = ext->pNext)
+            if (ext->sType == VK_STRUCTURE_TYPE_MEMORY_BARRIER_2) { /* (it replaces the masks) */
+                const VkMemoryBarrier2 *b = (const VkMemoryBarrier2 *)ext;
+                src = b->srcStageMask;
+                dst = b->dstStageMask;
+                src_access = b->srcAccessMask;
+                dst_access = b->dstAccessMask;
+            }
+        if (d->srcSubpass == VK_SUBPASS_EXTERNAL && d->dstSubpass != VK_SUBPASS_EXTERNAL) {
+            rp->in_src |= src;
+            rp->in_dst |= dst;
+            rp->in_src_access |= src_access;
+            rp->in_dst_access |= dst_access;
+        } else if (d->dstSubpass == VK_SUBPASS_EXTERNAL && d->srcSubpass != VK_SUBPASS_EXTERNAL) {
+            rp->out_src |= src;
+            rp->out_dst |= dst;
+            rp->out_src_access |= src_access;
+            rp->out_dst_access |= dst_access;
+        } else if (d->srcSubpass < ns && d->dstSubpass < ns &&
+                   rp->subpasses[d->srcSubpass].pass < rp->subpasses[d->dstSubpass].pass) {
+            rp->passes[rp->subpasses[d->dstSubpass].pass].after |= pvk_barrier_stages(dst, false) & PVK_STAGES_RENDER;
+        }
+    }
+    for (i = 1; i < rp->pass_count; i++) /* (stores before loads) */
+        rp->passes[i].after |= PVK_MTLStageFragment | PVK_MTLStageTile;
     for (i = 0; i < na; i++) { /* (the load ops the application gave: not those of input attachments, above) */
         struct pvk_rp_attachment *ra = &rp->attachments[i];
         const VkAttachmentDescription2 *a = &info->pAttachments[i];
