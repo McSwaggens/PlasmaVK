@@ -32478,6 +32478,7 @@ struct pvk_orders {
         pvk_MTLStages after[PVK_ORDER_STAGES];
     } at[PVK_ORDER_MAX];
     uint32_t count;
+    pvk_MTLStages all[PVK_ORDER_STAGES]; /* the entries' after[i] together */
     pvk_MTLStages sem;
     uint64_t sem_serial;
 };
@@ -56746,6 +56747,11 @@ VKAPI_ATTR void VKAPI_CALL vkCmdUpdateBuffer(VkCommandBuffer commandBuffer, VkBu
 
 /* ---- Synchronization commands ---- */
 
+/* The Vulkan stages of transfer commands (pvk_barrier_stages). */
+#define PVK_TRANSFER_STAGES                                                                                     \
+    (VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_RESOLVE_BIT | \
+     VK_PIPELINE_STAGE_2_BLIT_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT)
+
 static pvk_MTLStages pvk_barrier_stages(VkPipelineStageFlags2 stages, bool src);
 static pvk_MTLStages pvk_barrier_src_undrawn(VkPipelineStageFlags2 stages);
 static void pvk_waits_add(pvk_MTLStages *waits, pvk_MTLStages after, pvk_MTLStages before);
@@ -56765,7 +56771,7 @@ static void pvk_cmd_barrier(struct pvk_command_buffer *cb, VkPipelineStageFlags2
     c->dst_access = dst_access;
     c->src = src;
     c->dst = dst;
-    c->src_undrawn = pvk_barrier_src_undrawn(src_stages);
+    c->src_undrawn = src_stages & PVK_TRANSFER_STAGES ? pvk_barrier_src_undrawn(src_stages) : src;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdPipelineBarrier(VkCommandBuffer commandBuffer, VkPipelineStageFlags srcStageMask,
@@ -60670,6 +60676,7 @@ struct pvk_encoder {
      * stages its stage pvk_order_stages[i] waits for; and the barriers
      * recorded in it (pvk_waits_add) */
     pvk_MTLStages consumed[PVK_ORDER_STAGES], enc_order[PVK_ORDER_STAGES];
+    pvk_MTLStages order_last[2]; /* the last pvk_queue_order's stages */
     bool ms_store;         /* the render encoder made last stores multisampled attachments */
     struct pvk_render render;   /* graphics */
     struct pvk_query_pool *occ_pool; /* the active occlusion query, NULL: none */
@@ -60826,11 +60833,6 @@ static void *pvk_upload(struct pvk_encoder *e, size_t size, size_t align, id *bu
 #define PVK_STAGES_COMPUTE (PVK_MTLStageDispatch | PVK_MTLStageBlit)
 #define PVK_STAGES_RENDER (PVK_MTLStageVertex | PVK_MTLStageFragment | PVK_MTLStageTile)
 #define PVK_STAGES_ALL (PVK_STAGES_COMPUTE | PVK_STAGES_RENDER)
-
-/* The Vulkan stages of transfer commands (pvk_barrier_stages). */
-#define PVK_TRANSFER_STAGES                                                                                     \
-    (VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_RESOLVE_BIT | \
-     VK_PIPELINE_STAGE_2_BLIT_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT)
 
 /* ---- Debug labels (DEBUG LABELS) ---- */
 
@@ -61335,35 +61337,40 @@ static void pvk_orders_add(struct pvk_orders *q, uint64_t serial, const pvk_MTLS
 {
     pvk_MTLStages waits[PVK_ORDER_STAGES], any = 0, all = wait_before | q->sem;
     struct pvk_order *o;
-    uint32_t i, k;
+    uint32_t i;
     for (i = 0; i < PVK_ORDER_STAGES; i++)
         any |= later[i];
     if (!any)
         return;
-    for (i = 0; i < PVK_ORDER_STAGES; i++)
-        for (waits[i] = 0, k = 0; k < q->count; k++)
-            waits[i] |= q->at[k].after[i];
     for (i = 0; i < PVK_ORDER_STAGES; i++) {
-        waits[i] = later[i] ? pvk_waits_chain(waits, later[i]) : 0;
+        waits[i] = later[i] ? pvk_waits_chain(q->all, later[i]) : 0;
         if (waits[i] & all) {
             q->sem |= pvk_order_stages[i];
             q->sem_serial = q->sem_serial > serial ? q->sem_serial : serial;
         }
     }
     o = pvk_orders_at(q, serial);
-    for (i = 0; i < PVK_ORDER_STAGES; i++)
+    for (i = 0; i < PVK_ORDER_STAGES; i++) {
         o->after[i] |= waits[i];
+        q->all[i] |= waits[i];
+    }
 }
 
 /* A barrier (or a dependency like one) recorded in the submission being
  * encoded: encoders started later wait for earlier work at `after` stages
- * before their `before` stages. */
-static void pvk_queue_order(struct pvk_encoder *e, pvk_MTLStages after, pvk_MTLStages before)
+ * before their `before` stages. False: it changed nothing, being the last
+ * one again (chained to it, it adds nothing: a compute chain's barriers). */
+static bool pvk_queue_order(struct pvk_encoder *e, pvk_MTLStages after, pvk_MTLStages before)
 {
     pvk_MTLStages later[PVK_ORDER_STAGES];
+    if (after == e->order_last[0] && before == e->order_last[1])
+        return false;
+    e->order_last[0] = after;
+    e->order_last[1] = before;
     memset(later, 0, sizeof(later));
     pvk_waits_add(later, after, before);
     pvk_orders_add(e->orders, e->serial, later, e->wait_before);
+    return true;
 }
 
 /* What an encoder of `stages` started now waits for at each of them
@@ -61375,15 +61382,12 @@ static bool pvk_queue_waits(const struct pvk_encoder *e, pvk_MTLStages stages, p
 {
     const struct pvk_orders *q = e->orders;
     pvk_MTLStages any = 0;
-    uint32_t i, k;
+    uint32_t i;
     for (i = 0; i < PVK_ORDER_STAGES; i++) {
         waits[i] = 0;
         if (!(stages & pvk_order_stages[i]))
             continue;
-        if ((e->wait_before | q->sem) & pvk_order_stages[i])
-            waits[i] = PVK_STAGES_ALL;
-        for (k = 0; k < q->count; k++)
-            waits[i] |= q->at[k].after[i];
+        waits[i] = (e->wait_before | q->sem) & pvk_order_stages[i] ? PVK_STAGES_ALL : q->all[i];
         any |= waits[i];
     }
     return any != 0;
@@ -61438,9 +61442,10 @@ static void pvk_encoder_consume(struct pvk_encoder *e, pvk_MTLStages after, pvk_
 static void pvk_encode_barrier(struct pvk_encoder *e, const struct pvk_cmd_barrier *c)
 {
     pvk_MTLStages src = e->drawn ? c->src : c->src_undrawn, dst = c->dst, waits[PVK_ORDER_STAGES], chained;
+    bool fresh;
     if (!src || !dst)
         return;
-    pvk_queue_order(e, src, dst);
+    fresh = pvk_queue_order(e, src, dst);
     /* In a render pass (subpass self-dependencies, local read) nothing is
      * encoded: Metal render encoders take barriers after vertex work only
      * (validation layer, macOS 27.2), no vertex stage writes memory here
@@ -61455,9 +61460,10 @@ static void pvk_encode_barrier(struct pvk_encoder *e, const struct pvk_cmd_barri
     if (!(dst & PVK_STAGES_COMPUTE))
         return;
     /* earlier encoders, as the queue's order has the encoder's stages wait
-     * now (the barrier chained to earlier ones) */
-    pvk_queue_waits(e, dst & PVK_STAGES_COMPUTE, waits);
-    pvk_encoder_consume_waits(e, waits);
+     * now (the barrier chained to earlier ones; unchanged since the same
+     * barrier, the encoder waits for them already) */
+    if (fresh && pvk_queue_waits(e, dst & PVK_STAGES_COMPUTE, waits))
+        pvk_encoder_consume_waits(e, waits);
     if (chained) /* the encoder's commands before it */
         pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
             e->enc, chained, dst & PVK_STAGES_COMPUTE, e->queue->device->visibility);
@@ -67795,8 +67801,10 @@ static VkResult pvk_encode_parallel(struct pvk_queue *queue, struct pvk_submissi
         for (m = 0; m < q->count; m++)
             if (q->at[m].serial == serial) {
                 struct pvk_order *o = pvk_orders_at(&queue->orders, serial);
-                for (k = 0; k < PVK_ORDER_STAGES; k++)
+                for (k = 0; k < PVK_ORDER_STAGES; k++) {
                     o->after[k] |= q->at[m].after[k];
+                    queue->orders.all[k] |= q->at[m].after[k];
+                }
             }
         queue->orders.sem |= q->sem;
         if (q->sem_serial > queue->orders.sem_serial)
@@ -67863,6 +67871,9 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
     if (i) {
         queue->orders.count -= i;
         memmove(queue->orders.at, queue->orders.at + i, sizeof(queue->orders.at[0]) * queue->orders.count);
+        memset(queue->orders.all, 0, sizeof(queue->orders.all));
+        for (i = 0; i < PVK_ORDER_STAGES * queue->orders.count; i++) /* (each entry's stages) */
+            queue->orders.all[i % PVK_ORDER_STAGES] |= queue->orders.at[i / PVK_ORDER_STAGES].after[i % PVK_ORDER_STAGES];
     }
     if (queue->orders.sem && queue->orders.sem_serial <= e.completed + 1) /* (all work before it done) */
         queue->orders.sem = 0;
