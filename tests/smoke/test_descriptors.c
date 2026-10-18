@@ -1163,6 +1163,77 @@ static void test_pool_holes(void)
     vkDestroyDescriptorSetLayout(device, two, NULL);
 }
 
+/* Allocates A, then B, frees A and allocates B again, from a pool with room
+ * for two sets of the counts both have: Vulkan's fragmentation rule
+ * (VkDescriptorPoolCreateInfo) says the last allocation cannot fail, as
+ * every set allocated since the pool was made has the same number of
+ * descriptors of each type as it. Then the other way round, and a third
+ * set, beyond maxSets, fails as out of pool memory. */
+static void fragmentation_case(VkDescriptorSetLayout a, VkDescriptorSetLayout b, const VkDescriptorPoolSize *sizes,
+                               uint32_t n, const char *what)
+{
+    VkDescriptorPool pool = make_pool(2, sizes, n, VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT, NULL);
+    VkDescriptorSet sa, sb, again;
+    uint32_t round;
+    REQUIRE(pool);
+    for (round = 0; round < 2; round++) {
+        VkDescriptorSetLayout first = round ? b : a, second = round ? a : b;
+        CHECK_VK(alloc_sets(pool, &first, 1, NULL, &sa), VK_SUCCESS);
+        CHECK_VK(alloc_sets(pool, &second, 1, NULL, &sb), VK_SUCCESS);
+        CHECK_VK(vkFreeDescriptorSets(device, pool, 1, &sa), VK_SUCCESS);
+        if (alloc_sets(pool, &second, 1, NULL, &again) != VK_SUCCESS)
+            PVK_TEST_FAIL("%s: a set of the counts of every set allocated failed after one was freed", what);
+        CHECK_VK(alloc_sets(pool, &first, 1, NULL, &sa), VK_ERROR_OUT_OF_POOL_MEMORY);
+        CHECK_VK(vkResetDescriptorPool(device, pool, 0), VK_SUCCESS);
+    }
+    vkDestroyDescriptorPool(device, pool, NULL);
+}
+
+/* Sets of the same number of descriptors of each type take the same room
+ * in a pool whatever their bindings: two descriptors in one binding against
+ * one in each of two (8-byte descriptors' tables differ, 16 against 32
+ * bytes), and a buffer and two images against two images and a buffer. */
+static void test_pool_fragmentation(void)
+{
+    static const VkDescriptorType types[] = {
+        VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  VK_DESCRIPTOR_TYPE_SAMPLER,
+        VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
+        VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, UBO, SSBO, UBO_DYNAMIC, SSBO_DYNAMIC,
+    };
+    VkDescriptorSetLayoutBinding b[2];
+    VkDescriptorSetLayout one, two;
+    VkDescriptorPoolSize sizes[2];
+    char what[64];
+    uint32_t i;
+
+    for (i = 0; i < sizeof(types) / sizeof(types[0]); i++) {
+        b[0] = lb(0, types[i], 2);
+        one = make_set_layout(b, 1, 0, NULL);
+        b[0] = lb(0, types[i], 1);
+        b[1] = lb(1, types[i], 1);
+        two = make_set_layout(b, 2, 0, NULL);
+        REQUIRE(one && two);
+        sizes[0] = ps(types[i], 4);
+        snprintf(what, sizeof(what), "descriptor type %d", (int)types[i]);
+        fragmentation_case(one, two, sizes, 1, what);
+        vkDestroyDescriptorSetLayout(device, one, NULL);
+        vkDestroyDescriptorSetLayout(device, two, NULL);
+    }
+    b[0] = lb(0, UBO, 1);
+    b[1] = lb(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2);
+    one = make_set_layout(b, 2, 0, NULL);
+    b[0] = lb(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2);
+    b[1] = lb(1, UBO, 1);
+    two = make_set_layout(b, 2, 0, NULL);
+    REQUIRE(one && two);
+    sizes[0] = ps(UBO, 2);
+    sizes[1] = ps(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4);
+    fragmentation_case(one, two, sizes, 2, "a buffer and two images");
+    vkDestroyDescriptorSetLayout(device, one, NULL);
+    vkDestroyDescriptorSetLayout(device, two, NULL);
+}
+
 /* A freed set's struct serves the pool's next set, so its handle comes
  * back: without the private data and name it had, after vkFreeDescriptorSets
  * and after vkResetDescriptorPool. */
@@ -2968,6 +3039,7 @@ int main(void)
     RUN(test_pools);
     RUN(test_pool_layout_refs);
     RUN(test_pool_holes);
+    RUN(test_pool_fragmentation);
     RUN(test_pool_set_reuse);
     RUN(test_buffers);
     RUN(test_pipeline_robustness);

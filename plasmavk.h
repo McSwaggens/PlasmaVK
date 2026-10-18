@@ -40726,13 +40726,16 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  * POOLS
  *   A pool owns one shared, cached, untracked MTLBuffer in the device's
  *   residency set, large enough for the worst case of its pool sizes: 16
- *   bytes per descriptor (an 8-byte descriptor alone in its binding still
- *   takes 16 with the padding to the next binding), 32 per combined image
- *   sampler (the size with a multi-planar Y'CbCr conversion, whether or not
- *   the application counted combinedImageSamplerDescriptorCount for it) and,
- *   for inline uniform blocks, their bytes plus 16 per binding
- *   (maxInlineUniformBlockBindings).
- *   So any allocation within the pool sizes and maxSets fits. Sets are
+ *   bytes per descriptor, 32 per combined image sampler (the size with a
+ *   multi-planar Y'CbCr conversion, whether or not the application counted
+ *   combinedImageSamplerDescriptorCount for it) and, for inline uniform
+ *   blocks, their bytes plus 16 per binding (maxInlineUniformBlockBindings).
+ *   A set takes that room for its descriptors (pvk_binding_room: its table,
+ *   and after it the padding that makes an 8-byte descriptor's share 16
+ *   and a combined image sampler's 32 whatever its stride), so any
+ *   allocation within the pool sizes and maxSets fits, and sets of the same
+ *   number of descriptors of each type take the same room whatever their
+ *   bindings (inline uniform block bindings: of the same sizes). Sets are
  *   ranges of the buffer in a list ordered by offset. A freed set stays in
  *   the list as a hole, in the pool's bin of holes of its size (sets of
  *   sizes beyond PVK_POOL_BINS unlink), and the next set of that size takes
@@ -40741,8 +40744,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  *   allocation appends after the last set or hole, or else unlinks every
  *   hole and takes the first gap that fits. When all sets have one size,
  *   every hole and gap is a multiple of it, so fragmentation cannot fail an
- *   allocation the pool sizes allow (which vkAllocateDescriptorSets
- *   requires).
+ *   allocation the pool sizes allow: Vulkan requires that of allocations
+ *   with the same number of descriptors of each type as every set
+ *   allocated since the pool was made or reset (VkDescriptorPoolCreateInfo),
+ *   which have one size here. Sets of other sizes may leave holes no gap of
+ *   theirs fits: VK_ERROR_FRAGMENTED_POOL.
  *   A set's layout stays alive while the set does (vkCmdBindDescriptorSets
  *   reads it). The pool references the first PVK_POOL_LAYOUTS layouts of
  *   its sets once each, until it is reset or destroyed; sets of other
@@ -40835,6 +40841,17 @@ static pvk_MTLResourceID pvk_sampler_id(VkSampler sampler, bool alpha)
     return !s ? none : alpha ? s->alpha_id : s->sampler_id;
 }
 
+/* The room a binding of `count` descriptors of a type takes in a pool
+ * (POOLS): 16 bytes a descriptor, 32 a combined image sampler, an inline
+ * uniform block's bytes 16-aligned. Whatever a layout's bindings, its sets
+ * take the room of their descriptors of each type. */
+static uint64_t pvk_binding_room(VkDescriptorType type, uint32_t count)
+{
+    if (type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
+        return pvk_align16(count);
+    return (type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ? 32 : 16) * (uint64_t)count;
+}
+
 /* ---- Layouts ---- */
 
 struct pvk_set_binding {
@@ -40854,6 +40871,7 @@ struct pvk_descriptor_set_layout {
     uint32_t binding_count;
     struct pvk_set_binding *bindings; /* by binding number */
     uint64_t size;           /* table bytes but the variable-count binding's descriptors, 16-aligned */
+    uint64_t room;           /* bytes a set takes in a pool (POOLS), but the variable-count binding's descriptors' */
     uint32_t dynamic_count;  /* dynamic offsets that binding a set takes */
     const uint32_t *dynamic_at; /* their descriptors' table offsets, in binding order */
     bool variable;           /* the last binding has a variable count */
@@ -41037,6 +41055,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice _device,
     }
     layout->variable = n && (layout->bindings[n - 1].flags & VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT);
     layout->size = layout->variable ? layout->bindings[n - 1].offset : total;
+    layout->room = 0;
+    for (i = 0; i + (layout->variable ? 1 : 0) < n; i++)
+        layout->room += pvk_binding_room(layout->bindings[i].type, layout->bindings[i].count);
     pvk_free(alloc, sorted);
     *pSetLayout = (VkDescriptorSetLayout)layout;
     return VK_SUCCESS;
@@ -41366,14 +41387,14 @@ static VkResult pvk_descriptor_set_create(struct pvk_descriptor_pool *pool, stru
                                           uint32_t variable, struct pvk_descriptor_set **out)
 {
     struct pvk_descriptor_set *set;
-    uint64_t size = layout->size;
+    uint64_t size = layout->room; /* (the table and the padding that makes it the room of its descriptors, POOLS) */
     VkResult result;
 
     if (layout->variable) {
         const struct pvk_set_binding *b = &layout->bindings[layout->binding_count - 1];
         if (variable > b->count)
             variable = b->count;
-        size = pvk_align16(b->offset + (uint64_t)b->stride * variable);
+        size += pvk_binding_room(b->type, variable);
     }
     if (pool->set_count >= pool->max_sets || size > pool->size)
         return VK_ERROR_OUT_OF_POOL_MEMORY;
