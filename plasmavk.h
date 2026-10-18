@@ -32465,6 +32465,7 @@ struct pvk_lane {
 /* The Metal stages work waits at (section 16, BARRIERS: pvk_order_stages):
  * vertex, fragment, tile, dispatch, blit. */
 #define PVK_ORDER_STAGES 5
+#define PVK_ORDER_BLIT 4
 
 /* Barriers of submissions that may still run (section 16, BARRIERS): an
  * encoder started later waits for earlier work at after[i] stages before
@@ -32502,6 +32503,7 @@ struct pvk_queue {
      * only it, vkQueueWaitIdle and vkDeviceWaitIdle touch these. */
     id timeline;          /* MTLSharedEvent: reaches N when submission N is done */
     uint64_t serial;      /* value of the last submission */
+    uint64_t drawn;       /* ... of the last with transfers that may draw (blits, resolves, clears; 0: none) */
     /* MTLSharedEvent: reaches N when the batch of submission value N is
      * done, for timestamps written in batches before a submission's last
      * (section 14, TIMESTAMPS) */
@@ -56462,6 +56464,7 @@ struct pvk_cmd_barrier {
     VkPipelineStageFlags2 src_stages, dst_stages;
     VkAccessFlags2 src_access, dst_access;
     pvk_MTLStages src, dst; /* the Metal stages of src_stages and dst_stages (pvk_barrier_stages) */
+    pvk_MTLStages src_undrawn; /* ... of src_stages when no transfer that draws may run (pvk_barrier_src_undrawn) */
 };
 
 struct pvk_cmd_bind_pipeline {
@@ -56744,6 +56747,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdUpdateBuffer(VkCommandBuffer commandBuffer, VkBu
 /* ---- Synchronization commands ---- */
 
 static pvk_MTLStages pvk_barrier_stages(VkPipelineStageFlags2 stages, bool src);
+static pvk_MTLStages pvk_barrier_src_undrawn(VkPipelineStageFlags2 stages);
 static void pvk_waits_add(pvk_MTLStages *waits, pvk_MTLStages after, pvk_MTLStages before);
 static void pvk_waits_join(pvk_MTLStages *waits, const pvk_MTLStages *later);
 
@@ -56761,6 +56765,7 @@ static void pvk_cmd_barrier(struct pvk_command_buffer *cb, VkPipelineStageFlags2
     c->dst_access = dst_access;
     c->src = src;
     c->dst = dst;
+    c->src_undrawn = pvk_barrier_src_undrawn(src_stages);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdPipelineBarrier(VkCommandBuffer commandBuffer, VkPipelineStageFlags srcStageMask,
@@ -59854,8 +59859,11 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   compute encoder, interrupted by a render encoder for each clear, blit or
  *   resolve (they draw). A Vulkan barrier orders the work before it in
  *   submission order at the Metal stages of its first scope
- *   (pvk_barrier_stages: vertex, fragment and tile, dispatch; transfers and
- *   anything else all) against the work after it at those of its second, so
+ *   (pvk_barrier_stages: vertex, fragment and tile, dispatch; transfers
+ *   blit and dispatch, and fragment and tile while a blit, resolve or clear
+ *   that draws may run, whose render encoders wait for what the blit stage
+ *   does; anything else all) against the work after it at those of its
+ *   second, so
  *   it becomes (pvk_encode_barrier) an encoder barrier for the commands
  *   around it and a consumer barrier against all earlier encoders on the
  *   queue; and as its second scope reaches every later command, every
@@ -60652,6 +60660,9 @@ struct pvk_encoder {
     VkResult result;
     uint64_t completed;    /* the queue's timeline when the batch began encoding */
     pvk_MTLStages wait_before; /* stages the batch's semaphore waits block (0: no waits) */
+    /* Transfers that draw (pvk_encoder_render) may run before its barriers:
+     * the batch or a submission not done when it began has some */
+    bool drawn;
     /* The compute encoder's consumer barriers against earlier encoders: the
      * stages its stage pvk_order_stages[i] waits for; and the barriers
      * recorded in it (pvk_waits_add) */
@@ -60809,6 +60820,11 @@ static void *pvk_upload(struct pvk_encoder *e, size_t size, size_t align, id *bu
 #define PVK_STAGES_COMPUTE (PVK_MTLStageDispatch | PVK_MTLStageBlit)
 #define PVK_STAGES_RENDER (PVK_MTLStageVertex | PVK_MTLStageFragment | PVK_MTLStageTile)
 #define PVK_STAGES_ALL (PVK_STAGES_COMPUTE | PVK_STAGES_RENDER)
+
+/* The Vulkan stages of transfer commands (pvk_barrier_stages). */
+#define PVK_TRANSFER_STAGES                                                                                     \
+    (VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_RESOLVE_BIT | \
+     VK_PIPELINE_STAGE_2_BLIT_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT)
 
 /* ---- Debug labels (DEBUG LABELS) ---- */
 
@@ -61174,8 +61190,14 @@ static void pvk_encode_stamp_later(struct pvk_encoder *e, struct pvk_query_pool 
  * rasterization run at the vertex stage (no geometry or tessellation
  * shaders, and no vertex stage writes memory); fragment work, tests and
  * attachment loads, stores and resolves at the fragment and tile stages;
- * compute at the dispatch stage. Transfers and anything else may be any
- * work (copies run as blits or dispatches, blits, clears and resolves draw).
+ * compute at the dispatch stage. Transfers run at the blit and dispatch
+ * stages (copies, fills and updates as blits or dispatches, blits and
+ * clears of the compute encoder as dispatches), except blits, resolves and
+ * clears that draw (pvk_encoder_render): as a first scope, transfers are
+ * also fragment and tile work (pvk_barrier_src_undrawn drops it where none
+ * can run), and as a second those render encoders wait for what the blit
+ * stage does. All graphics work is the stages of draws; anything else may
+ * be any work.
  * Host accesses need no GPU barrier: host writes before vkQueueSubmit are
  * visible to it, and the GPU's writes are visible on the host once the fence
  * or semaphore wait returns, or the event signaled after them is seen set
@@ -61191,6 +61213,8 @@ static pvk_MTLStages pvk_barrier_stages(VkPipelineStageFlags2 stages, bool src)
                                            VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
                                            VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
                                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    const VkPipelineStageFlags2 known = input | vertex | fragment | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                        VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT | PVK_TRANSFER_STAGES;
     pvk_MTLStages m = 0;
     stages &= ~(VkPipelineStageFlags2)VK_PIPELINE_STAGE_2_HOST_BIT;
     /* TOP_OF_PIPE: no work as a source, all work as a destination;
@@ -61204,9 +61228,23 @@ static pvk_MTLStages pvk_barrier_stages(VkPipelineStageFlags2 stages, bool src)
         m |= PVK_MTLStageFragment | PVK_MTLStageTile;
     if (stages & VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
         m |= PVK_MTLStageDispatch;
-    if (stages & ~(input | vertex | fragment | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT))
+    if (stages & VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT) /* (no geometry, tessellation or mesh shaders) */
+        m |= PVK_STAGES_RENDER | PVK_MTLStageDispatch;
+    if (stages & PVK_TRANSFER_STAGES)
+        m |= PVK_STAGES_COMPUTE | (src ? PVK_MTLStageFragment | PVK_MTLStageTile : 0);
+    if (stages & ~known)
         m = PVK_STAGES_ALL;
     return m;
+}
+
+/* The Metal stages of the first scope of a barrier when no transfer that
+ * draws may run before it (struct pvk_encoder.drawn): transfers are only
+ * blit and dispatch work. */
+static pvk_MTLStages pvk_barrier_src_undrawn(VkPipelineStageFlags2 stages)
+{
+    if (!(stages & PVK_TRANSFER_STAGES))
+        return pvk_barrier_stages(stages, true);
+    return pvk_barrier_stages(stages & ~PVK_TRANSFER_STAGES, true) | PVK_STAGES_COMPUTE;
 }
 
 /* The Metal stages of struct pvk_order.after's entries. */
@@ -61393,7 +61431,7 @@ static void pvk_encoder_consume(struct pvk_encoder *e, pvk_MTLStages after, pvk_
 
 static void pvk_encode_barrier(struct pvk_encoder *e, const struct pvk_cmd_barrier *c)
 {
-    pvk_MTLStages src = c->src, dst = c->dst, waits[PVK_ORDER_STAGES], chained;
+    pvk_MTLStages src = e->drawn ? c->src : c->src_undrawn, dst = c->dst, waits[PVK_ORDER_STAGES], chained;
     if (!src || !dst)
         return;
     pvk_queue_order(e, src, dst);
@@ -62103,6 +62141,7 @@ static void pvk_device_finish_images(struct pvk_device *device)
 static id pvk_encoder_render(struct pvk_encoder *e, id pass, bool ms_store)
 {
     pvk_MTLStages waits[PVK_ORDER_STAGES];
+    uint32_t i;
     id enc;
     if (e->result != VK_SUCCESS)
         return NULL;
@@ -62115,8 +62154,14 @@ static id pvk_encoder_render(struct pvk_encoder *e, id pass, bool ms_store)
         return NULL;
     }
     pvk_labels_open(e, enc, NULL);
-    if (pvk_queue_waits(e, PVK_STAGES_RENDER, waits))
+    /* (transfers that draw: what the blit stage waits for, pvk_barrier_stages) */
+    if (pvk_queue_waits(e, PVK_STAGES_RENDER | PVK_MTLStageBlit, waits)) {
+        for (i = 0; i < PVK_ORDER_STAGES; i++)
+            if (pvk_order_stages[i] & PVK_STAGES_RENDER)
+                waits[i] |= waits[PVK_ORDER_BLIT];
+        waits[PVK_ORDER_BLIT] = 0;
         pvk_encoder_waits(e, enc, waits);
+    }
     return enc;
 }
 
@@ -67168,6 +67213,7 @@ struct pvk_batch {
     struct pvk_queue *queue;
     uint64_t serial, completed;
     pvk_MTLStages wait_before;
+    bool drawn; /* (struct pvk_encoder.drawn) */
     unsigned int qos; /* the submitting thread's QoS class, for the threads that take its jobs */
     struct pvk_job **jobs;
     uint32_t job_count, job_capacity;
@@ -67420,6 +67466,7 @@ static void pvk_job_run(struct pvk_job *j, struct pvk_lane *lane, const VkSubmit
     e.serial = b->serial;
     e.completed = b->completed;
     e.wait_before = b->wait_before;
+    e.drawn = b->drawn;
     if (!j->s && (j->s = pvk_lane_get_submission(device, lane))) { /* (the first job's: the batch's) */
         j->s->serial = b->serial;
         if (lane->pending_tail)
@@ -67682,6 +67729,7 @@ static VkResult pvk_encode_parallel(struct pvk_queue *queue, struct pvk_submissi
     b.serial = serial;
     b.completed = completed;
     b.wait_before = wait_before;
+    b.drawn = queue->drawn > completed;
     b.qos = pvk_qos_class_self();
     memset(later, 0, sizeof(later));
     for (k = 0; k < count && result == VK_SUCCESS; k++) {
@@ -67785,8 +67833,13 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
     e.cb = s->cb;
     for (i = 0; i < submit->waitSemaphoreInfoCount; i++)
         e.wait_before |= pvk_barrier_stages(submit->pWaitSemaphoreInfos[i].stageMask, false);
+    for (i = 0; i < submit->commandBufferInfoCount; i++)
+        if (((const struct pvk_command_buffer *)submit->pCommandBufferInfos[i].commandBuffer)->ops &
+            ((1u << PVK_CMD_BLIT_IMAGE) | (1u << PVK_CMD_CLEAR_IMAGE)))
+            queue->drawn = serial;
     /* barriers of submissions done since: nothing waits for them */
     e.completed = pvk_MTLSharedEvent_signaledValue(queue->timeline);
+    e.drawn = queue->drawn > e.completed;
     for (i = 0; i < queue->orders.count && queue->orders.at[i].serial <= e.completed; i++)
         ;
     if (i) {

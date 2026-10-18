@@ -524,7 +524,14 @@ static void test_barrier_order(void)
     CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, false) == 0);
     CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, false) == PVK_STAGES_ALL);
     CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, true) == PVK_STAGES_ALL);
-    CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_TRANSFER_BIT, false) == PVK_STAGES_ALL);
+    CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_TRANSFER_BIT, false) == PVK_STAGES_COMPUTE);
+    CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_TRANSFER_BIT, true) ==
+          (PVK_STAGES_COMPUTE | PVK_MTLStageFragment | PVK_MTLStageTile));
+    CHECK(pvk_barrier_src_undrawn(VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT) ==
+          PVK_STAGES_COMPUTE);
+    CHECK(pvk_barrier_src_undrawn(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT) == PVK_STAGES_ALL);
+    CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, false) ==
+          (PVK_STAGES_RENDER | PVK_MTLStageDispatch));
     CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_HOST_BIT, true) == 0);
 
     /* (pvk_order_stages: vertex, fragment, tile, dispatch, blit) */
@@ -577,7 +584,7 @@ static void test_barrier_order(void)
     REQUIRE_VK(submit(queues[0], VK_NULL_HANDLE, 0, cb, VK_NULL_HANDLE, 0, f));
     REQUIRE(q->orders.count >= 1);
     o = q->orders.at[q->orders.count - 1].after;
-    CHECK(!o[0] && o[1] == PVK_STAGES_ALL && o[2] == PVK_STAGES_ALL && !o[3] && !o[4]);
+    CHECK(!o[0] && o[1] == PVK_STAGES_COMPUTE && o[2] == PVK_STAGES_COMPUTE && !o[3] && !o[4]); /* (no blits: undrawn) */
     REQUIRE_VK(vkWaitForFences(device, 1, &f, VK_TRUE, 10000000000ull));
     fill = record_fill(&a, 2);
     REQUIRE_VK(submit(queues[0], VK_NULL_HANDLE, 0, fill, VK_NULL_HANDLE, 0, VK_NULL_HANDLE)); /* (done: dropped) */
