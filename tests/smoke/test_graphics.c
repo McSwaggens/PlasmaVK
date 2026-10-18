@@ -4395,6 +4395,85 @@ static void test_occlusion(void)
     free_img(&target);
 }
 
+/* Occlusion queries of two pools in one render pass, both counted: a's in
+ * the pass, b's in it and in one that b's query spans, begun before the
+ * pass. Results from the host and copied on the GPU; b's query 0 stays
+ * unavailable (its result is not written). */
+static void test_occlusion_pools(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    static const uint64_t want_a[4] = { 128, 1, 256, 1 }, want_b[6] = { 0, 0, 64, 1, 128, 1 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool a = VK_NULL_HANDLE, b = VK_NULL_HANDLE;
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    struct buf out = make_buf(sizeof(want_a) + sizeof(want_b));
+    uint64_t ra[4], rb[6];
+
+    REQUIRE(out.data);
+    memset(out.data, 0, sizeof(want_a) + sizeof(want_b));
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_OCCLUSION;
+    qi.queryCount = 2;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &a));
+    qi.queryCount = 3;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &b));
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    cb = begin_cmd();
+    vkCmdResetQueryPool(cb, a, 0, 2);
+    vkCmdResetQueryPool(cb, b, 0, 3);
+    begin_rendering(cb, &target, 1, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBeginQuery(cb, a, 0, VK_QUERY_CONTROL_PRECISE_BIT);
+    rect(cb, -1, -1, 0, 1, 1, 0, 0, 1, 0.5f); /* 8 x 16 pixels */
+    vkCmdEndQuery(cb, a, 0);
+    vkCmdBeginQuery(cb, b, 1, VK_QUERY_CONTROL_PRECISE_BIT);
+    rect(cb, 0, -1, 1, 0, 0, 1, 0, 1, 0.5f); /* 8 x 8 */
+    vkCmdEndQuery(cb, b, 1);
+    vkCmdBeginQuery(cb, a, 1, VK_QUERY_CONTROL_PRECISE_BIT);
+    rect(cb, -1, -1, 1, 1, 0, 0, 1, 1, 0.5f); /* 16 x 16 */
+    vkCmdEndQuery(cb, a, 1);
+    vkCmdEndRendering(cb);
+    vkCmdBeginQuery(cb, b, 2, VK_QUERY_CONTROL_PRECISE_BIT);
+    begin_rendering(cb, &target, 1, NULL, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -1, 0, 1, 1, 1, 1, 1, 1, 0.5f); /* 16 x 8 */
+    vkCmdEndRendering(cb);
+    vkCmdEndQuery(cb, b, 2);
+    vkCmdCopyQueryPoolResults(cb, a, 0, 2, out.buffer, 0, 16,
+                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT |
+                                  VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    vkCmdCopyQueryPoolResults(cb, b, 0, 3, out.buffer, sizeof(want_a), 16,
+                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    barrier(cb);
+    submit(cb);
+    memset(ra, 0xab, sizeof(ra));
+    memset(rb, 0xab, sizeof(rb));
+    CHECK_VK(vkGetQueryPoolResults(device, a, 0, 2, sizeof(ra), ra, 16,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
+             VK_SUCCESS);
+    CHECK_VK(vkGetQueryPoolResults(device, b, 0, 3, sizeof(rb), rb, 16,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
+             VK_NOT_READY);
+    CHECK(memcmp(ra, want_a, sizeof(ra)) == 0);
+    CHECK(memcmp(rb + 1, want_b + 1, sizeof(rb) - 8) == 0);
+    CHECK(memcmp(out.data, want_a, sizeof(want_a)) == 0);
+    CHECK(memcmp(out.data + sizeof(want_a), want_b, sizeof(want_b)) == 0);
+    if (memcmp(ra, want_a, sizeof(ra)) || memcmp(rb + 1, want_b + 1, sizeof(rb) - 8))
+        fprintf(stderr, "occlusion pools: a %llu %llu, b %llu %llu\n", (unsigned long long)ra[0],
+                (unsigned long long)ra[2], (unsigned long long)rb[2], (unsigned long long)rb[4]);
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyQueryPool(device, b, NULL);
+    vkDestroyQueryPool(device, a, NULL);
+    free_buf(&out);
+    free_img(&target);
+}
+
 /* ==========================================================================
  * Draws
  * ========================================================================== */
@@ -13962,6 +14041,7 @@ int main(void)
     RUN(test_timestamp_long_runs);
     RUN(test_timestamp_bracket);
     RUN(test_occlusion);
+    RUN(test_occlusion_pools);
     RUN(test_draw_kinds);
     RUN(test_draw_kinds_secondary);
     RUN(test_output_signedness);
