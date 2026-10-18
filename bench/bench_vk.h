@@ -15,6 +15,21 @@
 #define BENCH_VK_H
 
 #include "pvk_bench.h"
+#include <math.h>
+
+/* The float an RGBA16F texel's half holds (readbacks compare them with CPU references). */
+static inline float bench_half_to_float(uint16_t h)
+{
+    int exponent = (h >> 10) & 0x1F, mantissa = h & 0x3FF;
+    float v;
+    if (exponent == 0)
+        v = ldexpf((float)mantissa, -24);
+    else if (exponent == 31)
+        v = mantissa ? NAN : INFINITY;
+    else
+        v = ldexpf((float)(mantissa | 0x400), exponent - 25);
+    return (h & 0x8000) ? -v : v;
+}
 
 #define BENCH_FRAMES_IN_FLIGHT 2
 #define BENCH_TIMEOUT_NS 10000000000ull /* 10 s: anything longer is a hang */

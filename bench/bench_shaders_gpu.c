@@ -71,19 +71,6 @@ static float clampf(float x, float lo, float hi)
     return x < lo ? lo : x > hi ? hi : x;
 }
 
-static float half_to_float(uint16_t h)
-{
-    int exponent = (h >> 10) & 0x1F, mantissa = h & 0x3FF;
-    float v;
-    if (exponent == 0)
-        v = ldexpf((float)mantissa, -24);
-    else if (exponent == 31)
-        v = mantissa ? NAN : INFINITY;
-    else
-        v = ldexpf((float)(mantissa | 0x400), exponent - 25);
-    return (h & 0x8000) ? -v : v;
-}
-
 /* Exact for 0 and the normal numbers with at most 11 significant bits used
  * here (k / 64). */
 static uint16_t float_to_half(float f)
@@ -1027,9 +1014,9 @@ static int verify(struct scene *s)
         for (x = 0; x < s->width; x += (uint32_t)s->stride) {
             size_t p = (size_t)y * s->width + x;
             const float *w = &s->reference[3 * ((y / (uint32_t)s->stride) * cols + x / (uint32_t)s->stride)];
-            int ok = half_to_float(got[4 * p + 3]) == 1.0f, c;
+            int ok = bench_half_to_float(got[4 * p + 3]) == 1.0f, c;
             for (c = 0; c < 3 && ok; c++) {
-                float g = half_to_float(got[4 * p + (size_t)c]);
+                float g = bench_half_to_float(got[4 * p + (size_t)c]);
                 ok = fabsf(g - w[c]) <= 4e-3f + 5e-3f * fabsf(w[c]);
             }
             n++;
@@ -1041,8 +1028,8 @@ static int verify(struct scene *s)
     if (!bad)
         return 1;
     bench_error(s->cfg->name, "%zu of %zu pixels wrong; first at (%zu,%zu): got (%g,%g,%g,%g), want (%g,%g,%g,1)",
-                bad, n, first % s->width, first / s->width, half_to_float(got[4 * first]),
-                half_to_float(got[4 * first + 1]), half_to_float(got[4 * first + 2]), half_to_float(got[4 * first + 3]),
+                bad, n, first % s->width, first / s->width, bench_half_to_float(got[4 * first]),
+                bench_half_to_float(got[4 * first + 1]), bench_half_to_float(got[4 * first + 2]), bench_half_to_float(got[4 * first + 3]),
                 want[0], want[1], want[2]);
     return 0;
 }

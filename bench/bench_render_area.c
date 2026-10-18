@@ -247,19 +247,6 @@ static void record(void *user, const struct bench_frame *f)
 /* ---- Verification ---- */
 
 /* IEEE half to float (no NaNs here). */
-static float half_to_float(uint16_t h)
-{
-    uint32_t sign = (uint32_t)(h >> 15) << 31, exp = (h >> 10) & 0x1F, mant = h & 0x3FF, bits;
-    float f;
-    if (exp == 0) { /* zero or subnormal */
-        f = (float)mant / 16777216.0f;
-        return sign ? -f : f;
-    }
-    bits = sign | ((exp + 112) << 23) | (mant << 13);
-    memcpy(&f, &bits, sizeof(f));
-    return f;
-}
-
 /* Per-pixel reference of a scene: index of the visible (nearest) object, or -1. */
 static int *visible_objects(const struct object *objects, int count, int width, int height)
 {
@@ -328,7 +315,7 @@ static int verify_dynres(struct scene *s)
             else
                 bench_unorm4(s->objects[v].r.rgba, want);
             for (c = 0; c < 4; c++) {
-                float g = half_to_float(got[((size_t)y * w + x) * 4 + c]);
+                float g = bench_half_to_float(got[((size_t)y * w + x) * 4 + c]);
                 /* unorm8 / 255 converted to half: within an ulp (2^-11 below 1),
                  * as the conversion may round toward zero */
                 if (g - want[c] > 1.0f / 2048.0f || want[c] - g > 1.0f / 2048.0f) {

@@ -31673,7 +31673,6 @@ static inline void pvk_MTLIndirectCommandBufferDescriptor_setSupportColorAttachm
 static inline void pvk_MTLIndirectCommandBufferDescriptor_setMaxVertexBufferBindCount(id self, unsigned long maxVertexBufferBindCount) { PVK_SEL_CACHE("setMaxVertexBufferBindCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, maxVertexBufferBindCount); }
 static inline void pvk_MTLIndirectCommandBufferDescriptor_setMaxFragmentBufferBindCount(id self, unsigned long maxFragmentBufferBindCount) { PVK_SEL_CACHE("setMaxFragmentBufferBindCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, maxFragmentBufferBindCount); }
 static inline id pvk_MTLDevice_newIndirectCommandBufferWithDescriptor_maxCommandCount_options(id self, id descriptor, unsigned long maxCount, pvk_MTLResourceOptions options) { PVK_SEL_CACHE("newIndirectCommandBufferWithDescriptor:maxCommandCount:options:"); return PVK_MSG(id, (id, SEL, id, unsigned long, pvk_MTLResourceOptions))(self, pvk_sel_, descriptor, maxCount, options); }
-static inline unsigned long pvk_MTLIndirectCommandBuffer_size(id self) { PVK_SEL_CACHE("size"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
 static inline pvk_MTLResourceID pvk_MTLIndirectCommandBuffer_gpuResourceID(id self) { PVK_SEL_CACHE("gpuResourceID"); return PVK_MSG(pvk_MTLResourceID, (id, SEL))(self, pvk_sel_); }
 static inline id pvk_MTLDevice_newCompilerWithDescriptor_error(id self, id descriptor, id * error) { PVK_SEL_CACHE("newCompilerWithDescriptor:error:"); return PVK_MSG(id, (id, SEL, id, id *))(self, pvk_sel_, descriptor, error); }
 static inline id pvk_MTLDevice_newDepthStencilStateWithDescriptor(id self, id descriptor) { PVK_SEL_CACHE("newDepthStencilStateWithDescriptor:"); return PVK_MSG(id, (id, SEL, id))(self, pvk_sel_, descriptor); }
@@ -31722,7 +31721,6 @@ static inline void pvk_MTLStencilDescriptor_setDepthFailureOperation(id self, pv
 static inline void pvk_MTLStencilDescriptor_setDepthStencilPassOperation(id self, pvk_MTLStencilOperation depthStencilPassOperation) { PVK_SEL_CACHE("setDepthStencilPassOperation:"); PVK_MSG(void, (id, SEL, pvk_MTLStencilOperation))(self, pvk_sel_, depthStencilPassOperation); }
 static inline void pvk_MTLStencilDescriptor_setReadMask(id self, uint32_t readMask) { PVK_SEL_CACHE("setReadMask:"); PVK_MSG(void, (id, SEL, uint32_t))(self, pvk_sel_, readMask); }
 static inline void pvk_MTLStencilDescriptor_setWriteMask(id self, uint32_t writeMask) { PVK_SEL_CACHE("setWriteMask:"); PVK_MSG(void, (id, SEL, uint32_t))(self, pvk_sel_, writeMask); }
-static inline void pvk_MTL4RenderCommandEncoder_writeTimestampWithGranularity_afterStage_intoHeap_atIndex(id self, pvk_MTL4TimestampGranularity granularity, pvk_MTLRenderStages stage, id counterHeap, unsigned long index) { PVK_SEL_CACHE("writeTimestampWithGranularity:afterStage:intoHeap:atIndex:"); PVK_MSG(void, (id, SEL, pvk_MTL4TimestampGranularity, pvk_MTLRenderStages, id, unsigned long))(self, pvk_sel_, granularity, stage, counterHeap, index); }
 static inline bool pvk_NSObject_respondsToSelector(id self, SEL aSelector) { PVK_SEL_CACHE("respondsToSelector:"); return PVK_MSG(bool, (id, SEL, SEL))(self, pvk_sel_, aSelector); }
 static inline id pvk_NSObject_copy(id self) { PVK_SEL_CACHE("copy"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline pvk_CGRect pvk_CALayer_bounds(id self) { PVK_SEL_CACHE("bounds"); return PVK_MSG(pvk_CGRect, (id, SEL))(self, pvk_sel_); }
@@ -31758,7 +31756,6 @@ static inline void pvk_MTL4CounterHeapDescriptor_setType(id self, pvk_MTL4Counte
 static inline void pvk_MTL4CounterHeapDescriptor_setCount(id self, unsigned long count) { PVK_SEL_CACHE("setCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, count); }
 static inline id pvk_MTLDevice_newCounterHeapWithDescriptor_error(id self, id descriptor, id * error) { PVK_SEL_CACHE("newCounterHeapWithDescriptor:error:"); return PVK_MSG(id, (id, SEL, id, id *))(self, pvk_sel_, descriptor, error); }
 static inline unsigned long pvk_MTLDevice_sizeOfCounterHeapEntry(id self, pvk_MTL4CounterHeapType type) { PVK_SEL_CACHE("sizeOfCounterHeapEntry:"); return PVK_MSG(unsigned long, (id, SEL, pvk_MTL4CounterHeapType))(self, pvk_sel_, type); }
-static inline void pvk_MTL4CommandBuffer_writeTimestampIntoHeap_atIndex(id self, id counterHeap, unsigned long index) { PVK_SEL_CACHE("writeTimestampIntoHeap:atIndex:"); PVK_MSG(void, (id, SEL, id, unsigned long))(self, pvk_sel_, counterHeap, index); }
 static inline void pvk_MTL4CommandBuffer_resolveCounterHeap_withRange_intoBuffer_waitFence_updateFence(id self, id counterHeap, pvk_NSRange range, pvk_MTL4BufferRange bufferRange, id fenceToWait, id fenceToUpdate) { PVK_SEL_CACHE("resolveCounterHeap:withRange:intoBuffer:waitFence:updateFence:"); PVK_MSG(void, (id, SEL, id, pvk_NSRange, pvk_MTL4BufferRange, id, id))(self, pvk_sel_, counterHeap, range, bufferRange, fenceToWait, fenceToUpdate); }
 static inline void pvk_MTL4ComputeCommandEncoder_writeTimestampWithGranularity_intoHeap_atIndex(id self, pvk_MTL4TimestampGranularity granularity, id counterHeap, unsigned long index) { PVK_SEL_CACHE("writeTimestampWithGranularity:intoHeap:atIndex:"); PVK_MSG(void, (id, SEL, pvk_MTL4TimestampGranularity, id, unsigned long))(self, pvk_sel_, granularity, counterHeap, index); }
 static inline id pvk_MTL4CounterHeap_resolveCounterRange(id self, pvk_NSRange range) { PVK_SEL_CACHE("resolveCounterRange:"); return PVK_MSG(id, (id, SEL, pvk_NSRange))(self, pvk_sel_, range); }
@@ -31899,6 +31896,29 @@ static void pvk_free_raw(const VkAllocationCallbacks *alloc, void *p)
         alloc->pfnFree(alloc->pUserData, p);
     else
         free(p);
+}
+
+/* Room for `need` more items in an array of `count` items (the address of
+ * its pointer in `items`, its capacity in `capacity`), doubling from `min`
+ * items. False when out of memory: the array is untouched. */
+static bool pvk_grow(const VkAllocationCallbacks *alloc, void *items, uint32_t *capacity, uint32_t count,
+                     uint32_t need, uint32_t min, size_t item_size, VkSystemAllocationScope scope)
+{
+    void *old, *p;
+    uint32_t n = *capacity ? *capacity : min;
+    if (count + need <= *capacity)
+        return true;
+    while (n < count + need)
+        n *= 2;
+    if (!(p = pvk_alloc(alloc, item_size * n, scope)))
+        return false;
+    memcpy(&old, items, sizeof(old));
+    if (count)
+        memcpy(p, old, item_size * count);
+    pvk_free_raw(alloc, old);
+    memcpy(items, &p, sizeof(p));
+    *capacity = n;
+    return true;
 }
 
 /* Private data (section 9) is keyed by handle, and handles are the objects'
@@ -32403,7 +32423,7 @@ struct pvk_physical_device {
     struct pvk_properties_1x properties_1x;
     struct pvk_features features; /* supported */
     VkPhysicalDeviceMemoryProperties memory_properties;
-    struct pvk_texture_reqs *texture_reqs;
+    struct pvk_texture_reqs texture_reqs;
     /* Texture capabilities that vary within the Metal 4 families (section 7) */
     bool bc_formats;      /* supportsBCTextureCompression */
     bool filter_32bit;    /* supports32BitFloatFiltering: filter and resolve 32-bit floats */
@@ -33930,12 +33950,7 @@ static VkResult pvk_physical_device_create(struct pvk_instance *instance)
     }
 
     pd = pvk_alloc(pvk_instance_alloc(instance), sizeof(*pd), VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
-    if (pd)
-        pd->texture_reqs = pvk_alloc(pvk_instance_alloc(instance), sizeof(*pd->texture_reqs),
-                                     VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
-    if (!pd || !pd->texture_reqs || pthread_mutex_init(&pd->texture_reqs->lock, NULL) != 0) {
-        if (pd)
-            pvk_free(pvk_instance_alloc(instance), pd->texture_reqs);
+    if (!pd || pthread_mutex_init(&pd->texture_reqs.lock, NULL) != 0) {
         pvk_free(pvk_instance_alloc(instance), pd);
         pvk_release(mtl);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -33952,8 +33967,7 @@ static void pvk_physical_device_destroy(struct pvk_physical_device *pd)
     if (!pd)
         return;
     pvk_release(pd->mtl_device);
-    pthread_mutex_destroy(&pd->texture_reqs->lock);
-    pvk_free(pvk_instance_alloc(pd->instance), pd->texture_reqs);
+    pthread_mutex_destroy(&pd->texture_reqs.lock);
     pvk_free(pvk_instance_alloc(pd->instance), pd);
 }
 
@@ -36793,17 +36807,8 @@ static bool pvk_labels_push(struct pvk_labels *l, const VkAllocationCallbacks *a
                             const float *color, bool synthetic, bool copy)
 {
     struct pvk_label *item;
-    if (l->count == l->capacity) {
-        uint32_t capacity = l->capacity ? l->capacity * 2 : 8;
-        struct pvk_label *items = pvk_alloc(alloc, sizeof(*items) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-        if (!items)
-            return false;
-        if (l->count)
-            memcpy(items, l->items, sizeof(*items) * l->count);
-        pvk_free_raw(alloc, l->items);
-        l->items = items;
-        l->capacity = capacity;
-    }
+    if (!pvk_grow(alloc, &l->items, &l->capacity, l->count, 1, 8, sizeof(*l->items), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT))
+        return false;
     item = &l->items[l->count];
     memset(item, 0, sizeof(*item));
     item->text = text ? text : "";
@@ -37554,25 +37559,33 @@ static bool pvk_chunk_free(struct pvk_memory_chunk *c, uint32_t n)
     return --c->used == 0;
 }
 
+/* A placement heap of size bytes (retained; NULL on failure): sparse: its
+ * pages are PVK_SPARSE_PAGE (sparse memory). */
+static id pvk_placement_heap_new(id mtl, pvk_MTLResourceOptions options, VkDeviceSize size, bool sparse)
+{
+    id desc = pvk_MTLHeapDescriptor_new(), heap;
+    if (!desc)
+        return NULL;
+    pvk_MTLHeapDescriptor_setType(desc, PVK_MTLHeapTypePlacement);
+    pvk_MTLHeapDescriptor_setResourceOptions(desc, options);
+    pvk_MTLHeapDescriptor_setSize(desc, size);
+    if (sparse)
+        pvk_MTLHeapDescriptor_setMaxCompatiblePlacementSparsePageSize(desc, PVK_SPARSE_PAGE);
+    heap = pvk_MTLDevice_newHeapWithDescriptor(mtl, desc);
+    pvk_release(desc);
+    return heap;
+}
+
 static struct pvk_memory_chunk *pvk_chunk_create(struct pvk_device *device, uint32_t type)
 {
     struct pvk_memory_chunk *c = pvk_alloc(pvk_device_alloc(device), sizeof(*c), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
     void *pool;
-    id desc;
 
     if (!c)
         return NULL;
     pool = objc_autoreleasePoolPush();
-    desc = pvk_MTLHeapDescriptor_new();
-    if (desc) {
-        pvk_MTLHeapDescriptor_setType(desc, PVK_MTLHeapTypePlacement);
-        pvk_MTLHeapDescriptor_setResourceOptions(desc, pvk_memory_type_options[type]);
-        pvk_MTLHeapDescriptor_setSize(desc, PVK_POOL_CHUNK);
-        if (device->features.core.sparseBinding) /* blocks of 64 KB or more are sparse memory */
-            pvk_MTLHeapDescriptor_setMaxCompatiblePlacementSparsePageSize(desc, PVK_SPARSE_PAGE);
-        c->heap = pvk_MTLDevice_newHeapWithDescriptor(device->physical_device->mtl_device, desc);
-        pvk_release(desc);
-    }
+    c->heap = pvk_placement_heap_new(device->physical_device->mtl_device, pvk_memory_type_options[type], PVK_POOL_CHUNK,
+                                     device->features.core.sparseBinding); /* (blocks of 64 KB or more are sparse memory) */
     if (c->heap)
         pvk_MTLHeap_setLabel(c->heap, pvk_NSString_stringWithUTF8String("PlasmaVK small VkDeviceMemory"));
     objc_autoreleasePoolPop(pool);
@@ -37861,19 +37874,10 @@ static void pvk_memory_unwatch_pressure(struct pvk_device *device)
  * buffer of its size at offset 0, resident. */
 static bool pvk_memory_heap_make(struct pvk_device *device, struct pvk_device_memory *memory)
 {
-    id mtl = device->physical_device->mtl_device, desc;
+    id mtl = device->physical_device->mtl_device;
     pvk_MTLResourceOptions options = pvk_memory_type_options[memory->type_index];
     void *pool = objc_autoreleasePoolPush();
-    desc = pvk_MTLHeapDescriptor_new();
-    if (desc) {
-        pvk_MTLHeapDescriptor_setType(desc, PVK_MTLHeapTypePlacement);
-        pvk_MTLHeapDescriptor_setResourceOptions(desc, options);
-        pvk_MTLHeapDescriptor_setSize(desc, memory->heap_size);
-        if (memory->sparse)
-            pvk_MTLHeapDescriptor_setMaxCompatiblePlacementSparsePageSize(desc, PVK_SPARSE_PAGE);
-        memory->mtl_heap = pvk_MTLDevice_newHeapWithDescriptor(mtl, desc);
-        pvk_release(desc);
-    }
+    memory->mtl_heap = pvk_placement_heap_new(mtl, options, memory->heap_size, memory->sparse);
     if (memory->mtl_heap)
         memory->mtl_buffer = pvk_MTLHeap_newBufferWithLength_options_offset(memory->mtl_heap, memory->size, options, 0);
     objc_autoreleasePoolPop(pool);
@@ -38779,7 +38783,7 @@ static void pvk_texture_requirements(const struct pvk_physical_device *pd, const
             PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked,
             PVK_MTLResourceStorageModeShared | PVK_MTLResourceHazardTrackingModeUntracked,
         };
-        struct pvk_texture_reqs *reqs = pd->texture_reqs;
+        struct pvk_texture_reqs *reqs = (struct pvk_texture_reqs *)&pd->texture_reqs; /* (a memo: not const) */
         struct pvk_texture_req *e;
         uint32_t key[PVK_ARRAY_SIZE(e->key)];
         uint64_t h = 0;
@@ -38799,7 +38803,7 @@ static void pvk_texture_requirements(const struct pvk_physical_device *pd, const
         key[9] = (pvk_image_needs_shared(image) ? 1u : 0u) | ((image->usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT) ? 2u : 0u);
         for (m = 0; m < PVK_ARRAY_SIZE(key); m++)
             h = (h ^ key[m]) * 0x9e3779b97f4a7c15ull;
-        e = &reqs->entries[(h >> 56) % PVK_TEXTURE_REQS];
+        e = &reqs->entries[(h >> 56) & (PVK_TEXTURE_REQS - 1)];
         pthread_mutex_lock(&reqs->lock);
         if (e->size && memcmp(e->key, key, sizeof(key)) == 0) {
             *size_out = e->size;
@@ -41291,16 +41295,23 @@ static void pvk_descriptor_set_unlink(struct pvk_descriptor_set *set)
 
 /* A freed set becomes a hole in the bin of its size, or else in a free bin;
  * without one (or empty), it is unlinked. */
+/* A set's struct is a hole or spare: its layout reference, name and private
+ * data go. */
+static void pvk_descriptor_set_drop(struct pvk_descriptor_set *set)
+{
+    if (set->layout_ref)
+        pvk_set_layout_unref(set->layout);
+    set->layout_ref = false;
+    pvk_forget(set);
+}
+
 static void pvk_descriptor_set_free(struct pvk_descriptor_set *set)
 {
     struct pvk_descriptor_pool *pool = set->pool;
     uint32_t i, bin = PVK_POOL_BINS;
     pool->used -= set->size;
     pool->set_count--;
-    if (set->layout_ref)
-        pvk_set_layout_unref(set->layout);
-    set->layout_ref = false; /* a hole has nothing for a reset to drop */
-    pvk_forget(set);
+    pvk_descriptor_set_drop(set);
     for (i = 0; set->size && i < PVK_POOL_BINS; i++) {
         if (pool->bins[i].holes && pool->bins[i].size == set->size) {
             bin = i;
@@ -41476,11 +41487,8 @@ static void pvk_descriptor_pool_reset(struct pvk_descriptor_pool *pool)
 {
     struct pvk_descriptor_set *set;
     uint32_t i;
-    for (set = pool->first; set; set = set->next) {
-        if (set->layout_ref)
-            pvk_set_layout_unref(set->layout);
-        pvk_forget(set);
-    }
+    for (set = pool->first; set; set = set->next)
+        pvk_descriptor_set_drop(set);
     if (pool->last) {
         pool->last->next = pool->spare;
         pool->spare = pool->first;
@@ -44707,18 +44715,25 @@ static bool pvk_spv_specialization(struct pvk_spv *ctx, uint32_t spec_id, uint64
 
 /* Whether SpecId spec_id of a constant of type t is a function constant
  * (options->spec_function_constants), *slot its index in ctx->fc_ids. */
+/* Whether id is one of ids[0, n). */
+static bool pvk_spv_listed(const uint32_t *ids, uint32_t n, uint32_t id)
+{
+    uint32_t i;
+    for (i = 0; i < n; i++)
+        if (ids[i] == id)
+            return true;
+    return false;
+}
+
 static bool pvk_spv_fc_slot(struct pvk_spv *ctx, uint32_t spec_id, const struct pvk_spv_type *t, uint32_t *slot)
 {
     const struct pvk_msl_options *o = ctx->options;
     uint32_t i;
     if (!o || !o->spec_function_constants || spec_id > 0xffffu || (t->op != PVK_SPV_OpTypeBool && t->width > 32))
         return false; /* (Metal's indices end at 65535; 64-bit values do not fit its uint) */
-    for (i = 0; i < o->spec_baked_count; i++)
-        if (o->spec_baked[i] == spec_id)
-            return false;
-    for (i = 0; i < ctx->fc_baked_count; i++)
-        if (ctx->fc_baked[i] == spec_id)
-            return false;
+    if (pvk_spv_listed(o->spec_baked, o->spec_baked_count, spec_id) ||
+        pvk_spv_listed(ctx->fc_baked, ctx->fc_baked_count, spec_id))
+        return false;
     for (i = 0; i < ctx->nfc && ctx->fc_ids[i] != spec_id; i++)
         ;
     if (i == PVK_ARRAY_SIZE(ctx->fc_ids))
@@ -55632,18 +55647,24 @@ static void pvk_query_store(char *dst, uint32_t index, bool wide, uint64_t value
 /* VK_QUERY_RESULT_WAIT_BIT: until query q is available, polling. It may
  * never be (not written since its reset): the wait is then endless, which
  * vkGetQueryPoolResults allows ("a VK_ERROR_DEVICE_LOST error may occur"). */
+/* Sleeps *sleep_ns, doubling it for the next time up to a millisecond. */
+static void pvk_backoff(long *sleep_ns)
+{
+    struct timespec ts;
+    ts.tv_sec = 0;
+    ts.tv_nsec = *sleep_ns;
+    nanosleep(&ts, NULL);
+    if (*sleep_ns < 1000000)
+        *sleep_ns *= 2;
+}
+
 static VkResult pvk_query_wait(struct pvk_device *device, const struct pvk_query_pool *pool, uint32_t q)
 {
     long sleep_ns = 10000;
     while (!__atomic_load_n(&pool->available[q], __ATOMIC_ACQUIRE)) {
-        struct timespec ts;
         if (__atomic_load_n(&device->lost, __ATOMIC_ACQUIRE))
             return VK_ERROR_DEVICE_LOST;
-        ts.tv_sec = 0;
-        ts.tv_nsec = sleep_ns;
-        nanosleep(&ts, NULL);
-        if (sleep_ns < 1000000)
-            sleep_ns *= 2;
+        pvk_backoff(&sleep_ns);
     }
     return VK_SUCCESS;
 }
@@ -55656,7 +55677,6 @@ static VkResult pvk_ts_wait(struct pvk_device *device, const struct pvk_query_po
     long sleep_ns = 10000;
     for (;;) {
         uint64_t s = __atomic_load_n(&pool->state[q], __ATOMIC_ACQUIRE), seen[PVK_TS_EVENTS], value;
-        struct timespec ts;
         uint32_t slot;
         memset(seen, 0, sizeof(seen));
         if (pvk_ts_ready(device, s, seen))
@@ -55668,11 +55688,7 @@ static VkResult pvk_ts_wait(struct pvk_device *device, const struct pvk_query_po
             pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(event, value, 1000);
             continue;
         }
-        ts.tv_sec = 0;
-        ts.tv_nsec = sleep_ns;
-        nanosleep(&ts, NULL);
-        if (sleep_ns < 1000000)
-            sleep_ns *= 2;
+        pvk_backoff(&sleep_ns);
     }
 }
 
@@ -56437,6 +56453,7 @@ struct pvk_cmd_barrier {
     struct pvk_cmd hdr;
     VkPipelineStageFlags2 src_stages, dst_stages;
     VkAccessFlags2 src_access, dst_access;
+    pvk_MTLStages src, dst; /* the Metal stages of src_stages and dst_stages (pvk_barrier_stages) */
 };
 
 struct pvk_cmd_bind_pipeline {
@@ -56735,6 +56752,8 @@ static void pvk_cmd_barrier(struct pvk_command_buffer *cb, VkPipelineStageFlags2
     c->dst_stages = dst_stages;
     c->src_access = src_access;
     c->dst_access = dst_access;
+    c->src = src;
+    c->dst = dst;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdPipelineBarrier(VkCommandBuffer commandBuffer, VkPipelineStageFlags srcStageMask,
@@ -60535,7 +60554,6 @@ struct pvk_render {
     bool stencil_dirty;         /* the stencil copy may be out of date */
     VkRect2D area;              /* the render area */
     id pso_set;                 /* the MTLRenderPipelineState set (NULL: unknown) */
-    id icb_pso;                 /* to set instead of the pipeline's own (pvk_encode_draw_indirect), NULL */
     struct pvk_msl_depth_bounds bounds_set; /* bound at buffer index 27 */
     bool bounds_valid;
     pvk_MTLGPUAddress bounds_address, vertex_address; /* bound at indices 27 and 29 (struct pvk_icb_table) */
@@ -61050,10 +61068,10 @@ static void pvk_labels_batch_begin(struct pvk_encoder *e, const VkSubmitInfo2 *s
  * closed, the command buffer label regions still open get their own copies
  * of their texts (their command buffers may be reset once vkQueueSubmit
  * returns), and the queue's groups are popped. */
-static void pvk_labels_batch_end(struct pvk_encoder *e)
+static void pvk_labels_batch_end(struct pvk_queue *queue, id cb)
 {
-    struct pvk_labels *l = &e->queue->cmd_labels;
-    const VkAllocationCallbacks *alloc = pvk_device_alloc(e->device);
+    struct pvk_labels *l = &queue->cmd_labels;
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(queue->device);
     uint32_t i;
     for (i = l->count; i-- > 0;)
         if (l->items[i].synthetic)
@@ -61069,8 +61087,8 @@ static void pvk_labels_batch_end(struct pvk_encoder *e)
         memcpy(l->items[i].owned, l->items[i].text, n);
         l->items[i].text = l->items[i].owned;
     }
-    for (i = 0; i < e->queue->queue_labels.count; i++)
-        pvk_MTL4CommandBuffer_popDebugGroup(e->cb);
+    for (i = 0; cb && i < queue->queue_labels.count; i++)
+        pvk_MTL4CommandBuffer_popDebugGroup(cb);
 }
 
 static void pvk_render_end(struct pvk_encoder *e);
@@ -61233,7 +61251,7 @@ static void pvk_encoder_consume(struct pvk_encoder *e, pvk_MTLStages after, pvk_
 
 static void pvk_encode_barrier(struct pvk_encoder *e, const struct pvk_cmd_barrier *c)
 {
-    pvk_MTLStages src = pvk_barrier_stages(c->src_stages, true), dst = pvk_barrier_stages(c->dst_stages, false);
+    pvk_MTLStages src = c->src, dst = c->dst;
     if (!src || !dst)
         return;
     pvk_queue_order(e, src, dst);
@@ -62117,6 +62135,18 @@ static id pvk_blit_encoder(struct pvk_encoder *e, id dst, uint32_t level, uint32
     return enc;
 }
 
+/* Dispatches a kernel of 16x16 threadgroups over width x height x depth. */
+static void pvk_dispatch_tiles(id enc, uint32_t width, uint32_t height, uint32_t depth)
+{
+    pvk_MTLSize groups, threads;
+    groups.width = ((unsigned long)width + 15) / 16;
+    groups.height = ((unsigned long)height + 15) / 16;
+    groups.depth = depth;
+    threads.width = threads.height = 16;
+    threads.depth = 1;
+    pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(enc, groups, threads);
+}
+
 static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
 {
     bool resolve = c->function >= PVK_RESOLVE_F_MS;
@@ -62169,7 +62199,6 @@ static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
         a.swizzle[i] = c->swizzle[i];
 
     if (c->compute) { /* a dispatch of 16x16 threadgroups per layer */
-        pvk_MTLSize groups, threads;
         if (!(pso = pvk_blit_kernel(e->device, (c->function >= PVK_BLIT_FL_2D ? 3 : 0) + c->function % 3))) {
             e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
             return;
@@ -62185,12 +62214,7 @@ static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
         e->push_bound = 0;
         pvk_MTL4ArgumentTable_setTexture_atIndex(e->table, pvk_MTLTexture_gpuResourceID(c->src), 0);
         pvk_MTL4ArgumentTable_setTexture_atIndex(e->table, pvk_MTLTexture_gpuResourceID(c->dst), 1);
-        groups.width = ((unsigned long)vp.width + 15) / 16;
-        groups.height = ((unsigned long)vp.height + 15) / 16;
-        groups.depth = layers;
-        threads.width = threads.height = 16;
-        threads.depth = 1;
-        pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(enc, groups, threads);
+        pvk_dispatch_tiles(enc, (uint32_t)vp.width, (uint32_t)vp.height, layers);
         return;
     }
     if (!(pso = pvk_blit_pipeline(e->device, c->function, c->dst_format, layers > 1))) {
@@ -62258,7 +62282,6 @@ static void pvk_encode_clear_compute(struct pvk_encoder *e, const struct pvk_cmd
     pvk_MTL4ArgumentTable_setTexture_atIndex(e->table, pvk_MTLTexture_gpuResourceID(c->texture), 0);
     for (l = c->level; l < c->level + c->levels; l++) {
         pvk_MTLGPUAddress address;
-        pvk_MTLSize groups, threads;
         void *args = pvk_upload(e, sizeof(a), 16, NULL, NULL, &address);
         if (!args)
             return;
@@ -62268,12 +62291,7 @@ static void pvk_encode_clear_compute(struct pvk_encoder *e, const struct pvk_cmd
         a.at[3] = l;
         memcpy(args, &a, sizeof(a));
         pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
-        groups.width = (a.at[0] + 15) / 16;
-        groups.height = (a.at[1] + 15) / 16;
-        groups.depth = c->depth ? pvk_mip_extent(c->depth, l) : c->layers;
-        threads.width = threads.height = 16;
-        threads.depth = 1;
-        pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(enc, groups, threads);
+        pvk_dispatch_tiles(enc, a.at[0], a.at[1], c->depth ? pvk_mip_extent(c->depth, l) : c->layers);
     }
 }
 
@@ -63090,18 +63108,10 @@ static id pvk_prepass_pipeline(struct pvk_device *device, unsigned kernel)
 /* Room for one more result. */
 static struct pvk_pp_result *pvk_pp_push(struct pvk_encoder *e)
 {
-    if (e->pp_count == e->pp_capacity) {
-        uint32_t n = e->pp_capacity ? e->pp_capacity * 2 : 16;
-        struct pvk_pp_result *p = pvk_alloc(pvk_device_alloc(e->device), sizeof(*p) * n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-        if (!p) {
-            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
-            return NULL;
-        }
-        if (e->pp_count)
-            memcpy(p, e->pp, sizeof(*p) * e->pp_count);
-        pvk_free(pvk_device_alloc(e->device), e->pp);
-        e->pp = p;
-        e->pp_capacity = n;
+    if (!pvk_grow(pvk_device_alloc(e->device), &e->pp, &e->pp_capacity, e->pp_count, 1, 16, sizeof(*e->pp),
+                  VK_SYSTEM_ALLOCATION_SCOPE_COMMAND)) {
+        e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        return NULL;
     }
     memset(&e->pp[e->pp_count], 0, sizeof(e->pp[0]));
     return &e->pp[e->pp_count++];
@@ -63291,8 +63301,10 @@ static void pvk_prepass_indirect(struct pvk_encoder *e, const struct pvk_draw_tr
             if (!(ia.range = pvk_prepass_memory(e, sizeof(pvk_MTLIndirectCommandBufferExecutionRange))))
                 return;
             if (t->gfx->draw_index) { /* (the table is written when the draw is encoded, before the GPU runs this) */
+                if (!e->draw_indices)
+                    e->draw_indices = pvk_draw_indices(e->device);
                 if (!(res->table = pvk_upload(e, sizeof(*res->table), 16, NULL, NULL, &ia.table)) ||
-                    !(ia.draw_index = pvk_draw_indices(e->device))) {
+                    !(ia.draw_index = e->draw_indices)) {
                     e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
                     return;
                 }
@@ -63366,18 +63378,10 @@ static void pvk_prepass_indirect(struct pvk_encoder *e, const struct pvk_draw_tr
  * end of the scan (pvk_prepass_later). */
 static void pvk_prepass_defer(struct pvk_encoder *e, const struct pvk_draw_track *t, const struct pvk_cmd_draw_indirect *d)
 {
-    if (e->later_count == e->later_capacity) {
-        uint32_t n = e->later_capacity ? e->later_capacity * 2 : 8;
-        struct pvk_pp_later *l = pvk_alloc(pvk_device_alloc(e->device), sizeof(*l) * n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-        if (!l) {
-            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
-            return;
-        }
-        if (e->later_count)
-            memcpy(l, e->later, sizeof(*l) * e->later_count);
-        pvk_free(pvk_device_alloc(e->device), e->later);
-        e->later = l;
-        e->later_capacity = n;
+    if (!pvk_grow(pvk_device_alloc(e->device), &e->later, &e->later_capacity, e->later_count, 1, 8, sizeof(*e->later),
+                  VK_SYSTEM_ALLOCATION_SCOPE_COMMAND)) {
+        e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        return;
     }
     e->later[e->later_count].result = e->pp_count - 1;
     e->later[e->later_count].cmd = d;
@@ -64468,18 +64472,10 @@ static void pvk_render_pending(struct pvk_encoder *e, struct pvk_query_pool *poo
         q->count += count;
         return;
     }
-    if (r->pending_count == e->pending_capacity) {
-        uint32_t n = e->pending_capacity ? e->pending_capacity * 2 : 16;
-        q = pvk_alloc(pvk_device_alloc(e->device), sizeof(*q) * n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-        if (!q) {
-            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
-            return;
-        }
-        if (r->pending_count)
-            memcpy(q, e->pending, sizeof(*q) * r->pending_count);
-        pvk_free(pvk_device_alloc(e->device), e->pending);
-        e->pending = q;
-        e->pending_capacity = n;
+    if (!pvk_grow(pvk_device_alloc(e->device), &e->pending, &e->pending_capacity, r->pending_count, 1, 16,
+                  sizeof(*e->pending), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND)) {
+        e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        return;
     }
     q = &e->pending[r->pending_count++];
     q->pool = pool;
@@ -64570,6 +64566,16 @@ static void pvk_pass_set_attachment(id att, const struct pvk_pass_attachment *pa
     }
 }
 
+/* A pass's render target ends at (width, height) when that is short of its
+ * attachments' (full_width, full_height) far corner (pvk_render_open). */
+static void pvk_pass_set_target(id pass, uint32_t width, uint32_t height, uint32_t full_width, uint32_t full_height)
+{
+    if (width < full_width || height < full_height) {
+        pvk_MTL4RenderPassDescriptor_setRenderTargetWidth(pass, width);
+        pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(pass, height);
+    }
+}
+
 /* Depth and stencil StoreAndMultisampleResolve leave the resolve texture's
  * texels undefined at times (0x7fffffff, a NaN in D32_SFLOAT; Apple M4,
  * macOS 27.2), where MultisampleResolve does not: a pass that stores a
@@ -64599,12 +64605,9 @@ static void pvk_render_resolve_ds(struct pvk_encoder *e)
         }
         if (r->layers)
             pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, r->layers);
-        { /* the pass's render target, which may end at its render area's far corner (pvk_render_open) */
+        { /* the pass's render target, which may end at its render area's far corner */
             const struct pvk_pass_attachment *pa = r->resolve_depth.texture ? &r->resolve_depth : &r->resolve_stencil;
-            if (r->width < pa->width || r->height < pa->height) {
-                pvk_MTL4RenderPassDescriptor_setRenderTargetWidth(pass, r->width);
-                pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(pass, r->height);
-            }
+            pvk_pass_set_target(pass, r->width, r->height, pa->width, pa->height);
         }
         enc = pvk_render_encoder_new(
             e, pass,
@@ -64754,8 +64757,8 @@ static void pvk_render_resolve_area(struct pvk_encoder *e)
         c.function = r->begin->layers ? PVK_BLIT_F_2DARRAY : PVK_BLIT_F_2D;
         c.dst_level = pa->resolve_level;
         c.layers = 1;
-        c.src_w = (uint32_t)pvk_MTLTexture_width(pa->texture);
-        c.src_h = (uint32_t)pvk_MTLTexture_height(pa->texture);
+        c.src_w = pa->width;
+        c.src_h = pa->height;
         c.src_d = 1;
         c.src0[0] = c.dst0[0] = r->area.offset.x;
         c.src0[1] = c.dst0[1] = r->area.offset.y;
@@ -64838,10 +64841,7 @@ static id pvk_render_seed_depth(struct pvk_encoder *e, const struct pvk_pass_att
     pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
     if (layers)
         pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, layers);
-    if (width < tex_width || height < tex_height) {
-        pvk_MTL4RenderPassDescriptor_setRenderTargetWidth(pass, width);
-        pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(pass, height);
-    }
+    pvk_pass_set_target(pass, width, height, tex_width, tex_height);
     pvk_MTL4RenderPassDescriptor_setSupportColorAttachmentMapping(pass, true);
     enc = pvk_retain(pvk_render_encoder_new(e, pass, pvk_stores_ms(samples, PVK_MTLStoreActionStore)));
     pvk_release(pass);
@@ -64918,12 +64918,12 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
          * target ends there, so Metal loads and stores only the tiles up to
          * it (the attachments of such a pass all load and store, RENDER
          * PASSES; Metal would clear beyond it) */
+        uint32_t full_width = width, full_height = height;
         if ((uint32_t)c->area.offset.x + c->area.extent.width < width)
             width = (uint32_t)c->area.offset.x + c->area.extent.width;
         if ((uint32_t)c->area.offset.y + c->area.extent.height < height)
             height = (uint32_t)c->area.offset.y + c->area.extent.height;
-        pvk_MTL4RenderPassDescriptor_setRenderTargetWidth(pass, width);
-        pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(pass, height);
+        pvk_pass_set_target(pass, width, height, full_width, full_height);
     }
     for (s = 0; s < c->color_count; s++) {
         struct pvk_pass_attachment pa = c->colors[s];
@@ -65786,7 +65786,7 @@ static id pvk_gfx_group_variant(struct pvk_device *device, struct pvk_pipeline *
 static void pvk_render_tex_inputs(struct pvk_encoder *e, const struct pvk_pipeline *p);
 
 /* Applies what the next draw needs; false when it cannot draw. */
-static bool pvk_render_flush(struct pvk_encoder *e)
+static bool pvk_render_flush(struct pvk_encoder *e, id icb_pso)
 {
     struct pvk_render *r = &e->render;
     struct pvk_render_sent *sent = &r->sent;
@@ -65848,8 +65848,8 @@ static bool pvk_render_flush(struct pvk_encoder *e)
         if (gp && tex)
             pvk_render_tex_inputs(e, p);
     }
-    if (r->icb_pso && pso == p->mtl_pipeline) /* (its indirect command buffer variant) */
-        pso = r->icb_pso;
+    if (icb_pso && pso == p->mtl_pipeline) /* (its indirect command buffer variant) */
+        pso = icb_pso;
     if (pso != r->pso_set) { /* (pipelines may share a state, section 17) */
         pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
         r->pso_set = pso;
@@ -66156,7 +66156,7 @@ static bool pvk_render_points_bind(struct pvk_encoder *e, const struct pvk_msl_p
 static void pvk_encode_draw(struct pvk_encoder *e, const struct pvk_cmd_draw *c)
 {
     struct pvk_render *r = &e->render;
-    if (!pvk_render_flush(e) || pvk_render_discards(r))
+    if (!pvk_render_flush(e, NULL) || pvk_render_discards(r))
         return;
     if (pvk_render_points(r)) {
         struct pvk_msl_points g;
@@ -66197,7 +66197,7 @@ static void pvk_encode_draw_indexed(struct pvk_encoder *e, const struct pvk_cmd_
     uint32_t size = pvk_index_size(t.index_type);
     uint64_t at = (uint64_t)c->first_index * size;
 
-    if (!pvk_render_flush(e) || pvk_render_discards(r))
+    if (!pvk_render_flush(e, NULL) || pvk_render_discards(r))
         return;
     if (pvk_render_points(r)) {
         struct pvk_msl_points g;
@@ -66270,14 +66270,11 @@ static void pvk_encode_draw_indirect(struct pvk_encoder *e, const struct pvk_cmd
     uint64_t records = c->address, stride = c->stride, indices = t.index_address, indices_size = t.index_size;
     uint32_t type = t.index_type == VK_INDEX_TYPE_UINT16 ? PVK_MTLIndexTypeUInt16 : PVK_MTLIndexTypeUInt32;
     uint32_t n = c->draw_count, max = e->device->physical_device->properties.limits.maxDrawIndirectCount, d;
-    bool indexed = c->indexed != 0, flushed;
+    bool indexed = c->indexed != 0;
 
     if (conv && !res)
         return;
-    r->icb_pso = res && res->icb ? res->pso : NULL;
-    flushed = pvk_render_flush(e);
-    r->icb_pso = NULL;
-    if (!flushed || pvk_render_discards(r))
+    if (!pvk_render_flush(e, res && res->icb ? res->pso : NULL) || pvk_render_discards(r))
         return;
     if (res && res->icb) { /* the commands its preprocessing encoded, inheriting the pipeline (pvk_prepass_later) */
         if (res->table) { /* the buffers the pipeline reads, bound by pvk_render_flush */
@@ -66537,20 +66534,7 @@ struct pvk_ts_note {
 /* Room for n more timestamp notes; false when out of memory. */
 static bool pvk_notes_ts_room(const VkAllocationCallbacks *alloc, struct pvk_notes *q, uint32_t n)
 {
-    struct pvk_ts_note *ts;
-    uint32_t capacity = q->ts_capacity ? q->ts_capacity : 64;
-    if (q->ts_count + n <= q->ts_capacity)
-        return true;
-    while (capacity < q->ts_count + n)
-        capacity *= 2;
-    if (!(ts = pvk_alloc(alloc, sizeof(*ts) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)))
-        return false;
-    if (q->ts_count)
-        memcpy(ts, q->ts, sizeof(*ts) * q->ts_count);
-    pvk_free_raw(alloc, q->ts);
-    q->ts = ts;
-    q->ts_capacity = capacity;
-    return true;
+    return pvk_grow(alloc, &q->ts, &q->ts_capacity, q->ts_count, n, 64, sizeof(*q->ts), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
 }
 
 static void pvk_encode_ts_note(struct pvk_encoder *e, struct pvk_query_pool *pool, uint32_t first, uint32_t count,
@@ -66754,20 +66738,8 @@ static void pvk_encode_query(struct pvk_encoder *e, const struct pvk_cmd_query *
 /* Room for n more event notes; false when out of memory. */
 static bool pvk_notes_event_room(const VkAllocationCallbacks *alloc, struct pvk_notes *q, uint32_t n)
 {
-    const struct pvk_cmd_event **events;
-    uint32_t capacity = q->event_capacity ? q->event_capacity : 16;
-    if (q->event_count + n <= q->event_capacity)
-        return true;
-    while (capacity < q->event_count + n)
-        capacity *= 2;
-    if (!(events = pvk_alloc(alloc, sizeof(*events) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)))
-        return false;
-    if (q->event_count)
-        memcpy(events, q->events, sizeof(*events) * q->event_count);
-    pvk_free_raw(alloc, (void *)q->events);
-    q->events = events;
-    q->event_capacity = capacity;
-    return true;
+    return pvk_grow(alloc, &q->events, &q->event_capacity, q->event_count, n, 16, sizeof(*q->events),
+                    VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
 }
 
 /* Noted for pvk_queue_publish_events. */
@@ -66809,18 +66781,10 @@ static VkResult pvk_queue_publish_events(struct pvk_queue *queue, uint64_t seria
     for (i = 0; i < queue->notes.event_count; i++) { /* room for one more operation */
         struct pvk_event *event = queue->notes.events[i]->event;
         pvk_event_drain(event);
-        if (event->count == event->capacity) {
-            uint32_t capacity = event->capacity ? 2 * event->capacity : 4;
-            struct pvk_event_op *ops = pvk_alloc(alloc, sizeof(*ops) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-            if (!ops) {
-                pthread_mutex_unlock(&pvk_events_lock);
-                return VK_ERROR_OUT_OF_HOST_MEMORY;
-            }
-            if (event->count)
-                memcpy(ops, event->ops, sizeof(*ops) * event->count);
-            pvk_free_raw(alloc, event->ops);
-            event->ops = ops;
-            event->capacity = capacity;
+        if (!pvk_grow(alloc, &event->ops, &event->capacity, event->count, 1, 4, sizeof(*event->ops),
+                      VK_SYSTEM_ALLOCATION_SCOPE_OBJECT)) {
+            pthread_mutex_unlock(&pvk_events_lock);
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
         }
     }
     for (i = 0; i < queue->notes.event_count; i++) {
@@ -67072,23 +67036,14 @@ static struct pvk_job *pvk_job_new(struct pvk_batch *b)
 {
     struct pvk_device *device = b->queue->device;
     const VkAllocationCallbacks *alloc = pvk_device_alloc(device);
-    struct pvk_job *j = pvk_alloc(alloc, sizeof(*j), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND), **jobs;
-    bool ok = true;
+    struct pvk_job *j = pvk_alloc(alloc, sizeof(*j), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+    bool ok;
     if (!j)
         return NULL;
     j->batch = b;
     j->notes = &j->own_notes;
     pthread_mutex_lock(&device->par_lock);
-    if (b->job_count == b->job_capacity) {
-        uint32_t capacity = b->job_capacity ? 2 * b->job_capacity : 16;
-        if ((ok = (jobs = pvk_alloc(alloc, sizeof(*jobs) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND)) != NULL)) {
-            if (b->job_count)
-                memcpy(jobs, b->jobs, sizeof(*jobs) * b->job_count);
-            pvk_free_raw(alloc, b->jobs);
-            b->jobs = jobs;
-            b->job_capacity = capacity;
-        }
-    }
+    ok = pvk_grow(alloc, &b->jobs, &b->job_capacity, b->job_count, 1, 16, sizeof(*b->jobs), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
     if (ok)
         b->jobs[b->job_count++] = j;
     pthread_mutex_unlock(&device->par_lock);
@@ -67104,17 +67059,9 @@ static struct pvk_job *pvk_job_new(struct pvk_batch *b)
 static bool pvk_job_piece(struct pvk_job *j, id cb, struct pvk_job *job)
 {
     const VkAllocationCallbacks *alloc = pvk_device_alloc(j->batch->queue->device);
-    if (j->piece_count == j->piece_capacity) {
-        uint32_t capacity = j->piece_capacity ? 2 * j->piece_capacity : 8;
-        struct pvk_piece *p = pvk_alloc(alloc, sizeof(*p) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-        if (!p)
-            return false;
-        if (j->piece_count)
-            memcpy(p, j->pieces, sizeof(*p) * j->piece_count);
-        pvk_free_raw(alloc, j->pieces);
-        j->pieces = p;
-        j->piece_capacity = capacity;
-    }
+    if (!pvk_grow(alloc, &j->pieces, &j->piece_capacity, j->piece_count, 1, 8, sizeof(*j->pieces),
+                  VK_SYSTEM_ALLOCATION_SCOPE_COMMAND))
+        return false;
     j->pieces[j->piece_count].cb = cb;
     j->pieces[j->piece_count++].job = job;
     return true;
@@ -67185,18 +67132,10 @@ static void pvk_par_cb_begin(struct pvk_encoder *e)
     id cb;
     if (e->result != VK_SUCCESS)
         return;
-    if (s->more_count == s->more_capacity) {
-        uint32_t capacity = s->more_capacity ? 2 * s->more_capacity : 8;
-        id *more = pvk_alloc(alloc, sizeof(*more) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
-        if (!more) {
-            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
-            return;
-        }
-        if (s->more_count)
-            memcpy(more, s->more, sizeof(*more) * s->more_count);
-        pvk_free_raw(alloc, s->more);
-        s->more = more;
-        s->more_capacity = capacity;
+    if (!pvk_grow(alloc, &s->more, &s->more_capacity, s->more_count, 1, 8, sizeof(*s->more),
+                  VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)) {
+        e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        return;
     }
     if (!(cb = pvk_MTLDevice_newCommandBuffer(e->device->physical_device->mtl_device))) {
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -67566,17 +67505,9 @@ static bool pvk_job_flatten(struct pvk_submission *s, const struct pvk_job *j, c
                 return false;
             continue;
         }
-        if (s->commit_count == s->commit_capacity) {
-            uint32_t capacity = s->commit_capacity ? 2 * s->commit_capacity : 16;
-            id *commit = pvk_alloc(alloc, sizeof(*commit) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
-            if (!commit)
-                return false;
-            if (s->commit_count)
-                memcpy(commit, s->commit, sizeof(*commit) * s->commit_count);
-            pvk_free_raw(alloc, s->commit);
-            s->commit = commit;
-            s->commit_capacity = capacity;
-        }
+        if (!pvk_grow(alloc, &s->commit, &s->commit_capacity, s->commit_count, 1, 16, sizeof(*s->commit),
+                      VK_SYSTEM_ALLOCATION_SCOPE_DEVICE))
+            return false;
         s->commit[s->commit_count++] = j->pieces[i].cb;
     }
     return true;
@@ -67599,7 +67530,6 @@ static VkResult pvk_encode_parallel(struct pvk_queue *queue, struct pvk_submissi
     struct pvk_job *root[PVK_PAR_THREADS + 1], *j;
     pvk_MTLStages after = 0, before = 0;
     VkResult result = VK_SUCCESS;
-    struct pvk_encoder e;
     struct pvk_batch b;
     uint32_t i, k, m;
 
@@ -67674,10 +67604,7 @@ static VkResult pvk_encode_parallel(struct pvk_queue *queue, struct pvk_submissi
     for (k = 0; k < count && result == VK_SUCCESS; k++)
         if (!pvk_job_flatten(s, root[k], alloc))
             result = VK_ERROR_OUT_OF_HOST_MEMORY;
-    memset(&e, 0, sizeof(e));
-    e.device = device;
-    e.queue = queue;
-    pvk_labels_batch_end(&e);
+    pvk_labels_batch_end(queue, NULL); /* (no queue label regions: pvk_par_plan refuses them) */
     for (i = 0; i < b.job_count; i++) {
         j = b.jobs[i];
         pvk_release(j->pass);
@@ -67730,7 +67657,7 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
     pvk_encode_query_flush(&e);
     pvk_encoder_end(&e);
     pvk_encode_stamps(&e);
-    pvk_labels_batch_end(&e);
+    pvk_labels_batch_end(e.queue, s->cb);
     pvk_MTL4CommandBuffer_endCommandBuffer(s->cb);
     pvk_free(pvk_device_alloc(e.device), e.pp);
     pvk_free(pvk_device_alloc(e.device), e.later);
@@ -72213,9 +72140,7 @@ static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *
                           bool layered, bool invariant, const char *label, struct pvk_gfx_libs *libs, char *error,
                           size_t error_size)
 {
-    id vs_lib = NULL, fs_lib = NULL, values[2], spec[2] = { NULL, NULL }, pso = NULL;
-    bool constants[2];
-    uint32_t k;
+    id vs_lib = NULL, fs_lib = NULL, spec[2], pso = NULL;
     char mask_msl[512];
     if (!fs_msl && d->sample_mask_enable) { /* no fragment shader: a fragment function applying the sample mask */
         snprintf(mask_msl, sizeof(mask_msl),
@@ -72229,18 +72154,14 @@ static id pvk_gfx_compile(struct pvk_device *device, const struct pvk_gfx_desc *
     if (!pvk_library_get2(device, vs_msl, invariant, fs_msl, &vs_lib, &fs_lib, libs ? libs->keys : NULL, error,
                           error_size))
         return NULL;
-    /* (as pvk_msl_constant_values, each MSL searched once) */
-    constants[0] = pvk_msl_function_constants(vs_msl);
-    constants[1] = fs_lib && pvk_msl_function_constants(fs_msl);
-    values[0] = vs_values;
-    values[1] = fs_values;
-    for (k = 0; k < 2; k++)
-        if (constants[k])
-            spec[k] = values[k] ? pvk_retain(values[k]) : pvk_MTLFunctionConstantValues_new();
+    spec[0] = pvk_msl_constant_values(vs_msl, vs_values);
+    spec[1] = fs_lib ? pvk_msl_constant_values(fs_msl, fs_values) : NULL;
     pso = pvk_gfx_pipeline_state(device, d, vs_lib, vs_entry, spec[0], fs_lib, fs_entry, spec[1], layered, false, label,
                                  error, error_size);
-    if (libs)
-        memcpy(libs->constants, constants, sizeof(constants));
+    if (libs) {
+        libs->constants[0] = spec[0] != NULL;
+        libs->constants[1] = spec[1] != NULL;
+    }
     pvk_release(spec[1]);
     pvk_release(spec[0]);
     pvk_release(fs_lib);
@@ -72550,10 +72471,9 @@ struct pvk_gfx_icb {
     struct pvk_gfx_libs libs; /* what its Metal pipeline was made of ([1]: nothing without entry[1]) */
     /* The function constant values of the stages it specializes (libs.constants):
      * spec_count[k] (SpecId, bits) pairs each (pvk_spec_constant_pairs; in the
-     * pipeline's allocation), from spec_info[k] while the pipeline is made */
+     * pipeline's allocation) */
     const uint32_t *spec[2];
     uint32_t spec_count[2];
-    const VkSpecializationInfo *spec_info[2];
     char entry[2][64];        /* their functions ("": no fragment function) */
     bool layered;
     int state;                /* 0: not made, 1: made (pso), 2: Metal could not make it */
@@ -72847,8 +72767,6 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
         icb->desc = *d;
         pvk_gfx_hidden_formats(&icb->desc, ci->workgroup[0]);
         icb->libs = libs;
-        icb->spec_info[0] = libs.constants[0] ? vs->pSpecializationInfo : NULL;
-        icb->spec_info[1] = libs.constants[1] && fs ? fs->pSpecializationInfo : NULL;
         snprintf(icb->entry[0], sizeof(icb->entry[0]), "%s", names[0] ? names[0] : "");
         /* (no fragment shader: pvk_gfx_compile's function applying the sample mask, or none) */
         snprintf(icb->entry[1], sizeof(icb->entry[1]), "%s",
@@ -72935,6 +72853,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     uint32_t tex_inputs = 0;
     struct pvk_gfx_kept kept;
     struct pvk_gfx_icb icb;
+    const VkSpecializationInfo *spec_info[2];
     bool want_icb;
     uint32_t undecorated = 0;
     uint8_t hidden_logical[2];
@@ -73450,8 +73369,12 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     pvk_free(alloc, tex_msl[0]);
     pvk_free(alloc, tex_msl[1]);
 
-    for (k = 0; want_icb && k < 2; k++) /* (the variant's specializations: after it) */
-        icb.spec_count[k] = pvk_spec_constant_pairs(icb.spec_info[k], NULL);
+    if (want_icb) { /* (the variant's specializations: after it) */
+        spec_info[0] = icb.libs.constants[0] ? vs->pSpecializationInfo : NULL;
+        spec_info[1] = icb.libs.constants[1] && fs ? fs->pSpecializationInfo : NULL;
+        for (k = 0; k < 2; k++)
+            icb.spec_count[k] = pvk_spec_constant_pairs(spec_info[k], NULL);
+    }
     pipeline = pvk_alloc(alloc,
                          sizeof(*pipeline) + sizeof(gfx) +
                              (want_icb ? sizeof(icb) + 8 * (size_t)(icb.spec_count[0] + icb.spec_count[1]) : 0),
@@ -73463,9 +73386,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
         pairs = (uint32_t *)(gfx.icb + 1);
         for (k = 0; k < 2; k++) {
             gfx.icb->spec[k] = pairs;
-            pvk_spec_constant_pairs(icb.spec_info[k], pairs);
+            pvk_spec_constant_pairs(spec_info[k], pairs);
             pairs += 2 * icb.spec_count[k];
-            gfx.icb->spec_info[k] = NULL;
         }
         if (pthread_mutex_init(&gfx.icb->lock, NULL) != 0)
             gfx.icb = NULL;

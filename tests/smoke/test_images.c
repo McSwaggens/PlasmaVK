@@ -675,7 +675,7 @@ static void test_requirements_table(void)
         { VK_IMAGE_TYPE_3D, VK_FORMAT_R8G8B8A8_UNORM, 64, 64, 16, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT },
         { VK_IMAGE_TYPE_3D, VK_FORMAT_R8G8B8A8_UNORM, 64, 64, 32, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT },
     };
-    struct pvk_texture_reqs *table = ((struct pvk_physical_device *)pd)->texture_reqs;
+    struct pvk_texture_reqs *table = &((struct pvk_physical_device *)pd)->texture_reqs;
     VkMemoryRequirements computed[PVK_ARRAY_SIZE(kinds)], req;
     VkDeviceImageMemoryRequirements dinfo;
     VkMemoryRequirements2 req2;

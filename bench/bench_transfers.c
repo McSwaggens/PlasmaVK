@@ -498,19 +498,6 @@ static void record(void *user, const struct bench_frame *f)
 
 /* ---- Verification ---- */
 
-static float half_to_float(uint16_t h)
-{
-    uint32_t sign = (uint32_t)(h >> 15) << 31, exp = (h >> 10) & 0x1F, mant = h & 0x3FF, bits;
-    float f;
-    if (exp == 0) { /* zero or subnormal */
-        f = (float)mant / 16777216.0f;
-        return sign ? -f : f;
-    }
-    bits = sign | ((exp + 112) << 23) | (mant << 13);
-    memcpy(&f, &bits, sizeof(f));
-    return f;
-}
-
 /* Round to nearest even; normal values and zero only (all this file makes). */
 static uint16_t float_to_half(float f)
 {
@@ -544,7 +531,7 @@ static float linear_to_srgb(float l)
 static float channel(const struct img *im, const void *level, size_t i, int c)
 {
     if (im->format == VK_FORMAT_R16G16B16A16_SFLOAT)
-        return half_to_float(((const uint16_t *)level)[i * 4 + (size_t)c]);
+        return bench_half_to_float(((const uint16_t *)level)[i * 4 + (size_t)c]);
     if (im->format == VK_FORMAT_R8G8B8A8_SRGB && c < 3)
         return srgb_to_linear((float)((const uint8_t *)level)[i * 4 + (size_t)c] / 255.0f);
     return (float)((const uint8_t *)level)[i * 4 + (size_t)c];
@@ -727,7 +714,7 @@ static int verify(struct scene *s)
                     uint16_t h = ((const uint16_t *)got)[((size_t)y * MS_W + x) * 4 + (size_t)c];
                     if (h != float_to_half((float)want[c] / 256.0f)) {
                         bench_error(cfg->name, "texel (%u,%u) channel %d: %g, want %g", x, y, c,
-                                    (double)half_to_float(h), want[c] / 256.0);
+                                    (double)bench_half_to_float(h), want[c] / 256.0);
                         return 0;
                     }
                 }

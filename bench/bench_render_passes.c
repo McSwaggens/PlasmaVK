@@ -447,19 +447,6 @@ static void make_reference(struct scene *s)
     free(zbuf);
 }
 
-static float half_to_float(uint16_t h)
-{
-    int exponent = (h >> 10) & 0x1F, mantissa = h & 0x3FF;
-    float v;
-    if (exponent == 0)
-        v = ldexpf((float)mantissa, -24);
-    else if (exponent == 31)
-        v = mantissa ? NAN : INFINITY;
-    else
-        v = ldexpf((float)(mantissa | 0x400), exponent - 25);
-    return (h & 0x8000) ? -v : v;
-}
-
 static int verify(struct scene *s)
 {
     const uint16_t *got = s->readback.map;
@@ -467,9 +454,9 @@ static int verify(struct scene *s)
     int c;
 
     for (p = 0; p < n; p++) {
-        int ok = half_to_float(got[4 * p + 3]) == 1.0f;
+        int ok = bench_half_to_float(got[4 * p + 3]) == 1.0f;
         for (c = 0; c < 3 && ok; c++) {
-            float g = half_to_float(got[4 * p + c]), w = s->reference[3 * p + c];
+            float g = bench_half_to_float(got[4 * p + c]), w = s->reference[3 * p + c];
             ok = fabsf(g - w) <= 3e-3f + 5e-3f * fabsf(w);
         }
         if (!ok && bad++ == 0)
@@ -478,9 +465,9 @@ static int verify(struct scene *s)
     if (!bad)
         return 1;
     bench_error(s->cfg->name, "%zu of %zu pixels wrong; first at (%zu,%zu): got (%g,%g,%g,%g), want (%g,%g,%g,1)",
-                bad, n, first % s->width, first / s->width, half_to_float(got[4 * first]),
-                half_to_float(got[4 * first + 1]), half_to_float(got[4 * first + 2]),
-                half_to_float(got[4 * first + 3]), s->reference[3 * first], s->reference[3 * first + 1],
+                bad, n, first % s->width, first / s->width, bench_half_to_float(got[4 * first]),
+                bench_half_to_float(got[4 * first + 1]), bench_half_to_float(got[4 * first + 2]),
+                bench_half_to_float(got[4 * first + 3]), s->reference[3 * first], s->reference[3 * first + 1],
                 s->reference[3 * first + 2]);
     return 0;
 }

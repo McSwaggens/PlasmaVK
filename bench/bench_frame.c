@@ -199,19 +199,6 @@ struct world {
     struct reference refs[2]; /* 1080p, 2160p */
 };
 
-static float half_to_float(uint16_t h)
-{
-    int exponent = (h >> 10) & 0x1F, mantissa = h & 0x3FF;
-    float v;
-    if (exponent == 0)
-        v = ldexpf((float)mantissa, -24);
-    else if (exponent == 31)
-        v = mantissa ? NAN : INFINITY;
-    else
-        v = ldexpf((float)(mantissa | 0x400), exponent - 25);
-    return (h & 0x8000) ? -v : v;
-}
-
 /* Round to nearest even, as the GPU stores RGBA16F. */
 static uint16_t half_from_float(float f)
 {
@@ -245,7 +232,7 @@ static uint16_t half_from_float(float f)
 
 static float rounded_half(float f)
 {
-    return half_to_float(half_from_float(f));
+    return bench_half_to_float(half_from_float(f));
 }
 
 static uint32_t unorm8(float f)
