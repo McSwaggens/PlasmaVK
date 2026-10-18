@@ -13776,6 +13776,92 @@ static void test_parallel_icb(void)
     free_img(&color);
 }
 
+/* The faster paths left are reported once per cause (pvk_inform, at info
+ * level): a count draw while the queue's indirect command buffers are at
+ * their share of memory draws its records one by one, drawn right all the
+ * same; secondaries recording more than state, draws and clears (a query)
+ * are encoded in order. */
+static void test_fallbacks_informed(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    struct pvk_device *d = (struct pvk_device *)device;
+    struct pvk_queue *q = (struct pvk_queue *)queue;
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img color = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool pool = VK_NULL_HANDLE;
+    VkPipeline pipeline, par;
+    VkCommandBuffer cb, secs[4];
+    struct timespec ts;
+    struct pipe p;
+    uint64_t bytes, after;
+    uint32_t k;
+
+    REQUIRE(features.multiDrawIndirect);
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    pipeline = make_pipe(&p);
+    par = par_pipeline(VK_NULL_HANDLE);
+    REQUIRE(pipeline && par);
+    /* the chunks of earlier tests let go (idle over PVK_ICB_IDLE_NS, as in
+     * test_count_draws_idle), then the budget reached: no commands for the
+     * count draw */
+    ts.tv_sec = 1;
+    ts.tv_nsec = 100 * 1000000;
+    nanosleep(&ts, NULL);
+    submit(begin_cmd());
+    bytes = __atomic_load_n(&q->icb_bytes, __ATOMIC_RELAXED);
+    __atomic_store_n(&q->icb_bytes, UINT64_MAX / 2, __ATOMIC_RELAXED);
+    via = 1;
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -1, -1, 1, 1, 1, 0, 0, 1, 0);
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    via_end();
+    after = __atomic_load_n(&q->icb_bytes, __ATOMIC_RELAXED); /* (less the free chunks let go) */
+    __atomic_store_n(&q->icb_bytes, bytes + (after - UINT64_MAX / 2), __ATOMIC_RELAXED);
+    CHECK(count_bad(&out, expect_red_all, "count draw at the indirect command buffer budget") == 0);
+    CHECK(__atomic_load_n(&d->informed, __ATOMIC_RELAXED) & (1u << PVK_INFORM_ICB_MEMORY));
+    /* secondaries with an occlusion query: not forked */
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_OCCLUSION;
+    qi.queryCount = 1;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &pool));
+    par_scene(300);
+    for (k = 0; k < 4; k++) {
+        secs[k] = par_secondary(VK_NULL_HANDLE);
+        vkCmdBindPipeline(secs[k], VK_PIPELINE_BIND_POINT_GRAPHICS, par);
+        if (k == 0)
+            vkCmdBeginQuery(secs[k], pool, 0, 0);
+        par_draw(secs[k], k * (PAR_RECTS / 4), PAR_RECTS / 4);
+        if (k == 0)
+            vkCmdEndQuery(secs[k], pool, 0);
+        vkEndCommandBuffer(secs[k]);
+    }
+    cb = begin_cmd();
+    vkCmdResetQueryPool(cb, pool, 0, 1);
+    par_begin(cb, &color, &depth, true, VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT);
+    vkCmdExecuteCommands(cb, 4, secs);
+    vkCmdEndRendering(cb);
+    download(cb, &color, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    vkFreeCommandBuffers(device, cmd_pool, 4, secs);
+    CHECK(par_bad(&out, PAR_RECTS, "secondaries with a query") == 0);
+    CHECK(__atomic_load_n(&d->informed, __ATOMIC_RELAXED) & (1u << PVK_INFORM_FORK_OPS));
+    vkDestroyQueryPool(device, pool, NULL);
+    vkDestroyPipeline(device, par, NULL);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&depth);
+    free_img(&color);
+    free_img(&target);
+}
+
 int main(void)
 {
     setup();
@@ -13897,6 +13983,7 @@ int main(void)
     RUN(test_parallel_order);
     RUN(test_parallel_stress);
     RUN(test_parallel_icb);
+    RUN(test_fallbacks_informed);
     teardown();
     return TEST_RESULT();
 }

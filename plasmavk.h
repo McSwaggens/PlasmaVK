@@ -32571,6 +32571,7 @@ struct pvk_device {
     bool par_ready, par_stop, par_failed;
     uint32_t par_threads;
     struct pvk_par_thread par_thread[PVK_PAR_THREADS];
+    uint32_t informed; /* PVK_INFORM_* causes reported (pvk_inform; atomic) */
     struct pvk_job *par_head, *par_tail;
     id fill_pipeline;      /* internal kernel of vkCmdFillBuffer, made on first use */
     /* Images (sections 11, 15 and 16) */
@@ -32889,6 +32890,47 @@ static void pvk_logd(const struct pvk_device *device, enum pvk_log_level level, 
         pvk_msg_object(&m, VK_OBJECT_TYPE_DEVICE, (uint64_t)(uintptr_t)device);
     va_start(args, fmt);
     pvk_vmessage(&m, level, fmt, args);
+    va_end(args);
+}
+
+/* What the implementation does not do for an application, which it would
+ * otherwise: the faster paths it leaves (section 16, PARALLEL ENCODING;
+ * section 15, INDIRECT DRAWS) and why. Each is reported once per device,
+ * at info level (PLASMAVK_LOG=info, or a messenger taking INFO messages). */
+enum pvk_inform {
+    PVK_INFORM_PAR_ALLOC,        /* batches encode in order: allocation callbacks */
+    PVK_INFORM_PAR_DEBUG,        /* ... the debug layer */
+    PVK_INFORM_PAR_QUEUE_LABELS, /* ... a queue label region is open */
+    PVK_INFORM_PAR_LABELS,       /* ... a command buffer records label regions */
+    PVK_INFORM_PAR_SERIAL,       /* ... or copies query results or resolves part of a render area */
+    PVK_INFORM_FORK_PACKETS,     /* secondaries encode in order: too few packets */
+    PVK_INFORM_FORK_OPS,         /* ... commands other than state, draws and clears */
+    PVK_INFORM_FORK_PAR,         /* ... query results copied, queries reset or a pass suspended */
+    PVK_INFORM_FORK_SUSPENDED,   /* ... in a render pass instance suspended or resumed */
+    PVK_INFORM_FORK_SCANNED,     /* ... in a render pass instance that is scanned */
+    PVK_INFORM_FORK_COPIES,      /* ... in a render pass instance with depth/stencil copies */
+    PVK_INFORM_FORK_PASSES,      /* ... in a render pass instance of several Metal passes */
+    PVK_INFORM_FORK_QUERY,       /* ... in a render pass instance within an occlusion query */
+    PVK_INFORM_FORK_FETCHES,     /* ... in a render pass instance reading input attachments from tile memory */
+    PVK_INFORM_ICB_MEMORY,       /* count draws draw record by record: indirect command buffers at their budget */
+    PVK_INFORM_COUNT
+};
+
+static void pvk_inform(const struct pvk_device *device, enum pvk_inform cause, const char *id, const char *fmt, ...)
+    __attribute__((format(printf, 4, 5)));
+static void pvk_inform(const struct pvk_device *device, enum pvk_inform cause, const char *id, const char *fmt, ...)
+{
+    uint32_t *informed = (uint32_t *)&device->informed, bit = 1u << cause;
+    struct pvk_msg m;
+    va_list args;
+    if (__atomic_load_n(informed, __ATOMIC_RELAXED) & bit)
+        return;
+    if (__atomic_fetch_or(informed, bit, __ATOMIC_RELAXED) & bit)
+        return;
+    pvk_msg_init(&m, pvk_device_instance(device), id, VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT);
+    pvk_msg_object(&m, VK_OBJECT_TYPE_DEVICE, (uint64_t)(uintptr_t)device);
+    va_start(args, fmt);
+    pvk_vmessage(&m, PVK_LOG_INFO, fmt, args);
     va_end(args);
 }
 
@@ -55325,7 +55367,17 @@ static inline VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_
  *   (pvk_encode_stamps, pvk_encode_stamp_later); inside a render pass, once
  *   the pass ends (section 16). That is an execution dependency on
  *   everything earlier in submission order, whatever its stage, and the
- *   work after it starts after it. Nothing else of a query runs on the GPU:
+ *   work after it starts after it: every vkCmdWriteTimestamp drains the
+ *   queue, the stage it names ignored (Vulkan allows a later stage). So
+ *   the work before a timestamp and the work after it never overlap: a
+ *   profiler's zone around each pass keeps the passes from overlapping as
+ *   they would without the zones, and two timestamps measure the drained
+ *   GPU time of the work between them alone, which a driver sampling at
+ *   the stage asked for in a pipelined queue does not (MoltenVK): the
+ *   benchmarks' gpu_us is not comparable across the two (bench/README.md).
+ *   A timestamp written inside a render pass instance is written once the
+ *   pass and its resolves have ended, so a zone within a pass measures
+ *   about nothing. Nothing else of a query runs on the GPU:
  *   a submission notes its writes and resets while it is encoded, and
  *   stores them in the states once it is sure to go ahead
  *   (pvk_queue_publish_queries). A written query is available once its
@@ -58553,8 +58605,20 @@ static void pvk_cmd_scan_end(struct pvk_command_buffer *cb)
             cb->par |= PVK_PAR_SERIAL;
     /* a pass that is scanned or keeps depth/stencil copies does not fork
      * (pvk_render_begin_group, section 16) */
-    if (c->forks && (pvk_scan_needed(c->scan) || c->hidden))
+    if (c->forks && c->hidden) {
+        pvk_inform(cb->pool->device, PVK_INFORM_FORK_COPIES, "PlasmaVK-parallel-encoding",
+                   "secondaries executed in a render pass instance are encoded in order, not by other threads: the "
+                   "instance keeps depth/stencil copies (input attachments, depth bounds)");
         c->forks = 0;
+    }
+    if (c->forks && pvk_scan_needed(c->scan)) {
+        pvk_inform(cb->pool->device, PVK_INFORM_FORK_SCANNED, "PlasmaVK-parallel-encoding",
+                   "secondaries executed in a render pass instance are encoded in order, not by other threads: the "
+                   "instance is scanned ahead (count draws or long multi-draws, occlusion queries, 16-bit strips, "
+                   "Bresenham lines with samples, pipelines reading input attachments or SNORM attachments through "
+                   "SINT views, depth bounds)");
+        c->forks = 0;
+    }
     if (c->forks)
         cb->par |= PVK_PAR_FORKS;
     cb->scan_pass = NULL;
@@ -58577,12 +58641,29 @@ static void pvk_cmd_fork(struct pvk_command_buffer *cb, struct pvk_cmd_execute *
                          uint32_t par)
 {
     struct pvk_cmd_begin_pass *pass = cb->scan_pass;
-    if (!pass || cb->level != VK_COMMAND_BUFFER_LEVEL_PRIMARY || packets < 3 * PVK_PAR_FORK_PACKETS ||
-        (ops & ~(uint32_t)PVK_PAR_FORK_OPS) || par ||
-        (pass->flags & (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT)))
+    const struct pvk_device *device = cb->pool->device;
+    if (!pass || cb->level != VK_COMMAND_BUFFER_LEVEL_PRIMARY)
         return;
-    c->fork = 1;
-    pass->forks++;
+    if (packets < 3 * PVK_PAR_FORK_PACKETS)
+        pvk_inform(device, PVK_INFORM_FORK_PACKETS, "PlasmaVK-parallel-encoding",
+                   "secondaries executed in a render pass instance are encoded in order, not by other threads: "
+                   "fewer than %u packets together (vkCmdExecuteCommands)", 3 * PVK_PAR_FORK_PACKETS);
+    else if (ops & ~(uint32_t)PVK_PAR_FORK_OPS)
+        pvk_inform(device, PVK_INFORM_FORK_OPS, "PlasmaVK-parallel-encoding",
+                   "secondaries executed in a render pass instance are encoded in order, not by other threads: "
+                   "they record commands other than state, draws and clears (queries, label regions, ...)");
+    else if (par)
+        pvk_inform(device, PVK_INFORM_FORK_PAR, "PlasmaVK-parallel-encoding",
+                   "secondaries executed in a render pass instance are encoded in order, not by other threads: "
+                   "they copy query results, reset occlusion queries or suspend a render pass instance");
+    else if (pass->flags & (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT))
+        pvk_inform(device, PVK_INFORM_FORK_SUSPENDED, "PlasmaVK-parallel-encoding",
+                   "secondaries executed in a render pass instance are encoded in order, not by other threads: "
+                   "the instance is suspended or resumed");
+    else {
+        c->fork = 1;
+        pass->forks++;
+    }
 }
 
 /* A BEGIN_PASS packet c: the scan bits recorded until its END_PASS are its. */
@@ -59526,7 +59607,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdResetQueryPool(VkCommandBuffer commandBuffer, Vk
 
 /* Whatever the stage, the timestamp is taken once all earlier work is done
  * (section 14), which Vulkan allows: "it may instead do so at any logically
- * later stage". In a multiview render pass it takes one query per view. */
+ * later stage", and the work after it starts after it: a full drain of the
+ * queue (section 16, TIMESTAMPS). In a multiview render pass it takes one
+ * query per view. */
 VKAPI_ATTR void VKAPI_CALL vkCmdWriteTimestamp2(VkCommandBuffer commandBuffer, VkPipelineStageFlags2 stage,
                                                 VkQueryPool queryPool, uint32_t query)
 {
@@ -59720,9 +59803,25 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   it in order (PVK_PAR_SERIAL: copies of timestamp results, resolves in
  *   part of a render area; label regions, the debug layer), and on devices
  *   made with allocation callbacks, which Vulkan calls only on the thread of
- *   the command. Jobs never wait for each other: a job that forks goes on,
- *   and the submitting thread, done with its own, takes the jobs no thread
- *   began, then waits for the others.
+ *   the command. Each of those causes, and each reason secondaries are not
+ *   forked, is reported once per device at info level (pvk_inform:
+ *   PLASMAVK_LOG=info, or a messenger taking INFO messages of the
+ *   performance type), so an engine can see what keeps a frame off the
+ *   parallel path (label regions per pass do, as profilers record them).
+ *   Jobs never wait for each other: a job that forks goes on, and the
+ *   submitting thread, done with its own, takes the jobs no thread began,
+ *   then waits for the others.
+ *
+ * TIMESTAMPS
+ *   A vkCmdWriteTimestamp is a compute encoder of its own behind a barrier
+ *   against all earlier work of the queue, which the next encoder waits
+ *   for (section 14, TIMESTAMPS): a full drain of the queue at every
+ *   timestamp, whatever stage the command names, and inside a render pass
+ *   instance one after the pass and its resolves. Passes bracketed by
+ *   timestamps run one after the other where they would overlap without
+ *   them; what two timestamps measure is comparable with other PlasmaVK
+ *   measurements, not with a driver's that samples at the stage asked for
+ *   (bench/README.md on gpu_us).
  *
  * BARRIERS
  *   Metal 4 does not track resources: commands in an encoder and across
@@ -63094,8 +63193,13 @@ static struct pvk_icb_chunk *pvk_icb_take(struct pvk_encoder *e, bool bound, uin
             if (__atomic_load_n(&q->icb_bytes, __ATOMIC_RELAXED) + need > budget) {
                 __atomic_sub_fetch(&q->icb_bytes, pvk_icb_chunks_free(device, pool, pool->free), __ATOMIC_RELAXED);
                 pool->free = NULL;
-                if (__atomic_load_n(&q->icb_bytes, __ATOMIC_RELAXED) + need > budget)
+                if (__atomic_load_n(&q->icb_bytes, __ATOMIC_RELAXED) + need > budget) {
+                    pvk_inform(device, PVK_INFORM_ICB_MEMORY, "PlasmaVK-indirect-command-buffer-memory",
+                               "a count draw or long multi-draw draws its records one by one: the queue's indirect "
+                               "command buffers are at their share of memory (%llu MB)",
+                               (unsigned long long)(budget >> 20));
                     return NULL;
+                }
             }
             if (!(c = pvk_alloc(pvk_device_alloc(device), sizeof(*c), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)))
                 return NULL;
@@ -65188,10 +65292,23 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
      * or stencil copies, input attachments in tile memory, occlusion
      * queries or draw preprocessing. (Its pending timestamps are written:
      * pvk_encode_begin_pass.) */
-    r->forks = e->job && !group && first && last && !r->split && !r->hidden && !r->vis_pool && !e->occ_pool &&
-                       !e->pp_count && !t->fetches && !e->stamp_count
-                   ? c->forks
-                   : 0;
+    r->forks = 0;
+    if (c->forks && e->job) {
+        if (group || !first || !last || r->split)
+            pvk_inform(e->device, PVK_INFORM_FORK_PASSES, "PlasmaVK-parallel-encoding",
+                       "secondaries executed in a render pass instance are encoded in order, not by other threads: "
+                       "the instance is several Metal passes (subpasses, or more attachments than tile memory holds)");
+        else if (e->occ_pool)
+            pvk_inform(e->device, PVK_INFORM_FORK_QUERY, "PlasmaVK-parallel-encoding",
+                       "secondaries executed in a render pass instance are encoded in order, not by other threads: "
+                       "an occlusion query begun before the instance is active");
+        else if (t->fetches)
+            pvk_inform(e->device, PVK_INFORM_FORK_FETCHES, "PlasmaVK-parallel-encoding",
+                       "secondaries executed in a render pass instance are encoded in order, not by other threads: "
+                       "a pipeline reads input attachments from tile memory");
+        else if (!r->hidden && !r->vis_pool && !e->pp_count && !e->stamp_count) /* (pvk_cmd_scan_end reported them) */
+            r->forks = c->forks;
+    }
     enc = pvk_render_open(e, c, &depth, &stencil, false, r->split, r->int_slots);
     if (!enc)
         return;
@@ -67373,13 +67490,40 @@ static bool pvk_par_plan(const struct pvk_queue *queue, const VkSubmitInfo2 *sub
     uint32_t i, n = submit->commandBufferInfoCount, jobs;
     uint64_t total = 0, lo, hi;
     bool forks = false;
-    if (!device->par_ready || device->has_alloc || device->debug || queue->queue_labels.count ||
-        queue->queue_inserts.count)
+    if (!device->par_ready)
         return false;
+    if (device->has_alloc) {
+        pvk_inform(device, PVK_INFORM_PAR_ALLOC, "PlasmaVK-parallel-encoding",
+                   "batches are encoded in order, not in parallel: the device was made with allocation callbacks, "
+                   "which Vulkan calls only on the thread of the command");
+        return false;
+    }
+    if (device->debug) {
+        pvk_inform(device, PVK_INFORM_PAR_DEBUG, "PlasmaVK-parallel-encoding",
+                   "batches are encoded in order, not in parallel: the debug layer is on (its Metal debug groups go "
+                   "with command buffers)");
+        return false;
+    }
+    if (queue->queue_labels.count || queue->queue_inserts.count) {
+        pvk_inform(device, PVK_INFORM_PAR_QUEUE_LABELS, "PlasmaVK-parallel-encoding",
+                   "batches are encoded in order, not in parallel: a queue label region is open "
+                   "(vkQueueBeginDebugUtilsLabelEXT; its Metal debug group goes with command buffers)");
+        return false;
+    }
     for (i = 0; i < n; i++) {
         const struct pvk_command_buffer *cb = (const struct pvk_command_buffer *)submit->pCommandBufferInfos[i].commandBuffer;
-        if ((cb->ops & (1u << PVK_CMD_LABEL)) || (cb->par & PVK_PAR_SERIAL))
+        if (cb->ops & (1u << PVK_CMD_LABEL)) {
+            pvk_inform(device, PVK_INFORM_PAR_LABELS, "PlasmaVK-parallel-encoding",
+                       "a batch is encoded in order, not in parallel: a command buffer of it records label regions "
+                       "(vkCmdBeginDebugUtilsLabelEXT; their Metal debug groups go with command buffers)");
             return false;
+        }
+        if (cb->par & PVK_PAR_SERIAL) {
+            pvk_inform(device, PVK_INFORM_PAR_SERIAL, "PlasmaVK-parallel-encoding",
+                       "a batch is encoded in order, not in parallel: a command buffer of it copies query results or "
+                       "resolves part of a render area, which read what the batch encoded before them");
+            return false;
+        }
         total += cb->packets;
         forks |= (cb->par & PVK_PAR_FORKS) != 0;
     }

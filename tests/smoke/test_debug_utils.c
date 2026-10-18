@@ -945,6 +945,81 @@ static void test_layer(void)
     vkDestroyInstance(instance, NULL);
 }
 
+/* The faster paths PlasmaVK leaves are reported once per cause as INFO
+ * messages of the performance type: a batch with enough work for parallel
+ * encoding whose command buffer records a label region is encoded in
+ * order, said once, not again for the next such batch. */
+static void test_fallback_messages(void)
+{
+    VkInstance instance;
+    VkDevice device;
+    VkQueue queue;
+    VkDebugUtilsMessengerCreateInfoEXT info;
+    VkDebugUtilsMessengerEXT messenger;
+    VkCommandPoolCreateInfo cpi;
+    VkCommandPool cpool;
+    VkCommandBufferAllocateInfo cai;
+    VkCommandBufferBeginInfo begin;
+    VkCommandBuffer cbs[2];
+    VkViewport viewport = { 0, 0, 16, 16, 0, 1 };
+    VkDebugUtilsLabelEXT label;
+    VkSubmitInfo submit;
+    struct got g;
+    int round, i, k, found;
+
+    REQUIRE_VK(create_instance(false, NULL, NULL, &instance));
+    REQUIRE_VK(create_device(instance, NULL, &device));
+    vkGetDeviceQueue(device, 0, 0, &queue);
+    info = messenger_info(&g, ALL_SEVERITIES); /* (after the device: its messages are not the point) */
+    REQUIRE_VK(vkCreateDebugUtilsMessengerEXT(instance, &info, NULL, &messenger));
+    memset(&cpi, 0, sizeof(cpi));
+    cpi.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    REQUIRE_VK(vkCreateCommandPool(device, &cpi, NULL, &cpool));
+    memset(&cai, 0, sizeof(cai));
+    cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cai.commandPool = cpool;
+    cai.commandBufferCount = 2;
+    REQUIRE_VK(vkAllocateCommandBuffers(device, &cai, cbs));
+    memset(&begin, 0, sizeof(begin));
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    memset(&label, 0, sizeof(label));
+    label.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+    label.pLabelName = "frame";
+    memset(&submit, 0, sizeof(submit));
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 2;
+    submit.pCommandBuffers = cbs;
+    for (round = 0; round < 2; round++) {
+        CHECK_VK(vkResetCommandPool(device, cpool, 0), VK_SUCCESS);
+        for (k = 0; k < 2; k++) { /* 130 packets each: two jobs' worth (PVK_PAR_PACKETS) */
+            CHECK_VK(vkBeginCommandBuffer(cbs[k], &begin), VK_SUCCESS);
+            if (k == 0)
+                vkCmdBeginDebugUtilsLabelEXT(cbs[k], &label);
+            for (i = 0; i < 130; i++)
+                vkCmdSetViewport(cbs[k], 0, 1, &viewport);
+            if (k == 0)
+                vkCmdEndDebugUtilsLabelEXT(cbs[k]);
+            CHECK_VK(vkEndCommandBuffer(cbs[k]), VK_SUCCESS);
+        }
+        CHECK_VK(vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE), VK_SUCCESS);
+        CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+        for (i = 0, found = 0; i < g.count && i < GOT_MAX; i++)
+            if (strcmp(g.ids[i], "PlasmaVK-parallel-encoding") == 0) {
+                found++;
+                CHECK(g.severity[i] == VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT);
+                CHECK(g.types[i] == VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT);
+                CHECK(strstr(g.text[i], "label regions") != NULL);
+                CHECK(g.objects[i] == 1 && g.object0[i] == H(device));
+            }
+        CHECK(found == 1); /* (once, also after the second batch) */
+    }
+    vkDestroyCommandPool(device, cpool, NULL);
+    vkDestroyDevice(device, NULL);
+    vkDestroyDebugUtilsMessengerEXT(instance, messenger, NULL);
+    vkDestroyInstance(instance, NULL);
+}
+
 int main(void)
 {
     RUN(test_create_info_messages);
@@ -953,5 +1028,6 @@ int main(void)
     RUN(test_names_metal_labels);
     RUN(test_labels_metal);
     RUN(test_layer);
+    RUN(test_fallback_messages);
     return TEST_RESULT();
 }

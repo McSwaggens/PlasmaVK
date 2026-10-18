@@ -356,7 +356,13 @@ to stderr.
     here, so compare `cpu_us` across implementations.
   - `gpu_us`: from timestamp queries at the start and end of the command
     buffer. It is missing when the queue has no timestamps or
-    `timestampPeriod` is 0.
+    `timestampPeriod` is 0. On PlasmaVK every timestamp drains the GPU,
+    whatever stage it names (the work before it finishes, then the work
+    after it starts; `plasmavk.h` section 14), so `gpu_us` is the drained
+    time of the frame's work alone, while MoltenVK samples the stage asked
+    for in a pipelined queue: the two are not comparable with each other,
+    only each with itself across builds. Compare `frame_us` between
+    implementations.
   - `frame_us`: the time between consecutive submits, with 2 frames in
     flight. This is throughput, whichever of CPU or GPU is the bottleneck.
 - Derived numbers, all computed from medians: `cpu_ns_per_draw`
@@ -492,5 +498,10 @@ its other configurations have run:
   sometimes reports implausible minimums, far below the median, most often
   in transfer-only frames. Compare medians, and cross-check with
   `frame_us`. PlasmaVK takes each timestamp once all earlier work of the
-  queue is done (`plasmavk.h` section 14), so its `gpu_us` is the frame's
-  own GPU time, not counting earlier frames.
+  queue is done and starts the work after it only then (`plasmavk.h`
+  section 14): a full drain at each timestamp, so its `gpu_us` is the
+  frame's own GPU time with no overlap with the frames around it, and the
+  two timestamps cost the frame the overlap it would have had. MoltenVK's
+  `gpu_us` is a pipelined frame's. A lower `gpu_us` on one is not a faster
+  frame than the other's: compare `gpu_us` only between PlasmaVK builds,
+  and `frame_us` between implementations.
