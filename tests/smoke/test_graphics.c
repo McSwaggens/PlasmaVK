@@ -4854,6 +4854,14 @@ static void count_draws(int secondary)
     free_img(&target);
 }
 
+/* Not tested: a count draw whose pass sets another Metal pipeline than its
+ * indirect command buffer's commands inherit, which pvk_encode_draw_indirect
+ * then draws record by record from the copies pvk_pp_icb makes (reported
+ * once per pipeline at PLASMAVK_LOG=info). The pipeline set is another one
+ * only for a pass with a depth copy, SNORM attachments drawn through SINT
+ * views or a split for tile memory, which pvk_prepass_later rules out from
+ * the same scan, so the case is Metal refusing a pass pvk_render_fits
+ * accepted, which no command sequence provokes. */
 static void test_count_draws(void)
 {
     count_draws(false);
