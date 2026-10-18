@@ -64884,6 +64884,13 @@ static void pvk_render_resolve_clear(struct pvk_encoder *e)
                 : a                        ? PVK_MTLBlitOptionStencilFromDepthStencil
                                            : PVK_MTLBlitOptionDepthFromDepthStencil);
     }
+    /* The pass's load-op clears run at the blit stage, which barriers after
+     * the pass do not name (fragment tests): later work waits for them, in
+     * encoders of its own (struct pvk_order: earlier encoders only). */
+    if (enc) {
+        pvk_encoder_end(e);
+        pvk_queue_order(e, PVK_MTLStageBlit, PVK_STAGES_ALL);
+    }
 }
 
 /* Metal's resolves of 32-bit integer color attachments change even pixels
