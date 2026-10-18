@@ -497,7 +497,8 @@ static void test_timeline_long_wait(void)
     free_buf(&dst2);
 }
 
-/* Barrier stages (white box: pvk_barrier_stages), and a barrier's ordering
+/* Barrier stages (white box: pvk_barrier_stages), barriers kept per Metal
+ * stage they make wait, chained (pvk_waits_add), and a barrier's ordering
  * of later encoders lasting until the timeline shows its submission done
  * (pvk_queue_order). */
 static void test_barrier_order(void)
@@ -509,6 +510,10 @@ static void test_barrier_order(void)
     VkMemoryBarrier b;
     VkCommandBuffer cb = VK_NULL_HANDLE, fill;
     VkFence f = make_fence(false);
+    const pvk_MTLStages fragment = PVK_MTLStageFragment | PVK_MTLStageTile;
+    pvk_MTLStages w[PVK_ORDER_STAGES], later[PVK_ORDER_STAGES];
+    struct pvk_orders orders;
+    const pvk_MTLStages *o;
 
     CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, true) ==
           (PVK_MTLStageFragment | PVK_MTLStageTile));
@@ -521,6 +526,34 @@ static void test_barrier_order(void)
     CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, true) == PVK_STAGES_ALL);
     CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_TRANSFER_BIT, false) == PVK_STAGES_ALL);
     CHECK(pvk_barrier_stages(VK_PIPELINE_STAGE_2_HOST_BIT, true) == 0);
+
+    /* (pvk_order_stages: vertex, fragment, tile, dispatch, blit) */
+    memset(w, 0, sizeof(w));
+    pvk_waits_add(w, PVK_MTLStageDispatch, PVK_MTLStageVertex); /* compute -> vertex */
+    pvk_waits_add(w, fragment, fragment);                       /* fragment -> fragment */
+    /* (later vertices stay free of earlier fragments; later fragments chain
+     * to compute -> vertex, their first scope having the vertex stage) */
+    CHECK(w[0] == PVK_MTLStageDispatch && w[1] == (fragment | PVK_MTLStageVertex | PVK_MTLStageDispatch) &&
+          w[2] == w[1] && !w[3] && !w[4]);
+    pvk_waits_add(w, PVK_MTLStageVertex, PVK_MTLStageBlit); /* vertex -> transfer: chained to compute -> vertex */
+    CHECK(w[4] == (PVK_MTLStageVertex | PVK_MTLStageDispatch) && !w[3]);
+    memset(later, 0, sizeof(later));
+    pvk_waits_add(later, PVK_MTLStageBlit, PVK_MTLStageDispatch); /* transfer -> compute, after them */
+    pvk_waits_join(w, later);
+    CHECK(w[3] == (PVK_MTLStageBlit | PVK_MTLStageVertex | PVK_MTLStageDispatch) && w[0] == PVK_MTLStageDispatch);
+    /* A barrier chained to a semaphore wait (pvk_orders_add): its second
+     * scope waits for all work before the submission (sem), not in the
+     * entry, which lasts until the submission is done */
+    memset(&orders, 0, sizeof(orders));
+    memset(later, 0, sizeof(later));
+    pvk_waits_add(later, fragment, fragment);
+    pvk_orders_add(&orders, 7, later, fragment);
+    CHECK(orders.count == 1 && orders.sem == fragment && orders.sem_serial == 7 &&
+          orders.at[0].after[1] == (fragment | PVK_MTLStageVertex));
+    memset(later, 0, sizeof(later));
+    pvk_waits_add(later, PVK_MTLStageDispatch, PVK_MTLStageVertex);
+    pvk_orders_add(&orders, 8, later, 0);
+    CHECK(orders.count == 2 && orders.sem == fragment && orders.at[1].after[0] == PVK_MTLStageDispatch);
 
     REQUIRE(a.data);
     memset(&alloc, 0, sizeof(alloc));
@@ -543,8 +576,8 @@ static void test_barrier_order(void)
     REQUIRE_VK(vkQueueWaitIdle(queues[0]));
     REQUIRE_VK(submit(queues[0], VK_NULL_HANDLE, 0, cb, VK_NULL_HANDLE, 0, f));
     REQUIRE(q->orders.count >= 1);
-    CHECK(q->orders.at[q->orders.count - 1].after == PVK_STAGES_ALL &&
-          q->orders.at[q->orders.count - 1].before == (PVK_MTLStageFragment | PVK_MTLStageTile));
+    o = q->orders.at[q->orders.count - 1].after;
+    CHECK(!o[0] && o[1] == PVK_STAGES_ALL && o[2] == PVK_STAGES_ALL && !o[3] && !o[4]);
     REQUIRE_VK(vkWaitForFences(device, 1, &f, VK_TRUE, 10000000000ull));
     fill = record_fill(&a, 2);
     REQUIRE_VK(submit(queues[0], VK_NULL_HANDLE, 0, fill, VK_NULL_HANDLE, 0, VK_NULL_HANDLE)); /* (done: dropped) */
@@ -575,6 +608,7 @@ static void test_render_pass_external_dependencies(void)
     VkCommandBuffer cb = VK_NULL_HANDLE;
     VkFence f = make_fence(false);
     const pvk_MTLStages fragment = PVK_MTLStageFragment | PVK_MTLStageTile;
+    const pvk_MTLStages *o;
 
     memset(&subpass, 0, sizeof(subpass));
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -620,8 +654,8 @@ static void test_render_pass_external_dependencies(void)
     REQUIRE_VK(vkQueueWaitIdle(queues[0]));
     REQUIRE_VK(submit(queues[0], VK_NULL_HANDLE, 0, cb, VK_NULL_HANDLE, 0, f));
     REQUIRE(q->orders.count >= 1);
-    CHECK(q->orders.at[q->orders.count - 1].after == fragment);
-    CHECK(q->orders.at[q->orders.count - 1].before == (fragment | PVK_MTLStageDispatch));
+    o = q->orders.at[q->orders.count - 1].after; /* (pvk_order_stages) */
+    CHECK(!o[0] && o[1] == (fragment | PVK_MTLStageVertex) && o[2] == o[1] && o[3] == o[1] && !o[4]);
     CHECK_VK(vkWaitForFences(device, 1, &f, VK_TRUE, 10000000000ull), VK_SUCCESS);
     vkFreeCommandBuffers(device, pool, 1, &cb);
     vkDestroyFence(device, f, NULL);
