@@ -62431,23 +62431,71 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
 
 static pthread_mutex_t pvk_graphics_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* The MTL4Compilers of render pipelines, one per MTLDevice in the process,
+ * under pvk_graphics_lock. On macOS 26, MTL4Compilers compiling at the same
+ * time corrupt the heap (FB22683138, fixed in macOS 27 beta 5): VkDevices,
+ * of one instance or several, share their MTLDevice's. One MTL4Compiler
+ * compiles on several threads at once. users counts the VkDevices holding
+ * it; the last one releases it. Apple silicon has one GPU: a few slots are
+ * plenty. */
+static struct pvk_shared_compiler {
+    id mtl_device, compiler;
+    long users;
+} pvk_shared_compilers[4];
+
 /* The device's MTL4Compiler of render pipelines (made on first use; NULL on
- * failure). MTL4Compiler is thread-safe. */
+ * failure), shared with every VkDevice on its MTLDevice. */
 static id pvk_device_compiler(struct pvk_device *device)
 {
-    id compiler;
+    id compiler, mtl = device->physical_device->mtl_device;
     pthread_mutex_lock(&pvk_graphics_lock);
     if (!device->compiler) {
-        void *pool = objc_autoreleasePoolPush();
-        id desc = pvk_MTL4CompilerDescriptor_new();
-        if (desc)
-            device->compiler = pvk_MTLDevice_newCompilerWithDescriptor_error(device->physical_device->mtl_device, desc, NULL);
-        pvk_release(desc);
-        objc_autoreleasePoolPop(pool);
+        struct pvk_shared_compiler *slot = NULL;
+        uint32_t i;
+        for (i = 0; i < PVK_ARRAY_SIZE(pvk_shared_compilers); i++) {
+            struct pvk_shared_compiler *s = &pvk_shared_compilers[i];
+            if (s->users && s->mtl_device == mtl) {
+                slot = s;
+                break;
+            }
+            if (!s->users && !slot)
+                slot = s;
+        }
+        if (slot && !slot->users) {
+            void *pool = objc_autoreleasePoolPush();
+            id desc = pvk_MTL4CompilerDescriptor_new();
+            slot->compiler = desc ? pvk_MTLDevice_newCompilerWithDescriptor_error(mtl, desc, NULL) : NULL;
+            slot->mtl_device = mtl;
+            pvk_release(desc);
+            objc_autoreleasePoolPop(pool);
+        }
+        if (slot && slot->compiler) {
+            slot->users++;
+            device->compiler = slot->compiler;
+        }
     }
     compiler = device->compiler;
     pthread_mutex_unlock(&pvk_graphics_lock);
     return compiler;
+}
+
+/* Lets go of the device's share of its MTL4Compiler. */
+static void pvk_device_release_compiler(struct pvk_device *device)
+{
+    uint32_t i;
+    pthread_mutex_lock(&pvk_graphics_lock);
+    for (i = 0; device->compiler && i < PVK_ARRAY_SIZE(pvk_shared_compilers); i++) {
+        struct pvk_shared_compiler *s = &pvk_shared_compilers[i];
+        if (s->users && s->compiler == device->compiler) {
+            if (!--s->users) {
+                pvk_release(s->compiler);
+                s->compiler = s->mtl_device = NULL;
+            }
+            break;
+        }
+    }
+    device->compiler = NULL;
+    pthread_mutex_unlock(&pvk_graphics_lock);
 }
 
 /* Math mode for MSL (COMPILING THE OUTPUT): relaxed with fast functions
@@ -66439,8 +66487,7 @@ static void pvk_device_finish_graphics(struct pvk_device *device)
         pvk_release(device->prepass_pipelines[i]);
         device->prepass_pipelines[i] = NULL;
     }
-    pvk_release(device->compiler);
-    device->compiler = NULL;
+    pvk_device_release_compiler(device);
 }
 
 /* ---- Queries and events ----

@@ -12686,6 +12686,74 @@ static void test_shader_cache_threads(void)
     free_img(&target);
 }
 
+/* A VkDevice made on the test's physical device, with a layout like
+ * pc_layout (test_shared_compiler). */
+static VkDevice make_other_device(VkPipelineLayout *layout)
+{
+    VkDeviceQueueCreateInfo queue_info;
+    VkDeviceCreateInfo device_info;
+    VkPushConstantRange range;
+    VkPipelineLayoutCreateInfo layout_info;
+    VkDevice d = VK_NULL_HANDLE;
+    float priority = 1.0f;
+    memset(&queue_info, 0, sizeof(queue_info));
+    queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queue_info.queueCount = 1;
+    queue_info.pQueuePriorities = &priority;
+    memset(&device_info, 0, sizeof(device_info));
+    device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    device_info.queueCreateInfoCount = 1;
+    device_info.pQueueCreateInfos = &queue_info;
+    if (vkCreateDevice(pd, &device_info, NULL, &d) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    range.offset = 0;
+    range.size = sizeof(struct pc);
+    memset(&layout_info, 0, sizeof(layout_info));
+    layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout_info.pushConstantRangeCount = 1;
+    layout_info.pPushConstantRanges = &range;
+    CHECK_VK(vkCreatePipelineLayout(d, &layout_info, NULL, layout), VK_SUCCESS);
+    return d;
+}
+
+/* A render pipeline of a format no other test makes, on the device in
+ * `device`, with `layout`. */
+static void make_compiled_pipe(VkPipelineLayout layout, VkFormat format)
+{
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    struct pipe p;
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.layout = layout;
+    p.color_formats[0] = format;
+    CHECK_VK(make_pipe_result(&p, &pipeline), VK_SUCCESS);
+    vkDestroyPipeline(device, pipeline, NULL);
+}
+
+/* VkDevices share their MTLDevice's MTL4Compiler (macOS 26 corrupts the
+ * heap when several compile at once): render pipelines are made while
+ * other devices come and go, the last one releasing it. */
+static void test_shared_compiler(void)
+{
+    VkDevice main_device = device, d2, d3;
+    VkPipelineLayout l2 = VK_NULL_HANDLE, l3 = VK_NULL_HANDLE;
+    REQUIRE((d2 = make_other_device(&l2)) != VK_NULL_HANDLE);
+    device = d2;
+    make_compiled_pipe(l2, VK_FORMAT_R16G16_UNORM);
+    device = main_device;
+    make_compiled_pipe(pc_layout, VK_FORMAT_R16G16_SNORM);
+    vkDestroyPipelineLayout(d2, l2, NULL);
+    vkDestroyDevice(d2, NULL);
+    make_compiled_pipe(pc_layout, VK_FORMAT_R16G16_SFLOAT);
+    REQUIRE((d3 = make_other_device(&l3)) != VK_NULL_HANDLE);
+    device = d3;
+    make_compiled_pipe(l3, VK_FORMAT_R32G32_SFLOAT);
+    device = main_device;
+    vkDestroyPipelineLayout(d3, l3, NULL);
+    vkDestroyDevice(d3, NULL);
+    make_compiled_pipe(pc_layout, VK_FORMAT_R16G16B16A16_UNORM);
+}
+
 /* ==========================================================================
  * Y'CbCr conversion in fragment shaders
  * ========================================================================== */
@@ -13973,6 +14041,7 @@ int main(void)
     RUN(test_shader_cache_key);
     RUN(test_shader_cache);
     RUN(test_shader_cache_threads);
+    RUN(test_shared_compiler);
     RUN(test_implicit_cache);
     RUN(test_ycbcr_fragment);
     RUN(test_parallel_primaries);
