@@ -59888,8 +59888,11 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   loop's acquire, attachment reuse): serializing whole encoders cost a
  *   quarter of the frame rate where the GPU is busy (Sascha Willems'
  *   instancing, M4 Max). Each Metal pass of a render pass instance after its
- *   first, a resumed one and one after draw preprocessing waits for all
- *   earlier work: it loads what those before it stored. Waiting for all
+ *   first, a resumed one and one after depth copies waits for all earlier
+ *   work: it loads what those before it stored; one after draw
+ *   preprocessing waits for its dispatches before its vertex stage (its
+ *   draws read what they wrote there, or in fragments, which follow their
+ *   vertices). Waiting for all
  *   earlier encoders also covers what a barrier ordered before them, which a
  *   producer barrier at the end of an encoder would not when no command of
  *   that encoder follows the barrier. Barriers flush to the device coherence
@@ -60686,7 +60689,10 @@ struct pvk_encoder {
      * memory replays copy) */
     struct pvk_render_query *pending;
     uint32_t pending_capacity;
-    bool prepassed;             /* compute work the next render encoder must wait for */
+    /* Work of its own the next render encoder waits for: draw preprocessing
+     * dispatches (before its vertex stage), depth copies (render encoders:
+     * before all its stages, pvk_render_seed_depth) */
+    bool prepassed, seeded;
     struct pvk_replay replay;   /* tile memory overflow */
     struct pvk_pipeline *pipeline;
     bool pipeline_dirty; /* setComputePipelineState: owed */
@@ -65239,7 +65245,7 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
                                                                  : !k && !load_all && c->depth.load == PVK_MTLLoadActionClear
                                                                      ? PVK_MTLLoadActionClear
                                                                      : PVK_MTLLoadActionDontCare);
-        e->prepassed |= seed; /* (the pass waits for it) */
+        e->seeded |= seed; /* (the pass waits for it) */
         pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionDontCare);
         if (!k) {
             pvk_MTLClearColor cc;
@@ -65339,7 +65345,7 @@ static void pvk_render_split_resolve(struct pvk_encoder *e)
      * out of its resolve textures) */
     pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
         enc, PVK_STAGES_RENDER, PVK_STAGES_RENDER, e->queue->device->visibility);
-    e->prepassed = r->resolve_wait = false;
+    e->prepassed = e->seeded = r->resolve_wait = false;
     pvk_render_close(e, enc);
     pvk_release(enc);
 }
@@ -65509,12 +65515,17 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
             continue;
         if (r->resolve_wait) /* (after the copies, render encoders) */
             waits[i] |= PVK_STAGES_RENDER;
-        /* (a later part of a render pass instance loads what the earlier stored) */
-        if (e->prepassed || c->after || (c->flags & VK_RENDERING_RESUMING_BIT))
+        /* Draws read what preprocessing wrote at the vertex stage, or later
+         * in work that follows their vertices (fragments) */
+        if (e->prepassed && pvk_order_stages[i] == PVK_MTLStageVertex)
+            waits[i] |= PVK_MTLStageDispatch;
+        /* (a later part of a render pass instance loads what the earlier
+         * stored; depth copies are loaded) */
+        if (e->seeded || c->after || (c->flags & VK_RENDERING_RESUMING_BIT))
             waits[i] = PVK_STAGES_ALL;
     }
     pvk_encoder_waits(e, enc, waits);
-    e->prepassed = r->resolve_wait = false;
+    e->prepassed = e->seeded = r->resolve_wait = false;
     r->suspended = false;
     r->resolve_depth = resolve_depth;
     r->resolve_stencil = resolve_stencil;
