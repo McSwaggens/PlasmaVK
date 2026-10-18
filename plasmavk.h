@@ -60251,6 +60251,14 @@ struct pvk_pp_result {
  * the encoder and by the scan that preprocesses a render pass's draws. */
 struct pvk_draw_track {
     uint32_t topology, restart;
+    /* As the encoder's struct pvk_render keeps them: topology, restart and
+     * bounds are the bound pipeline's where it has them static (statics,
+     * PVK_DYN_BIT()s) and what commands set otherwise; what commands set
+     * while they were static waits in the _cmds for a pipeline that leaves
+     * them dynamic (pvk_track_pipeline) */
+    uint32_t topology_cmds, restart_cmds, statics;
+    bool bounds_cmds;
+#define PVK_TRACK_DYN (PVK_DYN_BIT(PRIMITIVE_TOPOLOGY) | PVK_DYN_BIT(PRIMITIVE_RESTART_ENABLE) | PVK_DYN_BIT(DEPTH_BOUNDS_TEST_ENABLE))
     uint64_t index_address, index_size;
     uint32_t index_type; /* VkIndexType */
     uint32_t samples;    /* the first graphics pipeline's (passes without attachments) */
@@ -60364,13 +60372,17 @@ struct pvk_render {
     uint32_t view_mask;
     bool depth, stencil;   /* it has them */
     bool dynamic;          /* dynamic rendering: clears name color slots */
-    /* Bound state */
+    /* Bound state: the draws' dynamic state is the pipeline's for the state
+     * it has static (dyn_static: those PVK_DYN_BIT()s) and what vkCmdSet*
+     * commands set for the rest. What they set while the bound pipeline
+     * had the state static is kept in dyn_cmds for a later pipeline that
+     * leaves it dynamic (pvk_encode_set_dynamic, pvk_encode_bind_graphics). */
     struct pvk_pipeline *pipeline;
-    struct pvk_dynamic_state dyn;
+    struct pvk_dynamic_state dyn, dyn_cmds;
+    uint32_t dyn_static;
     struct pvk_vertex_binding vertex[PVK_MAX_VERTEX_BINDINGS];
     struct pvk_draw_track track; /* index buffer binding (topology and restart: dyn) */
     uint32_t dirty;        /* PVK_RD_* */
-    uint32_t dyn_touched;  /* PVK_DYN_BIT()s of dyn set by commands since the last pipeline bind */
     struct pvk_render_sent sent;
     bool skip_scissor;     /* the scissor is empty */
     bool skip_bounds;      /* the depth bounds are empty */
@@ -63325,15 +63337,30 @@ static void pvk_track_pipeline(struct pvk_draw_track *t, const struct pvk_pipeli
 {
     if (!p || !p->gfx)
         return;
+    uint32_t statics = ~p->gfx->dynamic & PVK_TRACK_DYN;
+    uint32_t save = statics & ~t->statics, restore = ~statics & t->statics; /* (as pvk_encode_bind_graphics) */
     t->gfx = p->gfx;
     t->mapped = false;
     t->fetches |= p->gfx->fetches;
-    if (!(p->gfx->dynamic & PVK_DYN_BIT(PRIMITIVE_TOPOLOGY)))
+    if (save & PVK_DYN_BIT(PRIMITIVE_TOPOLOGY))
+        t->topology_cmds = t->topology;
+    if (save & PVK_DYN_BIT(PRIMITIVE_RESTART_ENABLE))
+        t->restart_cmds = t->restart;
+    if (save & PVK_DYN_BIT(DEPTH_BOUNDS_TEST_ENABLE))
+        t->bounds_cmds = t->bounds;
+    if (restore & PVK_DYN_BIT(PRIMITIVE_TOPOLOGY))
+        t->topology = t->topology_cmds;
+    if (restore & PVK_DYN_BIT(PRIMITIVE_RESTART_ENABLE))
+        t->restart = t->restart_cmds;
+    if (restore & PVK_DYN_BIT(DEPTH_BOUNDS_TEST_ENABLE))
+        t->bounds = t->bounds_cmds;
+    if (statics & PVK_DYN_BIT(PRIMITIVE_TOPOLOGY))
         t->topology = p->gfx->state.topology;
-    if (!(p->gfx->dynamic & PVK_DYN_BIT(PRIMITIVE_RESTART_ENABLE)))
+    if (statics & PVK_DYN_BIT(PRIMITIVE_RESTART_ENABLE))
         t->restart = p->gfx->state.primitive_restart;
-    if (!(p->gfx->dynamic & PVK_DYN_BIT(DEPTH_BOUNDS_TEST_ENABLE)))
+    if (statics & PVK_DYN_BIT(DEPTH_BOUNDS_TEST_ENABLE))
         t->bounds = p->gfx->state.depth_bounds_test != 0;
+    t->statics = statics;
     if (!t->samples)
         t->samples = p->gfx->samples;
     t->hidden |= p->gfx->reads; /* the copies the pass needs (depth bounds: pvk_scan_packet) */
@@ -63428,14 +63455,15 @@ static bool pvk_scan_packet(struct pvk_encoder *e, struct pvk_draw_track *t, con
     case PVK_CMD_CLEAR_ATTACHMENTS:
         t->written = ~0u;
         break;
-    case PVK_CMD_SET_DYNAMIC: {
+    case PVK_CMD_SET_DYNAMIC: { /* (the bound pipeline's static state stays: pvk_encode_set_dynamic) */
         const struct pvk_cmd_dynamic *d = (const struct pvk_cmd_dynamic *)c;
+        bool is_static = d->state < PVK_DYN_COUNT && (t->statics & (1u << d->state));
         if (d->state == PVK_DYN_PRIMITIVE_TOPOLOGY)
-            t->topology = *(const uint32_t *)(d + 1);
+            *(is_static ? &t->topology_cmds : &t->topology) = *(const uint32_t *)(d + 1);
         else if (d->state == PVK_DYN_PRIMITIVE_RESTART_ENABLE)
-            t->restart = *(const uint32_t *)(d + 1);
+            *(is_static ? &t->restart_cmds : &t->restart) = *(const uint32_t *)(d + 1);
         else if (d->state == PVK_DYN_DEPTH_BOUNDS_TEST_ENABLE)
-            t->bounds = *(const uint32_t *)(d + 1) != 0;
+            *(is_static ? &t->bounds_cmds : &t->bounds) = *(const uint32_t *)(d + 1) != 0;
         break;
     }
     case PVK_CMD_BIND_INDEX: {
@@ -64375,6 +64403,11 @@ static struct pvk_draw_track pvk_render_track(const struct pvk_render *r)
     struct pvk_draw_track t = r->track;
     t.topology = r->dyn.topology;
     t.restart = r->dyn.primitive_restart;
+    t.bounds = r->dyn.depth_bounds_test != 0;
+    t.statics = r->dyn_static & PVK_TRACK_DYN;
+    t.topology_cmds = r->dyn_cmds.topology;
+    t.restart_cmds = r->dyn_cmds.primitive_restart;
+    t.bounds_cmds = r->dyn_cmds.depth_bounds_test != 0;
     t.gfx = r->pipeline ? r->pipeline->gfx : NULL; /* (pvk_draw_conv: polygon points) */
     return t;
 }
@@ -65250,7 +65283,6 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
     memset(track.map, PVK_NO_SLOT, sizeof(track.map));
     track.mapped = false;
     track.hidden = r->pipeline && r->pipeline->gfx ? r->pipeline->gfx->reads : 0; /* the depth/stencil copies needed */
-    track.bounds = r->dyn.depth_bounds_test != 0;
     if (pvk_pass_scanned(e, c, &track)) {
         pvk_prepass_scan(e, &track);
         pvk_prepass_later(e, c, &track);
@@ -65402,44 +65434,35 @@ static void pvk_render_set_map(struct pvk_encoder *e, const uint8_t *map)
     r->map_valid = true;
 }
 
-/* Applies a SET_DYNAMIC packet. */
-static void pvk_encode_set_dynamic(struct pvk_encoder *e, const struct pvk_cmd_dynamic *c)
+/* Writes a SET_DYNAMIC packet's values into d; returns the PVK_RD_* state
+ * they change. */
+static uint32_t pvk_dynamic_set(struct pvk_dynamic_state *d, const struct pvk_cmd_dynamic *c)
 {
-    struct pvk_render *r = &e->render;
-    struct pvk_dynamic_state *d = &r->dyn;
     const uint32_t *u = (const uint32_t *)(c + 1);
     const float *f = (const float *)(c + 1);
     unsigned face;
-    if (c->state < PVK_DYN_COUNT) /* (with a count, the viewports or scissors too) */
-        r->dyn_touched |= (1u << c->state) | (c->state == PVK_DYN_VIEWPORT_COUNT ? PVK_DYN_BIT(VIEWPORT) : 0u) |
-                          (c->state == PVK_DYN_SCISSOR_COUNT ? PVK_DYN_BIT(SCISSOR) : 0u);
     switch ((enum pvk_dyn)c->state) {
     case PVK_DYN_VIEWPORT_COUNT:
         d->viewport_count = c->count;
         /* fallthrough */
     case PVK_DYN_VIEWPORT:
         memcpy(d->viewports + c->first, c + 1, sizeof(VkViewport) * c->count);
-        r->dirty |= PVK_RD_VIEWPORT;
-        break;
+        return PVK_RD_VIEWPORT;
     case PVK_DYN_SCISSOR_COUNT:
         d->scissor_count = c->count;
         /* fallthrough */
     case PVK_DYN_SCISSOR:
         memcpy(d->scissors + c->first, c + 1, sizeof(VkRect2D) * c->count);
-        r->dirty |= PVK_RD_SCISSOR;
-        break;
+        return PVK_RD_SCISSOR;
     case PVK_DYN_DEPTH_BIAS:
         memcpy(d->depth_bias, f, sizeof(d->depth_bias));
-        r->dirty |= PVK_RD_DEPTH_BIAS;
-        break;
+        return PVK_RD_DEPTH_BIAS;
     case PVK_DYN_BLEND_CONSTANTS:
         memcpy(d->blend_constants, f, sizeof(d->blend_constants));
-        r->dirty |= PVK_RD_BLEND;
-        break;
+        return PVK_RD_BLEND;
     case PVK_DYN_DEPTH_BOUNDS:
         memcpy(d->depth_bounds, f, sizeof(d->depth_bounds));
-        r->dirty |= PVK_RD_DEPTH_BOUNDS;
-        break;
+        return PVK_RD_DEPTH_BOUNDS;
     case PVK_DYN_STENCIL_COMPARE_MASK:
     case PVK_DYN_STENCIL_WRITE_MASK:
     case PVK_DYN_STENCIL_REFERENCE:
@@ -65461,87 +65484,103 @@ static void pvk_encode_set_dynamic(struct pvk_encoder *e, const struct pvk_cmd_d
                 s->compare = u[3];
             }
         }
-        r->dirty |= c->state == PVK_DYN_STENCIL_REFERENCE ? PVK_RD_STENCIL_REF : PVK_RD_DS;
-        break;
+        return c->state == PVK_DYN_STENCIL_REFERENCE ? PVK_RD_STENCIL_REF : PVK_RD_DS;
     case PVK_DYN_CULL_MODE:
         d->cull_mode = u[0];
-        r->dirty |= PVK_RD_CULL;
-        break;
+        return PVK_RD_CULL;
     case PVK_DYN_FRONT_FACE:
         d->front_face = u[0];
-        r->dirty |= PVK_RD_FRONT_FACE;
-        break;
+        return PVK_RD_FRONT_FACE;
     case PVK_DYN_PRIMITIVE_TOPOLOGY:
         d->topology = u[0];
-        break;
+        return 0;
     case PVK_DYN_DEPTH_TEST_ENABLE:
         d->depth_test = (uint8_t)u[0];
-        r->dirty |= PVK_RD_DS;
-        break;
+        return PVK_RD_DS;
     case PVK_DYN_DEPTH_WRITE_ENABLE:
         d->depth_write = (uint8_t)u[0];
-        r->dirty |= PVK_RD_DS;
-        break;
+        return PVK_RD_DS;
     case PVK_DYN_DEPTH_COMPARE_OP:
         d->depth_compare = u[0];
-        r->dirty |= PVK_RD_DS;
-        break;
+        return PVK_RD_DS;
     case PVK_DYN_DEPTH_BOUNDS_TEST_ENABLE:
         d->depth_bounds_test = (uint8_t)u[0];
-        r->dirty |= PVK_RD_DEPTH_BOUNDS;
-        break;
+        return PVK_RD_DEPTH_BOUNDS;
     case PVK_DYN_STENCIL_TEST_ENABLE:
         d->stencil_test = (uint8_t)u[0];
-        r->dirty |= PVK_RD_DS;
-        break;
+        return PVK_RD_DS;
     case PVK_DYN_RASTERIZER_DISCARD_ENABLE:
         d->rasterizer_discard = (uint8_t)u[0];
-        break;
+        return 0;
     case PVK_DYN_DEPTH_BIAS_ENABLE:
         d->depth_bias_enable = (uint8_t)u[0];
-        r->dirty |= PVK_RD_DEPTH_BIAS;
-        break;
+        return PVK_RD_DEPTH_BIAS;
     case PVK_DYN_PRIMITIVE_RESTART_ENABLE:
         d->primitive_restart = (uint8_t)u[0];
-        break;
+        return 0;
     default:
-        break;
+        return 0;
     }
 }
 
-/* A pipeline bind sets the pipeline's static state. Binding the bound
- * pipeline again (per-object secondaries, engines that bind every draw's
- * whole state) sets only the static state that commands changed since:
- * the rest, and what the encoder was sent, are as the last bind left them. */
+/* Applies a SET_DYNAMIC packet: to the draws' state, unless the bound
+ * pipeline has the state static (Vulkan: the command "sets the state for
+ * subsequent drawing commands when the graphics pipeline is created with
+ * [it] dynamic; otherwise, this state is specified by the [pipeline]"),
+ * in which case it is kept for a later pipeline that leaves it dynamic. */
+static void pvk_encode_set_dynamic(struct pvk_encoder *e, const struct pvk_cmd_dynamic *c)
+{
+    struct pvk_render *r = &e->render;
+    uint32_t bits = c->state < PVK_DYN_COUNT ? 1u << c->state : 0u;
+    if (c->state == PVK_DYN_VIEWPORT_COUNT) /* (with a count, the viewports or scissors too) */
+        bits |= PVK_DYN_BIT(VIEWPORT);
+    else if (c->state == PVK_DYN_SCISSOR_COUNT)
+        bits |= PVK_DYN_BIT(SCISSOR);
+    if (bits & r->dyn_static)
+        pvk_dynamic_set(&r->dyn_cmds, c);
+    else
+        r->dirty |= pvk_dynamic_set(&r->dyn, c);
+}
+
+/* A pipeline bind sets the pipeline's static state (Vulkan: "any pipeline
+ * object state that is not specified as dynamic is applied to the command
+ * buffer state"), and the state it leaves dynamic goes back to what
+ * commands set (kept in dyn_cmds while a pipeline had it static). Binding
+ * the bound pipeline again (per-object secondaries, engines that bind every
+ * draw's whole state) changes nothing: its static state was never
+ * overridden, and what the encoder was sent is as the last bind left it. */
 static void pvk_encode_bind_graphics(struct pvk_encoder *e, struct pvk_pipeline *p)
 {
     struct pvk_render *r = &e->render;
-    bool same = p == r->pipeline;
-    uint32_t statics;
+    uint32_t statics, save, restore;
+    if (p == r->pipeline)
+        return;
     r->pipeline = p;
     if (!p || !p->gfx)
         return;
     statics = ~p->gfx->dynamic & ((1u << PVK_DYN_COUNT) - 1);
-    if (same)
-        statics &= r->dyn_touched;
-    r->dyn_touched = 0;
-    if (statics)
-        pvk_dynamic_copy(&r->dyn, &p->gfx->state, statics);
-    if (!same || statics)
-        r->dirty = PVK_RD_ALL;
+    save = statics & ~r->dyn_static; /* what commands set, about to be a pipeline's */
+    restore = ~statics & r->dyn_static;
+    if (save)
+        pvk_dynamic_copy(&r->dyn_cmds, &r->dyn, save);
+    if (restore)
+        pvk_dynamic_copy(&r->dyn, &r->dyn_cmds, restore);
+    pvk_dynamic_copy(&r->dyn, &p->gfx->state, statics);
+    r->dyn_static = statics;
+    r->dirty = PVK_RD_ALL;
 }
 
 static void pvk_encode_bind_vertex(struct pvk_encoder *e, const struct pvk_cmd_bind_vertex *c)
 {
     struct pvk_render *r = &e->render;
     const struct pvk_vertex_binding *v = (const struct pvk_vertex_binding *)(c + 1);
+    /* (the pipeline's strides stay where it has them static, as pvk_encode_set_dynamic) */
+    struct pvk_dynamic_state *d = r->dyn_static & PVK_DYN_BIT(VERTEX_STRIDE) ? &r->dyn_cmds : &r->dyn;
     uint32_t i;
     for (i = 0; i < c->count; i++) {
         r->vertex[c->first + i] = v[i];
-        if (v[i].has_stride) {
-            r->dyn.strides[c->first + i] = v[i].stride;
-            r->dyn_touched |= PVK_DYN_BIT(VERTEX_STRIDE);
-        }
+        if (v[i].has_stride)
+            d->strides[c->first + i] = v[i].stride;
     }
     r->dirty |= PVK_RD_VERTEX;
 }

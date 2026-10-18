@@ -3516,6 +3516,58 @@ static void test_rebind_pipeline(void)
     free_img(&target);
 }
 
+static uint32_t expect_static_state(uint32_t x, uint32_t y)
+{
+    if (x < W / 2)
+        return BLUE;
+    return y < H / 2 ? GREEN : RED;
+}
+
+/* vkCmdSet* commands set the state of pipelines that leave it dynamic only
+ * (Vulkan: "otherwise, this state is specified by the [pipeline]"): with a
+ * pipeline of static scissor and cull mode bound, a scissor of the top half
+ * and FRONT_AND_BACK culling set, a full-screen rectangle covers the whole
+ * target. What they set stays set for a pipeline that leaves it dynamic,
+ * bound later, and the static pipeline's state comes back when it is bound
+ * again. */
+static void test_static_state(void)
+{
+    static const VkDynamicState states[] = { VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_CULL_MODE };
+    static const float black[4] = { 0, 0, 0, 1 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkRect2D top = { { 0, 0 }, { W, H / 2 } };
+    VkPipeline fixed, dynamic;
+    struct pipe p;
+    VkCommandBuffer cb;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    fixed = make_pipe(&p); /* everything static: the whole target's scissor, no culling */
+    p.dynamic = states;
+    p.dynamic_count = 2;
+    dynamic = make_pipe(&p);
+    REQUIRE(fixed && dynamic);
+    cb = begin_cmd();
+    begin_rendering(cb, &target, 1, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, fixed);
+    vkCmdSetScissor(cb, 0, 1, &top);                   /* not for this pipeline: its scissor is static */
+    vkCmdSetCullMode(cb, VK_CULL_MODE_FRONT_AND_BACK); /* nor this */
+    rect(cb, -1, -1, 1, 1, 1, 0, 0, 1, 0);             /* red, the whole target */
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, dynamic); /* the scissor and culling set above */
+    vkCmdSetCullMode(cb, VK_CULL_MODE_NONE);
+    rect(cb, -1, -1, 1, 1, 0, 1, 0, 1, 0);             /* green, the top half */
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, fixed); /* its own scissor again */
+    rect(cb, -1, -1, 0, 1, 0, 0, 1, 1, 0);             /* blue, the whole left half */
+    vkCmdEndRendering(cb);
+    download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    submit(cb);
+    CHECK(count_bad(&out, expect_static_state, "static state set by vkCmdSet*") == 0);
+    vkDestroyPipeline(device, fixed, NULL);
+    vkDestroyPipeline(device, dynamic, NULL);
+    free_buf(&out);
+    free_img(&target);
+}
+
 static uint32_t expect_bias_clamp(uint32_t x, uint32_t y)
 {
     if (y < H / 2) /* depth clamp: drawn with clamping, clipped without */
@@ -13737,6 +13789,7 @@ int main(void)
     RUN(test_blend_replace);
     RUN(test_cull);
     RUN(test_rebind_pipeline);
+    RUN(test_static_state);
     RUN(test_depth_bias_clamp);
     RUN(test_viewports_layers);
     RUN(test_multiview);
