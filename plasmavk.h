@@ -35368,9 +35368,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceImageFormatProperties2(VkPhysi
             ((VkSamplerYcbcrConversionImageFormatProperties *)(void *)s)->combinedImageSamplerDescriptorCount =
                 pvk_ycbcr_format(f) ? pvk_ycbcr_format(f)->planes : 1;
         } else if (s->sType == VK_STRUCTURE_TYPE_HOST_IMAGE_COPY_DEVICE_PERFORMANCE_QUERY) {
-            /* HOST_TRANSFER images live in shared memory (section 11), which
-             * Metal never compresses losslessly; block-compressed formats
-             * lose nothing. Whether the layouts are identical is unverified. */
+            /* HOST_TRANSFER images go without lossless compression (section
+             * 11; Metal compresses shared textures too, so it is turned off);
+             * block-compressed formats lose nothing. Whether the layouts are
+             * identical is unverified. */
             VkHostImageCopyDevicePerformanceQuery *p = (VkHostImageCopyDevicePerformanceQuery *)(void *)s;
             p->optimalDeviceAccess = f && f->block_w > 1 && !pvk_ycbcr_format(f) ? VK_TRUE : VK_FALSE;
             p->identicalMemoryLayout = VK_FALSE;
@@ -38658,8 +38659,9 @@ static bool pvk_format_reinterprets(const struct pvk_format *image, VkFormat vie
 static void pvk_image_init_planes(const struct pvk_physical_device *pd, struct pvk_image *image);
 
 /* Fills an image from its creation parameters; no Metal object is made. */
-static void pvk_image_init(const struct pvk_physical_device *pd, struct pvk_image *image, const VkImageCreateInfo *info)
+static void pvk_image_init(const struct pvk_device *device, struct pvk_image *image, const VkImageCreateInfo *info)
 {
+    const struct pvk_physical_device *pd = device->physical_device;
     const VkBaseInStructure *s;
     const struct pvk_format *f = pvk_format(info->format);
     bool views = (info->flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0, listed = false, reinterprets = false;
@@ -38705,10 +38707,14 @@ static void pvk_image_init(const struct pvk_physical_device *pd, struct pvk_imag
                          VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)) ||
         ((image->usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) && f && ((f->caps & PVK_FC_COLOR) || !pvk_format_is_color(f))))
         image->mtl_usage |= PVK_MTLTextureUsageRenderTarget;
+    /* PixelFormatView costs color textures their lossless compression (2x
+     * the bandwidth of a load and store, M4 Max) but not depth/stencil ones;
+     * SNORM attachments take it only for the SINT view of logical operations. */
     if ((views && (!listed || reinterprets)) || (f && f->kind == PVK_FK_DEPTH_STENCIL) ||
         (views && pvk_ycbcr_format(f)) || /* plane views */
-        ((image->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) && f && pvk_snorm_as_sint(f->mtl)))
-        image->mtl_usage |= PVK_MTLTextureUsagePixelFormatView; /* (SNORM: the SINT view for logical operations) */
+        ((image->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) && f && pvk_snorm_as_sint(f->mtl) &&
+         device->features.core.logicOp))
+        image->mtl_usage |= PVK_MTLTextureUsagePixelFormatView;
 
     if (image->tiling == VK_IMAGE_TILING_LINEAR && f) {
         VkDeviceSize align = pvk_MTLDevice_minimumLinearTextureAlignmentForPixelFormat(pd->mtl_device, f->mtl);
@@ -38724,9 +38730,18 @@ static void pvk_image_init(const struct pvk_physical_device *pd, struct pvk_imag
  * an extent (a plane's), with resource options. Lossless compression
  * (allowGPUOptimizedContents) rewrites the packed float formats' values in
  * canonical form (RGB9E5: exponent down and mantissas doubled while their
- * top bits are 0; checked on M4 Max with copies through buffers), where
- * Vulkan copies must keep every bit: their textures go without it. So do
- * those of images with VK_IMAGE_USAGE_HOST_TRANSFER_BIT (HOST IMAGE COPY). */
+ * top bits are 0; B10G11R11: NaN payloads; checked on M4 Max with copies
+ * through buffers), where Vulkan copies must keep every bit. Rendering and
+ * blits write canonical values, so only images whose raw bits copies may
+ * write (TRANSFER_DST, or aliased memory) go without it; storage and
+ * reinterpreting views already have none (ShaderWrite, PixelFormatView).
+ * So do images with VK_IMAGE_USAGE_HOST_TRANSFER_BIT (HOST IMAGE COPY). */
+static bool pvk_image_raw_bits(const struct pvk_image *image, pvk_MTLPixelFormat format)
+{
+    return (format == PVK_MTLPixelFormatRGB9E5Float || format == PVK_MTLPixelFormatRG11B10Float) &&
+           ((image->usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) || (image->flags & VK_IMAGE_CREATE_ALIAS_BIT));
+}
+
 static id pvk_texture_descriptor(const struct pvk_image *image, pvk_MTLPixelFormat format, uint32_t width,
                                  uint32_t height, pvk_MTLResourceOptions options)
 {
@@ -38743,8 +38758,7 @@ static id pvk_texture_descriptor(const struct pvk_image *image, pvk_MTLPixelForm
     pvk_MTLTextureDescriptor_setArrayLength(desc, image->type == VK_IMAGE_TYPE_3D ? 1 : image->layers);
     pvk_MTLTextureDescriptor_setResourceOptions(desc, options);
     pvk_MTLTextureDescriptor_setUsage(desc, image->mtl_usage);
-    if (format == PVK_MTLPixelFormatRGB9E5Float || format == PVK_MTLPixelFormatRG11B10Float ||
-        (image->usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT))
+    if (pvk_image_raw_bits(image, format) || (image->usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT))
         pvk_MTLTextureDescriptor_setAllowGPUOptimizedContents(desc, false);
     return desc;
 }
@@ -38800,7 +38814,8 @@ static void pvk_texture_requirements(const struct pvk_physical_device *pd, const
         key[6] = image->type == VK_IMAGE_TYPE_3D ? 1 : image->layers;
         key[7] = image->samples;
         key[8] = (uint32_t)image->mtl_usage;
-        key[9] = (pvk_image_needs_shared(image) ? 1u : 0u) | ((image->usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT) ? 2u : 0u);
+        key[9] = (pvk_image_needs_shared(image) ? 1u : 0u) | ((image->usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT) ? 2u : 0u) |
+                 (pvk_image_raw_bits(image, format) ? 4u : 0u);
         for (m = 0; m < PVK_ARRAY_SIZE(key); m++)
             h = (h ^ key[m]) * 0x9e3779b97f4a7c15ull;
         e = &reqs->entries[(h >> 56) & (PVK_TEXTURE_REQS - 1)];
@@ -39235,7 +39250,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImage(VkDevice _device, const VkImageCrea
     image = pvk_alloc(alloc, sizeof(*image), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (!image)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
-    pvk_image_init(device->physical_device, image, pCreateInfo);
+    pvk_image_init(device, image, pCreateInfo);
     if (image->flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) { /* SPARSE IMAGES */
         void *pool = objc_autoreleasePoolPush();
         image->mtl_texture = pvk_sparse_texture(device->physical_device, image, image->mtl_usage);
@@ -39327,7 +39342,7 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageMemoryRequirements(VkDevice _device, 
     struct pvk_sparse_layout layout;
     struct pvk_image image;
     bool sparse;
-    pvk_image_init(device->physical_device, &image, pInfo->pCreateInfo);
+    pvk_image_init(device, &image, pInfo->pCreateInfo);
     sparse = (image.flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) != 0;
     if (!image.fmt || !image.fmt->mtl || (sparse && !pvk_sparse_layout_query(device->physical_device, &image, &layout))) {
         memset(&pMemoryRequirements->memoryRequirements, 0, sizeof(pMemoryRequirements->memoryRequirements));
@@ -39393,7 +39408,7 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageSparseMemoryRequirements(VkDevice _de
     VkSparseImageMemoryRequirements r;
     struct pvk_image image;
     uint32_t n = 0;
-    pvk_image_init(device->physical_device, &image, pInfo->pCreateInfo);
+    pvk_image_init(device, &image, pInfo->pCreateInfo);
     if (image.fmt && image.fmt->mtl && (image.flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) &&
         pvk_sparse_layout_query(device->physical_device, &image, &layout))
         n = pvk_image_sparse_requirements(&image, &layout, &r);
@@ -39648,7 +39663,7 @@ VKAPI_ATTR void VKAPI_CALL vkGetDeviceImageSubresourceLayout(VkDevice device, co
                                                              VkSubresourceLayout2 *pLayout)
 {
     struct pvk_image image;
-    pvk_image_init(((struct pvk_device *)device)->physical_device, &image, pInfo->pCreateInfo);
+    pvk_image_init((const struct pvk_device *)device, &image, pInfo->pCreateInfo);
     if (!image.fmt || !image.fmt->mtl) {
         memset(&pLayout->subresourceLayout, 0, sizeof(pLayout->subresourceLayout));
         return;
