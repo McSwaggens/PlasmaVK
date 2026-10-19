@@ -42298,9 +42298,11 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   conformance (section 7). The wrappers that only keep signed zeros,
  *   Inf and NaN (pvk_fmin, pvk_fmax, pvk_sin, pvk_cos, pvk_fract) are the
  *   plain functions there. Either way such a module lets Metal contract,
- *   except the add of a multiplicative recurrence (`s = s * a + b`, s a
- *   loop's phi), written under `#pragma METAL fp contract(off)`
- *   (pvk_spv_recurrences). The kernel's name is
+ *   and so does a safe-math one without NoContraction or FPFastMath* flags
+ *   short of AllowContract, through `#pragma METAL fp contract(fast)`
+ *   (pvk_spv_contracts); except the add of a multiplicative recurrence
+ *   (`s = s * a + b`, s a loop's phi), written under `#pragma METAL fp
+ *   contract(off)` (pvk_spv_recurrences). The kernel's name is
  *   result->entry_point; dispatch with result->workgroup_size threads per
  *   threadgroup (declared with [[max_total_threads_per_threadgroup]], so the
  *   compiler fits up to 1024). A vertex function with result->invariant
@@ -42401,8 +42403,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   allow.)
  *   Semantics to know: atomics are memory_order_relaxed, memory semantics
  *   become fences (Memory model); signed integer overflow is undefined in
- *   MSL where SPIR-V wraps; NoContraction makes the module safe math; derivatives after a
- *   discard (OpKill/Terminate) are undefined, as in Vulkan.
+ *   MSL where SPIR-V wraps; NoContraction makes the module safe math
+ *   without contraction; derivatives after a discard (OpKill/Terminate) are
+ *   undefined, as in Vulkan.
  *
  * SHADER CAPABILITIES
  *   What section 7 reports that shaders depend on, the SPIR-V it allows and
@@ -42428,7 +42431,8 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   Float controls (SignedZeroInfNanPreserve and RoundingModeRTE for 16 and
  *     32 bits), shaderFloatControls2: the execution modes and FPFastMath*
  *     are accepted (MTLMathModeSafe keeps signed zeros, Inf, NaN and rounds
- *     to nearest even: stricter than any fast-math flag); FPRoundingMode RTZ
+ *     to nearest even: stricter than any fast-math flag; contracting unless
+ *     flags lack AllowContract, pvk_spv_contracts); FPRoundingMode RTZ
  *     on conversions to half (16-bit storage) is pvk_f16_rtz. No denormal
  *     modes are reported.
  *   shaderExpectAssume: ExpectAssumeKHR; OpExpectKHR is its value,
@@ -55232,6 +55236,47 @@ static bool pvk_spv_fast_math(struct pvk_spv *ctx)
     return true;
 }
 
+/* Whether a module that compiles with safe math (pvk_spv_fast_math) may
+ * contract all the same: Vulkan allows it unless NoContraction says
+ * otherwise, or (float_controls2) FPFastMath* flags without AllowContract:
+ * an FPFastMathMode decoration, or an FPFastMathDefault, under which a float
+ * type without one has no flags. Safe math fuses a multiply and an add only
+ * within a statement, and such modules have one per value (no arithmetic
+ * forwarded, pvk_spv_forward), so `#pragma METAL fp contract(fast)` lets
+ * Metal fuse across them: a vertex transform took 0.431 ms for 0.636 (M4
+ * Max; relaxed math 0.383), and the engine migration's vertex shaders,
+ * which declare SignedZeroInfNanPreserve, compile so. A fused result keeps
+ * signed zeros, Inf and NaN, and rounds to nearest even once. */
+static bool pvk_spv_contracts(struct pvk_spv *ctx)
+{
+    uint32_t i = 5, floats = 0, defaults = 0; /* bits: 16-bit, 32-bit, 64-bit, other float types */
+    bool fpdefault = false;
+    while (i < ctx->nw) {
+        const uint32_t *w = ctx->w + i;
+        uint32_t op = w[0] & 0xffffu, n = w[0] >> 16;
+        if (!n || n > ctx->nw - i || op == PVK_SPV_OpFunction) /* (annotations and types come before the functions) */
+            break;
+        if (op == PVK_SPV_OpTypeFloat && n >= 3)
+            floats |= w[2] == 16 ? 1u : w[2] == 32 ? 2u : w[2] == 64 ? 4u : 8u;
+        if ((op == PVK_SPV_OpExecutionMode || op == PVK_SPV_OpExecutionModeId) && n >= 5 && w[1] == ctx->entry_fid &&
+            w[2] == 6028) { /* FPFastMathDefault */
+            uint32_t f = (uint32_t)pvk_spv_const_uint(ctx, w[4]), width = pvk_spv_type(ctx, w[3])->width;
+            if (!(f & 0x10010u)) /* Fast, AllowContract */
+                return false;
+            fpdefault = true;
+            defaults |= width == 16 ? 1u : width == 32 ? 2u : width == 64 ? 4u : 8u;
+        }
+        if ((op == PVK_SPV_OpDecorate || op == PVK_SPV_OpMemberDecorate) && n >= (op == PVK_SPV_OpDecorate ? 3u : 4u)) {
+            uint32_t at = op == PVK_SPV_OpDecorate ? 2 : 3; /* the decoration's word */
+            uint32_t dec = w[at], arg = n > at + 1 ? w[at + 1] : 0;
+            if (dec == 42 || (dec == 40 && !(arg & 0x10010u))) /* NoContraction, FPFastMathMode */
+                return false;
+        }
+        i += n;
+    }
+    return !fpdefault || !(floats & ~defaults);
+}
+
 /* Whether the module reads storage images or texels of them
  * (OpImageRead, OpImageSparseRead, OpImageTexelPointer; subpass inputs
  * count too): only then must a storage image write be fenced for the
@@ -55257,6 +55302,7 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
     struct pvk_sb *out = &ctx->head;
     uint32_t version, i, g;
     const char *kernel;
+    bool contract;
 
     if (!words || word_count < 5)
         pvk_spv_fail(ctx, "SPIR-V module is too short");
@@ -55319,7 +55365,8 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
     }
     pvk_spv_assign_resources(ctx);
     res->fast_math = pvk_spv_fast_math(ctx);
-    if (res->fast_math)
+    contract = !res->fast_math && pvk_spv_contracts(ctx);
+    if (res->fast_math || contract)
         for (i = 0; i < ctx->norder; i++)
             pvk_spv_recurrences(ctx, ctx->order[i]);
     ctx->storage_reads = pvk_spv_storage_reads(ctx);
@@ -55369,6 +55416,8 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
                   kernel);
     if (res->fast_math)
         pvk_sb_printf(ctx, out, "#define PVK_FAST_MATH 1 /* Vulkan's default floating-point environment */\n\n");
+    if (contract)
+        pvk_sb_printf(ctx, out, "#pragma METAL fp contract(fast) /* safe math that Vulkan lets contract */\n\n");
     if (ctx->use_array) {
         pvk_sb_append(ctx, out, pvk_spv_templates, sizeof(pvk_spv_templates) - 1);
         if (strcmp(ctx->dev, "device") != 0)

@@ -11529,13 +11529,15 @@ static const uint32_t spv_spirv_odds[] = {
 
 /* A decoration group (DescriptorSet through OpGroupDecorate), an integer
  * image with Depth 1 (Vulkan ignores Depth: a color texture) and
- * FPFastMathDefault (Metal's safe math is what any flags allow). */
+ * FPFastMathDefault (Metal's safe math is what any flags allow; None:
+ * uncontracted). */
 static void test_spirv_odds(void)
 {
     struct pvk_msl_result res;
     REQUIRE(mt_translate(spv_spirv_odds, PVK_ARRAY_SIZE(spv_spirv_odds), NULL, &res));
     CHECK(res.resource_count == 1 && res.resources[0].set == 0 && res.resources[0].binding == 3);
     CHECK(strstr(res.msl, "texture2d<uint") != NULL && strstr(res.msl, "depth2d") == NULL);
+    CHECK(!res.fast_math && strstr(res.msl, "contract(fast)") == NULL);
     pvk_msl_result_free(&res);
 }
 
