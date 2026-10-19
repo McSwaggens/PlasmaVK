@@ -18,6 +18,16 @@
  *   Objective-C without ARC.
  *
  * CONFIGURATION (define before including the implementation)
+ *   PLASMAVK_FAST_MATH              compile shaders in Vulkan's default
+ *                                    floating-point environment (no float
+ *                                    controls) with MTLMathModeFast rather
+ *                                    than MTLMathModeRelaxed: Metal may
+ *                                    assume no Inf or NaN, so results that
+ *                                    overflow, or take Inf or NaN, may come
+ *                                    out finite. Shaders that ask for float
+ *                                    controls keep MTLMathModeSafe. Not
+ *                                    conformant: conformanceVersion is
+ *                                    0.0.0.0 and driverInfo says so.
  *   PLASMAVK_QUAD_MERGING           let Apple GPUs pack fragments of two
  *                                    triangles into one 2x2 quad, as
  *                                    MoltenVK does: fragment shaders using
@@ -31868,6 +31878,17 @@ static void pvk_logi(const struct pvk_instance *instance, enum pvk_log_level lev
 #define PVK_QUAD_MERGING 0
 #endif
 
+/* PLASMAVK_FAST_MATH (CONFIGURATION): MTLMathModeFast where the translator
+ * defines PVK_FAST_MATH (section 13, COMPILING THE OUTPUT). */
+#ifdef PLASMAVK_FAST_MATH
+#define PVK_FAST_MATH_MODE 1
+#else
+#define PVK_FAST_MATH_MODE 0
+#endif
+
+/* A configuration the CTS hasn't passed: no conformance claimed. */
+#define PVK_NONCONFORMANT (PVK_QUAD_MERGING || PVK_FAST_MATH_MODE)
+
 /* The version as "major.minor.patch". */
 #define PVK_STR_(x) #x
 #define PVK_STR(x) PVK_STR_(x)
@@ -33498,15 +33519,17 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
     /* ---- Vulkan 1.2 ---- */
     p12->driverID = (VkDriverId)0; /* TODO: register a VkDriverId with Khronos; 0 names no driver */
     snprintf(p12->driverName, sizeof(p12->driverName), "PlasmaVK");
-    snprintf(p12->driverInfo, sizeof(p12->driverInfo), "PlasmaVK %s on Metal 4%s", version,
-             PVK_QUAD_MERGING ? " (PLASMAVK_QUAD_MERGING, not conformant)" : "");
+    snprintf(p12->driverInfo, sizeof(p12->driverInfo), "PlasmaVK %s on Metal 4%s%s%s%s", version,
+             PVK_NONCONFORMANT ? " (" : "", PVK_FAST_MATH_MODE ? "PLASMAVK_FAST_MATH, " : "",
+             PVK_QUAD_MERGING ? "PLASMAVK_QUAD_MERGING, " : "", PVK_NONCONFORMANT ? "not conformant)" : "");
     /* conformanceVersion: the Khronos CTS release PlasmaVK was last tested
      * against (as the spec defines it), 1.4.7.0 on an M4 Max: every must-pass
      * case passes but driver_id_match, which needs a driver ID registered
      * with Khronos. No conformance submission has been made. A
-     * PLASMAVK_QUAD_MERGING build isn't the configuration tested (its
-     * derivatives may mix triangles): 0.0.0.0, no conformance claimed. */
-    if (!PVK_QUAD_MERGING) {
+     * PLASMAVK_QUAD_MERGING build (its derivatives may mix triangles) or
+     * PLASMAVK_FAST_MATH build (overflows may not give Inf) isn't the
+     * configuration tested: 0.0.0.0, no conformance claimed. */
+    if (!PVK_NONCONFORMANT) {
         p12->conformanceVersion.major = 1;
         p12->conformanceVersion.minor = 4;
         p12->conformanceVersion.subminor = 7;
@@ -33515,9 +33538,10 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
 
     /* Shaders with float controls are compiled with MTLMathModeSafe (section
      * 13, COMPILING THE OUTPUT): signed zeros, Inf and NaN are kept and
-     * results rounded to nearest even; others with relaxed math, as Vulkan's
-     * default floating-point environment allows. MSL offers no control over
-     * denormals and has no 64-bit floats. */
+     * results rounded to nearest even; others with relaxed math (fast in a
+     * PLASMAVK_FAST_MATH build), as Vulkan's default floating-point
+     * environment allows. MSL offers no control over denormals and has no
+     * 64-bit floats. */
     p12->denormBehaviorIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE;
     p12->roundingModeIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE;
     p12->shaderSignedZeroInfNanPreserveFloat16 = VK_TRUE;
@@ -42240,7 +42264,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   engine migration most of the gain). Not MTLMathModeFast: the CTS's
  *   precision tests want Inf where results overflow, and of Inf inputs (as
  *   GLSL's formulas give them; pvk_sinh, pvk_cosh and pvk_normalize keep
- *   that with relaxed math too). The wrappers that only keep signed zeros,
+ *   that with relaxed math too). A PLASMAVK_FAST_MATH build (CONFIGURATION)
+ *   compiles those with MTLMathModeFast nonetheless, and claims no
+ *   conformance (section 7). The wrappers that only keep signed zeros,
  *   Inf and NaN (pvk_fmin, pvk_fmax, pvk_sin, pvk_cos, pvk_fract) are the
  *   plain functions there. The kernel's name is
  *   result->entry_point; dispatch with result->workgroup_size threads per
@@ -62450,13 +62476,14 @@ static id pvk_device_compiler(struct pvk_device *device)
     return compiler;
 }
 
-/* Math mode for MSL (COMPILING THE OUTPUT): relaxed with fast functions
- * where the translator defined PVK_FAST_MATH, else safe with Metal's
- * default functions (internal shaders too). */
+/* Math mode for MSL (COMPILING THE OUTPUT): relaxed (fast in a
+ * PLASMAVK_FAST_MATH build) with fast functions where the translator defined
+ * PVK_FAST_MATH, else safe with Metal's default functions (internal shaders
+ * too). */
 static void pvk_msl_math_options(id options, const char *msl)
 {
     if (strstr(msl, "#define PVK_FAST_MATH 1 ")) {
-        pvk_MTLCompileOptions_setMathMode(options, PVK_MTLMathModeRelaxed);
+        pvk_MTLCompileOptions_setMathMode(options, PVK_FAST_MATH_MODE ? PVK_MTLMathModeFast : PVK_MTLMathModeRelaxed);
         pvk_MTLCompileOptions_setMathFloatingPointFunctions(options, PVK_MTLMathFloatingPointFunctionsFast);
     } else {
         pvk_MTLCompileOptions_setMathMode(options, PVK_MTLMathModeSafe);

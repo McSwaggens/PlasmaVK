@@ -30,6 +30,11 @@ Everywhere else, include `plasmavk.h` and call `vk*` as usual.
 
 ## Options
 
+- `PLASMAVK_FAST_MATH`: define it before `PLASMAVK_IMPLEMENTATION` to compile
+  shaders with Metal's fast math (`MTLMathModeFast`) instead of relaxed math.
+  Metal may then assume no Inf or NaN, so overflows can come out finite.
+  Shaders that request float controls still get safe math. Not conformant:
+  `conformanceVersion` reports 0.0.0.0.
 - `PLASMAVK_QUAD_MERGING`: define it before `PLASMAVK_IMPLEMENTATION` to let
   the GPU pack two triangles into one 2x2 quad, as MoltenVK does. Shaders that
   use derivatives run faster, but derivatives along shared edges may mix both
