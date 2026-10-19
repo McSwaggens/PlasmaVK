@@ -62701,9 +62701,8 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
  *                          new fan), padded with degenerate triangles to
  *                          3 * (count - 2) indices
  *   count buffers          the records below the count encoded as commands
- *                          of an indirect command buffer (below) and, or
- *                          else, the records copied, those past the count
- *                          zeroed
+ *                          of an indirect command buffer (below), or the
+ *                          records copied, those past the count zeroed
  *   indirect fans          records turned into indexed draws of the
  *                          device's fan pattern (non-indexed, up to 65536
  *                          vertices per draw) or of indices rewritten per
@@ -63273,9 +63272,7 @@ static const char pvk_prepass_points_msl[] =
 /* Draws through an indirect command buffer. Count draws (pvk_pp_icb):
  * thread d encodes record d as command first + d if d is below the count
  * (no instances or vertices: a command that does nothing), thread 0 the
- * range of them to execute; and copies the record as pvk_pp_records
- * would, for a pass that turns out unable to execute the commands
- * (pvk_encode_draw_indirect). Multi-draws (pvk_pp_icb_compact), whose
+ * range of them to execute. Multi-draws (pvk_pp_icb_compact), whose
  * records GPU culling may leave mostly empty: threadgroup g encodes those
  * of records 1024g to 1024g + 1023 that draw something, in order, after
  * the commands of those before (it counts them again: at most 63 blocks),
@@ -63295,7 +63292,7 @@ static const char pvk_prepass_icb_msl[] =
     "struct pvk_icb {\n"
     "    command_buffer icb;\n"
     "    device const uchar *records; device const uint *count; device const uchar *indices; device uint *range;\n"
-    "    device const pvk_icb_table *table; constant uint *draw_index; device uint *out_records;\n"
+    "    device const pvk_icb_table *table; constant uint *draw_index;\n"
     "    uint n, first, stride, index_size, elements, prim, has_count, pad;\n"
     "};\n"
     /* the vertices (indices from *at) record s draws, 0: nothing */
@@ -63332,11 +63329,6 @@ static const char pvk_prepass_icb_msl[] =
     "{\n"
     "    uint count = a.has_count != 0u ? min(a.count[0], a.n) : a.n, at = 0u;\n"
     "    if (d == 0u) { a.range[0] = a.first; a.range[1] = count; }\n"
-    "    if (d < a.n && a.out_records) { /* the records copied too (pvk_pp_records), those past the count zeroed */\n"
-    "        uint words = a.index_size != 0u ? 5u : 4u;\n"
-    "        device const uint *src = pvk_icb_record(a, d);\n"
-    "        for (uint k = 0u; k < words; k++) a.out_records[d * words + k] = d < count ? src[k] : 0u;\n"
-    "    }\n"
     "    if (d >= count) return;\n"
     "    device const uint *s = pvk_icb_record(a, d);\n"
     "    pvk_icb_draw(a, a.first + d, d, s, pvk_icb_vertices(a, s, at), at);\n"
@@ -63382,7 +63374,6 @@ struct pvk_icb_table {
 struct pvk_icb_args {
     pvk_MTLResourceID icb;
     uint64_t records, count, indices, range, table, draw_index;
-    uint64_t out_records; /* count draws: the records copied as pvk_pp_records does (0: not) */
     uint32_t n, first, stride, index_size, elements, prim, has_count, pad;
 };
 
@@ -63682,13 +63673,6 @@ static void pvk_prepass_indirect(struct pvk_encoder *e, const struct pvk_draw_tr
             ia.has_count = d->count_address != 0;
             ia.stride = d->stride;
             ia.prim = pvk_primitive_type(t->topology);
-            if (d->count_address) { /* its records as well, drawn one by one where the pass cannot execute
-                                     * the commands (pvk_encode_draw_indirect); a multi-draw has its own */
-                res->record_stride = d->indexed ? 20 : 16;
-                if (!(ia.out_records = pvk_prepass_memory(e, (uint64_t)res->record_stride * ia.n)))
-                    return;
-                res->records = ia.out_records;
-            }
             pvk_prepass_dispatch(e, d->count_address ? PVK_PP_ICB : PVK_PP_ICB_COMPACT, &ia, sizeof(ia), ia.n);
             res->icb = chunk->icb;
             res->range = ia.range;
@@ -65782,7 +65766,14 @@ static bool pvk_pass_scanned(const struct pvk_encoder *e, const struct pvk_cmd_b
  * for depth/stencil copies (they would add attachments too), for colors
  * split for tile memory (pvk_render_fits) or read from textures (t->tex:
  * should Metal refuse the pass whole, pvk_encode_begin_pass), SNORM ones
- * (pvk_render_rebind). */
+ * (pvk_render_rebind). That is exactly when pvk_render_flush could set
+ * another one: the copies are r->hidden's bits (pvk_render_begin_group),
+ * SNORM variants and rebinds need a pipeline with int_colors, which the
+ * scan sees bound (t->int_colors), and a pass is split only if it does not
+ * fit (t->nsplit) or leaves colors to textures (t->tex); one Metal refuses
+ * though it fits is not drawn at all (VK_ERROR_OUT_OF_DEVICE_MEMORY). So
+ * the commands are executed (pvk_encode_draw_indirect), and a count draw's
+ * records are not copied for drawing them one by one. */
 static void pvk_prepass_later(struct pvk_encoder *e, const struct pvk_cmd_begin_pass *c, const struct pvk_draw_track *t)
 {
     uint32_t copies = (c->depth.texture ? PVK_HIDDEN_DEPTH : 0u) | (c->stencil.texture ? PVK_HIDDEN_STENCIL : 0u), i;
@@ -66686,16 +66677,29 @@ static void pvk_encode_draw_indirect(struct pvk_encoder *e, const struct pvk_cmd
             return;
         }
         /* The pass draws the pipeline with another Metal pipeline than the
-         * commands could inherit (it is not as pvk_prepass_later judged it):
-         * the records are drawn one by one below, as without the variant
-         * (count draws: the copies the kernel made). Reported once per
-         * pipeline. */
+         * commands could inherit, which pvk_prepass_later rules out: a
+         * multi-draw draws its own records one by one below; a count draw,
+         * whose records past the count must not draw (none were copied),
+         * executes the commands with the Metal pipeline they were encoded
+         * for set, drawn as in a pass without depth/stencil copies, SNORM
+         * views or a split for tile memory. Reported once per pipeline. */
         if (r->pipeline && !pvk_gfx_icb_bypassed(r->pipeline->gfx))
-            pvk_logd(e->device, PVK_LOG_INFO, "PlasmaVK-indirect-command-buffer-variant", VK_OBJECT_TYPE_PIPELINE,
+            pvk_logd(e->device, c->count_address ? PVK_LOG_WARN : PVK_LOG_INFO,
+                     "PlasmaVK-indirect-command-buffer-variant", VK_OBJECT_TYPE_PIPELINE,
                      (uint64_t)(uintptr_t)r->pipeline,
-                     "a count draw or long multi-draw draws its records one by one, not as the commands of its "
-                     "pipeline's indirect command buffer variant: its pass draws the pipeline with another Metal "
-                     "pipeline than the commands could inherit");
+                     c->count_address
+                         ? "a count draw is drawn with its pipeline's indirect command buffer variant, not the Metal "
+                           "pipeline its pass draws the pipeline with for depth/stencil copies, SNORM attachments or "
+                           "a split for tile memory"
+                         : "a long multi-draw draws its records one by one, not as the commands of its pipeline's "
+                           "indirect command buffer variant: its pass draws the pipeline with another Metal "
+                           "pipeline than the commands could inherit");
+        if (c->count_address) {
+            pvk_MTL4RenderCommandEncoder_setRenderPipelineState(r->enc, res->pso);
+            r->pso_set = res->pso; /* (the next draw sets the pass's again) */
+            pvk_MTL4RenderCommandEncoder_executeCommandsInBuffer_indirectBuffer(r->enc, res->icb, res->range);
+            return;
+        }
     }
     if (res && res->records) {
         records = res->records;

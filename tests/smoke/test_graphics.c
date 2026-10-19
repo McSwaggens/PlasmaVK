@@ -1675,6 +1675,30 @@ static void submit(VkCommandBuffer cb)
     vkFreeCommandBuffers(device, cmd_pool, 1, &cb);
 }
 
+/* submit(), returning how many upload chunks of their own (more than
+ * PVK_UPLOAD_CHUNK_SIZE bytes: one large upload's, such as copied indirect
+ * records) its encoding made: the queue's lanes hold them until it is done
+ * and recycled (vkQueueWaitIdle). */
+static uint32_t submit_large_uploads(VkCommandBuffer cb)
+{
+    const struct pvk_queue *q = (const struct pvk_queue *)queue;
+    const struct pvk_upload_chunk *c;
+    VkSubmitInfo info;
+    uint32_t n = 0, i;
+    vkEndCommandBuffer(cb);
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    info.commandBufferCount = 1;
+    info.pCommandBuffers = &cb;
+    CHECK_VK(vkQueueSubmit(queue, 1, &info, VK_NULL_HANDLE), VK_SUCCESS);
+    for (i = 0; i <= q->lane_count; i++)
+        for (c = (i ? &q->lanes[i - 1] : &q->lane)->retired; c; c = c->next)
+            n += c->size != PVK_UPLOAD_CHUNK_SIZE;
+    CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+    vkFreeCommandBuffers(device, cmd_pool, 1, &cb);
+    return n;
+}
+
 /* A secondary command buffer that renders on its own (no inheritance). */
 static VkCommandBuffer begin_secondary(void)
 {
@@ -4767,7 +4791,9 @@ static void test_multi_draw_secondary(void)
  *            indirect command buffer has left), pushed row 1
  *   row 7    8-bit indices (widened), count 1 of 2
  * Records past a count would draw pixel (15, row). In the primary, or in a
- * secondary executed in its render pass instance (without the query). */
+ * secondary executed in its render pass instance (without the query). With
+ * the pipeline's indirect command buffer variant, no records are copied
+ * (row 6's 1 MB would take an upload chunk of its own). */
 static void count_draws(int secondary)
 {
     static const VkVertexInputBindingDescription binding = { 0, 8, VK_VERTEX_INPUT_RATE_VERTEX };
@@ -4798,6 +4824,7 @@ static void count_draws(int secondary)
     VkPipeline pipeline;
     VkCommandBuffer cb, rec;
     VkDeviceSize zero_offset = 0;
+    uint32_t large;
     int bad = 0;
 
     REQUIRE(features.multiDrawIndirect && features.drawIndirectFirstInstance && ind.data);
@@ -4893,9 +4920,15 @@ static void count_draws(int secondary)
     }
     vkCmdEndRendering(cb);
     download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
-    submit(cb);
+    large = submit_large_uploads(cb);
     if (secondary)
         vkFreeCommandBuffers(device, cmd_pool, 1, &rec);
+    if (pvk_gfx_icb_ready(((struct pvk_pipeline *)pipeline)->gfx)) {
+        CHECK(large == 0);
+        if (large)
+            fprintf(stderr, "count draws%s: %u upload chunks of their own (records copied)\n",
+                    secondary ? " (secondary)" : "", large);
+    }
     for (y = 0; y < H; y++)
         for (x = 0; x < W; x++) {
             const uint32_t *got = (const uint32_t *)out.data + 4 * (y * W + x);
@@ -4933,14 +4966,17 @@ static void count_draws(int secondary)
     free_img(&target);
 }
 
-/* Not tested: a count draw whose pass sets another Metal pipeline than its
- * indirect command buffer's commands inherit, which pvk_encode_draw_indirect
- * then draws record by record from the copies pvk_pp_icb makes (reported
- * once per pipeline at PLASMAVK_LOG=info). The pipeline set is another one
- * only for a pass with a depth copy, SNORM attachments drawn through SINT
- * views or a split for tile memory, which pvk_prepass_later rules out from
- * the same scan, so the case is Metal refusing a pass pvk_render_fits
- * accepted, which no command sequence provokes. */
+/* Not tested: a count draw or long multi-draw whose pass sets another Metal
+ * pipeline than its indirect command buffer's commands inherit, which
+ * pvk_encode_draw_indirect reports once per pipeline and draws anyway (a
+ * multi-draw record by record, a count draw's commands with the variant's
+ * pipeline set). The pipeline set is another one only for a pass with a
+ * depth copy, SNORM attachments drawn through SINT views or variants, or a
+ * split for tile memory (or colors read from textures), which
+ * pvk_prepass_later rules out from the same scan; a pass Metal refuses
+ * though pvk_render_fits accepted it is not split but not drawn at all
+ * (VK_ERROR_OUT_OF_DEVICE_MEMORY). No command sequence provokes it, so
+ * count draws copy no records for it (count_draws checks). */
 static void test_count_draws(void)
 {
     count_draws(false);
