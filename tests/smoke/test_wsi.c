@@ -85,6 +85,7 @@ static void setup(void)
                                     VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME };
     const char *device_exts[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
     VkPhysicalDeviceVulkan12Features v12;
+    VkPhysicalDeviceVulkan13Features v13;
     VkPhysicalDeviceMemoryProperties mem;
     VkInstanceCreateInfo instance_info;
     VkApplicationInfo app;
@@ -112,8 +113,12 @@ static void setup(void)
         queue_info[i].queueCount = 1;
         queue_info[i].pQueuePriorities = &priority;
     }
+    memset(&v13, 0, sizeof(v13));
+    v13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    v13.dynamicRendering = VK_TRUE;
     memset(&v12, 0, sizeof(v12));
     v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    v12.pNext = &v13;
     v12.timelineSemaphore = VK_TRUE;
     memset(&device_info, 0, sizeof(device_info));
     device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -946,6 +951,267 @@ static void test_frame_loop(void)
     pvk_release(layer);
 }
 
+/* Images without sampled, storage or input attachment usage render to the
+ * drawables they are presented with (section 18, SWAPCHAIN IMAGES), and
+ * keep their contents from a present to their next acquire, whatever
+ * drawable that renders to next: frames that discard the contents (a
+ * transition from UNDEFINED, a LOAD_OP_CLEAR render pass, a scaled blit
+ * into all of it, as the engine presents), that read them (a copy to a
+ * buffer, a LOAD_OP_LOAD render pass) and that leave the image alone, in
+ * turns, each image's contents checked when read and each
+ * presented drawable read back. Every lazy-th acquire has a finite timeout,
+ * so the first use (or the present) takes the drawable, whose IOSurface
+ * may have other contents: lazy 1 has their copies in most frames. */
+static void check_direct(uint32_t images, uint32_t family, uint32_t lazy_every)
+{
+    enum { W = 16, H = 8, FRAMES = 40 };
+    id layer = make_layer(W, H, 1.0);
+    VkSurfaceKHR surface = make_surface(layer);
+    VkSwapchainCreateInfoKHR info = swapchain_info(surface, VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+                                                   W, H, images);
+    VkBufferCreateInfo binfo;
+    VkMemoryAllocateInfo alloc;
+    VkMemoryRequirements req;
+    VkBufferImageCopy region;
+    VkImageViewCreateInfo vinfo;
+    VkSwapchainKHR swapchain;
+    VkImage image[3], source;
+    VkImageView view[3];
+    VkImageCreateInfo sinfo;
+    VkBuffer buffer;
+    VkDeviceMemory memory, source_memory;
+    VkFence fence = make_fence();
+    VkSemaphore acquired = make_semaphore(VK_SEMAPHORE_TYPE_BINARY), rendered = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
+    uint32_t color[3] = { 0, 0, 0 }; /* each image's contents (BGRA bytes), 0: undefined */
+    uint32_t count = 3, frame, index, i, *data = NULL, texels[W * H];
+    pvk_MTLRegion r;
+
+    info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                      VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    info.clipped = VK_FALSE;
+    REQUIRE(surface);
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchain));
+    CHECK(((struct pvk_swapchain *)swapchain)->direct); /* (white box) */
+    REQUIRE_VK(vkGetSwapchainImagesKHR(device, swapchain, &count, image));
+    REQUIRE(count == images);
+    for (i = 0; i < count; i++) {
+        memset(&vinfo, 0, sizeof(vinfo));
+        vinfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vinfo.image = image[i];
+        vinfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vinfo.format = VK_FORMAT_B8G8R8A8_UNORM;
+        vinfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        vinfo.subresourceRange.levelCount = 1;
+        vinfo.subresourceRange.layerCount = 1;
+        REQUIRE_VK(vkCreateImageView(device, &vinfo, NULL, &view[i]));
+    }
+    CHECK(((struct pvk_swapchain *)swapchain)->direct); /* (the views are the images' textures) */
+    memset(&binfo, 0, sizeof(binfo));
+    binfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    binfo.size = sizeof(texels);
+    binfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    REQUIRE_VK(vkCreateBuffer(device, &binfo, NULL, &buffer));
+    vkGetBufferMemoryRequirements(device, buffer, &req);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = shared_type;
+    REQUIRE_VK(vkAllocateMemory(device, &alloc, NULL, &memory));
+    REQUIRE_VK(vkBindBufferMemory(device, buffer, memory, 0));
+    REQUIRE_VK(vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, (void **)&data));
+    memset(&region, 0, sizeof(region));
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent.width = W;
+    region.imageExtent.height = H;
+    region.imageExtent.depth = 1;
+    memset(&sinfo, 0, sizeof(sinfo)); /* the blits' source: twice the size, one color */
+    sinfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    sinfo.imageType = VK_IMAGE_TYPE_2D;
+    sinfo.format = VK_FORMAT_B8G8R8A8_UNORM;
+    sinfo.extent.width = 2 * W;
+    sinfo.extent.height = 2 * H;
+    sinfo.extent.depth = 1;
+    sinfo.mipLevels = sinfo.arrayLayers = 1;
+    sinfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    sinfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    REQUIRE_VK(vkCreateImage(device, &sinfo, NULL, &source));
+    vkGetImageMemoryRequirements(device, source, &req);
+    alloc.allocationSize = req.size;
+    for (alloc.memoryTypeIndex = 0; !(req.memoryTypeBits & (1u << alloc.memoryTypeIndex)); alloc.memoryTypeIndex++)
+        ;
+    REQUIRE_VK(vkAllocateMemory(device, &alloc, NULL, &source_memory));
+    REQUIRE_VK(vkBindImageMemory(device, source, source_memory, 0));
+
+    for (frame = 0; frame < FRAMES; frame++) {
+        uint32_t mode = frame % 6, next = 0xff000000u | (frame * 0x050b11u + 0x102030u), read = 0, k;
+        bool use = true, lazy = frame % lazy_every == lazy_every - 1;
+        VkClearColorValue clear;
+        VkImageSubresourceRange range;
+        VkCommandBuffer cb;
+
+        clear.float32[0] = (float)((next >> 16) & 255) / 255.0f; /* (BGRA bytes: R is byte 2) */
+        clear.float32[1] = (float)((next >> 8) & 255) / 255.0f;
+        clear.float32[2] = (float)(next & 255) / 255.0f;
+        clear.float32[3] = 1.0f;
+        memset(&range, 0, sizeof(range));
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.levelCount = 1;
+        range.layerCount = 1;
+        pvk_release(last_drawable);
+        last_drawable = NULL;
+        REQUIRE_VK(vkAcquireNextImageKHR(device, swapchain, lazy ? 2000000000ull : UINT64_MAX, acquired, VK_NULL_HANDLE,
+                                         &index));
+        CHECK(lazy == (last_drawable == NULL));
+        cb = begin(family);
+        REQUIRE(cb);
+        if (mode == 0) { /* discards: a clear after a transition from UNDEFINED */
+            barrier(cb, image[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdClearColorImage(cb, image[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+            barrier(cb, image[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        } else if (mode == 1 || mode == 4) { /* reads: a copy (or a LOAD_OP_LOAD pass, then a copy), then a clear */
+            if (mode == 4) {
+                VkRenderingAttachmentInfo att;
+                VkRenderingInfo ri;
+                memset(&att, 0, sizeof(att));
+                att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                att.imageView = view[index];
+                att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                memset(&ri, 0, sizeof(ri));
+                ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                ri.renderArea.extent.width = W;
+                ri.renderArea.extent.height = H;
+                ri.layerCount = 1;
+                ri.colorAttachmentCount = 1;
+                ri.pColorAttachments = &att;
+                barrier(cb, image[index], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                vkCmdBeginRendering(cb, &ri);
+                vkCmdEndRendering(cb);
+                barrier(cb, image[index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            } else {
+                barrier(cb, image[index], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            }
+            vkCmdCopyImageToBuffer(cb, image[index], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &region);
+            barrier(cb, image[index], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdClearColorImage(cb, image[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+            barrier(cb, image[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+            read = color[index];
+        } else if (mode == 2 && color[index]) { /* left alone: presented as it was */
+            use = false;
+            next = color[index];
+        } else if (mode == 5) { /* discards: a scaled blit into all of it */
+            VkImageBlit blit;
+            barrier(cb, source, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdClearColorImage(cb, source, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+            barrier(cb, source, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            barrier(cb, image[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            memset(&blit, 0, sizeof(blit));
+            blit.srcSubresource = region.imageSubresource;
+            blit.srcOffsets[1].x = 2 * W;
+            blit.srcOffsets[1].y = 2 * H;
+            blit.srcOffsets[1].z = 1;
+            blit.dstSubresource = region.imageSubresource;
+            blit.dstOffsets[1].x = W;
+            blit.dstOffsets[1].y = H;
+            blit.dstOffsets[1].z = 1;
+            vkCmdBlitImage(cb, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image[index],
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+            barrier(cb, image[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        } else { /* discards: a LOAD_OP_CLEAR render pass */
+            VkRenderingAttachmentInfo att;
+            VkRenderingInfo ri;
+            memset(&att, 0, sizeof(att));
+            att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            att.imageView = view[index];
+            att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            att.clearValue.color = clear;
+            memset(&ri, 0, sizeof(ri));
+            ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            ri.renderArea.extent.width = W;
+            ri.renderArea.extent.height = H;
+            ri.layerCount = 1;
+            ri.colorAttachmentCount = 1;
+            ri.pColorAttachments = &att;
+            barrier(cb, image[index], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            vkCmdBeginRendering(cb, &ri);
+            vkCmdEndRendering(cb);
+            barrier(cb, image[index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        }
+        REQUIRE_VK(submit(family, cb, acquired, rendered, fence)); /* (empty when the image is left alone) */
+        if (lazy)
+            CHECK(use == (last_drawable != NULL));
+        CHECK_VK(present(family, swapchain, index, rendered), VK_SUCCESS);
+        REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+        REQUIRE_VK(vkResetFences(device, 1, &fence));
+        CHECK_VK(vkQueueWaitIdle(queues[family]), VK_SUCCESS);
+        if (read)
+            for (k = 0; k < W * H; k++)
+                if (data[k] != read) {
+                    PVK_TEST_FAIL("frame %u (%u images, mode %u): image %u read 0x%08x at %u, not 0x%08x", frame,
+                                  images, mode, index, data[k], k, read);
+                    break;
+                }
+        color[index] = next;
+        REQUIRE(last_drawable != NULL);
+        memset(&r, 0, sizeof(r));
+        r.size.width = W;
+        r.size.height = H;
+        r.size.depth = 1;
+        pvk_MTLTexture_getBytes_bytesPerRow_bytesPerImage_fromRegion_mipmapLevel_slice(
+            pvk_CAMetalDrawable_texture(last_drawable), texels, W * 4, sizeof(texels), r, 0, 0);
+        for (k = 0; k < W * H; k++)
+            if (texels[k] != next) {
+                PVK_TEST_FAIL("frame %u (%u images, mode %u): image %u presented 0x%08x at %u, not 0x%08x", frame,
+                              images, mode, index, texels[k], k, next);
+                break;
+            }
+        pvk_release(last_drawable);
+        last_drawable = NULL;
+        vkResetCommandPool(device, pools[family], 0);
+        if (mode == 0) { /* read back once presented, not acquired (invalid usage, but the CTS's colorspace tests do) */
+            cb = begin(family);
+            REQUIRE(cb);
+            vkCmdCopyImageToBuffer(cb, image[index], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, buffer, 1, &region);
+            REQUIRE_VK(submit(family, cb, VK_NULL_HANDLE, VK_NULL_HANDLE, fence));
+            REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+            REQUIRE_VK(vkResetFences(device, 1, &fence));
+            for (k = 0; k < W * H; k++)
+                if (data[k] != next) {
+                    PVK_TEST_FAIL("frame %u (%u images): image %u read 0x%08x at %u once presented, not 0x%08x", frame,
+                                  images, index, data[k], k, next);
+                    break;
+                }
+            vkResetCommandPool(device, pools[family], 0);
+        }
+    }
+
+    vkDestroySwapchainKHR(device, swapchain, NULL);
+    for (i = 0; i < count; i++)
+        vkDestroyImageView(device, view[i], NULL);
+    vkDestroyImage(device, source, NULL);
+    vkFreeMemory(device, source_memory, NULL);
+    vkDestroyBuffer(device, buffer, NULL);
+    vkFreeMemory(device, memory, NULL);
+    vkDestroyFence(device, fence, NULL);
+    vkDestroySemaphore(device, acquired, NULL);
+    vkDestroySemaphore(device, rendered, NULL);
+    vkDestroySurfaceKHR(instance, surface, NULL);
+    pvk_release(layer);
+}
+
+static void test_direct(void)
+{
+    check_direct(2, 0, 3);
+    check_direct(3, 0, 3);
+    check_direct(2, 1, 3); /* the compute family */
+    check_direct(2, 0, 1);
+    check_direct(3, 0, 1);
+}
+
 /* Present modes, color spaces, composite alpha and two swapchains in one
  * present (vkAcquireNextImage2KHR for one of them). */
 static void test_layer_configuration(void)
@@ -1233,6 +1499,7 @@ int main(void)
     RUN(test_acquire_timeouts);
     RUN(test_deferred_present);
     RUN(test_frame_loop);
+    RUN(test_direct);
     RUN(test_layer_configuration);
     RUN(test_headless);
     RUN(test_lazy_present_threads);
