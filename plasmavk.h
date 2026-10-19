@@ -31818,6 +31818,7 @@ static inline id pvk_MTLRenderPipelineState_label(id self) { PVK_SEL_CACHE("labe
 #define PVK_QUEUE_FAMILY_COUNT 2 /* section 7 */
 #define PVK_MAX_QUEUES (PVK_MAX_QUEUES_PER_FAMILY * PVK_QUEUE_FAMILY_COUNT)
 #define PVK_MEMORY_TYPE_COUNT 4 /* section 7 */
+#define PVK_VIS_QUERIES 32768    /* the device's visibility buffer, 256 KB: Metal's largest visibility offset (section 14) */
 #define PVK_ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 /* ---- Logging ----
@@ -32630,6 +32631,8 @@ struct pvk_device {
     int warm_stop;         /* atomic */
     /* Queries (sections 14-16) */
     id query_copy_pipeline; /* internal kernel of vkCmdCopyQueryPoolResults, made on first use */
+    id vis_buffer;          /* MTLBuffer of occlusion pools' results, in ranges (section 14's OCCLUSION) */
+    uint64_t vis_used[PVK_VIS_QUERIES / 64]; /* its words in pools' ranges, under pvk_vis_lock */
     /* Private data (section 9): slots reserved by VkDevicePrivateDataCreateInfo */
     struct pvk_private_data_slot *private_data_reserve;
     /* Sparse binding (section 16, vkQueueBindSparse): with sparseBinding
@@ -55490,8 +55493,12 @@ static inline VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_
  *   vkCmdEndQuery (Disabled); exact counts serve precise and non-precise
  *   queries. Once the render encoder has ended, pvk_encoder_query_available
  *   (section 16) makes the query available. A render encoder has one
- *   visibility buffer: queries of different pools in one render pass need
- *   an encoder each (or a device-wide buffer that results are copied from).
+ *   visibility buffer, so pools count into one of the device's: each takes
+ *   a run of its PVK_VIS_QUERIES words (256 KB, the most a visibility
+ *   offset reaches), and q counts at offset 8 (vis_word + q). The pool's
+ *   own buffer holds availability. A pool that finds no run long enough
+ *   counts into its own buffer, results before availability: a render
+ *   pass that also counts another pool's queries drops that pool's.
  *
  * Pipeline statistics queries are not supported (pipelineStatisticsQuery
  * is not reported, section 7).
@@ -55500,11 +55507,15 @@ static inline VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_
 struct pvk_query_pool {
     VkQueryType type;
     uint32_t count;
-    /* Occlusion pools (STORAGE) */
-    id buffer;                 /* MTLBuffer: results, then availability */
-    uint64_t *results;         /* its contents */
-    uint64_t *available;       /* results + count */
-    pvk_MTLGPUAddress address; /* of results; availability at address + 8 count */
+    /* Occlusion pools (STORAGE, OCCLUSION) */
+    id buffer;                 /* MTLBuffer: availability (and results, when vis is it) */
+    id vis;                    /* MTLBuffer counted into: the device's vis_buffer, or buffer */
+    unsigned long vis_word;    /* query 0's result in vis, in 8-byte words */
+    unsigned long avail_word;  /* query 0's availability in buffer */
+    uint64_t *results;         /* in vis's contents */
+    uint64_t *available;       /* in buffer's */
+    pvk_MTLGPUAddress address; /* of results */
+    pvk_MTLGPUAddress available_address;
     /* Timestamp pools (TIMESTAMPS) */
     id heap;                   /* MTL4CounterHeap */
     uint64_t *state;           /* per query, atomic: pvk_ts_state */
@@ -55553,6 +55564,53 @@ static bool pvk_ts_ready(const struct pvk_device *device, uint64_t s, uint64_t *
     return seen[slot] >= value;
 }
 
+/* The ranges occlusion pools take of device->vis_buffer (OCCLUSION). */
+static pthread_mutex_t pvk_vis_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Takes the first run of `count` free words of the device's visibility
+ * buffer (made on first use) at *word; false: none is that long. */
+static bool pvk_vis_take(struct pvk_device *device, uint32_t count, unsigned long *word)
+{
+    uint32_t i, run = 0;
+    bool taken = false;
+    if (!count || count > PVK_VIS_QUERIES)
+        return false;
+    pthread_mutex_lock(&pvk_vis_lock);
+    if (!device->vis_buffer) {
+        device->vis_buffer = pvk_MTLDevice_newBufferWithLength_options(
+            device->physical_device->mtl_device, 8ul * PVK_VIS_QUERIES,
+            PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeDefaultCache |
+                PVK_MTLResourceHazardTrackingModeUntracked);
+        if (device->vis_buffer)
+            pvk_device_make_resident(device, device->vis_buffer);
+    }
+    for (i = 0; device->vis_buffer && i < PVK_VIS_QUERIES; i++) {
+        if (!(i & 63) && device->vis_used[i / 64] == ~0ull) { /* a full 64 */
+            run = 0;
+            i += 63;
+        } else if (device->vis_used[i / 64] >> (i & 63) & 1) {
+            run = 0;
+        } else if (++run == count) {
+            *word = i + 1 - count;
+            for (i = (uint32_t)*word; i < *word + count; i++)
+                device->vis_used[i / 64] |= 1ull << (i & 63);
+            taken = true;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&pvk_vis_lock);
+    return taken;
+}
+
+static void pvk_vis_give(struct pvk_device *device, unsigned long word, uint32_t count)
+{
+    unsigned long i;
+    pthread_mutex_lock(&pvk_vis_lock);
+    for (i = word; i < word + count; i++)
+        device->vis_used[i / 64] &= ~(1ull << (i & 63));
+    pthread_mutex_unlock(&pvk_vis_lock);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateQueryPool(VkDevice _device, const VkQueryPoolCreateInfo *pCreateInfo,
                                                  const VkAllocationCallbacks *pAllocator, VkQueryPool *pQueryPool)
 {
@@ -55561,6 +55619,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateQueryPool(VkDevice _device, const VkQuery
     id mtl = device->physical_device->mtl_device;
     struct pvk_query_pool *pool = pvk_alloc(alloc, sizeof(*pool), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     unsigned long size;
+    bool shared;
 
     if (!pool)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -55593,20 +55652,27 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateQueryPool(VkDevice _device, const VkQuery
         *pQueryPool = (VkQueryPool)pool;
         return VK_SUCCESS;
     }
-    size = 16ul * pool->count;
+    shared = pvk_vis_take(device, pool->count, &pool->vis_word);
+    size = (shared ? 8ul : 16ul) * pool->count;
     if (size <= pvk_MTLDevice_maxBufferLength(mtl))
         pool->buffer = pvk_MTLDevice_newBufferWithLength_options(
             mtl, size,
             PVK_MTLResourceStorageModeShared | PVK_MTLResourceCPUCacheModeDefaultCache |
                 PVK_MTLResourceHazardTrackingModeUntracked);
     if (!pool->buffer) {
+        if (shared)
+            pvk_vis_give(device, pool->vis_word, pool->count);
         pvk_free(alloc, pool);
         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     }
-    pool->results = pvk_MTLBuffer_contents(pool->buffer);
-    pool->available = pool->results + pool->count;
-    pool->address = pvk_MTLBuffer_gpuAddress(pool->buffer);
-    memset(pool->results, 0, size);
+    pool->vis = shared ? device->vis_buffer : pool->buffer;
+    pool->avail_word = shared ? 0 : pool->count;
+    pool->results = (uint64_t *)pvk_MTLBuffer_contents(pool->vis) + pool->vis_word;
+    pool->available = (uint64_t *)pvk_MTLBuffer_contents(pool->buffer) + pool->avail_word;
+    pool->address = pvk_MTLBuffer_gpuAddress(pool->vis) + 8ull * pool->vis_word;
+    pool->available_address = pvk_MTLBuffer_gpuAddress(pool->buffer) + 8ull * pool->avail_word;
+    memset(pool->results, 0, 8ul * pool->count);
+    memset(pool->available, 0, 8ul * pool->count);
     pvk_device_make_resident(device, pool->buffer);
     *pQueryPool = (VkQueryPool)pool;
     return VK_SUCCESS;
@@ -55622,6 +55688,8 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyQueryPool(VkDevice _device, VkQueryPool quer
         return;
     if (pool->buffer)
         pvk_device_evict(device, pool->buffer);
+    if (pool->vis && pool->vis != pool->buffer)
+        pvk_vis_give(device, pool->vis_word, pool->count);
     pvk_release(pool->buffer);
     pvk_release(pool->heap);
     pvk_free_raw(alloc, pool->state);
@@ -60570,7 +60638,7 @@ struct pvk_render {
     bool map_valid;
     uint32_t views_set;     /* the view mask vertex amplification maps (0: none, Metal's default) */
     uint32_t draw_index;    /* DrawIndex bound at buffer index 28 (UINT32_MAX: none) */
-    /* Occlusion queries: the pass's visibility result buffer is vis_pool's */
+    /* Occlusion queries: the pass's visibility result buffer is vis_pool's vis (pools sharing it count) */
     struct pvk_query_pool *vis_pool;
     bool counting;          /* visibility counting is on */
     uint32_t pending_count; /* queries in pvk_encoder.pending */
@@ -62639,23 +62707,71 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
 
 static pthread_mutex_t pvk_graphics_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* The MTL4Compilers of render pipelines, one per MTLDevice in the process,
+ * under pvk_graphics_lock. On macOS 26, MTL4Compilers compiling at the same
+ * time corrupt the heap (FB22683138, fixed in macOS 27 beta 5): VkDevices,
+ * of one instance or several, share their MTLDevice's. One MTL4Compiler
+ * compiles on several threads at once. users counts the VkDevices holding
+ * it; the last one releases it. Apple silicon has one GPU: a few slots are
+ * plenty. */
+static struct pvk_shared_compiler {
+    id mtl_device, compiler;
+    long users;
+} pvk_shared_compilers[4];
+
 /* The device's MTL4Compiler of render pipelines (made on first use; NULL on
- * failure). MTL4Compiler is thread-safe. */
+ * failure), shared with every VkDevice on its MTLDevice. */
 static id pvk_device_compiler(struct pvk_device *device)
 {
-    id compiler;
+    id compiler, mtl = device->physical_device->mtl_device;
     pthread_mutex_lock(&pvk_graphics_lock);
     if (!device->compiler) {
-        void *pool = objc_autoreleasePoolPush();
-        id desc = pvk_MTL4CompilerDescriptor_new();
-        if (desc)
-            device->compiler = pvk_MTLDevice_newCompilerWithDescriptor_error(device->physical_device->mtl_device, desc, NULL);
-        pvk_release(desc);
-        objc_autoreleasePoolPop(pool);
+        struct pvk_shared_compiler *slot = NULL;
+        uint32_t i;
+        for (i = 0; i < PVK_ARRAY_SIZE(pvk_shared_compilers); i++) {
+            struct pvk_shared_compiler *s = &pvk_shared_compilers[i];
+            if (s->users && s->mtl_device == mtl) {
+                slot = s;
+                break;
+            }
+            if (!s->users && !slot)
+                slot = s;
+        }
+        if (slot && !slot->users) {
+            void *pool = objc_autoreleasePoolPush();
+            id desc = pvk_MTL4CompilerDescriptor_new();
+            slot->compiler = desc ? pvk_MTLDevice_newCompilerWithDescriptor_error(mtl, desc, NULL) : NULL;
+            slot->mtl_device = mtl;
+            pvk_release(desc);
+            objc_autoreleasePoolPop(pool);
+        }
+        if (slot && slot->compiler) {
+            slot->users++;
+            device->compiler = slot->compiler;
+        }
     }
     compiler = device->compiler;
     pthread_mutex_unlock(&pvk_graphics_lock);
     return compiler;
+}
+
+/* Lets go of the device's share of its MTL4Compiler. */
+static void pvk_device_release_compiler(struct pvk_device *device)
+{
+    uint32_t i;
+    pthread_mutex_lock(&pvk_graphics_lock);
+    for (i = 0; device->compiler && i < PVK_ARRAY_SIZE(pvk_shared_compilers); i++) {
+        struct pvk_shared_compiler *s = &pvk_shared_compilers[i];
+        if (s->users && s->compiler == device->compiler) {
+            if (!--s->users) {
+                pvk_release(s->compiler);
+                s->compiler = s->mtl_device = NULL;
+            }
+            break;
+        }
+    }
+    device->compiler = NULL;
+    pthread_mutex_unlock(&pvk_graphics_lock);
 }
 
 /* Math mode for MSL (COMPILING THE OUTPUT): relaxed with fast functions
@@ -64695,11 +64811,12 @@ static void pvk_render_pending(struct pvk_encoder *e, struct pvk_query_pool *poo
 static void pvk_render_counting(struct pvk_encoder *e, bool on)
 {
     struct pvk_render *r = &e->render;
-    on = on && e->occ_pool && e->occ_pool == r->vis_pool;
+    on = on && e->occ_pool && r->vis_pool && e->occ_pool->vis == r->vis_pool->vis;
     if (!r->enc || on == r->counting)
         return;
     pvk_MTL4RenderCommandEncoder_setVisibilityResultMode_offset(
-        r->enc, on ? PVK_MTLVisibilityResultModeCounting : PVK_MTLVisibilityResultModeDisabled, on ? 8ul * e->occ_query : 0);
+        r->enc, on ? PVK_MTLVisibilityResultModeCounting : PVK_MTLVisibilityResultModeDisabled,
+        on ? 8ul * (e->occ_pool->vis_word + e->occ_query) : 0);
     r->counting = on;
 }
 
@@ -64711,13 +64828,13 @@ static void pvk_encode_occlusion(struct pvk_encoder *e, const struct pvk_cmd_que
     if (c->op == PVK_QUERY_BEGIN) {
         e->occ_pool = c->pool;
         e->occ_query = c->first;
-        if (r->enc && r->vis_pool != c->pool) {
+        if (r->enc && (!r->vis_pool || r->vis_pool->vis != c->pool->vis)) {
             static int warned;
             if (!warned) {
                 warned = 1;
                 pvk_logd(e->device, PVK_LOG_WARN, "PlasmaVK-unsupported-occlusion-pools", VK_OBJECT_TYPE_QUERY_POOL,
-                         (uint64_t)(uintptr_t)c->pool, "occlusion queries of two pools in one render pass: the second "
-                         "pool's are not counted");
+                         (uint64_t)(uintptr_t)c->pool, "occlusion queries of two pools in one render pass, one too "
+                         "large for the device's visibility buffer: the second pool's are not counted");
             }
         }
         pvk_render_counting(e, true);
@@ -65116,7 +65233,7 @@ static id pvk_render_open(struct pvk_encoder *e, const struct pvk_cmd_begin_pass
     if (c->layers)
         pvk_MTL4RenderPassDescriptor_setRenderTargetArrayLength(pass, c->layers);
     if (r->vis_pool) { /* queries add up across render passes */
-        pvk_MTL4RenderPassDescriptor_setVisibilityResultBuffer(pass, r->vis_pool->buffer);
+        pvk_MTL4RenderPassDescriptor_setVisibilityResultBuffer(pass, r->vis_pool->vis);
         pvk_MTL4RenderPassDescriptor_setVisibilityResultType(pass, PVK_MTLVisibilityResultTypeAccumulate);
     }
     if (!samples) { /* no attachments */
@@ -66664,8 +66781,7 @@ static void pvk_device_finish_graphics(struct pvk_device *device)
         pvk_release(device->prepass_pipelines[i]);
         device->prepass_pipelines[i] = NULL;
     }
-    pvk_release(device->compiler);
-    device->compiler = NULL;
+    pvk_device_release_compiler(device);
 }
 
 /* ---- Queries and events ----
@@ -66723,7 +66839,7 @@ static void pvk_encode_query_flush(struct pvk_encoder *e)
     if (!n || !(enc = pvk_encoder_alone(e)))
         return;
     for (i = 0; i < n; i++)
-        pvk_encode_fill_words(enc, e->queries[i].pool->buffer, (uint64_t)e->queries[i].pool->count + e->queries[i].first,
+        pvk_encode_fill_words(enc, e->queries[i].pool->buffer, (uint64_t)e->queries[i].pool->avail_word + e->queries[i].first,
                               e->queries[i].count, 1);
     pvk_encoder_close(e, enc);
 }
@@ -66837,8 +66953,8 @@ static void pvk_encode_query_reset(struct pvk_encoder *e, const struct pvk_cmd_q
     pvk_encode_query_flush(e);
     if (!(enc = pvk_encoder_alone(e)))
         return;
-    pvk_encode_fill_words(enc, c->pool->buffer, c->first, c->count, 0);
-    pvk_encode_fill_words(enc, c->pool->buffer, (uint64_t)c->pool->count + c->first, c->count, 0);
+    pvk_encode_fill_words(enc, c->pool->vis, (uint64_t)c->pool->vis_word + c->first, c->count, 0);
+    pvk_encode_fill_words(enc, c->pool->buffer, (uint64_t)c->pool->avail_word + c->first, c->count, 0);
     pvk_encoder_close(e, enc);
     /* Render passes counting occlusion into the results must start after
      * it, so later encoders wait for earlier work. Availability writes and
@@ -66912,7 +67028,7 @@ static void pvk_encode_query_copy(struct pvk_encoder *e, const struct pvk_cmd_qu
     } else {
         pvk_encode_query_flush(e);
         results = c->pool->address + 8ull * c->first;
-        available = c->pool->address + 8ull * ((uint64_t)c->pool->count + c->first);
+        available = c->pool->available_address + 8ull * c->first;
     }
     if (!(enc = pvk_encoder_get(e)))
         return;
@@ -69278,6 +69394,11 @@ static void pvk_device_finish(struct pvk_device *device)
     device->fill_pipeline = NULL;
     pvk_release(device->query_copy_pipeline);
     device->query_copy_pipeline = NULL;
+    if (device->vis_buffer) {
+        pvk_device_evict(device, device->vis_buffer);
+        pvk_release(device->vis_buffer);
+        device->vis_buffer = NULL;
+    }
     pvk_device_finish_images(device);
     pvk_device_finish_graphics(device);
 }

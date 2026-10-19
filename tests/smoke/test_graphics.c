@@ -4395,6 +4395,85 @@ static void test_occlusion(void)
     free_img(&target);
 }
 
+/* Occlusion queries of two pools in one render pass, both counted: a's in
+ * the pass, b's in it and in one that b's query spans, begun before the
+ * pass. Results from the host and copied on the GPU; b's query 0 stays
+ * unavailable (its result is not written). */
+static void test_occlusion_pools(void)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    static const uint64_t want_a[4] = { 128, 1, 256, 1 }, want_b[6] = { 0, 0, 64, 1, 128, 1 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    VkQueryPoolCreateInfo qi;
+    VkQueryPool a = VK_NULL_HANDLE, b = VK_NULL_HANDLE;
+    VkPipeline pipeline;
+    struct pipe p;
+    VkCommandBuffer cb;
+    struct buf out = make_buf(sizeof(want_a) + sizeof(want_b));
+    uint64_t ra[4], rb[6];
+
+    REQUIRE(out.data);
+    memset(out.data, 0, sizeof(want_a) + sizeof(want_b));
+    memset(&qi, 0, sizeof(qi));
+    qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qi.queryType = VK_QUERY_TYPE_OCCLUSION;
+    qi.queryCount = 2;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &a));
+    qi.queryCount = 3;
+    REQUIRE_VK(vkCreateQueryPool(device, &qi, NULL, &b));
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    cb = begin_cmd();
+    vkCmdResetQueryPool(cb, a, 0, 2);
+    vkCmdResetQueryPool(cb, b, 0, 3);
+    begin_rendering(cb, &target, 1, black, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBeginQuery(cb, a, 0, VK_QUERY_CONTROL_PRECISE_BIT);
+    rect(cb, -1, -1, 0, 1, 1, 0, 0, 1, 0.5f); /* 8 x 16 pixels */
+    vkCmdEndQuery(cb, a, 0);
+    vkCmdBeginQuery(cb, b, 1, VK_QUERY_CONTROL_PRECISE_BIT);
+    rect(cb, 0, -1, 1, 0, 0, 1, 0, 1, 0.5f); /* 8 x 8 */
+    vkCmdEndQuery(cb, b, 1);
+    vkCmdBeginQuery(cb, a, 1, VK_QUERY_CONTROL_PRECISE_BIT);
+    rect(cb, -1, -1, 1, 1, 0, 0, 1, 1, 0.5f); /* 16 x 16 */
+    vkCmdEndQuery(cb, a, 1);
+    vkCmdEndRendering(cb);
+    vkCmdBeginQuery(cb, b, 2, VK_QUERY_CONTROL_PRECISE_BIT);
+    begin_rendering(cb, &target, 1, NULL, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    rect(cb, -1, 0, 1, 1, 1, 1, 1, 1, 0.5f); /* 16 x 8 */
+    vkCmdEndRendering(cb);
+    vkCmdEndQuery(cb, b, 2);
+    vkCmdCopyQueryPoolResults(cb, a, 0, 2, out.buffer, 0, 16,
+                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT |
+                                  VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    vkCmdCopyQueryPoolResults(cb, b, 0, 3, out.buffer, sizeof(want_a), 16,
+                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    barrier(cb);
+    submit(cb);
+    memset(ra, 0xab, sizeof(ra));
+    memset(rb, 0xab, sizeof(rb));
+    CHECK_VK(vkGetQueryPoolResults(device, a, 0, 2, sizeof(ra), ra, 16,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
+             VK_SUCCESS);
+    CHECK_VK(vkGetQueryPoolResults(device, b, 0, 3, sizeof(rb), rb, 16,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT),
+             VK_NOT_READY);
+    CHECK(memcmp(ra, want_a, sizeof(ra)) == 0);
+    CHECK(memcmp(rb + 1, want_b + 1, sizeof(rb) - 8) == 0);
+    CHECK(memcmp(out.data, want_a, sizeof(want_a)) == 0);
+    CHECK(memcmp(out.data + sizeof(want_a), want_b, sizeof(want_b)) == 0);
+    if (memcmp(ra, want_a, sizeof(ra)) || memcmp(rb + 1, want_b + 1, sizeof(rb) - 8))
+        fprintf(stderr, "occlusion pools: a %llu %llu, b %llu %llu\n", (unsigned long long)ra[0],
+                (unsigned long long)ra[2], (unsigned long long)rb[2], (unsigned long long)rb[4]);
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyQueryPool(device, b, NULL);
+    vkDestroyQueryPool(device, a, NULL);
+    free_buf(&out);
+    free_img(&target);
+}
+
 /* ==========================================================================
  * Draws
  * ========================================================================== */
@@ -12686,6 +12765,74 @@ static void test_shader_cache_threads(void)
     free_img(&target);
 }
 
+/* A VkDevice made on the test's physical device, with a layout like
+ * pc_layout (test_shared_compiler). */
+static VkDevice make_other_device(VkPipelineLayout *layout)
+{
+    VkDeviceQueueCreateInfo queue_info;
+    VkDeviceCreateInfo device_info;
+    VkPushConstantRange range;
+    VkPipelineLayoutCreateInfo layout_info;
+    VkDevice d = VK_NULL_HANDLE;
+    float priority = 1.0f;
+    memset(&queue_info, 0, sizeof(queue_info));
+    queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queue_info.queueCount = 1;
+    queue_info.pQueuePriorities = &priority;
+    memset(&device_info, 0, sizeof(device_info));
+    device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    device_info.queueCreateInfoCount = 1;
+    device_info.pQueueCreateInfos = &queue_info;
+    if (vkCreateDevice(pd, &device_info, NULL, &d) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    range.offset = 0;
+    range.size = sizeof(struct pc);
+    memset(&layout_info, 0, sizeof(layout_info));
+    layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout_info.pushConstantRangeCount = 1;
+    layout_info.pPushConstantRanges = &range;
+    CHECK_VK(vkCreatePipelineLayout(d, &layout_info, NULL, layout), VK_SUCCESS);
+    return d;
+}
+
+/* A render pipeline of a format no other test makes, on the device in
+ * `device`, with `layout`. */
+static void make_compiled_pipe(VkPipelineLayout layout, VkFormat format)
+{
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    struct pipe p;
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    p.layout = layout;
+    p.color_formats[0] = format;
+    CHECK_VK(make_pipe_result(&p, &pipeline), VK_SUCCESS);
+    vkDestroyPipeline(device, pipeline, NULL);
+}
+
+/* VkDevices share their MTLDevice's MTL4Compiler (macOS 26 corrupts the
+ * heap when several compile at once): render pipelines are made while
+ * other devices come and go, the last one releasing it. */
+static void test_shared_compiler(void)
+{
+    VkDevice main_device = device, d2, d3;
+    VkPipelineLayout l2 = VK_NULL_HANDLE, l3 = VK_NULL_HANDLE;
+    REQUIRE((d2 = make_other_device(&l2)) != VK_NULL_HANDLE);
+    device = d2;
+    make_compiled_pipe(l2, VK_FORMAT_R16G16_UNORM);
+    device = main_device;
+    make_compiled_pipe(pc_layout, VK_FORMAT_R16G16_SNORM);
+    vkDestroyPipelineLayout(d2, l2, NULL);
+    vkDestroyDevice(d2, NULL);
+    make_compiled_pipe(pc_layout, VK_FORMAT_R16G16_SFLOAT);
+    REQUIRE((d3 = make_other_device(&l3)) != VK_NULL_HANDLE);
+    device = d3;
+    make_compiled_pipe(l3, VK_FORMAT_R32G32_SFLOAT);
+    device = main_device;
+    vkDestroyPipelineLayout(d3, l3, NULL);
+    vkDestroyDevice(d3, NULL);
+    make_compiled_pipe(pc_layout, VK_FORMAT_R16G16B16A16_UNORM);
+}
+
 /* ==========================================================================
  * Y'CbCr conversion in fragment shaders
  * ========================================================================== */
@@ -13894,6 +14041,7 @@ int main(void)
     RUN(test_timestamp_long_runs);
     RUN(test_timestamp_bracket);
     RUN(test_occlusion);
+    RUN(test_occlusion_pools);
     RUN(test_draw_kinds);
     RUN(test_draw_kinds_secondary);
     RUN(test_output_signedness);
@@ -13973,6 +14121,7 @@ int main(void)
     RUN(test_shader_cache_key);
     RUN(test_shader_cache);
     RUN(test_shader_cache_threads);
+    RUN(test_shared_compiler);
     RUN(test_implicit_cache);
     RUN(test_ycbcr_fragment);
     RUN(test_parallel_primaries);
