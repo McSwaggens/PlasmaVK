@@ -7,6 +7,7 @@ Users `#define PLASMAVK_IMPLEMENTATION` + `#include "plasmavk.h"`. No loader, no
 - `plasmavk.h` is the only source file. Edit it directly. Its header comment lists the numbered sections.
 - No tools, generators, build steps or scripts of any language in the repo (no Python, no codegen).
   Everything in `plasmavk.h` is hand-written or pasted in (Vulkan headers, Metal declarations).
+  The exception is small shell scripts for running work on the dev machine, like `bench/gpulock.sh`.
 - C99 only (`-std=c99 -pedantic -Werror`). No Objective-C, no `-fblocks`, no third-party code.
 - Never require link flags: frameworks are autolinked via `.linker_option` (section 3).
 - All implementation symbols are `static` except the `vk*` entry points.
@@ -22,5 +23,11 @@ Users `#define PLASMAVK_IMPLEMENTATION` + `#include "plasmavk.h"`. No loader, no
   `glslangValidator` and pasted as `uint32_t` arrays with the GLSL source in a comment beside them.
 
 ## Verify
+- The Mac is shared by several sessions and agents, and timings are only valid when nothing else runs.
+  Wrap work in `bench/gpulock.sh` (it waits for the lock, then runs the command):
+  - `bench/gpulock.sh shared make -j32 check`: builds and tests; any number at once.
+  - `bench/gpulock.sh excl CMD`: benchmarks, profiles, anything timed or GPU-heavy; runs alone.
+  - `bench/gpulock.sh cts deqp-vk ...`: the CTS; one at a time.
+  - `bench/gpulock.sh status`: who holds or waits. Exit code 75 means the wait timed out: retry.
 - `make -j8 test`: smoke tests (ASan/UBSan), in parallel.
 - `make -j8 check`: all C dialects, ObjC with/without `<Metal/Metal.h>`, `VK_NO_PROTOTYPES`, C++, two-TU link, iOS, smoke tests, then the conformance suite (`tests/conformance`).
