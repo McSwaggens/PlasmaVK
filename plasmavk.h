@@ -66223,6 +66223,10 @@ static bool pvk_render_flush(struct pvk_encoder *e, id icb_pso)
         if (gp && tex)
             pvk_render_tex_inputs(e, p);
     }
+    /* Any other pipeline set above for a pipeline with an indirect command
+     * buffer variant must be one pvk_prepass_later's gate rules out: count
+     * draws in a pass it allowed have no copied records to fall back on, and
+     * pvk_encode_draw_indirect would draw them with the variant's pipeline. */
     if (icb_pso && pso == p->mtl_pipeline) /* (its indirect command buffer variant) */
         pso = icb_pso;
     if (pso != r->pso_set) { /* (pipelines may share a state, section 17) */
