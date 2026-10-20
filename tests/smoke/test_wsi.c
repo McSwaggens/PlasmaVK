@@ -82,7 +82,8 @@ static uint64_t now_ns(void)
 static void setup(void)
 {
     const char *instance_exts[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_METAL_SURFACE_EXTENSION_NAME,
-                                    VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME };
+                                    VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME,
+                                    VK_EXT_DEBUG_UTILS_EXTENSION_NAME };
     const char *device_exts[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
     VkPhysicalDeviceVulkan12Features v12;
     VkPhysicalDeviceVulkan13Features v13;
@@ -101,7 +102,7 @@ static void setup(void)
     memset(&instance_info, 0, sizeof(instance_info));
     instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instance_info.pApplicationInfo = &app;
-    instance_info.enabledExtensionCount = 4;
+    instance_info.enabledExtensionCount = 5;
     instance_info.ppEnabledExtensionNames = instance_exts;
     REQUIRE_VK(vkCreateInstance(&instance_info, NULL, &instance));
     REQUIRE_VK(vkEnumeratePhysicalDevices(instance, &count, &pd));
@@ -1496,6 +1497,395 @@ static void test_transfers_into_drawables(void)
     pvk_release(layer);
 }
 
+/* ---- Waits for drawables ---- */
+
+/* A device-local w x h BGRA8 image of `samples` samples and its memory. */
+static VkImage make_image(uint32_t w, uint32_t h, VkSampleCountFlagBits samples, VkImageUsageFlags usage,
+                          VkDeviceMemory *memory)
+{
+    VkImageCreateInfo info;
+    VkMemoryAllocateInfo alloc;
+    VkMemoryRequirements req;
+    VkImage image = VK_NULL_HANDLE;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    info.imageType = VK_IMAGE_TYPE_2D;
+    info.format = VK_FORMAT_B8G8R8A8_UNORM;
+    info.extent.width = w;
+    info.extent.height = h;
+    info.extent.depth = 1;
+    info.mipLevels = info.arrayLayers = 1;
+    info.samples = samples;
+    info.usage = usage;
+    if (vkCreateImage(device, &info, NULL, &image) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    vkGetImageMemoryRequirements(device, image, &req);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    for (alloc.memoryTypeIndex = 0; !(req.memoryTypeBits & (1u << alloc.memoryTypeIndex)); alloc.memoryTypeIndex++)
+        ;
+    if (vkAllocateMemory(device, &alloc, NULL, memory) != VK_SUCCESS ||
+        vkBindImageMemory(device, image, *memory, 0) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    return image;
+}
+
+static VkImageView make_view(VkImage image)
+{
+    VkImageViewCreateInfo info;
+    VkImageView view = VK_NULL_HANDLE;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    info.image = image;
+    info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    info.format = VK_FORMAT_B8G8R8A8_UNORM;
+    info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    info.subresourceRange.levelCount = 1;
+    info.subresourceRange.layerCount = 1;
+    vkCreateImageView(device, &info, NULL, &view);
+    return view;
+}
+
+/* The submission vkQueueSubmit just made on queue `family`, until the next
+ * submit or present recycles it (white box: section 16). */
+static const struct pvk_submission *last_submission(uint32_t family)
+{
+    return ((const struct pvk_queue *)queues[family])->lane.pending_tail;
+}
+
+/* Only the work that uses a drawable waits for it (section 16's
+ * pvk_wsi_split): a batch's commands before the first that uses a drawable
+ * are committed, in a command buffer of their own, before the queue waits
+ * for the drawable. Frames render offscreen, then write the swapchain image
+ * from what they made, which the drawable shows:
+ *   0: a chain of copies (clear, copy, then copy into the image) in one
+ *      command buffer, with timestamps before, at and after the split, a
+ *      label region across it and a queue label region open;
+ *   1: a fill of a buffer in one command buffer, its copy into the image in
+ *      a second, the batch waiting for a semaphore the host signals later
+ *      (the queue's thread commits it);
+ *   2: a render pass whose resolve attachment is the image, resolving a
+ *      multisampled image cleared before;
+ *   3: a scaled blit from an image cleared before (a render pass into the
+ *      drawable);
+ *   4: the image used first (cleared), offscreen work after: nothing to
+ *      split off, the queue waits before all of it;
+ *   5: a batch encoded in parallel: fills of a buffer in one job, then in
+ *      the second a clear and a copy from the buffer into the image (that
+ *      job's command buffer splits too).
+ * Every fourth acquire has a finite timeout (the first use takes the
+ * drawable): a batch that copies contents into the drawable first is not
+ * split. */
+static void check_split(uint32_t images)
+{
+    enum { W = 32, H = 16, FRAMES = 18, FILLS = 130 };
+    id layer = make_layer(W, H, 1.0);
+    VkSurfaceKHR surface = make_surface(layer);
+    VkSwapchainCreateInfoKHR info = swapchain_info(surface, VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+                                                   W, H, images);
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    VkSemaphore acquired = make_semaphore(VK_SEMAPHORE_TYPE_BINARY), rendered = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
+    VkSemaphore host = make_semaphore(VK_SEMAPHORE_TYPE_TIMELINE);
+    VkFence fence = make_fence();
+    VkDeviceMemory mem[5];
+    VkImage image[3], offscreen, chain, ms, big;
+    VkImageView view[3], ms_view;
+    VkBuffer buffer;
+    VkBufferCreateInfo binfo;
+    VkMemoryRequirements req;
+    VkMemoryAllocateInfo alloc;
+    VkQueryPoolCreateInfo qinfo;
+    VkQueryPool stamps;
+    VkSwapchainKHR swapchain;
+    VkDebugUtilsLabelEXT label;
+    VkImageSubresourceRange range;
+    VkImageSubresourceLayers layers;
+    VkBufferImageCopy region;
+    VkImageCopy copy;
+    uint32_t count = 3, frame, index, i, k, texels[W * H];
+    uint64_t host_value = 0;
+
+    REQUIRE(surface && host);
+    info.imageUsage = usage; /* (transfers: drawables the test reads back) */
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchain));
+    REQUIRE(((struct pvk_swapchain *)swapchain)->direct); /* (white box) */
+    REQUIRE_VK(vkGetSwapchainImagesKHR(device, swapchain, &count, image));
+    for (i = 0; i < count; i++)
+        REQUIRE((view[i] = make_view(image[i])));
+    offscreen = make_image(W, H, VK_SAMPLE_COUNT_1_BIT, usage, &mem[0]);
+    chain = make_image(W, H, VK_SAMPLE_COUNT_1_BIT, usage, &mem[1]);
+    ms = make_image(W, H, VK_SAMPLE_COUNT_4_BIT, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                    &mem[2]);
+    big = make_image(2 * W, 2 * H, VK_SAMPLE_COUNT_1_BIT, usage, &mem[3]);
+    REQUIRE(offscreen && chain && ms && big);
+    REQUIRE((ms_view = make_view(ms)));
+    memset(&binfo, 0, sizeof(binfo));
+    binfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    binfo.size = sizeof(texels) + 4;
+    binfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    REQUIRE_VK(vkCreateBuffer(device, &binfo, NULL, &buffer));
+    vkGetBufferMemoryRequirements(device, buffer, &req);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    for (alloc.memoryTypeIndex = 0; !(req.memoryTypeBits & (1u << alloc.memoryTypeIndex)); alloc.memoryTypeIndex++)
+        ;
+    REQUIRE_VK(vkAllocateMemory(device, &alloc, NULL, &mem[4]));
+    REQUIRE_VK(vkBindBufferMemory(device, buffer, mem[4], 0));
+    memset(&qinfo, 0, sizeof(qinfo));
+    qinfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qinfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    qinfo.queryCount = 3;
+    REQUIRE_VK(vkCreateQueryPool(device, &qinfo, NULL, &stamps));
+    memset(&label, 0, sizeof(label));
+    label.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+    memset(&range, 0, sizeof(range));
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = range.layerCount = 1;
+    memset(&layers, 0, sizeof(layers));
+    layers.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    layers.layerCount = 1;
+    memset(&region, 0, sizeof(region));
+    region.imageSubresource = layers;
+    region.imageExtent.width = W;
+    region.imageExtent.height = H;
+    region.imageExtent.depth = 1;
+    memset(&copy, 0, sizeof(copy));
+    copy.srcSubresource = copy.dstSubresource = layers;
+    copy.extent = region.imageExtent;
+
+    for (frame = 0; frame < FRAMES; frame++) {
+        uint32_t mode = frame % 6, want = 0xff000000u | (frame * 0x0a1b2cu + 0x203040u);
+        bool lazy = frame % 4 == 3, used_first = mode == 4;
+        VkCommandBuffer cbs[2];
+        VkClearColorValue clear;
+        VkMemoryBarrier mb;
+        const struct pvk_submission *s;
+        uint32_t ncb = 1;
+
+        clear.float32[0] = (float)((want >> 16) & 255) / 255.0f; /* (BGRA bytes: R is byte 2) */
+        clear.float32[1] = (float)((want >> 8) & 255) / 255.0f;
+        clear.float32[2] = (float)(want & 255) / 255.0f;
+        clear.float32[3] = 1.0f;
+        pvk_release(last_drawable);
+        last_drawable = NULL;
+        REQUIRE_VK(vkAcquireNextImageKHR(device, swapchain, lazy ? 2000000000ull : UINT64_MAX, acquired, VK_NULL_HANDLE,
+                                         &index));
+        cbs[0] = begin(0);
+        REQUIRE(cbs[0]);
+        if (mode == 0) {
+            label.pLabelName = "across the split";
+            vkCmdResetQueryPool(cbs[0], stamps, 0, 3);
+            vkCmdWriteTimestamp(cbs[0], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, stamps, 0);
+            vkCmdBeginDebugUtilsLabelEXT(cbs[0], &label);
+            barrier(cbs[0], offscreen, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdClearColorImage(cbs[0], offscreen, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+            barrier(cbs[0], offscreen, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            barrier(cbs[0], chain, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdCopyImage(cbs[0], offscreen, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, chain,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            barrier(cbs[0], chain, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            vkCmdWriteTimestamp(cbs[0], VK_PIPELINE_STAGE_TRANSFER_BIT, stamps, 1);
+            barrier(cbs[0], image[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdCopyImage(cbs[0], chain, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image[index],
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            vkCmdEndDebugUtilsLabelEXT(cbs[0]);
+            vkCmdWriteTimestamp(cbs[0], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, stamps, 2);
+        } else if (mode == 1 || mode == 5) {
+            for (k = 0; mode == 5 && k + 1 < FILLS; k++) /* (a job's packets: into words the copy does not read) */
+                vkCmdFillBuffer(cbs[0], buffer, sizeof(texels), 4, k);
+            vkCmdFillBuffer(cbs[0], buffer, 0, sizeof(texels), want);
+            cbs[1] = begin(0);
+            REQUIRE(cbs[1]);
+            ncb = 2;
+            memset(&mb, 0, sizeof(mb));
+            mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            vkCmdPipelineBarrier(cbs[1], VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0,
+                                 NULL, 0, NULL);
+            if (mode == 5) {
+                VkViewport viewport = { 0, 0, W, H, 0, 1 };
+                for (k = 0; k < FILLS; k++) /* (a second job's packets) */
+                    vkCmdSetViewport(cbs[1], 0, 1, &viewport);
+                barrier(cbs[1], offscreen, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                vkCmdClearColorImage(cbs[1], offscreen, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+            }
+            barrier(cbs[1], image[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdCopyBufferToImage(cbs[1], buffer, image[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        } else if (mode == 2) {
+            VkRenderingAttachmentInfo att;
+            VkRenderingInfo ri;
+            barrier(cbs[0], ms, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdClearColorImage(cbs[0], ms, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+            barrier(cbs[0], ms, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            barrier(cbs[0], image[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            memset(&att, 0, sizeof(att));
+            att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            att.imageView = ms_view;
+            att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            att.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+            att.resolveImageView = view[index];
+            att.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            memset(&ri, 0, sizeof(ri));
+            ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            ri.renderArea.extent.width = W;
+            ri.renderArea.extent.height = H;
+            ri.layerCount = 1;
+            ri.colorAttachmentCount = 1;
+            ri.pColorAttachments = &att;
+            vkCmdBeginRendering(cbs[0], &ri);
+            vkCmdEndRendering(cbs[0]);
+            barrier(cbs[0], image[index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        } else if (mode == 3) {
+            VkImageBlit blit;
+            barrier(cbs[0], big, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdClearColorImage(cbs[0], big, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+            barrier(cbs[0], big, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            barrier(cbs[0], image[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            memset(&blit, 0, sizeof(blit));
+            blit.srcSubresource = blit.dstSubresource = layers;
+            blit.srcOffsets[1].x = 2 * W;
+            blit.srcOffsets[1].y = 2 * H;
+            blit.srcOffsets[1].z = 1;
+            blit.dstOffsets[1].x = W;
+            blit.dstOffsets[1].y = H;
+            blit.dstOffsets[1].z = 1;
+            vkCmdBlitImage(cbs[0], big, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image[index],
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+        } else { /* used first */
+            barrier(cbs[0], image[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdClearColorImage(cbs[0], image[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+            barrier(cbs[0], offscreen, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdClearColorImage(cbs[0], offscreen, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+        }
+        barrier(cbs[ncb - 1], image[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        if (mode == 1) { /* behind a wait for the host */
+            VkSemaphore waits[2];
+            VkPipelineStageFlags stages[2] = { VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT };
+            uint64_t values[2], zero = 0;
+            VkTimelineSemaphoreSubmitInfo tl;
+            VkSemaphoreSignalInfo signal;
+            VkSubmitInfo si;
+            waits[0] = acquired;
+            waits[1] = host;
+            values[0] = 0;
+            values[1] = ++host_value;
+            memset(&tl, 0, sizeof(tl));
+            tl.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+            tl.waitSemaphoreValueCount = 2;
+            tl.pWaitSemaphoreValues = values;
+            tl.signalSemaphoreValueCount = 1;
+            tl.pSignalSemaphoreValues = &zero;
+            memset(&si, 0, sizeof(si));
+            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            si.pNext = &tl;
+            si.waitSemaphoreCount = 2;
+            si.pWaitSemaphores = waits;
+            si.pWaitDstStageMask = stages;
+            si.commandBufferCount = 2;
+            si.pCommandBuffers = cbs;
+            si.signalSemaphoreCount = 1;
+            si.pSignalSemaphores = &rendered;
+            vkEndCommandBuffer(cbs[0]);
+            vkEndCommandBuffer(cbs[1]);
+            REQUIRE_VK(vkQueueSubmit(queues[0], 1, &si, fence));
+            s = last_submission(0);
+            CHECK(!no_backlog(0));
+            memset(&signal, 0, sizeof(signal));
+            signal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
+            signal.semaphore = host;
+            signal.value = host_value;
+            REQUIRE_VK(vkSignalSemaphore(device, &signal));
+        } else if (ncb == 2) {
+            VkPipelineStageFlags stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            VkSubmitInfo si;
+            memset(&si, 0, sizeof(si));
+            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            si.waitSemaphoreCount = 1;
+            si.pWaitSemaphores = &acquired;
+            si.pWaitDstStageMask = &stage;
+            si.commandBufferCount = 2;
+            si.pCommandBuffers = cbs;
+            si.signalSemaphoreCount = 1;
+            si.pSignalSemaphores = &rendered;
+            vkEndCommandBuffer(cbs[0]);
+            vkEndCommandBuffer(cbs[1]);
+            REQUIRE_VK(vkQueueSubmit(queues[0], 1, &si, fence));
+            s = last_submission(0);
+        } else {
+            label.pLabelName = "queue region";
+            if (mode == 0)
+                vkQueueBeginDebugUtilsLabelEXT(queues[0], &label);
+            REQUIRE_VK(submit(0, cbs[0], acquired, rendered, fence));
+            if (mode == 0)
+                vkQueueEndDebugUtilsLabelEXT(queues[0]);
+            s = last_submission(0);
+        }
+        /* (white box) split unless copies of contents into the drawable come first */
+        REQUIRE(s && s->wsi_wait_count == 1);
+        if (used_first || s->wsi_copy_count) {
+            CHECK(s->commit_count == 0);
+        } else if (mode == 5) {
+            CHECK(s->commit_count == 3 && s->wsi_split == 2); /* the second job's after its clear */
+            CHECK(((struct pvk_queue *)queues[0])->lane_count != 0);
+        } else {
+            CHECK(s->commit_count == 2 && s->wsi_split == 1);
+        }
+        CHECK_VK(present(0, swapchain, index, rendered), VK_SUCCESS);
+        REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+        REQUIRE_VK(vkResetFences(device, 1, &fence));
+        CHECK_VK(vkQueueWaitIdle(queues[0]), VK_SUCCESS);
+        if (mode == 0) {
+            uint64_t t[3];
+            CHECK_VK(vkGetQueryPoolResults(device, stamps, 0, 3, sizeof(t), t, 8,
+                                           VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+                     VK_SUCCESS);
+            CHECK(t[0] && t[0] <= t[1] && t[1] <= t[2]);
+        }
+        REQUIRE(last_drawable != NULL);
+        read_drawable(last_drawable, layer, texels, W, H);
+        for (k = 0; k < W * H; k++)
+            if (texels[k] != want) {
+                PVK_TEST_FAIL("frame %u (%u images, mode %u%s): image %u presented 0x%08x at %u, not 0x%08x", frame,
+                              images, mode, lazy ? ", drawable at first use" : "", index, texels[k], k, want);
+                break;
+            }
+        pvk_release(last_drawable);
+        last_drawable = NULL;
+        vkResetCommandPool(device, pools[0], 0);
+    }
+
+    vkDestroySwapchainKHR(device, swapchain, NULL);
+    for (i = 0; i < count; i++)
+        vkDestroyImageView(device, view[i], NULL);
+    vkDestroyImageView(device, ms_view, NULL);
+    vkDestroyImage(device, offscreen, NULL);
+    vkDestroyImage(device, chain, NULL);
+    vkDestroyImage(device, ms, NULL);
+    vkDestroyImage(device, big, NULL);
+    vkDestroyBuffer(device, buffer, NULL);
+    for (i = 0; i < 5; i++)
+        vkFreeMemory(device, mem[i], NULL);
+    vkDestroyQueryPool(device, stamps, NULL);
+    vkDestroyFence(device, fence, NULL);
+    vkDestroySemaphore(device, acquired, NULL);
+    vkDestroySemaphore(device, rendered, NULL);
+    vkDestroySemaphore(device, host, NULL);
+    vkDestroySurfaceKHR(instance, surface, NULL);
+    pvk_release(layer);
+}
+
+static void test_wait_placement(void)
+{
+    check_split(2);
+    check_split(3);
+}
+
 /* Present modes, color spaces, composite alpha and two swapchains in one
  * present (vkAcquireNextImage2KHR for one of them). */
 static void test_layer_configuration(void)
@@ -1786,6 +2176,7 @@ int main(void)
     RUN(test_fetch_copies);
     RUN(test_direct);
     RUN(test_transfers_into_drawables);
+    RUN(test_wait_placement);
     RUN(test_layer_configuration);
     RUN(test_headless);
     RUN(test_lazy_present_threads);

@@ -60313,7 +60313,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  * SUBMISSION
  *   Each batch (VkSubmitInfo) with command buffers is encoded into one
  *   MTL4CommandBuffer from an MTL4CommandAllocator (or several, committed
- *   together: PARALLEL ENCODING), with one compute encoder
+ *   together: PARALLEL ENCODING; or two, around the queue's wait for a
+ *   drawable the batch renders to: pvk_wsi_split), with one compute encoder
  *   (Metal 4 compute encoders also blit). All batches are encoded, and
  *   everything allocated, before anything reaches the queue, so a failure
  *   leaves no trace. Then, per batch: commit, signalEvent: for its signal
@@ -60594,11 +60595,12 @@ struct pvk_submission {
     id *commit;
     uint32_t commit_count, commit_capacity;
     /* Swapchain images the batch renders to as drawables (section 18,
-     * SWAPCHAIN IMAGES): the drawables the queue waits for before its
-     * command buffers (retained), and the copies of images' contents its
+     * SWAPCHAIN IMAGES): the drawables the queue waits for (retained), the
+     * command buffers committed before those waits (the first wsi_split of
+     * cb or commit: pvk_wsi_split), and the copies of images' contents its
      * first command buffer makes first */
     id wsi_waits[PVK_WSI_WAITS];
-    uint32_t wsi_wait_count, wsi_copy_count;
+    uint32_t wsi_wait_count, wsi_split, wsi_copy_count;
     struct pvk_wsi_copy {
         id src, dst;
         id residency; /* the layer's MTLResidencySet, for drawables' textures; NULL: none */
@@ -60644,7 +60646,7 @@ struct pvk_deferred_batch {
     uint32_t nwaits, nsignals;
     id drawable;      /* presentation (section 18): cb copies into it (or NULL: has it), then it is presented; owned */
     const struct pvk_sparse_batch *sparse; /* vkQueueBindSparse: its mapping updates (in the binds) */
-    const struct pvk_submission *wsi; /* the drawables to wait for before cb (its wsi_waits); NULL: none */
+    const struct pvk_submission *wsi; /* cb's, which waits for drawables (pvk_queue_commit_submission); NULL: none */
 };
 
 struct pvk_deferred {
@@ -60735,7 +60737,7 @@ static void pvk_submission_reset(struct pvk_submission *s)
     s->commit_count = 0;
     while (s->wsi_wait_count)
         pvk_release(s->wsi_waits[--s->wsi_wait_count]);
-    s->wsi_copy_count = 0;
+    s->wsi_split = s->wsi_copy_count = 0;
 }
 
 /* Frees chunks c (a list) of a lane's pool; returns their allocatedSize. */
@@ -61313,6 +61315,15 @@ struct pvk_encoder {
     uint32_t blit_level, blit_slice, blit_plane, blit_layers;
     /* The drawables' residency set (pvk_wsi_texture) last used by wsi_cb */
     id wsi_cb, wsi_residency;
+    /* While the batch waits for drawables (struct pvk_submission.wsi_waits)
+     * and no command used one yet: the submission whose command buffer ends
+     * at the first that does (pvk_wsi_split), the batch's or (PARALLEL
+     * ENCODING) the job's; NULL: none. The batch (encoded in order), whose
+     * labels the command buffer after that gets too. The encoders cb ended,
+     * and its other work (0: nothing to split off). */
+    struct pvk_submission *wsi_split;
+    const VkSubmitInfo2 *submit;
+    uint32_t closed;
 };
 
 /* "Parallel encoding" below. */
@@ -61474,6 +61485,7 @@ static void pvk_encoder_close(struct pvk_encoder *e, id enc)
 {
     pvk_labels_close(e, enc);
     pvk_MTL4CommandEncoder_endEncoding(enc);
+    e->closed++;
 }
 
 /* Ends a render encoder: later encoders wait for its work when it stored
@@ -62769,10 +62781,15 @@ static id pvk_encoder_render(struct pvk_encoder *e, id pass, bool ms_store)
 
 /* ---- Swapchain images ---- */
 
+/* Section 16: the command buffer so far ends before the first command that
+ * uses a drawable, which the queue waits for before what follows. */
+static void pvk_wsi_split(struct pvk_encoder *e);
+
 /* The texture a command recorded with `texture` uses: a swapchain image's
  * own, or while it renders to a drawable (section 18, SWAPCHAIN IMAGES) the
  * drawable's, which the layer's residency set makes resident in the command
- * buffer. */
+ * buffer. A command calls it before it begins an encoder: the first that
+ * gets a drawable may end the command buffer (pvk_wsi_split). */
 static id pvk_wsi_texture(struct pvk_encoder *e, id texture)
 {
     struct pvk_device *device = e->device;
@@ -62786,6 +62803,8 @@ static id pvk_wsi_texture(struct pvk_encoder *e, id texture)
         residency = __atomic_load_n(&w->residency, __ATOMIC_RELAXED);
         if (!current)
             return texture;
+        if (e->wsi_split)
+            pvk_wsi_split(e);
         if (residency && (e->wsi_cb != e->cb || e->wsi_residency != (id)residency)) {
             pvk_MTL4CommandBuffer_useResidencySet(e->cb, (id)residency);
             e->wsi_cb = e->cb;
@@ -62827,7 +62846,7 @@ static const struct pvk_cmd_begin_pass *pvk_wsi_pass(struct pvk_encoder *e, cons
 
 static void pvk_encode_buffer_image(struct pvk_encoder *e, const struct pvk_cmd_buffer_image *c)
 {
-    id enc = pvk_encoder_get(e), texture = pvk_wsi_texture(e, c->texture);
+    id texture = pvk_wsi_texture(e, c->texture), enc = pvk_encoder_get(e);
     struct pvk_cmd_buffer_image w;
     uint32_t i, z, row;
     pvk_MTLOrigin o;
@@ -62920,7 +62939,7 @@ static void pvk_encode_copy_staged(struct pvk_encoder *e, id enc, const struct p
 
 static void pvk_encode_copy_image(struct pvk_encoder *e, const struct pvk_cmd_copy_image *c)
 {
-    id enc = pvk_encoder_get(e), src = pvk_wsi_texture(e, c->src), dst = pvk_wsi_texture(e, c->dst);
+    id src = pvk_wsi_texture(e, c->src), dst = pvk_wsi_texture(e, c->dst), enc = pvk_encoder_get(e);
     struct pvk_cmd_copy_image w;
     uint32_t i, z;
     pvk_MTLOrigin so, dO;
@@ -66356,8 +66375,8 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
         r->suspended = false; /* the same instance goes on */
         return;
     }
-    c = pvk_wsi_pass(e, c);
     pvk_render_end(e);
+    c = pvk_wsi_pass(e, c);
     if (e->result != VK_SUCCESS)
         return;
     track = pvk_render_track(r);
@@ -67587,6 +67606,7 @@ static void pvk_encode_ts_resolve(struct pvk_encoder *e, struct pvk_query_pool *
     dst.length = 8ull * count;
     pvk_MTL4CommandBuffer_resolveCounterHeap_withRange_intoBuffer_waitFence_updateFence(e->cb, pool->heap, range, dst,
                                                                                         NULL, NULL);
+    e->closed++;
 }
 
 /* A timestamp pool's results and availability for a copy, in memory of the
@@ -67964,6 +67984,7 @@ struct pvk_job {
         struct pvk_job *job;
     } *pieces;
     uint32_t piece_count, piece_capacity;
+    id wsi_cb; /* the first of them the batch's waits for drawables come before (pvk_wsi_split); NULL: none */
     VkResult result;
     struct pvk_render render;
 };
@@ -67977,6 +67998,7 @@ struct pvk_batch {
     pvk_MTLStages wait_before;
     bool drawn; /* (struct pvk_encoder.drawn) */
     bool forks; /* its secondaries may fork (pvk_par_plan) */
+    bool wsi;   /* it waits for drawables (pvk_wsi_split) */
     unsigned int qos; /* the submitting thread's QoS class, for the threads that take its jobs */
     struct pvk_job **jobs;
     uint32_t job_count, job_capacity;
@@ -68097,6 +68119,7 @@ static void pvk_par_cb_begin(struct pvk_encoder *e)
     s->more[s->more_count++] = cb;
     pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(cb, s->allocator);
     e->cb = cb;
+    e->closed = 0;
 }
 
 static void pvk_par_cb_next(struct pvk_encoder *e)
@@ -68244,6 +68267,8 @@ static void pvk_job_run(struct pvk_job *j, struct pvk_lane *lane, const VkSubmit
         pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(e.cb, j->s->allocator);
         if (submit)
             pvk_labels_batch_begin(&e, submit);
+        if (b->wsi && j->primaries) /* (forked secondaries draw in a pass begun before them) */
+            e.wsi_split = j->s;
     } else {
         e.result = VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -68461,7 +68486,9 @@ static bool pvk_par_plan(const struct pvk_queue *queue, const VkSubmitInfo2 *sub
 }
 
 /* Job j's command buffers, and those of the jobs between them, in commit
- * order, after s->commit's; false when out of memory. */
+ * order, after s->commit's; the first a job's waits for drawables come
+ * before sets s->wsi_split (UINT32_MAX: none yet). False when out of
+ * memory. */
 static bool pvk_job_flatten(struct pvk_submission *s, const struct pvk_job *j, const VkAllocationCallbacks *alloc)
 {
     uint32_t i;
@@ -68474,6 +68501,8 @@ static bool pvk_job_flatten(struct pvk_submission *s, const struct pvk_job *j, c
         if (!pvk_grow(alloc, &s->commit, &s->commit_capacity, s->commit_count, 1, 16, sizeof(*s->commit),
                       VK_SYSTEM_ALLOCATION_SCOPE_DEVICE))
             return false;
+        if (j->pieces[i].cb == j->wsi_cb && s->wsi_split == UINT32_MAX)
+            s->wsi_split = s->commit_count;
         s->commit[s->commit_count++] = j->pieces[i].cb;
     }
     return true;
@@ -68506,6 +68535,7 @@ static VkResult pvk_encode_parallel(struct pvk_queue *queue, struct pvk_submissi
     b.wait_before = wait_before;
     b.drawn = queue->drawn > completed;
     b.forks = forks;
+    b.wsi = s->wsi_wait_count != 0;
     b.qos = pvk_qos_class_self();
     memset(later, 0, sizeof(later));
     for (k = 0; k < count && result == VK_SUCCESS; k++) {
@@ -68577,9 +68607,12 @@ static VkResult pvk_encode_parallel(struct pvk_queue *queue, struct pvk_submissi
                    sizeof(*n->events) * n->event_count);
         queue->notes.event_count += n->event_count;
     }
+    s->wsi_split = UINT32_MAX;
     for (k = 0; k < count && result == VK_SUCCESS; k++)
         if (!pvk_job_flatten(s, root[k], alloc))
             result = VK_ERROR_OUT_OF_HOST_MEMORY;
+    if (s->wsi_split == UINT32_MAX) /* (no command used a drawable) */
+        s->wsi_split = s->commit_count;
     pvk_labels_batch_end(queue, NULL); /* (no queue label regions: pvk_par_plan refuses them) */
     for (i = 0; i < b.job_count; i++) {
         j = b.jobs[i];
@@ -68675,6 +68708,69 @@ static bool pvk_wsi_encode_copies(struct pvk_device *device, id cb, const struct
     return true;
 }
 
+/* The first command of a batch that uses a drawable, while the batch waits
+ * for drawables (e->wsi_split): the command buffer so far ends, with its
+ * timestamps and occlusion queries written, and that command begins the
+ * next, so that the queue commits the work before it ahead of its waits
+ * (pvk_queue_commit_submission). A frame that renders offscreen and copies
+ * into the swapchain image last runs while the display still has the
+ * drawable, instead of all of it waiting for the display: the queue waits
+ * for a drawable before everything committed after the wait. Barriers
+ * order work across a queue's command buffers as within one. A command
+ * buffer without work yet is not split off: the waits come before it. In
+ * a job (PARALLEL ENCODING), its command buffer ends and the next is
+ * marked (struct pvk_job.wsi_cb): the batch's first such one in commit
+ * order follows the waits. */
+static void pvk_wsi_split(struct pvk_encoder *e)
+{
+    const VkAllocationCallbacks *alloc = pvk_device_alloc(e->device);
+    struct pvk_submission *s = e->wsi_split;
+    uint32_t i;
+    id cb;
+
+    e->wsi_split = NULL;
+    if (e->render.enc || e->render.pass) /* (a transfer in a render pass instance, invalid: the pass ends) */
+        pvk_render_end(e);
+    pvk_encoder_end(e);
+    if (e->closed) {
+        pvk_encode_query_flush(e);
+        pvk_encode_stamps(e);
+    }
+    if (e->result != VK_SUCCESS)
+        return;
+    if (e->job) {
+        if (e->closed)
+            pvk_par_cb_next(e);
+        e->job->wsi_cb = e->cb;
+        return;
+    }
+    if (!e->closed) /* (s->wsi_split 0: the waits come before cb) */
+        return;
+    if (!pvk_grow(alloc, &s->more, &s->more_capacity, s->more_count, 1, 8, sizeof(*s->more),
+                  VK_SYSTEM_ALLOCATION_SCOPE_DEVICE) ||
+        !pvk_grow(alloc, &s->commit, &s->commit_capacity, 0, 2, 16, sizeof(*s->commit),
+                  VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)) {
+        e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        return;
+    }
+    if (!(cb = pvk_MTLDevice_newCommandBuffer(e->device->physical_device->mtl_device))) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return;
+    }
+    for (i = 0; i < e->queue->queue_labels.count; i++) /* (as pvk_labels_batch_end) */
+        pvk_MTL4CommandBuffer_popDebugGroup(e->cb);
+    pvk_MTL4CommandBuffer_endCommandBuffer(e->cb);
+    s->more[s->more_count++] = cb;
+    s->commit[0] = e->cb;
+    s->commit[1] = cb;
+    s->commit_count = 2;
+    s->wsi_split = 1;
+    pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(cb, s->allocator);
+    e->cb = cb;
+    e->closed = 0;
+    pvk_labels_batch_begin(e, e->submit);
+}
+
 /* The copies of swapchain images' contents a batch makes before its
  * commands (section 18, SWAPCHAIN IMAGES). */
 static void pvk_wsi_copies(struct pvk_encoder *e, const struct pvk_submission *s)
@@ -68730,6 +68826,9 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
         return pvk_encode_parallel(queue, s, submit, serial, e.wait_before, e.completed, starts, jobs, forks);
     e.cursor.cbs = submit->pCommandBufferInfos;
     e.cursor.count = submit->commandBufferInfoCount;
+    e.submit = submit;
+    /* (copies of contents use drawables first: the waits come before all) */
+    e.wsi_split = s->wsi_wait_count && !s->wsi_copy_count ? s : NULL;
     pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(s->cb, s->allocator);
     pvk_wsi_copies(&e, s);
     pvk_labels_batch_begin(&e, submit);
@@ -68741,8 +68840,10 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
     pvk_encode_query_flush(&e);
     pvk_encoder_end(&e);
     pvk_encode_stamps(&e);
-    pvk_labels_batch_end(e.queue, s->cb);
-    pvk_MTL4CommandBuffer_endCommandBuffer(s->cb);
+    pvk_labels_batch_end(e.queue, e.cb); /* (the second after a split) */
+    pvk_MTL4CommandBuffer_endCommandBuffer(e.cb);
+    if (e.wsi_split) /* no command used a drawable: the waits come after all */
+        s->wsi_split = 1;
     pvk_free(pvk_device_alloc(e.device), e.pp);
     pvk_free(pvk_device_alloc(e.device), e.later);
     pvk_free(pvk_device_alloc(e.device), e.pending);
@@ -68812,13 +68913,20 @@ static void pvk_queue_commit(struct pvk_queue *queue, id cb)
     pvk_queue_commit_all(queue, &cb, 1);
 }
 
-/* A submission's command buffers: cb, or the batch's encoded in parallel. */
+/* A submission's command buffers: cb, or the batch's encoded in parallel,
+ * or split (pvk_wsi_split). The queue waits until the display is done with
+ * the drawables its swapchain images render to before the first that uses
+ * one: the work before that runs meanwhile. */
 static void pvk_queue_commit_submission(struct pvk_queue *queue, const struct pvk_submission *s)
 {
-    if (s->commit_count)
-        pvk_queue_commit_all(queue, s->commit, s->commit_count);
-    else
-        pvk_queue_commit(queue, s->cb);
+    const id *cbs = s->commit_count ? s->commit : &s->cb;
+    uint32_t i, n = s->commit_count ? s->commit_count : 1, before = s->wsi_wait_count ? s->wsi_split : 0;
+    if (before)
+        pvk_queue_commit_all(queue, cbs, before);
+    for (i = 0; i < s->wsi_wait_count; i++)
+        pvk_MTL4CommandQueue_waitForDrawable(queue->mtl_queue, s->wsi_waits[i]);
+    if (before < n)
+        pvk_queue_commit_all(queue, cbs + before, n - before);
 }
 
 /* "Presentation" below: commits a present's copy and presents the drawable. */
@@ -68827,15 +68935,6 @@ static void pvk_present_commit(struct pvk_queue *queue, id cb, id drawable);
 /* Section 18: the first uses of swapchain images in a batch about to be
  * encoded into submission s (SWAPCHAIN IMAGES). */
 static void pvk_wsi_batch(struct pvk_queue *queue, struct pvk_submission *s, const VkSubmitInfo2 *submit);
-
-/* Before a batch's command buffers: the queue waits until the display is
- * done with the drawables its swapchain images render to. */
-static void pvk_wsi_wait(struct pvk_queue *queue, const struct pvk_submission *s)
-{
-    uint32_t i;
-    for (i = 0; i < s->wsi_wait_count; i++)
-        pvk_MTL4CommandQueue_waitForDrawable(queue->mtl_queue, s->wsi_waits[i]);
-}
 
 /* ---- Semaphore waits ----
  *
@@ -69063,12 +69162,12 @@ static void *pvk_queue_thread(void *arg)
             if (!stop) {
                 if (db->sparse)
                     pvk_sparse_execute(queue, d->binds, db->sparse);
-                if (db->wsi)
-                    pvk_wsi_wait(queue, db->wsi);
                 if (db->drawable) {
                     pvk_present_commit(queue, db->cb, db->drawable);
                     pvk_release(db->drawable);
                     db->drawable = NULL;
+                } else if (db->wsi) {
+                    pvk_queue_commit_submission(queue, db->wsi);
                 } else if (db->cbs) {
                     pvk_queue_commit_all(queue, db->cbs, db->cb_count);
                 } else if (db->cb) {
@@ -69260,7 +69359,6 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
         if (binds)
             pvk_sparse_execute(queue, binds, &binds->batches[i]);
         if (s && s->batch == i) {
-            pvk_wsi_wait(queue, s);
             pvk_queue_commit_submission(queue, s);
             if (s->batch_value)
                 pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, queue->batch_event, s->batch_value);
@@ -74628,11 +74726,18 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
  *   they record and whether it needs the image's contents (struct
  *   pvk_wsi_use); the submission that has the first use (pvk_wsi_batch)
  *   switches the image to the drawable, and its queue waits for the drawable
- *   before the batch. Presenting is then -signalDrawable: and -present,
- *   without a copy: the copy took 62/185/306 us of GPU time per frame at
- *   1080p/4K/5K, the present now 8 (MoltenVK's 9), and vkQueuePresentKHR
- *   70-120 us of CPU, now 8-11; the acquire's drawable adds 25, the queue's
- *   wait for it 20 to the submission (M4 Max, bench_present).
+ *   (until the display is done with it) before the first of the batch's
+ *   commands that uses a drawable: the commands before that are committed
+ *   ahead of the wait, in a command buffer of their own (section 16's
+ *   pvk_wsi_split). A frame that renders offscreen and copies into the image
+ *   last runs meanwhile; a wait before the whole batch held all of it back
+ *   (an engine's unpaced windowed frames, 3456x1956 at 120 Hz: 7.5 ms
+ *   between the GPU's frames, 5.1 with the copy at present). Presenting is
+ *   then -signalDrawable: and -present, without a copy: the copy took
+ *   62/185/306 us of GPU time per frame at 1080p/4K/5K, the present now 8
+ *   (MoltenVK's 9), and vkQueuePresentKHR 70-120 us of CPU, now 8-11; the
+ *   acquire's drawable adds 25, the queue's wait for it 20 to the
+ *   submission (M4 Max, bench_present).
  *
  *   An image keeps its contents from a present to its next acquire
  *   (VK_KHR_swapchain: presentation is read-only, and an image transitioned
