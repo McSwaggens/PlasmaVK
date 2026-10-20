@@ -951,18 +951,169 @@ static void test_frame_loop(void)
     pvk_release(layer);
 }
 
+/* ---- Drawables only render passes read ---- */
+
+/* Runs copies of contents on a command queue of its own and waits for
+ * them (white box: section 16's pvk_wsi_encode_copies, or with fetch its
+ * render pass for each, pvk_wsi_fetch_copy); residency: the layer's set,
+ * for drawables' textures (NULL: none). */
+static void run_copies(const struct pvk_wsi_copy *copies, uint32_t count, id residency, bool fetch)
+{
+    struct pvk_device *d = (struct pvk_device *)device;
+    id mtl = d->physical_device->mtl_device, queue = pvk_MTLDevice_newMTL4CommandQueue(mtl);
+    id allocator = pvk_MTLDevice_newCommandAllocator(mtl), cb = pvk_MTLDevice_newCommandBuffer(mtl);
+    id event = pvk_MTLDevice_newSharedEvent(mtl);
+    uint32_t i;
+
+    if (queue && allocator && cb && event) {
+        pvk_MTL4CommandQueue_addResidencySet(queue, d->residency_set);
+        pvk_device_commit_residency(d);
+        pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(cb, allocator);
+        if (residency)
+            pvk_MTL4CommandBuffer_useResidencySet(cb, residency);
+        if (fetch)
+            for (i = 0; i < count; i++)
+                CHECK(pvk_wsi_fetch_copy(d, cb, &copies[i]));
+        else
+            CHECK(pvk_wsi_encode_copies(d, cb, copies, count));
+        pvk_MTL4CommandBuffer_endCommandBuffer(cb);
+        pvk_MTL4CommandQueue_commit_count(queue, &cb, 1);
+        pvk_MTL4CommandQueue_signalEvent_value(queue, event, 1);
+        CHECK(pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(event, 1, 5000));
+    } else {
+        PVK_TEST_FAIL("no command queue for copies");
+    }
+    pvk_release(event);
+    pvk_release(cb);
+    pvk_release(allocator);
+    pvk_release(queue);
+}
+
+/* A w x h texture that can be a render target, in memory the CPU reads,
+ * resident (the device's set). */
+static id shared_texture(pvk_MTLPixelFormat format, uint32_t w, uint32_t h)
+{
+    struct pvk_device *d = (struct pvk_device *)device;
+    id desc = pvk_MTLTextureDescriptor_new(), t = NULL;
+    if (desc) {
+        pvk_MTLTextureDescriptor_setPixelFormat(desc, format);
+        pvk_MTLTextureDescriptor_setWidth(desc, w);
+        pvk_MTLTextureDescriptor_setHeight(desc, h);
+        pvk_MTLTextureDescriptor_setUsage(desc, PVK_MTLTextureUsageRenderTarget);
+        pvk_MTLTextureDescriptor_setResourceOptions(desc, PVK_MTLResourceStorageModeShared);
+        t = pvk_MTLDevice_newTextureWithDescriptor(d->physical_device->mtl_device, desc);
+        pvk_release(desc);
+    }
+    if (t)
+        pvk_device_make_resident(d, t);
+    return t;
+}
+
+static void free_shared_texture(id t)
+{
+    pvk_device_evict((struct pvk_device *)device, t);
+    pvk_release(t);
+}
+
+/* The texels of a drawable's texture of w x h, 4 bytes each. A
+ * framebufferOnly one (images that are only color attachments render to
+ * those) is read by no CPU, copy or shader, only by a render pass: one
+ * copies it into a shared texture first, as PlasmaVK's copies of contents
+ * do. */
+static void read_drawable(id drawable, id layer, void *texels, uint32_t w, uint32_t h)
+{
+    id texture = pvk_CAMetalDrawable_texture(drawable), readable = texture;
+    pvk_MTLRegion r;
+    if (pvk_MTLTexture_isFramebufferOnly(texture)) {
+        struct pvk_wsi_copy c;
+        REQUIRE(pvk_MTLTexture_width(texture) == w && pvk_MTLTexture_height(texture) == h);
+        readable = shared_texture(pvk_MTLTexture_pixelFormat(texture), w, h);
+        REQUIRE(readable);
+        c.src = texture;
+        c.dst = readable;
+        c.residency = NULL;
+        run_copies(&c, 1, pvk_CAMetalLayer_residencySet(layer), false);
+    }
+    memset(&r, 0, sizeof(r));
+    r.size.width = w;
+    r.size.height = h;
+    r.size.depth = 1;
+    pvk_MTLTexture_getBytes_bytesPerRow_bytesPerImage_fromRegion_mipmapLevel_slice(readable, texels, w * 4, w * h * 4,
+                                                                                   r, 0, 0);
+    if (readable != texture)
+        free_shared_texture(readable);
+}
+
+/* Copies of contents through a render pass (pvk_wsi_fetch_copy: the
+ * fragments read the source attachment's pixel as floats and write them)
+ * are exact in every swapchain format, for texels of every value. */
+static void test_fetch_copies(void)
+{
+    static const struct {
+        pvk_MTLPixelFormat format;
+        uint32_t bytes;
+    } formats[] = {
+        { PVK_MTLPixelFormatBGRA8Unorm, 4 },    { PVK_MTLPixelFormatBGRA8Unorm_sRGB, 4 },
+        { PVK_MTLPixelFormatRGBA16Float, 8 },   { PVK_MTLPixelFormatRGB10A2Unorm, 4 },
+        { PVK_MTLPixelFormatBGR10A2Unorm, 4 },
+    };
+    enum { W = 64, H = 32 };
+    static unsigned char data[W * H * 8], readback[W * H * 8];
+    uint32_t f, i, y;
+    pvk_MTLRegion r;
+
+    memset(&r, 0, sizeof(r));
+    r.size.width = W;
+    r.size.height = H;
+    r.size.depth = 1;
+    for (f = 0; f < sizeof(formats) / sizeof(formats[0]); f++) {
+        uint32_t row = W * formats[f].bytes;
+        struct pvk_wsi_copy c;
+        c.src = shared_texture(formats[f].format, W, H);
+        c.dst = shared_texture(formats[f].format, W, H);
+        c.residency = NULL;
+        REQUIRE(c.src && c.dst);
+        for (i = 0; i < row * H; i++)
+            data[i] = (unsigned char)(i * 7 + i / 13 + f);
+        if (formats[f].bytes == 8) /* finite halves of either sign: exponents up to 15 */
+            for (i = 1; i < row * H; i += 2)
+                data[i] &= 0xBF;
+        pvk_MTLTexture_replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(c.src, r, 0, 0, data, row,
+                                                                                           row * H);
+        run_copies(&c, 1, NULL, true);
+        pvk_MTLTexture_getBytes_bytesPerRow_bytesPerImage_fromRegion_mipmapLevel_slice(c.dst, readback, row, row * H, r,
+                                                                                       0, 0);
+        for (y = 0; y < H; y++)
+            if (memcmp(readback + y * row, data + y * row, row) != 0) {
+                PVK_TEST_FAIL("pixel format %lu: row %u differs after a copy", formats[f].format, y);
+                break;
+            }
+        pvk_MTLTexture_getBytes_bytesPerRow_bytesPerImage_fromRegion_mipmapLevel_slice(c.src, readback, row, row * H, r,
+                                                                                       0, 0);
+        CHECK(memcmp(readback, data, row * H) == 0); /* the source as it was */
+        free_shared_texture(c.src);
+        free_shared_texture(c.dst);
+    }
+}
+
 /* Images without sampled, storage or input attachment usage render to the
  * drawables they are presented with (section 18, SWAPCHAIN IMAGES), and
  * keep their contents from a present to their next acquire, whatever
- * drawable that renders to next: frames that discard the contents (a
- * transition from UNDEFINED, a LOAD_OP_CLEAR render pass, a scaled blit
- * into all of it, as the engine presents), that read them (a copy to a
- * buffer, a LOAD_OP_LOAD render pass) and that leave the image alone, in
- * turns, each image's contents checked when read and each
- * presented drawable read back. Every lazy-th acquire has a finite timeout,
- * so the first use (or the present) takes the drawable, whose IOSurface
- * may have other contents: lazy 1 has their copies in most frames. */
-static void check_direct(uint32_t images, uint32_t family, uint32_t lazy_every)
+ * drawable that renders to next: frames that discard the contents, that
+ * need them and that leave the image alone, in turns, each presented
+ * drawable read back. With transfers: discarding by a transition from
+ * UNDEFINED, a LOAD_OP_CLEAR render pass or a scaled blit into all of it
+ * (as the engine presents), reading by a copy to a buffer (or a
+ * LOAD_OP_LOAD render pass, then a copy), each read checked. Without, the
+ * images only color attachments (their drawables framebufferOnly, which
+ * render passes copy): discarding by a transition from UNDEFINED or a
+ * LOAD_OP_CLEAR or DONT_CARE render pass, needing the contents for a
+ * LOAD_OP_LOAD render pass that clears half of it or a render pass over
+ * half of it, the other half checked in the drawable. Every lazy-th acquire
+ * has a finite timeout, so the first use (or the present) takes the
+ * drawable, whose IOSurface may have other contents: lazy 1 has their
+ * copies in most frames. */
+static void check_direct(uint32_t images, uint32_t family, uint32_t lazy_every, bool transfers)
 {
     enum { W = 16, H = 8, FRAMES = 40 };
     id layer = make_layer(W, H, 1.0);
@@ -982,16 +1133,18 @@ static void check_direct(uint32_t images, uint32_t family, uint32_t lazy_every)
     VkDeviceMemory memory, source_memory;
     VkFence fence = make_fence();
     VkSemaphore acquired = make_semaphore(VK_SEMAPHORE_TYPE_BINARY), rendered = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
-    uint32_t color[3] = { 0, 0, 0 }; /* each image's contents (BGRA bytes), 0: undefined */
+    uint32_t want[3][W * H]; /* each image's contents (BGRA bytes), 0: undefined */
     uint32_t count = 3, frame, index, i, *data = NULL, texels[W * H];
-    pvk_MTLRegion r;
 
-    info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                      VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    memset(want, 0, sizeof(want));
+    info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (transfers)
+        info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     info.clipped = VK_FALSE;
     REQUIRE(surface);
     REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchain));
     CHECK(((struct pvk_swapchain *)swapchain)->direct); /* (white box) */
+    CHECK(PVK_MSG(bool, (id, SEL))(layer, sel_registerName("framebufferOnly")) == !transfers);
     REQUIRE_VK(vkGetSwapchainImagesKHR(device, swapchain, &count, image));
     REQUIRE(count == images);
     for (i = 0; i < count; i++) {
@@ -1044,8 +1197,9 @@ static void check_direct(uint32_t images, uint32_t family, uint32_t lazy_every)
     REQUIRE_VK(vkBindImageMemory(device, source, source_memory, 0));
 
     for (frame = 0; frame < FRAMES; frame++) {
-        uint32_t mode = frame % 6, next = 0xff000000u | (frame * 0x050b11u + 0x102030u), read = 0, k;
-        bool use = true, lazy = frame % lazy_every == lazy_every - 1;
+        uint32_t mode = frame % 6, next = 0xff000000u | (frame * 0x050b11u + 0x102030u), k;
+        uint32_t before[W * H]; /* the image's contents before the frame */
+        bool use = true, read = false, lazy = frame % lazy_every == lazy_every - 1;
         VkClearColorValue clear;
         VkImageSubresourceRange range;
         VkCommandBuffer cb;
@@ -1063,9 +1217,52 @@ static void check_direct(uint32_t images, uint32_t family, uint32_t lazy_every)
         REQUIRE_VK(vkAcquireNextImageKHR(device, swapchain, lazy ? 2000000000ull : UINT64_MAX, acquired, VK_NULL_HANDLE,
                                          &index));
         CHECK(lazy == (last_drawable == NULL));
+        memcpy(before, want[index], sizeof(before));
         cb = begin(family);
         REQUIRE(cb);
-        if (mode == 0) { /* discards: a clear after a transition from UNDEFINED */
+        if (mode == 2 && before[0]) { /* left alone: presented as it was */
+            use = false;
+        } else if (!transfers) { /* render passes only */
+            VkRenderingAttachmentInfo att;
+            VkRenderingInfo ri;
+            VkClearAttachment ca;
+            VkClearRect rect;
+            memset(&att, 0, sizeof(att));
+            att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            att.imageView = view[index];
+            att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            /* 0: discards (a transition from UNDEFINED), then clears all; 1: loads, clears the left half;
+             * 4: clears the top half (the render area); 5: discards (DONT_CARE), clears all; 3: clears all */
+            att.loadOp = mode == 0 || mode == 1 ? VK_ATTACHMENT_LOAD_OP_LOAD
+                         : mode == 5         ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
+                                             : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            att.clearValue.color = clear;
+            memset(&ri, 0, sizeof(ri));
+            ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            ri.renderArea.extent.width = W;
+            ri.renderArea.extent.height = mode == 4 ? H / 2 : H;
+            ri.layerCount = 1;
+            ri.colorAttachmentCount = 1;
+            ri.pColorAttachments = &att;
+            memset(&ca, 0, sizeof(ca));
+            ca.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            ca.clearValue.color = clear;
+            memset(&rect, 0, sizeof(rect));
+            rect.rect.extent.width = mode == 1 ? W / 2 : W;
+            rect.rect.extent.height = H;
+            rect.layerCount = 1;
+            barrier(cb, image[index], mode == 0 ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            vkCmdBeginRendering(cb, &ri);
+            if (att.loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR)
+                vkCmdClearAttachments(cb, 1, &ca, 1, &rect);
+            vkCmdEndRendering(cb);
+            barrier(cb, image[index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+            for (k = 0; k < W * H; k++)
+                if ((mode != 1 || k % W < W / 2) && (mode != 4 || k / W < H / 2))
+                    want[index][k] = next;
+        } else if (mode == 0) { /* discards: a clear after a transition from UNDEFINED */
             barrier(cb, image[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             vkCmdClearColorImage(cb, image[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
             barrier(cb, image[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
@@ -1097,10 +1294,7 @@ static void check_direct(uint32_t images, uint32_t family, uint32_t lazy_every)
             barrier(cb, image[index], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             vkCmdClearColorImage(cb, image[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
             barrier(cb, image[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-            read = color[index];
-        } else if (mode == 2 && color[index]) { /* left alone: presented as it was */
-            use = false;
-            next = color[index];
+            read = true;
         } else if (mode == 5) { /* discards: a scaled blit into all of it */
             VkImageBlit blit;
             barrier(cb, source, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -1141,6 +1335,9 @@ static void check_direct(uint32_t images, uint32_t family, uint32_t lazy_every)
             vkCmdEndRendering(cb);
             barrier(cb, image[index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
         }
+        if (transfers && use) /* (every frame that uses the image writes all of it) */
+            for (k = 0; k < W * H; k++)
+                want[index][k] = next;
         REQUIRE_VK(submit(family, cb, acquired, rendered, fence)); /* (empty when the image is left alone) */
         if (lazy)
             CHECK(use == (last_drawable != NULL));
@@ -1150,29 +1347,25 @@ static void check_direct(uint32_t images, uint32_t family, uint32_t lazy_every)
         CHECK_VK(vkQueueWaitIdle(queues[family]), VK_SUCCESS);
         if (read)
             for (k = 0; k < W * H; k++)
-                if (data[k] != read) {
+                if (before[k] && data[k] != before[k]) {
                     PVK_TEST_FAIL("frame %u (%u images, mode %u): image %u read 0x%08x at %u, not 0x%08x", frame,
-                                  images, mode, index, data[k], k, read);
+                                  images, mode, index, data[k], k, before[k]);
                     break;
                 }
-        color[index] = next;
         REQUIRE(last_drawable != NULL);
-        memset(&r, 0, sizeof(r));
-        r.size.width = W;
-        r.size.height = H;
-        r.size.depth = 1;
-        pvk_MTLTexture_getBytes_bytesPerRow_bytesPerImage_fromRegion_mipmapLevel_slice(
-            pvk_CAMetalDrawable_texture(last_drawable), texels, W * 4, sizeof(texels), r, 0, 0);
+        read_drawable(last_drawable, layer, texels, W, H);
         for (k = 0; k < W * H; k++)
-            if (texels[k] != next) {
-                PVK_TEST_FAIL("frame %u (%u images, mode %u): image %u presented 0x%08x at %u, not 0x%08x", frame,
-                              images, mode, index, texels[k], k, next);
+            if (want[index][k] && texels[k] != want[index][k]) {
+                PVK_TEST_FAIL("frame %u (%u images, mode %u%s): image %u presented 0x%08x at %u, not 0x%08x", frame,
+                              images, mode, transfers ? "" : ", color attachment only", index, texels[k], k,
+                              want[index][k]);
                 break;
             }
         pvk_release(last_drawable);
         last_drawable = NULL;
         vkResetCommandPool(device, pools[family], 0);
-        if (mode == 0) { /* read back once presented, not acquired (invalid usage, but the CTS's colorspace tests do) */
+        /* read back once presented, not acquired (invalid usage, but the CTS's colorspace tests do) */
+        if (transfers && mode == 0) {
             cb = begin(family);
             REQUIRE(cb);
             vkCmdCopyImageToBuffer(cb, image[index], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, buffer, 1, &region);
@@ -1180,9 +1373,9 @@ static void check_direct(uint32_t images, uint32_t family, uint32_t lazy_every)
             REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
             REQUIRE_VK(vkResetFences(device, 1, &fence));
             for (k = 0; k < W * H; k++)
-                if (data[k] != next) {
+                if (data[k] != want[index][k]) {
                     PVK_TEST_FAIL("frame %u (%u images): image %u read 0x%08x at %u once presented, not 0x%08x", frame,
-                                  images, index, data[k], k, next);
+                                  images, index, data[k], k, want[index][k]);
                     break;
                 }
             vkResetCommandPool(device, pools[family], 0);
@@ -1205,11 +1398,16 @@ static void check_direct(uint32_t images, uint32_t family, uint32_t lazy_every)
 
 static void test_direct(void)
 {
-    check_direct(2, 0, 3);
-    check_direct(3, 0, 3);
-    check_direct(2, 1, 3); /* the compute family */
-    check_direct(2, 0, 1);
-    check_direct(3, 0, 1);
+    check_direct(2, 0, 3, true);
+    check_direct(3, 0, 3, true);
+    check_direct(2, 1, 3, true); /* the compute family */
+    check_direct(2, 0, 1, true);
+    check_direct(3, 0, 1, true);
+    check_direct(2, 0, 3, false);
+    check_direct(3, 0, 3, false);
+    check_direct(2, 1, 3, false);
+    check_direct(2, 0, 1, false);
+    check_direct(3, 0, 1, false);
 }
 
 /* Present modes, color spaces, composite alpha and two swapchains in one
@@ -1499,6 +1697,7 @@ int main(void)
     RUN(test_acquire_timeouts);
     RUN(test_deferred_present);
     RUN(test_frame_loop);
+    RUN(test_fetch_copies);
     RUN(test_direct);
     RUN(test_layer_configuration);
     RUN(test_headless);
