@@ -1410,6 +1410,92 @@ static void test_direct(void)
     check_direct(3, 0, 1, false);
 }
 
+/* Transfers alone write the drawables, no render pass before them: copies
+ * from a buffer into the images, of a layer that had no device before the
+ * swapchain (the drawables' residency set comes with it). */
+static void test_transfers_into_drawables(void)
+{
+    enum { W = 16, H = 8, FRAMES = 8 };
+    id layer = make_layer(W, H, 1.0);
+    VkSurfaceKHR surface = make_surface(layer);
+    VkSwapchainCreateInfoKHR info = swapchain_info(surface, VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+                                                   W, H, 2);
+    VkSemaphore acquired = make_semaphore(VK_SEMAPHORE_TYPE_BINARY), rendered = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
+    VkFence fence = make_fence();
+    VkBufferCreateInfo binfo;
+    VkMemoryAllocateInfo alloc;
+    VkMemoryRequirements req;
+    VkBufferImageCopy region;
+    VkSwapchainKHR swapchain;
+    VkDeviceMemory memory;
+    VkBuffer buffer;
+    VkImage images[2];
+    uint32_t count = 2, frame, index, k, *data = NULL, texels[W * H];
+
+    REQUIRE(surface);
+    REQUIRE(pvk_CAMetalLayer_device(layer) == NULL);
+    info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchain));
+    CHECK(((struct pvk_swapchain *)swapchain)->direct && ((struct pvk_swapchain *)swapchain)->residency); /* (white box) */
+    REQUIRE_VK(vkGetSwapchainImagesKHR(device, swapchain, &count, images));
+    memset(&binfo, 0, sizeof(binfo));
+    binfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    binfo.size = sizeof(texels);
+    binfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    REQUIRE_VK(vkCreateBuffer(device, &binfo, NULL, &buffer));
+    vkGetBufferMemoryRequirements(device, buffer, &req);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = shared_type;
+    REQUIRE_VK(vkAllocateMemory(device, &alloc, NULL, &memory));
+    REQUIRE_VK(vkBindBufferMemory(device, buffer, memory, 0));
+    REQUIRE_VK(vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, (void **)&data));
+    memset(&region, 0, sizeof(region));
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent.width = W;
+    region.imageExtent.height = H;
+    region.imageExtent.depth = 1;
+    for (frame = 0; frame < FRAMES; frame++) {
+        uint32_t want = 0xff000000u | (frame * 0x0b1d2fu + 0x405060u);
+        VkCommandBuffer cb;
+        pvk_release(last_drawable);
+        last_drawable = NULL;
+        REQUIRE_VK(vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired, VK_NULL_HANDLE, &index));
+        for (k = 0; k < W * H; k++)
+            data[k] = want;
+        cb = begin(0);
+        REQUIRE(cb);
+        barrier(cb, images[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        vkCmdCopyBufferToImage(cb, buffer, images[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        barrier(cb, images[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        REQUIRE_VK(submit(0, cb, acquired, rendered, fence));
+        CHECK_VK(present(0, swapchain, index, rendered), VK_SUCCESS);
+        REQUIRE_VK(vkWaitForFences(device, 1, &fence, VK_TRUE, 2000000000ull));
+        REQUIRE_VK(vkResetFences(device, 1, &fence));
+        CHECK_VK(vkQueueWaitIdle(queues[0]), VK_SUCCESS);
+        REQUIRE(last_drawable != NULL);
+        read_drawable(last_drawable, layer, texels, W, H);
+        for (k = 0; k < W * H; k++)
+            if (texels[k] != want) {
+                PVK_TEST_FAIL("frame %u: image %u presented 0x%08x at %u, not 0x%08x", frame, index, texels[k], k, want);
+                break;
+            }
+        pvk_release(last_drawable);
+        last_drawable = NULL;
+        vkResetCommandPool(device, pools[0], 0);
+    }
+    vkDestroySwapchainKHR(device, swapchain, NULL);
+    vkDestroyBuffer(device, buffer, NULL);
+    vkFreeMemory(device, memory, NULL);
+    vkDestroyFence(device, fence, NULL);
+    vkDestroySemaphore(device, acquired, NULL);
+    vkDestroySemaphore(device, rendered, NULL);
+    vkDestroySurfaceKHR(instance, surface, NULL);
+    pvk_release(layer);
+}
+
 /* Present modes, color spaces, composite alpha and two swapchains in one
  * present (vkAcquireNextImage2KHR for one of them). */
 static void test_layer_configuration(void)
@@ -1699,6 +1785,7 @@ int main(void)
     RUN(test_frame_loop);
     RUN(test_fetch_copies);
     RUN(test_direct);
+    RUN(test_transfers_into_drawables);
     RUN(test_layer_configuration);
     RUN(test_headless);
     RUN(test_lazy_present_threads);

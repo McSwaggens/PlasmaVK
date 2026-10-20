@@ -75236,7 +75236,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice _device, const VkSw
 
     sc->device = device;
     sc->layer = pvk_retain(surface->layer);
-    sc->residency = sc->layer ? pvk_retain(pvk_CAMetalLayer_residencySet(sc->layer)) : NULL;
     sc->surface = surface;
     sc->extent = pCreateInfo->imageExtent;
     sc->mtl_format = f ? f->mtl : PVK_MTLPixelFormatInvalid;
@@ -75279,6 +75278,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice _device, const VkSw
             pvk_CATransaction_setDisableActions(true);
             pvk_swapchain_configure(sc, pCreateInfo);
             pvk_CATransaction_commit();
+            /* The drawables' set, once the layer has the device: a layer
+             * without one has none (and nothing made the textures that
+             * transfers copy into resident), a new device a new one. */
+            sc->residency = pvk_retain(pvk_CAMetalLayer_residencySet(sc->layer));
         }
         objc_autoreleasePoolPop(pool);
     }
