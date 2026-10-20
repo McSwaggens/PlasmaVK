@@ -42302,8 +42302,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   and so does a safe-math one without NoContraction or FPFastMath* flags
  *   short of AllowContract, through `#pragma METAL fp contract(fast)`
  *   (pvk_spv_contracts); except the add of a multiplicative recurrence
- *   (`s = s * a + b`, s a loop's phi), written under `#pragma METAL fp
- *   contract(off)` (pvk_spv_recurrences). The kernel's name is
+ *   (`s = s * a + b`, s a loop's phi) and of a product to such a phi that
+ *   the loop doesn't take back (`t = a * b + s`), written under `#pragma
+ *   METAL fp contract(off)` (pvk_spv_recurrences). The kernel's name is
  *   result->entry_point; dispatch with result->workgroup_size threads per
  *   threadgroup (declared with [[max_total_threads_per_threadgroup]], so the
  *   compiler fits up to 1024). A vertex function with result->invariant
@@ -43386,9 +43387,10 @@ enum pvk_spv_kind {
 #define PVK_SPV_F_FORWARDED 0x400000u /* msl is its expression, written into its one use */
 #define PVK_SPV_F_READS 0x800000u     /* forwarded, reading memory that stores and calls change */
 #define PVK_SPV_F_REPEATED 0x1000000u /* an operand twice of one instruction (`vec3(x, x, x)`) */
-#define PVK_SPV_F_RECURRENCE 0x2000000u /* the add of a multiplicative recurrence: uncontracted (pvk_spv_recurrences) */
+#define PVK_SPV_F_RECURRENCE 0x2000000u /* an add written uncontracted (pvk_spv_recurrences) */
 #define PVK_SPV_F_OUTSIDE 0x4000000u    /* in a recurrence's add, no arithmetic forwarded (pvk_spv_recurrences) */
 #define PVK_SPV_F_ARITH 0x8000000u      /* forwarded, with float arithmetic in its expression */
+#define PVK_SPV_F_LOOPED 0x10000000u    /* makes what a loop header's phi takes back (pvk_spv_recurrences) */
 /* member flags */
 #define PVK_SPV_M_OFFSET 0x1u
 #define PVK_SPV_M_ROW_MAJOR 0x2u
@@ -47291,20 +47293,73 @@ static bool pvk_spv_product(struct pvk_spv *ctx, uint32_t v, struct pvk_spv_insn
     return in->wc == 5;
 }
 
+/* Add x (instruction in) uncontracted: PVK_SPV_F_RECURRENCE, and its
+ * products go in, nothing else that contracts (pvk_spv_recurrences). */
+static void pvk_spv_uncontracted(struct pvk_spv *ctx, struct pvk_spv_id *x, const struct pvk_spv_insn *in)
+{
+    struct pvk_spv_insn m;
+    uint32_t i, j;
+    x->flags |= PVK_SPV_F_RECURRENCE;
+    for (i = 3; i < 5; i++) {
+        bool product = pvk_spv_product(ctx, in->w[i], &m);
+        for (j = 0; j < (product ? 2u : 1u); j++) {
+            uint32_t o = product ? m.w[3 + j] : in->w[i];
+            if (o < ctx->nids && ctx->ids[o].kind == PVK_SPV_K_VALUE)
+                ctx->ids[o].flags |= PVK_SPV_F_OUTSIDE;
+        }
+    }
+}
+
+/* Whether value v is a phi of a loop header in function fidx, or data moved
+ * out of one (pvk_spv_moved_from). */
+static bool pvk_spv_from_loop_phi(struct pvk_spv *ctx, uint32_t fidx, uint32_t v, uint32_t depth, uint32_t *budget)
+{
+    const struct pvk_spv_id *x;
+    struct pvk_spv_insn in;
+    uint32_t i, b, e;
+    if (v == 0 || v >= ctx->nids || depth == 0 || *budget == 0)
+        return false;
+    --*budget;
+    x = &ctx->ids[v];
+    if (x->kind != PVK_SPV_K_VALUE || x->func != fidx)
+        return false;
+    switch (x->op) {
+    case PVK_SPV_OpPhi: {
+        const struct pvk_spv_block *blk = &ctx->funcs[fidx - 1]->blocks[x->block];
+        return blk->merge && pvk_spv_insn_at(ctx, blk->merge).op == PVK_SPV_OpLoopMerge;
+    }
+    case PVK_SPV_OpCompositeConstruct: case PVK_SPV_OpCompositeExtract: case PVK_SPV_OpCompositeInsert:
+    case PVK_SPV_OpVectorShuffle: case PVK_SPV_OpCopyObject: case PVK_SPV_OpFNegate:
+        break;
+    default:
+        return false;
+    }
+    in = pvk_spv_insn_at(ctx, x->insn);
+    pvk_spv_id_range(&in, 2, &b, &e);
+    for (i = b; i < e; i++)
+        if (pvk_spv_from_loop_phi(ctx, fidx, in.w[i], depth - 1, budget))
+            return true;
+    return false;
+}
+
 /* Finds the adds that make value v, which loop header phi takes from a
  * predecessor (through data movement, selects, other adds and the phis of
- * selections), and add a product of the phi itself (pvk_spv_recurrences). */
+ * selections), and add a product of the phi itself; marks what it passes
+ * PVK_SPV_F_LOOPED (pvk_spv_recurrences). */
 static void pvk_spv_recurrence(struct pvk_spv *ctx, uint32_t fidx, uint32_t v, uint32_t phi, uint32_t depth,
                                uint32_t *budget)
 {
     struct pvk_spv_id *x;
     struct pvk_spv_insn in, m;
-    uint32_t i, j, b, e;
+    uint32_t i, b, e;
     if (v == phi || v == 0 || v >= ctx->nids || depth == 0 || *budget == 0)
         return;
     --*budget;
     x = &ctx->ids[v];
-    if (x->kind != PVK_SPV_K_VALUE || x->func != fidx || (x->flags & PVK_SPV_F_RECURRENCE))
+    if (x->kind != PVK_SPV_K_VALUE || x->func != fidx)
+        return;
+    x->flags |= PVK_SPV_F_LOOPED;
+    if (x->flags & PVK_SPV_F_RECURRENCE)
         return;
     in = pvk_spv_insn_at(ctx, x->insn);
     switch (x->op) {
@@ -47315,15 +47370,8 @@ static void pvk_spv_recurrence(struct pvk_spv *ctx, uint32_t fidx, uint32_t v, u
             if (pvk_spv_product(ctx, in.w[i], &m) &&
                 (pvk_spv_moved_from(ctx, m.w[3], phi, 4, budget) || pvk_spv_moved_from(ctx, m.w[4], phi, 4, budget)))
                 x->flags |= PVK_SPV_F_RECURRENCE;
-        if (x->flags & PVK_SPV_F_RECURRENCE) /* its products go in, nothing else that contracts */
-            for (i = 3; i < 5; i++) {
-                bool product = pvk_spv_product(ctx, in.w[i], &m);
-                for (j = 0; j < (product ? 2u : 1u); j++) {
-                    uint32_t o = product ? m.w[3 + j] : in.w[i];
-                    if (o < ctx->nids && ctx->ids[o].kind == PVK_SPV_K_VALUE)
-                        ctx->ids[o].flags |= PVK_SPV_F_OUTSIDE;
-                }
-            }
+        if (x->flags & PVK_SPV_F_RECURRENCE)
+            pvk_spv_uncontracted(ctx, x, &in);
         break;
     case PVK_SPV_OpPhi: {
         const struct pvk_spv_block *blk = &ctx->funcs[fidx - 1]->blocks[x->block];
@@ -47349,13 +47397,16 @@ static void pvk_spv_recurrence(struct pvk_spv *ctx, uint32_t fidx, uint32_t v, u
  * contraction off. Metal contracting one into fma(s, a, b) slows the loop
  * down: ggml's wkv6 state update took 24% longer (M4 Max, Relaxed or Safe
  * math, 64 or 512 threadgroups), the unfused loop 3% less than with nothing
- * contracted. Adds into an accumulator (`acc += x * y`, the phi not a
- * factor: n-body) contract as before, as do the others. Their other
- * operands, and their products' factors, get PVK_SPV_F_OUTSIDE: arithmetic
- * there is not forwarded into the add (pvk_spv_forward), so contracts. */
+ * contracted. So does an add of a product to such a phi (`t = a * b + s`)
+ * that the loop doesn't take back: wkv6's `tf * kv + s` contracted took 4%
+ * longer. Adds into an accumulator (`acc += x * y`, the add taken back:
+ * n-body) contract as before, as do the others. Their other operands, and
+ * their products' factors, get PVK_SPV_F_OUTSIDE: arithmetic there is not
+ * forwarded into the add (pvk_spv_forward), so contracts. */
 static void pvk_spv_recurrences(struct pvk_spv *ctx, uint32_t fidx)
 {
     const struct pvk_spv_func *fn = ctx->funcs[fidx - 1];
+    struct pvk_spv_insn m;
     uint32_t bi, i;
     for (bi = 0; bi < fn->nblocks; bi++) {
         const struct pvk_spv_block *blk = &fn->blocks[bi];
@@ -47372,6 +47423,28 @@ static void pvk_spv_recurrences(struct pvk_spv *ctx, uint32_t fidx)
             for (i = 3; i + 1 < in.wc; i += 2) {
                 uint32_t budget = 256;
                 pvk_spv_recurrence(ctx, fidx, in.w[i], in.w[2], 8, &budget);
+            }
+        }
+    }
+    for (bi = 0; bi < fn->nblocks; bi++) { /* products added to a phi, not taken back */
+        const struct pvk_spv_block *blk = &fn->blocks[bi];
+        uint32_t off = blk->begin;
+        while (off < blk->end) {
+            struct pvk_spv_insn in = pvk_spv_insn_at(ctx, off);
+            struct pvk_spv_id *x;
+            off += in.wc;
+            if ((in.op != PVK_SPV_OpFAdd && in.op != PVK_SPV_OpFSub) || in.wc != 5 || in.w[2] >= ctx->nids)
+                continue;
+            x = &ctx->ids[in.w[2]];
+            if (x->flags & (PVK_SPV_F_LOOPED | PVK_SPV_F_RECURRENCE))
+                continue;
+            for (i = 3; i < 5; i++) {
+                uint32_t budget = 64;
+                if (pvk_spv_product(ctx, in.w[i], &m) && !pvk_spv_product(ctx, in.w[7 - i], &m) &&
+                    pvk_spv_from_loop_phi(ctx, fidx, in.w[7 - i], 4, &budget)) {
+                    pvk_spv_uncontracted(ctx, x, &in);
+                    break;
+                }
             }
         }
     }
