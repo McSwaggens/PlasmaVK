@@ -31757,6 +31757,8 @@ static inline unsigned long pvk_MTLTexture_height(id self) { PVK_SEL_CACHE("heig
 static inline void pvk_MTL4CommandQueue_signalDrawable(id self, id drawable) { PVK_SEL_CACHE("signalDrawable:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, drawable); }
 static inline void pvk_MTL4CommandQueue_waitForDrawable(id self, id drawable) { PVK_SEL_CACHE("waitForDrawable:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, drawable); }
 static inline void pvk_MTL4CommandBuffer_useResidencySet(id self, id residencySet) { PVK_SEL_CACHE("useResidencySet:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, residencySet); }
+static inline IOSurfaceRef pvk_MTLTexture_iosurface(id self) { PVK_SEL_CACHE("iosurface"); return PVK_MSG(IOSurfaceRef, (id, SEL))(self, pvk_sel_); }
+static inline void pvk_MTL4ComputeCommandEncoder_copyFromTexture_toTexture(id self, id sourceTexture, id destinationTexture) { PVK_SEL_CACHE("copyFromTexture:toTexture:"); PVK_MSG(void, (id, SEL, id, id))(self, pvk_sel_, sourceTexture, destinationTexture); }
 static inline void pvk_CATransaction_begin(void) { PVK_CLASS_CACHE("CATransaction"); PVK_SEL_CACHE("begin"); PVK_MSG(void, (id, SEL))((id)pvk_cls_, pvk_sel_); }
 static inline void pvk_CATransaction_commit(void) { PVK_CLASS_CACHE("CATransaction"); PVK_SEL_CACHE("commit"); PVK_MSG(void, (id, SEL))((id)pvk_cls_, pvk_sel_); }
 static inline void pvk_CATransaction_setDisableActions(bool flag) { PVK_CLASS_CACHE("CATransaction"); PVK_SEL_CACHE("setDisableActions:"); PVK_MSG(void, (id, SEL, bool))((id)pvk_cls_, pvk_sel_, flag); }
@@ -32587,6 +32589,17 @@ struct pvk_par_thread {
 #define PVK_HEAP_CACHE_SLOTS 16
 #define PVK_HEAP_CACHE_BYTES ((VkDeviceSize)64 << 20)
 
+/* A swapchain image that commands render to as a CAMetalDrawable's texture
+ * (section 18, SWAPCHAIN IMAGES): commands recorded with its own texture
+ * use current instead, while it has one. Pointers as void * for atomics
+ * (Objective-C builds take no id in __atomic builtins). */
+#define PVK_WSI_SLOTS 16u
+struct pvk_wsi_slot {
+    void *texture;   /* the image's own MTLTexture; NULL: a free slot */
+    void *current;   /* the drawable's MTLTexture this cycle; NULL: its own */
+    void *residency; /* the layer's MTLResidencySet, which has current */
+};
+
 struct pvk_device {
     struct pvk_physical_device *physical_device;
     VkAllocationCallbacks alloc;
@@ -32671,6 +32684,10 @@ struct pvk_device {
     bool debug;               /* the instance enabled the debug layer */
     bool app_alloc;           /* made with pAllocator (the debug layer checks vkDestroyDevice's) */
     struct pvk_names *names;  /* object names and tags (pvk_names_lock); NULL: none yet */
+    /* Swapchain images presented as drawables (section 18, SWAPCHAIN
+     * IMAGES), slots [0, wsi_slots) (atomic: encoders read them) */
+    struct pvk_wsi_slot wsi[PVK_WSI_SLOTS];
+    uint32_t wsi_slots;
 };
 
 /* Section 13: a queue's submission state, and waiting for the GPU before
@@ -38610,6 +38627,8 @@ struct pvk_sampler {
 
 /* ---- Images ---- */
 
+struct pvk_swapchain_image; /* section 18 */
+
 /* One plane of a multi-planar image (Y'CBCR IMAGES). */
 struct pvk_image_plane {
     const struct pvk_format *fmt; /* the plane's compatible format */
@@ -38665,6 +38684,7 @@ struct pvk_image {
     uint32_t plane_count;                 /* multi-planar formats: 2 or 3 planes[], else 0 */
     struct pvk_image_plane planes[3];
     struct pvk_sparse_layout *sparse;     /* sparse images (mtl_texture made at creation), else NULL */
+    struct pvk_swapchain_image *wsi;      /* a swapchain's image (section 18), else NULL */
 };
 
 /* Whether a view format makes Metal reinterpret the image's pixels (beyond
@@ -39559,8 +39579,10 @@ static id pvk_image_committed(struct pvk_device *device, struct pvk_image *image
     return texture;
 }
 
-/* Section 18: the memory of a swapchain's image (bound at offset 0). */
+/* Section 18: the memory of a swapchain's image (bound at offset 0); a
+ * view of a swapchain's image. */
 static struct pvk_device_memory *pvk_swapchain_image_memory(VkSwapchainKHR swapchain, uint32_t index);
+static void pvk_swapchain_view(const struct pvk_image_view *view);
 
 static VkResult pvk_bind_images(struct pvk_device *device, uint32_t bindInfoCount, const VkBindImageMemoryInfo *pBindInfos,
                                 bool info2)
@@ -39987,6 +40009,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
             pvk_device_make_resident(device, view->mtl_residency);
         view->resident = true;
     }
+    if (image->wsi)
+        pvk_swapchain_view(view);
     pvk_live_add(device, VK_OBJECT_TYPE_IMAGE_VIEW, view, NULL, pAllocator != NULL);
     *pView = (VkImageView)view;
     return VK_SUCCESS;
@@ -56206,6 +56230,15 @@ struct pvk_push_descriptors {
 
 struct pvk_cb_render;
 
+/* The first use of a swapchain's image in a recording (section 18,
+ * SWAPCHAIN IMAGES): whether it needs the image's contents (it reads them,
+ * or writes only part of the image), or discards them (a transition from
+ * VK_IMAGE_LAYOUT_UNDEFINED, a whole-image clear or DONT_CARE load). */
+struct pvk_wsi_use {
+    struct pvk_image *image;
+    bool preserve;
+};
+
 struct pvk_command_buffer {
     struct pvk_command_pool *pool;
     struct pvk_command_buffer *prev, *next; /* pool->buffers */
@@ -56245,6 +56278,10 @@ struct pvk_command_buffer {
     uint32_t packets, ops, par, fork_packets;
     pvk_MTLStages order[PVK_ORDER_STAGES];
     const struct pvk_pipeline *gfx_bound; /* the graphics pipeline bound (pvk_gfx_icb_make) */
+    /* The swapchain images it uses, and how each is used first, in
+     * recording order (secondaries' at their vkCmdExecuteCommands) */
+    struct pvk_wsi_use *wsi;
+    uint32_t wsi_count, wsi_capacity;
 };
 
 /* Debug layer: recordings begun (struct pvk_command_buffer.recording). */
@@ -56304,7 +56341,11 @@ static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release
     cb->packets = cb->ops = cb->par = cb->fork_packets = 0;
     memset(cb->order, 0, sizeof(cb->order));
     cb->gfx_bound = NULL;
+    cb->wsi_count = 0;
     if (release) {
+        pvk_free(pvk_pool_alloc(pool), cb->wsi);
+        cb->wsi = NULL;
+        cb->wsi_capacity = 0;
         pvk_labels_free(&cb->labels, pvk_pool_alloc(pool));
         pvk_cb_render_free(cb);
     } else { /* (secondaries recorded per object and frame would allocate it each time) */
@@ -56337,6 +56378,7 @@ static void pvk_command_buffer_free(struct pvk_command_buffer *cb)
     pvk_labels_free(&cb->labels, pvk_pool_alloc(pool));
     pvk_cb_render_free(cb);
     pvk_free(pvk_pool_alloc(pool), cb->push);
+    pvk_free(pvk_pool_alloc(pool), cb->wsi);
     if (cb->prev)
         cb->prev->next = cb->next;
     else
@@ -56699,6 +56741,25 @@ static void *pvk_cmd_append(struct pvk_command_buffer *cb, enum pvk_cmd_op op, s
     return c;
 }
 
+/* A command uses a swapchain's image (struct pvk_wsi_use): the recording
+ * keeps the first use of each. */
+static void pvk_cmd_wsi(struct pvk_command_buffer *cb, const struct pvk_image *image, bool preserve)
+{
+    uint32_t i;
+    if (!image || !image->wsi || cb->result != VK_SUCCESS)
+        return;
+    for (i = 0; i < cb->wsi_count; i++)
+        if (cb->wsi[i].image == image)
+            return;
+    if (!pvk_grow(pvk_pool_alloc(cb->pool), &cb->wsi, &cb->wsi_capacity, cb->wsi_count, 1, 4, sizeof(*cb->wsi),
+                  VK_SYSTEM_ALLOCATION_SCOPE_OBJECT)) {
+        cb->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        return;
+    }
+    cb->wsi[cb->wsi_count].image = (struct pvk_image *)image;
+    cb->wsi[cb->wsi_count++].preserve = preserve;
+}
+
 /* ---- Labels (VK_EXT_debug_utils) ----
  *
  * vkCmdBegin/End/InsertDebugUtilsLabelEXT are packets, encoded as Metal
@@ -56940,6 +57001,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdPipelineBarrier(VkCommandBuffer commandBuffer, V
     for (i = 0; i < imageMemoryBarrierCount; i++) {
         src |= pImageMemoryBarriers[i].srcAccessMask;
         dst |= pImageMemoryBarriers[i].dstAccessMask;
+        if (pImageMemoryBarriers[i].oldLayout == VK_IMAGE_LAYOUT_UNDEFINED) /* contents discarded */
+            pvk_cmd_wsi((struct pvk_command_buffer *)commandBuffer,
+                        (const struct pvk_image *)pImageMemoryBarriers[i].image, false);
     }
     /* The VkPipelineStageFlags bits have the same values in VkPipelineStageFlags2. */
     pvk_cmd_barrier((struct pvk_command_buffer *)commandBuffer, srcStageMask, dstStageMask, src, dst);
@@ -56970,6 +57034,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdPipelineBarrier2(VkCommandBuffer commandBuffer, 
         dst_stages |= b->dstStageMask;
         src |= b->srcAccessMask;
         dst |= b->dstAccessMask;
+        if (b->oldLayout == VK_IMAGE_LAYOUT_UNDEFINED) /* contents discarded */
+            pvk_cmd_wsi((struct pvk_command_buffer *)commandBuffer, (const struct pvk_image *)b->image, false);
     }
     pvk_cmd_barrier((struct pvk_command_buffer *)commandBuffer, src_stages, dst_stages, src, dst);
 }
@@ -57098,6 +57164,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdExecuteCommands(VkCommandBuffer commandBuffer, u
     recordings = (uint64_t *)((VkCommandBuffer *)(c + 1) + commandBufferCount);
     for (i = 0; i < commandBufferCount; i++) {
         const struct pvk_command_buffer *secondary = (const struct pvk_command_buffer *)pCommandBuffers[i];
+        uint32_t k;
+        for (k = 0; k < secondary->wsi_count; k++)
+            pvk_cmd_wsi(cb, secondary->wsi[k].image, secondary->wsi[k].preserve);
         cb->scan |= secondary->scan;
         recordings[i] = secondary->recording;
         packets += secondary->packets;
@@ -57405,6 +57474,13 @@ static uint32_t pvk_layer_count(const VkImageSubresourceLayers *sub, const struc
     return sub->layerCount == VK_REMAINING_ARRAY_LAYERS ? image->layers - sub->baseArrayLayer : sub->layerCount;
 }
 
+/* Whether a write at offset, extent covers all of a swapchain's image (one
+ * level and layer: struct pvk_wsi_use). */
+static bool pvk_wsi_covered(const struct pvk_image *image, int32_t x, int32_t y, uint32_t w, uint32_t h)
+{
+    return x <= 0 && y <= 0 && (int64_t)x + w >= image->extent.width && (int64_t)y + h >= image->extent.height;
+}
+
 static void pvk_cmd_buffer_image_copy(struct pvk_command_buffer *cb, const struct pvk_buffer *buffer,
                                       const struct pvk_image *image, const VkBufferImageCopy2 *r, bool to_image)
 {
@@ -57420,6 +57496,9 @@ static void pvk_cmd_buffer_image_copy(struct pvk_command_buffer *cb, const struc
 
     if (!buffer->memory || !texture || !r->imageExtent.width || !r->imageExtent.height || !r->imageExtent.depth)
         return;
+    pvk_cmd_wsi(cb, image,
+                !to_image || !pvk_wsi_covered(image, r->imageOffset.x, r->imageOffset.y, r->imageExtent.width,
+                                              r->imageExtent.height));
     c = pvk_cmd_append(cb, PVK_CMD_COPY_BUFFER_IMAGE, sizeof(*c));
     if (!c)
         return;
@@ -57537,6 +57616,8 @@ static void pvk_cmd_image_copy(struct pvk_command_buffer *cb, const struct pvk_i
     (void)sh;
     if (!stex || !dtex || !r->extent.width || !r->extent.height || !r->extent.depth)
         return;
+    pvk_cmd_wsi(cb, src, true);
+    pvk_cmd_wsi(cb, dst, !pvk_wsi_covered(dst, r->dstOffset.x, r->dstOffset.y, r->extent.width, r->extent.height));
     c = pvk_cmd_append(cb, PVK_CMD_COPY_IMAGE, sizeof(*c));
     if (!c)
         return;
@@ -57691,6 +57772,12 @@ static void pvk_cmd_blit(struct pvk_command_buffer *cb, const struct pvk_image *
             return;
         }
     }
+    pvk_cmd_wsi(cb, src, true);
+    pvk_cmd_wsi(cb, dst,
+                !pvk_wsi_covered(dst, r->dstOffsets[0].x < r->dstOffsets[1].x ? r->dstOffsets[0].x : r->dstOffsets[1].x,
+                                 r->dstOffsets[0].y < r->dstOffsets[1].y ? r->dstOffsets[0].y : r->dstOffsets[1].y,
+                                 (uint32_t)abs(r->dstOffsets[1].x - r->dstOffsets[0].x),
+                                 (uint32_t)abs(r->dstOffsets[1].y - r->dstOffsets[0].y)));
     c = pvk_cmd_append(cb, PVK_CMD_BLIT_IMAGE, sizeof(*c));
     if (!c)
         return;
@@ -57778,6 +57865,7 @@ static void pvk_cmd_resolve(struct pvk_command_buffer *cb, const struct pvk_imag
 
     if (!src->mtl_texture || !dst->mtl_texture || !pvk_format_is_color(f) || !r->extent.width || !r->extent.height)
         return;
+    pvk_cmd_wsi(cb, dst, !pvk_wsi_covered(dst, r->dstOffset.x, r->dstOffset.y, r->extent.width, r->extent.height));
     c = pvk_cmd_append(cb, PVK_CMD_BLIT_IMAGE, sizeof(*c));
     if (!c)
         return;
@@ -57886,6 +57974,7 @@ static struct pvk_cmd_clear *pvk_cmd_clear_range(struct pvk_command_buffer *cb, 
     struct pvk_cmd_clear *c;
     if (!image->mtl_texture)
         return NULL;
+    pvk_cmd_wsi(cb, image, false); /* (a swapchain's image is one level and layer: all of it) */
     c = pvk_cmd_append(cb, PVK_CMD_CLEAR_IMAGE, sizeof(*c));
     if (!c)
         return NULL;
@@ -58072,6 +58161,7 @@ struct pvk_rp_attachment {
     VkAttachmentStoreOp store_op, stencil_store_op;
     uint32_t first_use, last_use; /* subpasses; first_use UINT32_MAX: unused */
     bool kept;                    /* contents outlive a Metal pass: used in several, loaded or stored */
+    bool undefined;               /* initialLayout UNDEFINED: the instance discards its contents */
 };
 
 struct pvk_subpass {
@@ -58730,6 +58820,24 @@ static void pvk_pass_att_actions(struct pvk_pass_attachment *pa, VkAttachmentLoa
     pa->store = s;
 }
 
+/* The uses of swapchain images (struct pvk_wsi_use) of a color attachment
+ * pa of a Metal pass, its view and its resolve attachment's (NULL: none);
+ * undefined: the render pass's initialLayout of each is UNDEFINED. The
+ * attachment needs the image's contents when it loads (a LOAD_OP_LOAD, a
+ * partial render area or a later Metal pass of the instance), the resolve
+ * attachment when the render area is partial. */
+static void pvk_cmd_wsi_pass(struct pvk_command_buffer *cb, const struct pvk_pass_attachment *pa,
+                             const struct pvk_image_view *view, bool undefined, const struct pvk_image_view *resolve,
+                             bool resolve_undefined, const VkRect2D *area)
+{
+    if (view && view->image->wsi)
+        pvk_cmd_wsi(cb, view->image, !undefined && pa->load == PVK_MTLLoadActionLoad);
+    if (resolve && resolve->image->wsi)
+        pvk_cmd_wsi(cb, resolve->image,
+                    !resolve_undefined && !pvk_wsi_covered(resolve->image, area->offset.x, area->offset.y,
+                                                           area->extent.width, area->extent.height));
+}
+
 static uint32_t pvk_depth_resolve_filter(VkResolveModeFlagBits mode)
 {
     return mode == VK_RESOLVE_MODE_MIN_BIT ? PVK_MTLMultisampleDepthResolveFilterMin
@@ -58916,6 +59024,10 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
         pvk_pass_att_actions(pa, att->load_op, att->store_op, att->first_use >= mp->first, att->last_use <= mp->last,
                              &r->area, mp->view_mask, pvk_rp_fresh_views(pass, a, mp), pa->memoryless != 0);
         pa->clear = r->clears[a];
+        pvk_cmd_wsi_pass(cb, pa, r->views[a], att->undefined,
+                         mp->resolves[s] != VK_ATTACHMENT_UNUSED ? r->views[mp->resolves[s]] : NULL,
+                         mp->resolves[s] != VK_ATTACHMENT_UNUSED && pass->attachments[mp->resolves[s]].undefined,
+                         &r->area);
     }
     if (mp->depth != VK_ATTACHMENT_UNUSED) {
         const struct pvk_rp_attachment *att = &pass->attachments[mp->depth];
@@ -59176,6 +59288,9 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
         pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, info->viewMask, 0,
                              pa->memoryless != 0);
         pa->clear = a->clearValue;
+        pvk_cmd_wsi_pass(cb, pa, view, false,
+                         a->resolveMode != VK_RESOLVE_MODE_NONE ? (const struct pvk_image_view *)a->resolveImageView : NULL,
+                         false, &info->renderArea);
     }
     ds[0] = info->pDepthAttachment;
     ds[1] = info->pStencilAttachment;
@@ -60186,6 +60301,9 @@ struct pvk_icb_chunk {
     uint64_t taken;    /* when it did (CLOCK_UPTIME_RAW nanoseconds) */
 };
 
+#define PVK_WSI_WAITS 4u
+#define PVK_WSI_COPIES 16u
+
 struct pvk_submission {
     struct pvk_submission *next;
     uint64_t serial;
@@ -60201,6 +60319,16 @@ struct pvk_submission {
      * retained; commit_count 0: cb alone) */
     id *commit;
     uint32_t commit_count, commit_capacity;
+    /* Swapchain images the batch renders to as drawables (section 18,
+     * SWAPCHAIN IMAGES): the drawables the queue waits for before its
+     * command buffers (retained), and the copies of images' contents its
+     * first command buffer makes first */
+    id wsi_waits[PVK_WSI_WAITS];
+    uint32_t wsi_wait_count, wsi_copy_count;
+    struct pvk_wsi_copy {
+        id src, dst;
+        id residency; /* the layer's MTLResidencySet, for drawables' textures; NULL: none */
+    } wsi_copies[PVK_WSI_COPIES];
 };
 
 struct pvk_event_value {
@@ -60240,8 +60368,9 @@ struct pvk_deferred_batch {
     uint32_t cb_count;
     uint32_t first;   /* in ops: nwaits waits, then nsignals signals */
     uint32_t nwaits, nsignals;
-    id drawable;      /* presentation (section 18): cb copies into it, then it is presented; owned */
+    id drawable;      /* presentation (section 18): cb copies into it (or NULL: has it), then it is presented; owned */
     const struct pvk_sparse_batch *sparse; /* vkQueueBindSparse: its mapping updates (in the binds) */
+    const struct pvk_submission *wsi; /* the drawables to wait for before cb (its wsi_waits); NULL: none */
 };
 
 struct pvk_deferred {
@@ -60330,6 +60459,9 @@ static void pvk_submission_reset(struct pvk_submission *s)
     while (s->more_count)
         pvk_release(s->more[--s->more_count]);
     s->commit_count = 0;
+    while (s->wsi_wait_count)
+        pvk_release(s->wsi_waits[--s->wsi_wait_count]);
+    s->wsi_copy_count = 0;
 }
 
 /* Frees chunks c (a list) of a lane's pool; returns their allocatedSize. */
@@ -60355,6 +60487,8 @@ static void pvk_submissions_free(struct pvk_device *device, struct pvk_submissio
         next = s->next;
         while (s->more_count)
             pvk_release(s->more[--s->more_count]);
+        while (s->wsi_wait_count)
+            pvk_release(s->wsi_waits[--s->wsi_wait_count]);
         pvk_free(pvk_device_alloc(device), s->more);
         pvk_free(pvk_device_alloc(device), s->commit);
         pvk_release(s->cb);
@@ -60903,6 +61037,8 @@ struct pvk_encoder {
      * level, layers from a slice or depth plane (pvk_blit_encoder) */
     id blit_enc, blit_dst;
     uint32_t blit_level, blit_slice, blit_plane, blit_layers;
+    /* The drawables' residency set (pvk_wsi_texture) last used by wsi_cb */
+    id wsi_cb, wsi_residency;
 };
 
 /* "Parallel encoding" below. */
@@ -62339,15 +62475,79 @@ static id pvk_encoder_render(struct pvk_encoder *e, id pass, bool ms_store)
     return enc;
 }
 
+/* ---- Swapchain images ---- */
+
+/* The texture a command recorded with `texture` uses: a swapchain image's
+ * own, or while it renders to a drawable (section 18, SWAPCHAIN IMAGES) the
+ * drawable's, which the layer's residency set makes resident in the command
+ * buffer. */
+static id pvk_wsi_texture(struct pvk_encoder *e, id texture)
+{
+    struct pvk_device *device = e->device;
+    uint32_t i, n = __atomic_load_n(&device->wsi_slots, __ATOMIC_ACQUIRE);
+    for (i = 0; i < n && texture; i++) {
+        struct pvk_wsi_slot *w = &device->wsi[i];
+        void *current, *residency;
+        if (__atomic_load_n(&w->texture, __ATOMIC_RELAXED) != (void *)texture)
+            continue;
+        current = __atomic_load_n(&w->current, __ATOMIC_ACQUIRE);
+        residency = __atomic_load_n(&w->residency, __ATOMIC_RELAXED);
+        if (!current)
+            return texture;
+        if (residency && (e->wsi_cb != e->cb || e->wsi_residency != (id)residency)) {
+            pvk_MTL4CommandBuffer_useResidencySet(e->cb, (id)residency);
+            e->wsi_cb = e->cb;
+            e->wsi_residency = (id)residency;
+        }
+        return (id)current;
+    }
+    return texture;
+}
+
+/* BEGIN_PASS packet c with its color attachments' textures as
+ * pvk_wsi_texture has them: c, or when one differs a copy in upload memory
+ * (it outlives the batch's encoding, parallel jobs included). */
+static const struct pvk_cmd_begin_pass *pvk_wsi_pass(struct pvk_encoder *e, const struct pvk_cmd_begin_pass *c)
+{
+    id tex[PVK_MAX_COLOR_ATTACHMENTS][2];
+    struct pvk_cmd_begin_pass *t;
+    pvk_MTLGPUAddress address;
+    bool differ = false;
+    uint32_t s;
+    if (!__atomic_load_n(&e->device->wsi_slots, __ATOMIC_RELAXED))
+        return c;
+    for (s = 0; s < c->color_count; s++) {
+        tex[s][0] = pvk_wsi_texture(e, c->colors[s].texture);
+        tex[s][1] = pvk_wsi_texture(e, c->colors[s].resolve);
+        differ |= tex[s][0] != c->colors[s].texture || tex[s][1] != c->colors[s].resolve;
+    }
+    if (!differ || !(t = pvk_upload(e, sizeof(*t), 16, NULL, NULL, &address)))
+        return c;
+    memcpy(t, c, sizeof(*t));
+    for (s = 0; s < c->color_count; s++) {
+        if (t->colors[s].input == t->colors[s].texture)
+            t->colors[s].input = tex[s][0];
+        t->colors[s].texture = tex[s][0];
+        t->colors[s].resolve = tex[s][1];
+    }
+    return t;
+}
+
 static void pvk_encode_buffer_image(struct pvk_encoder *e, const struct pvk_cmd_buffer_image *c)
 {
-    id enc = pvk_encoder_get(e);
+    id enc = pvk_encoder_get(e), texture = pvk_wsi_texture(e, c->texture);
+    struct pvk_cmd_buffer_image w;
     uint32_t i, z, row;
     pvk_MTLOrigin o;
     pvk_MTLSize s;
 
     if (!enc)
         return;
+    if (texture != c->texture) { /* (a swapchain image's drawable) */
+        w = *c;
+        w.texture = texture;
+        c = &w;
+    }
     for (i = 0; i < c->layers; i++) {
         VkDeviceSize base = c->offset + c->image_bytes * i;
         if (c->row_bytes <= c->max_row) {
@@ -62428,13 +62628,20 @@ static void pvk_encode_copy_staged(struct pvk_encoder *e, id enc, const struct p
 
 static void pvk_encode_copy_image(struct pvk_encoder *e, const struct pvk_cmd_copy_image *c)
 {
-    id enc = pvk_encoder_get(e);
+    id enc = pvk_encoder_get(e), src = pvk_wsi_texture(e, c->src), dst = pvk_wsi_texture(e, c->dst);
+    struct pvk_cmd_copy_image w;
     uint32_t i, z;
     pvk_MTLOrigin so, dO;
     pvk_MTLSize s;
 
     if (!enc)
         return;
+    if (src != c->src || dst != c->dst) { /* (a swapchain image's drawable) */
+        w = *c;
+        w.src = src;
+        w.dst = dst;
+        c = &w;
+    }
     for (i = 0; i < c->count; i++) {
         uint32_t ss = c->src_3d ? 0 : c->src_layer + i, ds = c->dst_3d ? 0 : c->dst_layer + i;
         so.x = c->sx;
@@ -62519,12 +62726,19 @@ static void pvk_encode_blit(struct pvk_encoder *e, const struct pvk_cmd_blit *c)
     uint32_t layers = c->dst_3d ? (uint32_t)(c->dst1[2] > c->dst0[2] ? c->dst1[2] - c->dst0[2] : c->dst0[2] - c->dst1[2])
                                 : c->layers;
     struct pvk_blit_args a, *args;
+    struct pvk_cmd_blit w;
     pvk_MTLGPUAddress address;
     pvk_MTLViewport vp;
     void *pool;
     uint32_t i;
-    id pso, enc;
+    id pso, enc, src = pvk_wsi_texture(e, c->src), dst = pvk_wsi_texture(e, c->dst);
 
+    if (src != c->src || dst != c->dst) { /* (a swapchain image's drawable) */
+        w = *c;
+        w.src = src;
+        w.dst = dst;
+        c = &w;
+    }
     vp.originX = c->dst0[0] < c->dst1[0] ? c->dst0[0] : c->dst1[0];
     vp.originY = c->dst0[1] < c->dst1[1] ? c->dst0[1] : c->dst1[1];
     vp.width = c->dst1[0] > c->dst0[0] ? c->dst1[0] - c->dst0[0] : c->dst0[0] - c->dst1[0];
@@ -62662,7 +62876,14 @@ static void pvk_encode_clear_compute(struct pvk_encoder *e, const struct pvk_cmd
 
 static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *c)
 {
+    struct pvk_cmd_clear w;
+    id texture = pvk_wsi_texture(e, c->texture);
     uint32_t l;
+    if (texture != c->texture) { /* (a swapchain image's drawable) */
+        w = *c;
+        w.texture = texture;
+        c = &w;
+    }
     if (c->compute) {
         pvk_encode_clear_compute(e, c);
         return;
@@ -65843,6 +66064,7 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
         r->suspended = false; /* the same instance goes on */
         return;
     }
+    c = pvk_wsi_pass(e, c);
     pvk_render_end(e);
     if (e->result != VK_SUCCESS)
         return;
@@ -68079,6 +68301,37 @@ static VkResult pvk_encode_parallel(struct pvk_queue *queue, struct pvk_submissi
     return result;
 }
 
+/* The copies of swapchain images' contents a batch makes before its
+ * commands (section 18, SWAPCHAIN IMAGES), in order: after all earlier work
+ * on the queue, and before all later work. */
+static void pvk_wsi_copies(struct pvk_encoder *e, const struct pvk_submission *s)
+{
+    pvk_MTL4VisibilityOptions visibility = e->device->visibility;
+    uint32_t i;
+    id enc;
+    if (!s->wsi_copy_count)
+        return;
+    for (i = 0; i < s->wsi_copy_count; i++)
+        if (s->wsi_copies[i].residency && (!i || s->wsi_copies[i].residency != s->wsi_copies[i - 1].residency))
+            pvk_MTL4CommandBuffer_useResidencySet(e->cb, s->wsi_copies[i].residency);
+    enc = pvk_MTL4CommandBuffer_computeCommandEncoder(e->cb);
+    if (!enc) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return;
+    }
+    pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(enc, PVK_STAGES_ALL, PVK_MTLStageBlit,
+                                                                                  visibility);
+    for (i = 0; i < s->wsi_copy_count; i++) {
+        if (i)
+            pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
+                enc, PVK_MTLStageBlit, PVK_MTLStageBlit, visibility);
+        pvk_MTL4ComputeCommandEncoder_copyFromTexture_toTexture(enc, s->wsi_copies[i].src, s->wsi_copies[i].dst);
+    }
+    pvk_MTL4CommandEncoder_barrierAfterStages_beforeQueueStages_visibilityOptions(enc, PVK_MTLStageBlit, PVK_STAGES_ALL,
+                                                                                  visibility);
+    pvk_MTL4CommandEncoder_endEncoding(enc);
+}
+
 static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission *s, const VkSubmitInfo2 *submit,
                                  uint64_t serial)
 {
@@ -68116,11 +68369,12 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
     }
     if (queue->orders.sem && queue->orders.sem_serial <= e.completed + 1) /* (all work before it done) */
         queue->orders.sem = 0;
-    if (pvk_par_plan(queue, submit, starts, &jobs, &forks) && pvk_par_ready(queue))
+    if (!s->wsi_copy_count && pvk_par_plan(queue, submit, starts, &jobs, &forks) && pvk_par_ready(queue))
         return pvk_encode_parallel(queue, s, submit, serial, e.wait_before, e.completed, starts, jobs, forks);
     e.cursor.cbs = submit->pCommandBufferInfos;
     e.cursor.count = submit->commandBufferInfoCount;
     pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(s->cb, s->allocator);
+    pvk_wsi_copies(&e, s);
     pvk_labels_batch_begin(&e, submit);
     for (i = 0; i < submit->commandBufferInfoCount && e.result == VK_SUCCESS; i++) {
         e.cursor.index = i;
@@ -68212,6 +68466,19 @@ static void pvk_queue_commit_submission(struct pvk_queue *queue, const struct pv
 
 /* "Presentation" below: commits a present's copy and presents the drawable. */
 static void pvk_present_commit(struct pvk_queue *queue, id cb, id drawable);
+
+/* Section 18: the first uses of swapchain images in a batch about to be
+ * encoded into submission s (SWAPCHAIN IMAGES). */
+static void pvk_wsi_batch(struct pvk_queue *queue, struct pvk_submission *s, const VkSubmitInfo2 *submit);
+
+/* Before a batch's command buffers: the queue waits until the display is
+ * done with the drawables its swapchain images render to. */
+static void pvk_wsi_wait(struct pvk_queue *queue, const struct pvk_submission *s)
+{
+    uint32_t i;
+    for (i = 0; i < s->wsi_wait_count; i++)
+        pvk_MTL4CommandQueue_waitForDrawable(queue->mtl_queue, s->wsi_waits[i]);
+}
 
 /* ---- Semaphore waits ----
  *
@@ -68439,6 +68706,8 @@ static void *pvk_queue_thread(void *arg)
             if (!stop) {
                 if (db->sparse)
                     pvk_sparse_execute(queue, d->binds, db->sparse);
+                if (db->wsi)
+                    pvk_wsi_wait(queue, db->wsi);
                 if (db->drawable) {
                     pvk_present_commit(queue, db->cb, db->drawable);
                     pvk_release(db->drawable);
@@ -68500,6 +68769,7 @@ static struct pvk_deferred *pvk_deferred_make(struct pvk_queue *queue, uint32_t 
             list = list->next;
         db->cb = list && list->batch == i ? list->cb : NULL;
         db->cbs = db->cb && list->commit_count ? list->commit : NULL;
+        db->wsi = db->cb && list->wsi_wait_count ? list : NULL;
         db->cb_count = db->cbs ? list->commit_count : 0;
         db->sparse = binds ? &binds->batches[i] : NULL;
         db->first = n;
@@ -68572,6 +68842,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
         *tail = s;
         tail = &s->next;
         notes = queue->notes.ts_count;
+        pvk_wsi_batch(queue, s, &submits[i]);
         result = pvk_encode_batch(queue, s, &submits[i], serial);
         if (queue->notes.ts_count > notes && i + 1 < count) {
             /* its timestamps are available once it is done, not once the
@@ -68632,6 +68903,7 @@ static VkResult pvk_queue_submit(struct pvk_queue *queue, uint32_t count, const 
         if (binds)
             pvk_sparse_execute(queue, binds, &binds->batches[i]);
         if (s && s->batch == i) {
+            pvk_wsi_wait(queue, s);
             pvk_queue_commit_submission(queue, s);
             if (s->batch_value)
                 pvk_MTL4CommandQueue_signalEvent_value(queue->mtl_queue, queue->batch_event, s->batch_value);
@@ -69252,14 +69524,18 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueBindSparse(VkQueue _queue, uint32_t bindIn
  * thread, in order with the submissions. */
 
 struct pvk_present_batch {
-    struct pvk_submission *s; /* the copy; NULL: nothing to present to that swapchain */
-    id drawable;              /* retained; NULL when s is */
+    struct pvk_submission *s; /* the copy; NULL: none (the image is the drawable's texture, or not presented) */
+    id drawable;              /* retained; NULL: nothing to present to that swapchain */
 };
 
+/* cb NULL: the drawable has the image (the queue waited for it before the
+ * image's first use). */
 static void pvk_present_commit(struct pvk_queue *queue, id cb, id drawable)
 {
-    pvk_MTL4CommandQueue_waitForDrawable(queue->mtl_queue, drawable);
-    pvk_queue_commit(queue, cb);
+    if (cb) {
+        pvk_MTL4CommandQueue_waitForDrawable(queue->mtl_queue, drawable);
+        pvk_queue_commit(queue, cb);
+    }
     pvk_MTL4CommandQueue_signalDrawable(queue->mtl_queue, drawable);
     pvk_MTLDrawable_present(drawable);
 }
@@ -69346,7 +69622,7 @@ static VkResult pvk_queue_present(struct pvk_queue *queue, uint32_t nwaits, cons
                                       &((const struct pvk_semaphore *)waits[i])->source);
         for (i = 0; i < count; i++) {
             if (batches[i].drawable) {
-                pvk_present_commit(queue, batches[i].s->cb, batches[i].drawable);
+                pvk_present_commit(queue, batches[i].s ? batches[i].s->cb : NULL, batches[i].drawable);
                 pvk_release(batches[i].drawable);
             }
         }
@@ -72031,6 +72307,7 @@ static VkResult pvk_render_pass_create(struct pvk_device *device, const VkRender
         ra->stencil_load_op = a->stencilLoadOp;
         ra->stencil_store_op = a->stencilStoreOp;
         ra->first_use = UINT32_MAX;
+        ra->undefined = a->initialLayout == VK_IMAGE_LAYOUT_UNDEFINED;
     }
     for (i = 0; i < ns; i++) {
         const VkSubpassDescription2 *d = &info->pSubpasses[i];
@@ -73979,37 +74256,80 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
  *
  * SWAPCHAIN IMAGES
  *   Ordinary VkImages, each bound to a VkDeviceMemory of its own, made with
- *   the swapchain. vkQueuePresentKHR copies the image into a CAMetalDrawable
- *   and presents the drawable. The alternative, images that are the
- *   drawables' textures, would change a VkImage's MTLTexture at every
- *   acquire, while views, descriptors and attachments made from it keep the
- *   old texture (or its resource ID), and the drawable pool is the layer's to
- *   resize; and an image keeps its contents from a present to its next
- *   acquire, which a drawable's texture, the compositor's once presented,
- *   is not promised to. With a copy the handles and textures never change,
- *   images have every usage their format has (section 7), and acquiring
- *   needs no drawable. The copy is a draw: a triangle over the drawable, a
- *   render target, reads the image's texels (section 16's pvk_present, its
- *   pipeline and render pass made with the swapchain), so drawables can be
- *   framebufferOnly. It ends 10-25% sooner after the frame's work than a
- *   compute encoder's texture copy (M4 Max, frames of smooth gradients: 52
- *   against 67 us at 1080p, 171 against 220 at 4K, 300 against 400 at 5K;
- *   less for incompressible noise). The swapchain configures the layer:
- *   device, pixelFormat, drawableSize (the image extent), maximumDrawableCount
- *   (the image count, 2 or 3: Core Animation's range), framebufferOnly YES,
- *   colorspace and EDR, displaySyncEnabled, and opaque for compositeAlpha
- *   OPAQUE / PRE_MULTIPLIED (INHERIT leaves it alone).
+ *   the swapchain; handles, views and textures never change. When the
+ *   swapchain's usage has no SAMPLED, STORAGE or INPUT_ATTACHMENT, so that
+ *   no descriptor can hold an image's texture or its resource ID, the images
+ *   render to the CAMetalDrawables they are presented with: from an image's
+ *   first use after an acquire until its present, the commands recorded with
+ *   its own texture (section 15) use the drawable's instead, which section
+ *   16 encodes at submission (pvk_wsi_texture: the device's slot for the
+ *   image says which texture; the layer's residency set has the drawables').
+ *   vkAcquireNextImageKHR takes a drawable from the layer (-nextDrawable
+ *   blocks while Core Animation has none free: the FIFO throttle), or with
+ *   a finite timeout the image's first use does (-nextDrawable may block for
+ *   a second). Command buffers keep the first use of each swapchain image
+ *   they record and whether it needs the image's contents (struct
+ *   pvk_wsi_use); the submission that has the first use (pvk_wsi_batch)
+ *   switches the image to the drawable, and its queue waits for the drawable
+ *   before the batch. Presenting is then -signalDrawable: and -present,
+ *   without a copy: the copy took 62/185/306 us of GPU time per frame at
+ *   1080p/4K/5K, the present now 8 (MoltenVK's 9), and vkQueuePresentKHR
+ *   70-120 us of CPU, now 8-11; the acquire's drawable adds 25, the queue's
+ *   wait for it 20 to the submission (M4 Max, bench_present). Drawables
+ *   that are not framebufferOnly cost the frame 1-3% of GPU time at 4K-5K.
+ *
+ *   An image keeps its contents from a present to its next acquire
+ *   (VK_KHR_swapchain: presentation is read-only, and an image transitioned
+ *   away from PRESENT_SRC has the contents it was presented with), while
+ *   Core Animation hands drawables out in its own order: it rotates through
+ *   more IOSurfaces than maximumDrawableCount (3 for 2, 4 for 3) and now and
+ *   then replaces one (M4 Max, macOS 27.2). So each image knows where its
+ *   contents are: in its own texture, in the IOSurface of the drawable it
+ *   was presented with (its texture retained), or nowhere (undefined); the
+ *   image's uses resolve to where they are, also between a present and the
+ *   next acquire. The acquire returns the image whose contents its
+ *   drawable's IOSurface has, if that is free, so frame loops copy nothing
+ *   whatever IOSurfaces Core Animation rotates through (a 60 Hz loop on 3
+ *   images used only 2, which made every frame move an image's contents).
+ *   Otherwise a first use that needs the contents (it reads them or writes
+ *   part of the image, and no transition from UNDEFINED came first) copies
+ *   them into the drawable before the batch, and a drawable whose IOSurface
+ *   has another image's contents moves them to that image's own texture
+ *   first (pvk_wsi_spill). The copies need drawables that are not
+ *   framebufferOnly.
+ *
+ *   Other images, and images whose first use cannot take a drawable (none
+ *   within a second, the layer resized by someone else, a retired
+ *   swapchain), render to their own textures, and vkQueuePresentKHR copies
+ *   them into a drawable, as it does an image presented without a use since
+ *   acquired (from wherever its contents are). The copy is a draw: a
+ *   triangle over the drawable, a render target, reads the image's texels
+ *   (section 16's pvk_present, its pipeline and render pass made with the
+ *   swapchain), so drawables can be framebufferOnly. It ends 10-25% sooner
+ *   after the frame's work than a compute encoder's texture copy (M4 Max,
+ *   frames of smooth gradients: 52 against 67 us at 1080p, 171 against 220
+ *   at 4K, 300 against 400 at 5K; less for incompressible noise). A view
+ *   that is not an image's own texture (an array view, say), or an image
+ *   bound to the memory of one (VkBindImageMemorySwapchainInfoKHR), keeps
+ *   the swapchain to copies. The swapchain configures the layer: device,
+ *   pixelFormat, drawableSize (the image extent), maximumDrawableCount (the
+ *   image count, 2 or 3: Core Animation's range), framebufferOnly (YES for
+ *   copies only), colorspace and EDR, displaySyncEnabled, and opaque for
+ *   compositeAlpha OPAQUE / PRE_MULTIPLIED (INHERIT leaves it alone).
  *
  * ACQUIRE AND PRESENT
- *   vkQueuePresentKHR gets a drawable with -nextDrawable on the calling
- *   thread (it blocks while all of the layer's drawables are queued for
- *   display: the FIFO throttle), encodes the copy, and section 16 commits it
- *   once the wait semaphores are signalled and presents the drawable. The
- *   image goes back to the presentation engine, released when the queue's
- *   timeline reaches the present's serial (the copy is done).
+ *   vkQueuePresentKHR presents the drawable an image rendered to, or copies
+ *   the image into the acquire's drawable or one it gets with -nextDrawable
+ *   on the calling thread (blocking while all of the layer's drawables are
+ *   queued for display: the FIFO throttle); section 16 signals the drawable
+ *   (after committing any copy) once the wait semaphores are signalled, and
+ *   presents it. The image goes back to the presentation engine, released
+ *   when the queue's timeline reaches the present's serial (the copy is
+ *   done).
  *   vkAcquireNextImageKHR never waits for the GPU: it returns an image the
- *   application does not hold, released ones first, then the one presented
- *   longest ago. The fence becomes (timeline, serial) as after a submission;
+ *   application does not hold: the one whose contents its drawable has
+ *   (images that render to drawables), else released ones first, then the
+ *   one presented longest ago. The fence becomes (timeline, serial) as after a submission;
  *   the binary semaphore is signalled at once when the image is released,
  *   otherwise its signal is the release: waits on the presenting queue are
  *   in its order, others wait for its timeline (section 16). Nothing can be
@@ -74040,6 +74360,9 @@ struct pvk_surface {
 #define PVK_SWAPCHAIN_USAGE                                                                              \
     (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |      \
      VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)
+/* The usages of images that render to drawables (SWAPCHAIN IMAGES). */
+#define PVK_SWAPCHAIN_DIRECT_USAGE \
+    (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
 
 struct pvk_swapchain_image {
     VkImage image;
@@ -74048,6 +74371,20 @@ struct pvk_swapchain_image {
     struct pvk_queue *release_queue; /* presented, released once its timeline reaches release_value; NULL: free */
     uint64_t release_value;
     uint64_t presented;     /* sequence number of its last present (0: never presented) */
+    /* Rendering to drawables (SWAPCHAIN IMAGES), under pvk_swapchain_lock
+     * but for the first three, which only the acquiring and submitting
+     * threads touch (the application synchronizes them) */
+    struct pvk_swapchain *sc;
+    bool used;              /* since acquired: its first use was submitted */
+    bool direct;            /* ... and it renders to drawable */
+    id drawable;            /* this cycle's drawable, taken by the acquire or the first use (retained); NULL: none */
+    uint32_t waited;        /* queues that wait for the drawable before using it (bit: index in device->queues) */
+    id own;                 /* the image's own texture */
+    uint32_t slot;          /* its device->wsi slot; UINT32_MAX: none (it never renders to drawables) */
+    /* Where its contents are: own, a drawable's texture of IOSurface
+     * surface (retained), or NULL: undefined */
+    id content;
+    IOSurfaceRef surface;
 };
 
 struct pvk_swapchain {
@@ -74056,6 +74393,12 @@ struct pvk_swapchain {
     const struct pvk_surface *surface;
     struct pvk_swapchain *next; /* in pvk_swapchains while not retired */
     bool retired;
+    /* Its images render to drawables (SWAPCHAIN IMAGES); the swapchains of
+     * its layer it replaced (oldSwapchain) and that replaced it, while they
+     * exist (under pvk_swapchain_lock) */
+    bool direct;
+    struct pvk_swapchain *older, *newer;
+    id residency; /* with a layer: its MTLResidencySet, which has its drawables' textures (retained) */
     VkExtent2D extent;
     pvk_MTLPixelFormat mtl_format;
     id present_pso;             /* with a layer: the device's pipeline of the present draw */
@@ -74335,7 +74678,55 @@ static VkResult pvk_swapchain_image_init(struct pvk_device *device, const VkSwap
     r = vkAllocateMemory((VkDevice)device, &ai, alloc, &img->memory);
     if (r != VK_SUCCESS)
         return r;
-    return vkBindImageMemory((VkDevice)device, img->image, img->memory, 0);
+    r = vkBindImageMemory((VkDevice)device, img->image, img->memory, 0);
+    if (r != VK_SUCCESS)
+        return r;
+    ((struct pvk_image *)img->image)->wsi = img;
+    img->own = ((struct pvk_image *)img->image)->mtl_texture;
+    return VK_SUCCESS;
+}
+
+/* A device->wsi slot for image img's own texture; false when all are
+ * taken. Under pvk_swapchain_lock. */
+static bool pvk_wsi_slot_take(struct pvk_device *device, struct pvk_swapchain_image *img)
+{
+    uint32_t i, n = device->wsi_slots;
+    for (i = 0; i < n && device->wsi[i].texture; i++)
+        ;
+    if (i == PVK_WSI_SLOTS)
+        return false;
+    device->wsi[i].current = device->wsi[i].residency = NULL;
+    __atomic_store_n(&device->wsi[i].texture, (void *)img->own, __ATOMIC_RELEASE);
+    if (i == n)
+        __atomic_store_n(&device->wsi_slots, n + 1, __ATOMIC_RELEASE);
+    img->slot = i;
+    return true;
+}
+
+/* Under pvk_swapchain_lock. */
+static void pvk_wsi_slot_free(struct pvk_device *device, struct pvk_swapchain_image *img)
+{
+    uint32_t n = device->wsi_slots;
+    if (img->slot == UINT32_MAX)
+        return;
+    __atomic_store_n(&device->wsi[img->slot].current, NULL, __ATOMIC_RELAXED);
+    __atomic_store_n(&device->wsi[img->slot].texture, NULL, __ATOMIC_RELEASE);
+    img->slot = UINT32_MAX;
+    while (n && !device->wsi[n - 1].texture)
+        n--;
+    __atomic_store_n(&device->wsi_slots, n, __ATOMIC_RELEASE);
+}
+
+/* The texture uses of image img resolve to (pvk_wsi_texture): a drawable's
+ * texture in the layer's residency set, or NULL: its own. */
+static void pvk_wsi_slot_set(struct pvk_device *device, const struct pvk_swapchain_image *img, id texture, id residency)
+{
+    struct pvk_wsi_slot *w;
+    if (img->slot == UINT32_MAX)
+        return;
+    w = &device->wsi[img->slot];
+    __atomic_store_n(&w->residency, (void *)residency, __ATOMIC_RELAXED);
+    __atomic_store_n(&w->current, (void *)texture, __ATOMIC_RELEASE);
 }
 
 /* Waits (up to 5 s: a present may wait for a semaphore that is never
@@ -74355,6 +74746,12 @@ static void pvk_swapchain_free(struct pvk_swapchain *sc, const VkAllocationCallb
             break;
         }
     }
+    if (sc->older)
+        sc->older->newer = sc->newer;
+    if (sc->newer)
+        sc->newer->older = sc->older;
+    for (i = 0; i < sc->image_count; i++)
+        pvk_wsi_slot_free(device, &sc->images[i]);
     pthread_mutex_unlock(&pvk_swapchain_lock);
     for (i = 0; i < sc->image_count; i++) {
         struct pvk_swapchain_image *img = &sc->images[i];
@@ -74366,6 +74763,9 @@ static void pvk_swapchain_free(struct pvk_swapchain *sc, const VkAllocationCallb
                 break;
             }
         }
+        pvk_release(img->drawable); /* (acquired, never presented) */
+        if (img->surface)
+            pvk_release(img->content);
         if (img->image)
             vkDestroyImage((VkDevice)device, img->image, alloc);
         if (img->memory)
@@ -74373,6 +74773,7 @@ static void pvk_swapchain_free(struct pvk_swapchain *sc, const VkAllocationCallb
     }
     pvk_release(sc->present_attachment);
     pvk_release(sc->present_pass);
+    pvk_release(sc->residency);
     pvk_release(sc->layer);
     pvk_free(alloc, sc);
 }
@@ -74400,7 +74801,7 @@ static void pvk_swapchain_configure(struct pvk_swapchain *sc, const VkSwapchainC
     if (pvk_CAMetalLayer_device(layer) != mtl) /* a new device invalidates the layer's residency set */
         pvk_CAMetalLayer_setDevice(layer, mtl);
     pvk_CAMetalLayer_setPixelFormat(layer, sc->mtl_format);
-    pvk_CAMetalLayer_setFramebufferOnly(layer, true);
+    pvk_CAMetalLayer_setFramebufferOnly(layer, !sc->direct); /* (drawables copied from and to) */
     size.width = info->imageExtent.width;
     size.height = info->imageExtent.height;
     pvk_CAMetalLayer_setDrawableSize(layer, size);
@@ -74464,14 +74865,33 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice _device, const VkSw
 
     sc->device = device;
     sc->layer = pvk_retain(surface->layer);
+    sc->residency = sc->layer ? pvk_retain(pvk_CAMetalLayer_residencySet(sc->layer)) : NULL;
     sc->surface = surface;
     sc->extent = pCreateInfo->imageExtent;
     sc->mtl_format = f ? f->mtl : PVK_MTLPixelFormatInvalid;
     sc->image_count = pCreateInfo->minImageCount < PVK_SWAPCHAIN_MIN_IMAGES ? PVK_SWAPCHAIN_MIN_IMAGES
                       : pCreateInfo->minImageCount > PVK_SWAPCHAIN_MAX_IMAGES ? PVK_SWAPCHAIN_MAX_IMAGES
                                                                               : pCreateInfo->minImageCount;
+    for (i = 0; i < PVK_SWAPCHAIN_MAX_IMAGES; i++) {
+        sc->images[i].sc = sc;
+        sc->images[i].slot = UINT32_MAX;
+    }
     for (i = 0; i < sc->image_count && result == VK_SUCCESS; i++)
         result = pvk_swapchain_image_init(device, pCreateInfo, alloc, &sc->images[i]);
+    /* Images render to drawables when no descriptor can hold their texture
+     * and the device has a slot for each (SWAPCHAIN IMAGES). */
+    sc->direct = sc->layer && result == VK_SUCCESS && !(pCreateInfo->imageUsage & ~PVK_SWAPCHAIN_DIRECT_USAGE) &&
+                 pCreateInfo->imageArrayLayers == 1 && !pCreateInfo->flags;
+    pthread_mutex_lock(&pvk_swapchain_lock);
+    for (i = 0; i < sc->image_count && sc->direct; i++)
+        sc->direct = pvk_wsi_slot_take(device, &sc->images[i]);
+    for (i = 0; i < sc->image_count && !sc->direct; i++)
+        pvk_wsi_slot_free(device, &sc->images[i]);
+    if (old && !old->newer) {
+        sc->older = old;
+        old->newer = sc;
+    }
+    pthread_mutex_unlock(&pvk_swapchain_lock);
     if (sc->layer) {
         pool = objc_autoreleasePoolPush();
         if (result == VK_SUCCESS)
@@ -74512,7 +74932,25 @@ VKAPI_ATTR void VKAPI_CALL vkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR
  * swapchain image's memory. */
 static struct pvk_device_memory *pvk_swapchain_image_memory(VkSwapchainKHR swapchain, uint32_t index)
 {
-    return (struct pvk_device_memory *)((struct pvk_swapchain *)swapchain)->images[index].memory;
+    struct pvk_swapchain *sc = (struct pvk_swapchain *)swapchain;
+    pthread_mutex_lock(&pvk_swapchain_lock);
+    sc->direct = false; /* the alias renders to the image's own texture */
+    pthread_mutex_unlock(&pvk_swapchain_lock);
+    return (struct pvk_device_memory *)sc->images[index].memory;
+}
+
+/* A view of a swapchain's image whose textures are not the image's own
+ * (another type, or a swizzle): commands with it would not render to the
+ * drawables, so the images keep to their own textures from their next
+ * acquire on. */
+static void pvk_swapchain_view(const struct pvk_image_view *view)
+{
+    struct pvk_swapchain_image *img = view->image->wsi;
+    if (view->mtl_texture == img->own && view->mtl_attachment == img->own)
+        return;
+    pthread_mutex_lock(&pvk_swapchain_lock);
+    img->sc->direct = false;
+    pthread_mutex_unlock(&pvk_swapchain_lock);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesKHR(VkDevice device, VkSwapchainKHR swapchain,
@@ -74546,6 +74984,29 @@ static VkResult pvk_swapchain_status(const struct pvk_swapchain *sc)
 
 /* ---- Acquire ---- */
 
+/* A drawable for the swapchain's images (retained): -nextDrawable blocks
+ * while Core Animation has none free. NULL without one within a second, or
+ * when someone else changed the layer (the images then render to their own
+ * textures, the present finds the swapchain out of date). */
+static id pvk_wsi_next_drawable(struct pvk_swapchain *sc)
+{
+    id drawable = pvk_retain(pvk_CAMetalLayer_nextDrawable(sc->layer));
+    id texture = drawable ? pvk_CAMetalDrawable_texture(drawable) : NULL;
+    if (texture && pvk_MTLTexture_iosurface(texture) && pvk_MTLTexture_width(texture) == sc->extent.width &&
+        pvk_MTLTexture_height(texture) == sc->extent.height && pvk_CAMetalLayer_pixelFormat(sc->layer) == sc->mtl_format)
+        return drawable;
+    if (texture && !pvk_MTLTexture_iosurface(texture))
+        pvk_logd(sc->device, PVK_LOG_INFO, "PlasmaVK-wsi-no-iosurface", VK_OBJECT_TYPE_SWAPCHAIN_KHR,
+                 (uint64_t)(uintptr_t)sc, "a drawable's texture has no IOSurface: the images render to their own");
+    pvk_release(drawable);
+    return NULL;
+}
+
+static bool pvk_swapchain_image_released(const struct pvk_swapchain_image *img)
+{
+    return !img->release_queue || pvk_MTLSharedEvent_signaledValue(img->release_queue->timeline) >= img->release_value;
+}
+
 static void pvk_sleep_ns(uint64_t ns)
 {
     struct timespec ts;
@@ -74564,6 +75025,7 @@ static VkResult pvk_acquire(struct pvk_device *device, struct pvk_swapchain *sc,
     uint32_t i, best = UINT32_MAX;
     bool best_released = false;
     VkResult status;
+    id drawable = NULL;
     void *pool;
 
     if (pvk_device_lost(device))
@@ -74577,8 +75039,7 @@ static VkResult pvk_acquire(struct pvk_device *device, struct pvk_swapchain *sc,
         img = &sc->images[i];
         if (img->acquired)
             continue;
-        released = !img->release_queue ||
-                   pvk_MTLSharedEvent_signaledValue(img->release_queue->timeline) >= img->release_value;
+        released = pvk_swapchain_image_released(img);
         if (best == UINT32_MAX || (released && !best_released) ||
             (released == best_released && img->presented < sc->images[best].presented)) {
             best = i;
@@ -74596,8 +75057,29 @@ static VkResult pvk_acquire(struct pvk_device *device, struct pvk_swapchain *sc,
         return VK_TIMEOUT;
     }
 
+    /* Images that render to drawables: the drawable now (the wait for one
+     * the frame's first use or present would make otherwise), and the image
+     * whose contents its IOSurface has, if free: they need no copy then,
+     * however many IOSurfaces Core Animation rotates through (SWAPCHAIN
+     * IMAGES). Not with a finite timeout: -nextDrawable may block for up to
+     * a second. */
+    if (sc->direct && timeout == UINT64_MAX && (drawable = pvk_wsi_next_drawable(sc))) {
+        IOSurfaceRef surface = pvk_MTLTexture_iosurface(pvk_CAMetalDrawable_texture(drawable));
+        pthread_mutex_lock(&pvk_swapchain_lock);
+        for (i = 0; i < sc->image_count; i++) {
+            if (!sc->images[i].acquired && sc->images[i].surface == surface) {
+                best = i;
+                best_released = pvk_swapchain_image_released(&sc->images[i]);
+                break;
+            }
+        }
+        pthread_mutex_unlock(&pvk_swapchain_lock);
+    }
     img = &sc->images[best];
     img->acquired = true;
+    img->used = img->direct = false;
+    img->waited = 0;
+    img->drawable = drawable;
     if (sem) {
         sem->value++; /* a signal operation: section 16's binary semaphores */
         if (best_released) {
@@ -74640,21 +75122,155 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImage2KHR(VkDevice device, const VkA
                        pAcquireInfo->timeout, pAcquireInfo->semaphore, pAcquireInfo->fence, pImageIndex);
 }
 
+/* ---- Rendering to drawables ---- */
+
+/* Copies a submission makes before its commands (pvk_wsi_copies, section
+ * 16); false when it has no room left. */
+static bool pvk_wsi_copy(struct pvk_wsi_copy *copies, uint32_t *count, id src, id dst, id residency)
+{
+    if (*count == PVK_WSI_COPIES)
+        return false;
+    copies[*count].src = src;
+    copies[*count].dst = dst;
+    copies[*count].residency = residency;
+    ++*count;
+    return true;
+}
+
+/* The contents of image img are now in texture: its own (surface NULL), a
+ * drawable's of IOSurface surface, or NULL: undefined. The image's uses
+ * resolve to where they are, also after a present (the application may
+ * not use the image then, but the CTS reads presented images back). Under
+ * pvk_swapchain_lock. */
+static void pvk_wsi_content(struct pvk_swapchain_image *img, id texture, IOSurfaceRef surface)
+{
+    if (texture != img->content) {
+        if (img->surface)
+            pvk_release(img->content);
+        img->content = surface ? pvk_retain(texture) : texture;
+        img->surface = surface;
+    }
+    pvk_wsi_slot_set(img->sc->device, img, surface ? texture : NULL, surface ? img->sc->residency : NULL);
+}
+
+/* Drawable texture `texture`, of IOSurface `surface`, is about to be
+ * written for image `img`: the contents of any other image of the layer
+ * still in that surface (it was presented, and Core Animation hands its
+ * drawables out in any order) move to that image's own texture first, by
+ * copies made before the writes. Under pvk_swapchain_lock. */
+static void pvk_wsi_spill(struct pvk_swapchain *sc, const struct pvk_swapchain_image *img, IOSurfaceRef surface,
+                          id residency, struct pvk_wsi_copy *copies, uint32_t *count)
+{
+    struct pvk_swapchain *x;
+    uint32_t j;
+    while (sc->newer)
+        sc = sc->newer;
+    for (x = sc; x; x = x->older) {
+        for (j = 0; j < x->image_count; j++) {
+            struct pvk_swapchain_image *other = &x->images[j];
+            if (other == img || other->surface != surface)
+                continue;
+            if (x->retired && !other->acquired) /* never acquired again */
+                pvk_wsi_content(other, NULL, NULL);
+            else if (pvk_wsi_copy(copies, count, other->content, other->own, residency))
+                pvk_wsi_content(other, other->own, NULL);
+            else /* (more than a submission's copies: not expected) */
+                pvk_wsi_content(other, NULL, NULL);
+        }
+    }
+}
+
+/* The first use of image img since acquired, in the batch of submission s:
+ * a drawable from the layer (blocking while Core Animation has none free,
+ * as presenting did), which the batch's queue waits for, and the image's
+ * uses until presented render to its texture; or when that cannot be, the
+ * image's own texture. preserve: the use needs the image's contents, copied
+ * there before the batch's commands unless they are there already. */
+static void pvk_wsi_first_use(struct pvk_queue *queue, struct pvk_submission *s, struct pvk_swapchain_image *img,
+                              bool preserve)
+{
+    struct pvk_swapchain *sc = img->sc;
+    struct pvk_device *device = sc->device;
+    id drawable = NULL, texture = NULL, residency = NULL;
+    IOSurfaceRef surface = NULL;
+    void *pool = objc_autoreleasePoolPush();
+    uint32_t copies = s->wsi_copy_count;
+
+    img->used = true;
+    if (sc->direct && !sc->retired && s->wsi_wait_count < PVK_WSI_WAITS && !pvk_device_lost(device)) {
+        if (!img->drawable) /* (the acquire took none) */
+            img->drawable = pvk_wsi_next_drawable(sc);
+        drawable = img->drawable;
+    }
+    if (drawable) {
+        texture = pvk_CAMetalDrawable_texture(drawable);
+        surface = pvk_MTLTexture_iosurface(texture);
+    }
+    residency = sc->residency;
+    pthread_mutex_lock(&pvk_swapchain_lock);
+    if (drawable) {
+        pvk_wsi_spill(sc, img, surface, residency, s->wsi_copies, &s->wsi_copy_count);
+        if (img->surface != surface && preserve && img->content)
+            pvk_wsi_copy(s->wsi_copies, &s->wsi_copy_count, img->content, texture, residency);
+        pvk_wsi_content(img, texture, surface);
+        img->direct = true;
+        s->wsi_waits[s->wsi_wait_count++] = pvk_retain(drawable);
+        img->waited = 1u << (uint32_t)(queue - device->queues);
+    } else {
+        if (preserve && img->content && img->content != img->own)
+            pvk_wsi_copy(s->wsi_copies, &s->wsi_copy_count, img->content, img->own, residency);
+        pvk_wsi_content(img, img->own, NULL);
+    }
+    pthread_mutex_unlock(&pvk_swapchain_lock);
+    if (!drawable || s->wsi_copy_count > copies) /* (not the common case) */
+        pvk_logd(device, PVK_LOG_DEBUG, "PlasmaVK-wsi-first-use", VK_OBJECT_TYPE_SWAPCHAIN_KHR,
+                 (uint64_t)(uintptr_t)sc, "swapchain image %u renders to %s; %u copies of contents first (%s)",
+                 (uint32_t)(img - sc->images), drawable ? "a drawable" : "its own texture", s->wsi_copy_count - copies,
+                 preserve ? "it needs its contents" : "it discards them");
+    objc_autoreleasePoolPop(pool);
+}
+
+static void pvk_wsi_batch(struct pvk_queue *queue, struct pvk_submission *s, const VkSubmitInfo2 *submit)
+{
+    uint32_t i, k, bit = 1u << (uint32_t)(queue - queue->device->queues);
+    if (!__atomic_load_n(&queue->device->wsi_slots, __ATOMIC_RELAXED))
+        return;
+    for (i = 0; i < submit->commandBufferInfoCount; i++) {
+        const struct pvk_command_buffer *cb = (const struct pvk_command_buffer *)submit->pCommandBufferInfos[i].commandBuffer;
+        for (k = 0; k < cb->wsi_count; k++) {
+            struct pvk_swapchain_image *img = cb->wsi[k].image->wsi;
+            if (!img->acquired || img->slot == UINT32_MAX)
+                continue; /* (not acquired: invalid usage) */
+            if (!img->used) {
+                pvk_wsi_first_use(queue, s, img, cb->wsi[k].preserve);
+            } else if (img->direct && !(img->waited & bit) && s->wsi_wait_count < PVK_WSI_WAITS) {
+                s->wsi_waits[s->wsi_wait_count++] = pvk_retain(img->drawable); /* another queue renders to it too */
+                img->waited |= bit;
+            }
+        }
+    }
+}
+
 /* ---- Present ---- */
 
-/* A command buffer copying the image into the drawable: a triangle over
- * the drawable reads the image's texels (SWAPCHAIN IMAGES). The drawable is
+/* A command buffer copying the image's contents, `source` (its own
+ * texture, or a drawable's), into the drawable: a triangle over the
+ * drawable reads the image's texels (SWAPCHAIN IMAGES). The drawable is
  * the image's size, so the draw writes every pixel and the drawable's old
  * ones are not loaded; unless a view resized the layer since the present
- * found it in date: then the draw covers what both have. */
-static VkResult pvk_present_encode(struct pvk_queue *queue, const struct pvk_swapchain *sc,
-                                   const struct pvk_swapchain_image *img, id drawable, struct pvk_submission **out)
+ * found it in date: then the draw covers what both have. Before it, the
+ * contents of other images in the drawable's IOSurface move out
+ * (pvk_wsi_spill). */
+static VkResult pvk_present_encode(struct pvk_queue *queue, struct pvk_swapchain *sc,
+                                   const struct pvk_swapchain_image *img, id source, id drawable,
+                                   struct pvk_submission **out)
 {
-    const struct pvk_image *image = (const struct pvk_image *)img->image;
     struct pvk_submission *s = pvk_queue_get_submission(queue);
-    id texture = pvk_CAMetalDrawable_texture(drawable), residency = pvk_CAMetalLayer_residencySet(sc->layer), enc;
+    id texture = pvk_CAMetalDrawable_texture(drawable), residency = sc->residency, enc;
     unsigned long w = pvk_MTLTexture_width(texture), h = pvk_MTLTexture_height(texture);
+    IOSurfaceRef surface = pvk_MTLTexture_iosurface(texture);
     pvk_MTLViewport vp;
+    uint32_t i;
 
     if (!s)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -74666,6 +75282,25 @@ static VkResult pvk_present_encode(struct pvk_queue *queue, const struct pvk_swa
     pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(s->cb, s->allocator);
     if (residency) /* the drawables' textures */
         pvk_MTL4CommandBuffer_useResidencySet(s->cb, residency);
+    if (surface) { /* (also after the swapchain fell back to copies) */
+        pthread_mutex_lock(&pvk_swapchain_lock);
+        pvk_wsi_spill(sc, img, surface, residency, s->wsi_copies, &s->wsi_copy_count);
+        pthread_mutex_unlock(&pvk_swapchain_lock);
+    }
+    if (s->wsi_copy_count)
+        pvk_logd(queue->device, PVK_LOG_DEBUG, "PlasmaVK-wsi-present-copy", VK_OBJECT_TYPE_SWAPCHAIN_KHR,
+                 (uint64_t)(uintptr_t)sc, "presenting swapchain image %u moves %u other images' contents first",
+                 (uint32_t)(img - sc->images), s->wsi_copy_count);
+    if (s->wsi_copy_count && (enc = pvk_MTL4CommandBuffer_computeCommandEncoder(s->cb))) {
+        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
+            enc, PVK_STAGES_ALL, PVK_MTLStageBlit, queue->device->visibility);
+        for (i = 0; i < s->wsi_copy_count; i++)
+            pvk_MTL4ComputeCommandEncoder_copyFromTexture_toTexture(enc, s->wsi_copies[i].src, s->wsi_copies[i].dst);
+        pvk_MTL4CommandEncoder_barrierAfterStages_beforeQueueStages_visibilityOptions(
+            enc, PVK_MTLStageBlit, PVK_STAGES_ALL, queue->device->visibility);
+        pvk_MTL4CommandEncoder_endEncoding(enc);
+    }
+    s->wsi_copy_count = 0;
     pvk_MTLRenderPassAttachmentDescriptor_setTexture(sc->present_attachment, texture);
     pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(
         sc->present_attachment,
@@ -74680,8 +75315,7 @@ static VkResult pvk_present_encode(struct pvk_queue *queue, const struct pvk_swa
         pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, sc->present_pso);
         pvk_MTL4RenderCommandEncoder_setViewport(enc, vp);
         pvk_MTL4RenderCommandEncoder_setArgumentTable_atStages(enc, queue->lane.render_table, PVK_MTLRenderStageFragment);
-        pvk_MTL4ArgumentTable_setTexture_atIndex(queue->lane.render_table,
-                                                 pvk_MTLTexture_gpuResourceID(image->mtl_texture), 0);
+        pvk_MTL4ArgumentTable_setTexture_atIndex(queue->lane.render_table, pvk_MTLTexture_gpuResourceID(source), 0);
         pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount(enc, PVK_MTLPrimitiveTypeTriangle, 0, 3);
         pvk_MTL4CommandEncoder_endEncoding(enc);
     }
@@ -74717,22 +75351,47 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue _queue, const VkPresent
     pvk_queue_recycle(queue);
     for (i = 0; i < n && result == VK_SUCCESS; i++) {
         struct pvk_swapchain *sc = (struct pvk_swapchain *)pPresentInfo->pSwapchains[i];
+        struct pvk_swapchain_image *img = &sc->images[pPresentInfo->pImageIndices[i]];
+        id source;
         batches[i].s = NULL;
         batches[i].drawable = NULL;
         status[i] = pvk_swapchain_status(sc);
-        if (status[i] == VK_ERROR_OUT_OF_DATE_KHR || !sc->layer) /* (headless: nothing to show) */
+        if (img->direct) { /* it rendered to the drawable: that is presented as it is */
+            if (status[i] == VK_ERROR_OUT_OF_DATE_KHR)
+                pvk_release(img->drawable);
+            else
+                batches[i].drawable = img->drawable;
+            img->drawable = NULL;
+            img->direct = false;
             continue;
-        /* Blocks while every drawable is queued for display; nil after a
-         * second without one (e.g. the display is asleep): the frame is
-         * dropped. */
-        batches[i].drawable = pvk_retain(pvk_CAMetalLayer_nextDrawable(sc->layer));
+        }
+        if (status[i] == VK_ERROR_OUT_OF_DATE_KHR || !sc->layer) { /* (headless: nothing to show) */
+            pvk_release(img->drawable);
+            img->drawable = NULL;
+            continue;
+        }
+        /* The acquire's, or one now: it blocks while every drawable is
+         * queued for display; nil after a second without one (e.g. the
+         * display is asleep): the frame is dropped. */
+        batches[i].drawable = img->drawable ? img->drawable : pvk_retain(pvk_CAMetalLayer_nextDrawable(sc->layer));
+        img->drawable = NULL;
         if (!batches[i].drawable) {
             pvk_logd(device, PVK_LOG_INFO, "PlasmaVK-vkQueuePresentKHR-frame-dropped", VK_OBJECT_TYPE_SWAPCHAIN_KHR,
                      (uint64_t)(uintptr_t)sc, "vkQueuePresentKHR: no drawable within a second, a frame is dropped");
             continue;
         }
-        result = pvk_present_encode(queue, sc, &sc->images[pPresentInfo->pImageIndices[i]], batches[i].drawable,
-                                    &batches[i].s);
+        /* The image's contents: its own texture, or a drawable's (it was
+         * not used since acquired), unless that is the drawable's. */
+        pthread_mutex_lock(&pvk_swapchain_lock);
+        source = pvk_retain(img->content ? img->content : img->own);
+        if (img->surface && img->surface == pvk_MTLTexture_iosurface(pvk_CAMetalDrawable_texture(batches[i].drawable))) {
+            pvk_release(source);
+            source = NULL;
+        }
+        pthread_mutex_unlock(&pvk_swapchain_lock);
+        if (source)
+            result = pvk_present_encode(queue, sc, img, source, batches[i].drawable, &batches[i].s);
+        pvk_release(source);
         if (result != VK_SUCCESS) {
             pvk_release(batches[i].drawable);
             batches[i].drawable = NULL;
