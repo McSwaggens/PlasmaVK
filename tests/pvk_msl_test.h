@@ -65,18 +65,23 @@ static inline bool mt_translate(const uint32_t *words, size_t count, const struc
     return true;
 }
 
-/* Compiles the MSL as section 17 does (MSL 3.2, safe math) and builds a
- * compute pipeline (retained), NULL on failure after printing the compiler
- * error and the numbered source. MSL with function constants
+/* Compiles the MSL as section 17 does (MSL 3.2; safe math, or where
+ * relaxed, as for result->fast_math, relaxed math with fast functions) and
+ * builds a compute pipeline (retained), NULL on failure after printing the
+ * compiler error and the numbered source. MSL with function constants
  * (options->spec_function_constants) gets spec's values, as pipelines set
  * them (NULL: the defaults). */
-static inline id mt_pipeline_spec(const struct pvk_msl_result *res, const VkSpecializationInfo *spec)
+static inline id mt_pipeline_math(const struct pvk_msl_result *res, const VkSpecializationInfo *spec, bool relaxed)
 {
     void *pool = objc_autoreleasePoolPush();
     id options, library, function, pipeline = NULL, error = NULL, values;
 
     options = PVK_MSG(id, (id, SEL))((id)objc_getClass("MTLCompileOptions"), sel_registerName("new"));
-    PVK_MSG(void, (id, SEL, long))(options, sel_registerName("setMathMode:"), PVK_MTLMathModeSafe);
+    PVK_MSG(void, (id, SEL, long))(options, sel_registerName("setMathMode:"),
+                                   relaxed ? PVK_MTLMathModeRelaxed : PVK_MTLMathModeSafe);
+    if (relaxed)
+        PVK_MSG(void, (id, SEL, long))(options, sel_registerName("setMathFloatingPointFunctions:"),
+                                       PVK_MTLMathFloatingPointFunctionsFast);
     PVK_MSG(void, (id, SEL, unsigned long))(options, sel_registerName("setLanguageVersion:"), PVK_MTLLanguageVersion3_2);
     library = PVK_MSG(id, (id, SEL, id, id, id *))(mt_device, sel_registerName("newLibraryWithSource:options:error:"),
                                                    mt_string(res->msl), options, &error);
@@ -113,6 +118,11 @@ static inline id mt_pipeline_spec(const struct pvk_msl_result *res, const VkSpec
     pvk_release(library);
     objc_autoreleasePoolPop(pool);
     return pipeline;
+}
+
+static inline id mt_pipeline_spec(const struct pvk_msl_result *res, const VkSpecializationInfo *spec)
+{
+    return mt_pipeline_math(res, spec, false);
 }
 
 static inline id mt_pipeline(const struct pvk_msl_result *res)

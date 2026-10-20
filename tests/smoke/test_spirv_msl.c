@@ -11529,13 +11529,15 @@ static const uint32_t spv_spirv_odds[] = {
 
 /* A decoration group (DescriptorSet through OpGroupDecorate), an integer
  * image with Depth 1 (Vulkan ignores Depth: a color texture) and
- * FPFastMathDefault (Metal's safe math is what any flags allow). */
+ * FPFastMathDefault (Metal's safe math is what any flags allow; None:
+ * uncontracted). */
 static void test_spirv_odds(void)
 {
     struct pvk_msl_result res;
     REQUIRE(mt_translate(spv_spirv_odds, PVK_ARRAY_SIZE(spv_spirv_odds), NULL, &res));
     CHECK(res.resource_count == 1 && res.resources[0].set == 0 && res.resources[0].binding == 3);
     CHECK(strstr(res.msl, "texture2d<uint") != NULL && strstr(res.msl, "depth2d") == NULL);
+    CHECK(!res.fast_math && strstr(res.msl, "contract(fast)") == NULL);
     pvk_msl_result_free(&res);
 }
 
@@ -13953,6 +13955,139 @@ static void test_forwarding_memory(void)
 
 /*
  * #version 450
+ * layout(local_size_x = 1) in;
+ * layout(std430, binding = 0) buffer B { int n; float s, t, u, acc; float a[4], b[4], c[4], d[4]; } buf;
+ * void main()
+ * {
+ *     float s = buf.s, t = buf.t, u = buf.u, acc = buf.acc;
+ *     for (int i = 0; i < buf.n; i++) {
+ *         float a = buf.a[i], b = buf.b[i];
+ *         s = s * a - buf.c[i];
+ *         vec2 tu = vec2(t, u) * (a + buf.d[i]) + b;
+ *         t = tu.x;
+ *         u = tu.y;
+ *         acc += a * b;
+ *     }
+ *     buf.s = s;
+ *     buf.t = t;
+ *     buf.u = u;
+ *     buf.acc = acc;
+ * }
+ * after spirv-opt -O (s, t, u and acc phis of the loop's header).
+ */
+static const uint32_t spv_recurrence[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000071, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0006000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x00000012, 0x00060010, 0x00000004,
+    0x00000011, 0x00000001, 0x00000001, 0x00000001, 0x00030003, 0x00000002, 0x000001c2, 0x00040005,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000010, 0x00000042, 0x00040006, 0x00000010,
+    0x00000000, 0x0000006e, 0x00040006, 0x00000010, 0x00000001, 0x00000073, 0x00040006, 0x00000010,
+    0x00000002, 0x00000074, 0x00040006, 0x00000010, 0x00000003, 0x00000075, 0x00040006, 0x00000010,
+    0x00000004, 0x00636361, 0x00040006, 0x00000010, 0x00000005, 0x00000061, 0x00040006, 0x00000010,
+    0x00000006, 0x00000062, 0x00040006, 0x00000010, 0x00000007, 0x00000063, 0x00040006, 0x00000010,
+    0x00000008, 0x00000064, 0x00030005, 0x00000012, 0x00667562, 0x00040047, 0x0000000c, 0x00000006,
+    0x00000004, 0x00040047, 0x0000000d, 0x00000006, 0x00000004, 0x00040047, 0x0000000e, 0x00000006,
+    0x00000004, 0x00040047, 0x0000000f, 0x00000006, 0x00000004, 0x00030047, 0x00000010, 0x00000002,
+    0x00050048, 0x00000010, 0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x00000010, 0x00000001,
+    0x00000023, 0x00000004, 0x00050048, 0x00000010, 0x00000002, 0x00000023, 0x00000008, 0x00050048,
+    0x00000010, 0x00000003, 0x00000023, 0x0000000c, 0x00050048, 0x00000010, 0x00000004, 0x00000023,
+    0x00000010, 0x00050048, 0x00000010, 0x00000005, 0x00000023, 0x00000014, 0x00050048, 0x00000010,
+    0x00000006, 0x00000023, 0x00000024, 0x00050048, 0x00000010, 0x00000007, 0x00000023, 0x00000034,
+    0x00050048, 0x00000010, 0x00000008, 0x00000023, 0x00000044, 0x00040047, 0x00000012, 0x00000021,
+    0x00000000, 0x00040047, 0x00000012, 0x00000022, 0x00000000, 0x00020013, 0x00000002, 0x00030021,
+    0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040015, 0x00000009, 0x00000020,
+    0x00000001, 0x00040015, 0x0000000a, 0x00000020, 0x00000000, 0x0004002b, 0x0000000a, 0x0000000b,
+    0x00000004, 0x0004001c, 0x0000000c, 0x00000006, 0x0000000b, 0x0004001c, 0x0000000d, 0x00000006,
+    0x0000000b, 0x0004001c, 0x0000000e, 0x00000006, 0x0000000b, 0x0004001c, 0x0000000f, 0x00000006,
+    0x0000000b, 0x000b001e, 0x00000010, 0x00000009, 0x00000006, 0x00000006, 0x00000006, 0x00000006,
+    0x0000000c, 0x0000000d, 0x0000000e, 0x0000000f, 0x00040020, 0x00000011, 0x0000000c, 0x00000010,
+    0x0004003b, 0x00000011, 0x00000012, 0x0000000c, 0x0004002b, 0x00000009, 0x00000013, 0x00000001,
+    0x00040020, 0x00000014, 0x0000000c, 0x00000006, 0x0004002b, 0x00000009, 0x00000018, 0x00000002,
+    0x0004002b, 0x00000009, 0x0000001c, 0x00000003, 0x0004002b, 0x00000009, 0x00000020, 0x00000004,
+    0x0004002b, 0x00000009, 0x00000025, 0x00000000, 0x00040020, 0x0000002c, 0x0000000c, 0x00000009,
+    0x00020014, 0x0000002f, 0x0004002b, 0x00000009, 0x00000032, 0x00000005, 0x0004002b, 0x00000009,
+    0x00000037, 0x00000006, 0x0004002b, 0x00000009, 0x0000003e, 0x00000007, 0x00040017, 0x00000043,
+    0x00000006, 0x00000002, 0x0004002b, 0x00000009, 0x0000004a, 0x00000008, 0x00050036, 0x00000002,
+    0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x00050041, 0x00000014, 0x00000015,
+    0x00000012, 0x00000013, 0x0004003d, 0x00000006, 0x00000016, 0x00000015, 0x00050041, 0x00000014,
+    0x00000019, 0x00000012, 0x00000018, 0x0004003d, 0x00000006, 0x0000001a, 0x00000019, 0x00050041,
+    0x00000014, 0x0000001d, 0x00000012, 0x0000001c, 0x0004003d, 0x00000006, 0x0000001e, 0x0000001d,
+    0x00050041, 0x00000014, 0x00000021, 0x00000012, 0x00000020, 0x0004003d, 0x00000006, 0x00000022,
+    0x00000021, 0x000200f9, 0x00000026, 0x000200f8, 0x00000026, 0x000700f5, 0x00000006, 0x00000070,
+    0x00000022, 0x00000005, 0x0000005d, 0x00000027, 0x000700f5, 0x00000006, 0x0000006f, 0x0000001e,
+    0x00000005, 0x00000058, 0x00000027, 0x000700f5, 0x00000006, 0x0000006e, 0x0000001a, 0x00000005,
+    0x00000055, 0x00000027, 0x000700f5, 0x00000006, 0x0000006d, 0x00000016, 0x00000005, 0x00000042,
+    0x00000027, 0x000700f5, 0x00000009, 0x0000006c, 0x00000025, 0x00000005, 0x0000005f, 0x00000027,
+    0x00050041, 0x0000002c, 0x0000002d, 0x00000012, 0x00000025, 0x0004003d, 0x00000009, 0x0000002e,
+    0x0000002d, 0x000500b1, 0x0000002f, 0x00000030, 0x0000006c, 0x0000002e, 0x000400f6, 0x00000028,
+    0x00000027, 0x00000000, 0x000400fa, 0x00000030, 0x00000027, 0x00000028, 0x000200f8, 0x00000027,
+    0x00060041, 0x00000014, 0x00000034, 0x00000012, 0x00000032, 0x0000006c, 0x0004003d, 0x00000006,
+    0x00000035, 0x00000034, 0x00060041, 0x00000014, 0x00000039, 0x00000012, 0x00000037, 0x0000006c,
+    0x0004003d, 0x00000006, 0x0000003a, 0x00000039, 0x00050085, 0x00000006, 0x0000003d, 0x0000006d,
+    0x00000035, 0x00060041, 0x00000014, 0x00000040, 0x00000012, 0x0000003e, 0x0000006c, 0x0004003d,
+    0x00000006, 0x00000041, 0x00000040, 0x00050083, 0x00000006, 0x00000042, 0x0000003d, 0x00000041,
+    0x00050050, 0x00000043, 0x00000048, 0x0000006e, 0x0000006f, 0x00060041, 0x00000014, 0x0000004c,
+    0x00000012, 0x0000004a, 0x0000006c, 0x0004003d, 0x00000006, 0x0000004d, 0x0000004c, 0x00050081,
+    0x00000006, 0x0000004e, 0x00000035, 0x0000004d, 0x0005008e, 0x00000043, 0x0000004f, 0x00000048,
+    0x0000004e, 0x00050050, 0x00000043, 0x00000051, 0x0000003a, 0x0000003a, 0x00050081, 0x00000043,
+    0x00000052, 0x0000004f, 0x00000051, 0x00050051, 0x00000006, 0x00000055, 0x00000052, 0x00000000,
+    0x00050051, 0x00000006, 0x00000058, 0x00000052, 0x00000001, 0x00050085, 0x00000006, 0x0000005b,
+    0x00000035, 0x0000003a, 0x00050081, 0x00000006, 0x0000005d, 0x00000070, 0x0000005b, 0x00050080,
+    0x00000009, 0x0000005f, 0x0000006c, 0x00000013, 0x000200f9, 0x00000026, 0x000200f8, 0x00000028,
+    0x0003003e, 0x00000015, 0x0000006d, 0x0003003e, 0x00000019, 0x0000006e, 0x0003003e, 0x0000001d,
+    0x0000006f, 0x0003003e, 0x00000021, 0x00000070, 0x000100fd, 0x00010038,
+};
+
+/* Multiplicative recurrences (pvk_spv_recurrences): in a fast-math module
+ * the add of `s = s * a - c`, and of a vector made of phis (as ggml's wkv6
+ * updates its state), is written with contraction off, with only its
+ * product forwarded into it (not a + d), while the accumulator's add
+ * contracts. Compiled as pipelines compile the module (relaxed math),
+ * (1 + 2^-12)^2 - (1 + 2^-11) comes out 0, not the fma's 2^-24. */
+static void test_recurrence(void)
+{
+    struct { int32_t n; float s, t, u, acc, a[4], b[4], c[4], d[4]; } v;
+    struct pvk_msl_result res;
+    struct mt_buffer buf;
+    struct mt_binding b;
+    const char *p;
+    uint32_t n = 0;
+    id pso;
+
+    REQUIRE(mt_translate(spv_recurrence, PVK_ARRAY_SIZE(spv_recurrence), NULL, &res));
+    CHECK(res.fast_math);
+    for (p = res.msl; (p = strstr(p, "#pragma METAL fp contract(off)\n")) != NULL; p++)
+        n++;
+    CHECK(n == 2);
+    CHECK(strstr(res.msl, "{\n                #pragma METAL fp contract(off)\n"
+                          "                _66 = (_109 * _53) - buf_18.c[_108];\n            }\n") != NULL);
+    CHECK(strstr(res.msl, "{\n                #pragma METAL fp contract(off)\n"
+                          "                _82 = (float2(_110, _111) * _78) + float2(_58, _58);\n            }\n") != NULL);
+    CHECK(strstr(res.msl, "float _78 = _53 + buf_18.d[_108];\n") != NULL);
+    CHECK(strstr(res.msl, "float _93 = _112 + (_53 * _58);\n") != NULL);
+
+    pso = mt_pipeline_math(&res, NULL, res.fast_math);
+    if (!pso)
+        pvk_msl_result_free(&res);
+    REQUIRE(pso != NULL);
+    memset(&v, 0, sizeof(v));
+    v.n = 1;
+    v.s = v.t = v.u = v.a[0] = 1.0f + 0x1p-12f;
+    v.b[0] = -(1.0f + 0x1p-11f);
+    v.c[0] = 1.0f + 0x1p-11f;
+    buf = mt_buffer(sizeof(v), &v, sizeof(v));
+    b = bind(0, 0, &buf);
+    CHECK(mt_dispatch(pso, &res, &b, 1, NULL, 0, 1, 1, 1));
+    memcpy(&v, buf.data, sizeof(v));
+    CHECK(v.s == 0 && v.t == 0 && v.u == 0);
+    CHECK(v.acc == (1.0f + 0x1p-12f) * -(1.0f + 0x1p-11f));
+    mt_buffer_free(&buf);
+    pvk_release(pso);
+    pvk_msl_result_free(&res);
+}
+
+/*
+ * #version 450
  * layout(local_size_x = 4) in;
  * shared uvec4 s[1];
  * layout(std430, binding = 0) buffer B { uvec4 o; };
@@ -14702,6 +14837,7 @@ int main(void)
     RUN(test_default_float_environment);
     RUN(test_forwarding);
     RUN(test_forwarding_memory);
+    RUN(test_recurrence);
     RUN(test_atomic_components);
     RUN(test_ieee_specials);
     RUN(test_layout_odds);

@@ -42322,7 +42322,13 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   compiles those with MTLMathModeFast nonetheless, and claims no
  *   conformance (section 7). The wrappers that only keep signed zeros,
  *   Inf and NaN (pvk_fmin, pvk_fmax, pvk_sin, pvk_cos, pvk_fract) are the
- *   plain functions there. The kernel's name is
+ *   plain functions there. Either way such a module lets Metal contract,
+ *   and so does a safe-math one without NoContraction or FPFastMath* flags
+ *   short of AllowContract, through `#pragma METAL fp contract(fast)`
+ *   (pvk_spv_contracts); except the add of a multiplicative recurrence
+ *   (`s = s * a + b`, s a loop's phi) and of a product to such a phi that
+ *   the loop doesn't take back (`t = a * b + s`), written under `#pragma
+ *   METAL fp contract(off)` (pvk_spv_recurrences). The kernel's name is
  *   result->entry_point; dispatch with result->workgroup_size threads per
  *   threadgroup (declared with [[max_total_threads_per_threadgroup]], so the
  *   compiler fits up to 1024). A vertex function with result->invariant
@@ -42423,8 +42429,9 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   allow.)
  *   Semantics to know: atomics are memory_order_relaxed, memory semantics
  *   become fences (Memory model); signed integer overflow is undefined in
- *   MSL where SPIR-V wraps; NoContraction makes the module safe math; derivatives after a
- *   discard (OpKill/Terminate) are undefined, as in Vulkan.
+ *   MSL where SPIR-V wraps; NoContraction makes the module safe math
+ *   without contraction; derivatives after a discard (OpKill/Terminate) are
+ *   undefined, as in Vulkan.
  *
  * SHADER CAPABILITIES
  *   What section 7 reports that shaders depend on, the SPIR-V it allows and
@@ -42450,7 +42457,8 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   Float controls (SignedZeroInfNanPreserve and RoundingModeRTE for 16 and
  *     32 bits), shaderFloatControls2: the execution modes and FPFastMath*
  *     are accepted (MTLMathModeSafe keeps signed zeros, Inf, NaN and rounds
- *     to nearest even: stricter than any fast-math flag); FPRoundingMode RTZ
+ *     to nearest even: stricter than any fast-math flag; contracting unless
+ *     flags lack AllowContract, pvk_spv_contracts); FPRoundingMode RTZ
  *     on conversions to half (16-bit storage) is pvk_f16_rtz. No denormal
  *     modes are reported.
  *   shaderExpectAssume: ExpectAssumeKHR; OpExpectKHR is its value,
@@ -43403,6 +43411,10 @@ enum pvk_spv_kind {
 #define PVK_SPV_F_FORWARDED 0x400000u /* msl is its expression, written into its one use */
 #define PVK_SPV_F_READS 0x800000u     /* forwarded, reading memory that stores and calls change */
 #define PVK_SPV_F_REPEATED 0x1000000u /* an operand twice of one instruction (`vec3(x, x, x)`) */
+#define PVK_SPV_F_RECURRENCE 0x2000000u /* an add written uncontracted (pvk_spv_recurrences) */
+#define PVK_SPV_F_OUTSIDE 0x4000000u    /* in a recurrence's add, no arithmetic forwarded (pvk_spv_recurrences) */
+#define PVK_SPV_F_ARITH 0x8000000u      /* forwarded, with float arithmetic in its expression */
+#define PVK_SPV_F_LOOPED 0x10000000u    /* makes what a loop header's phi takes back (pvk_spv_recurrences) */
 /* member flags */
 #define PVK_SPV_M_OFFSET 0x1u
 #define PVK_SPV_M_ROW_MAJOR 0x2u
@@ -47265,6 +47277,203 @@ static void pvk_spv_analyze(struct pvk_spv *ctx, uint32_t fidx)
     }
 }
 
+/* Whether value v is phi or data moved out of it (composites, copies,
+ * negation). */
+static bool pvk_spv_moved_from(struct pvk_spv *ctx, uint32_t v, uint32_t phi, uint32_t depth, uint32_t *budget)
+{
+    const struct pvk_spv_id *x;
+    struct pvk_spv_insn in;
+    uint32_t i, b, e;
+    if (v == phi)
+        return true;
+    if (v == 0 || v >= ctx->nids || depth == 0 || *budget == 0)
+        return false;
+    --*budget;
+    x = &ctx->ids[v];
+    if (x->kind != PVK_SPV_K_VALUE)
+        return false;
+    switch (x->op) {
+    case PVK_SPV_OpCompositeConstruct: case PVK_SPV_OpCompositeExtract: case PVK_SPV_OpCompositeInsert:
+    case PVK_SPV_OpVectorShuffle: case PVK_SPV_OpCopyObject: case PVK_SPV_OpFNegate:
+        break;
+    default:
+        return false;
+    }
+    in = pvk_spv_insn_at(ctx, x->insn);
+    pvk_spv_id_range(&in, 2, &b, &e);
+    for (i = b; i < e; i++)
+        if (pvk_spv_moved_from(ctx, in.w[i], phi, depth - 1, budget))
+            return true;
+    return false;
+}
+
+/* Value v as a product (OpFMul, OpVectorTimesScalar): its instruction. */
+static bool pvk_spv_product(struct pvk_spv *ctx, uint32_t v, struct pvk_spv_insn *in)
+{
+    const struct pvk_spv_id *x = v < ctx->nids ? &ctx->ids[v] : NULL;
+    if (!x || x->kind != PVK_SPV_K_VALUE || (x->op != PVK_SPV_OpFMul && x->op != PVK_SPV_OpVectorTimesScalar))
+        return false;
+    *in = pvk_spv_insn_at(ctx, x->insn);
+    return in->wc == 5;
+}
+
+/* Add x (instruction in) uncontracted: PVK_SPV_F_RECURRENCE, and its
+ * products go in, nothing else that contracts (pvk_spv_recurrences). */
+static void pvk_spv_uncontracted(struct pvk_spv *ctx, struct pvk_spv_id *x, const struct pvk_spv_insn *in)
+{
+    struct pvk_spv_insn m;
+    uint32_t i, j;
+    x->flags |= PVK_SPV_F_RECURRENCE;
+    for (i = 3; i < 5; i++) {
+        bool product = pvk_spv_product(ctx, in->w[i], &m);
+        for (j = 0; j < (product ? 2u : 1u); j++) {
+            uint32_t o = product ? m.w[3 + j] : in->w[i];
+            if (o < ctx->nids && ctx->ids[o].kind == PVK_SPV_K_VALUE)
+                ctx->ids[o].flags |= PVK_SPV_F_OUTSIDE;
+        }
+    }
+}
+
+/* Whether value v is a phi of a loop header in function fidx, or data moved
+ * out of one (pvk_spv_moved_from). */
+static bool pvk_spv_from_loop_phi(struct pvk_spv *ctx, uint32_t fidx, uint32_t v, uint32_t depth, uint32_t *budget)
+{
+    const struct pvk_spv_id *x;
+    struct pvk_spv_insn in;
+    uint32_t i, b, e;
+    if (v == 0 || v >= ctx->nids || depth == 0 || *budget == 0)
+        return false;
+    --*budget;
+    x = &ctx->ids[v];
+    if (x->kind != PVK_SPV_K_VALUE || x->func != fidx)
+        return false;
+    switch (x->op) {
+    case PVK_SPV_OpPhi: {
+        const struct pvk_spv_block *blk = &ctx->funcs[fidx - 1]->blocks[x->block];
+        return blk->merge && pvk_spv_insn_at(ctx, blk->merge).op == PVK_SPV_OpLoopMerge;
+    }
+    case PVK_SPV_OpCompositeConstruct: case PVK_SPV_OpCompositeExtract: case PVK_SPV_OpCompositeInsert:
+    case PVK_SPV_OpVectorShuffle: case PVK_SPV_OpCopyObject: case PVK_SPV_OpFNegate:
+        break;
+    default:
+        return false;
+    }
+    in = pvk_spv_insn_at(ctx, x->insn);
+    pvk_spv_id_range(&in, 2, &b, &e);
+    for (i = b; i < e; i++)
+        if (pvk_spv_from_loop_phi(ctx, fidx, in.w[i], depth - 1, budget))
+            return true;
+    return false;
+}
+
+/* Finds the adds that make value v, which loop header phi takes from a
+ * predecessor (through data movement, selects, other adds and the phis of
+ * selections), and add a product of the phi itself; marks what it passes
+ * PVK_SPV_F_LOOPED (pvk_spv_recurrences). */
+static void pvk_spv_recurrence(struct pvk_spv *ctx, uint32_t fidx, uint32_t v, uint32_t phi, uint32_t depth,
+                               uint32_t *budget)
+{
+    struct pvk_spv_id *x;
+    struct pvk_spv_insn in, m;
+    uint32_t i, b, e;
+    if (v == phi || v == 0 || v >= ctx->nids || depth == 0 || *budget == 0)
+        return;
+    --*budget;
+    x = &ctx->ids[v];
+    if (x->kind != PVK_SPV_K_VALUE || x->func != fidx)
+        return;
+    x->flags |= PVK_SPV_F_LOOPED;
+    if (x->flags & PVK_SPV_F_RECURRENCE)
+        return;
+    in = pvk_spv_insn_at(ctx, x->insn);
+    switch (x->op) {
+    case PVK_SPV_OpFAdd: case PVK_SPV_OpFSub:
+        if (in.wc != 5)
+            return;
+        for (i = 3; i < 5; i++)
+            if (pvk_spv_product(ctx, in.w[i], &m) &&
+                (pvk_spv_moved_from(ctx, m.w[3], phi, 4, budget) || pvk_spv_moved_from(ctx, m.w[4], phi, 4, budget)))
+                x->flags |= PVK_SPV_F_RECURRENCE;
+        if (x->flags & PVK_SPV_F_RECURRENCE)
+            pvk_spv_uncontracted(ctx, x, &in);
+        break;
+    case PVK_SPV_OpPhi: {
+        const struct pvk_spv_block *blk = &ctx->funcs[fidx - 1]->blocks[x->block];
+        if (blk->merge && pvk_spv_insn_at(ctx, blk->merge).op == PVK_SPV_OpLoopMerge)
+            return; /* another loop's (its adds feed it) */
+        for (i = 3; i + 1 < in.wc; i += 2)
+            pvk_spv_recurrence(ctx, fidx, in.w[i], phi, depth - 1, budget);
+        return;
+    }
+    case PVK_SPV_OpCompositeConstruct: case PVK_SPV_OpCompositeExtract: case PVK_SPV_OpCompositeInsert:
+    case PVK_SPV_OpVectorShuffle: case PVK_SPV_OpCopyObject: case PVK_SPV_OpFNegate: case PVK_SPV_OpSelect:
+        break;
+    default:
+        return;
+    }
+    pvk_spv_id_range(&in, 2, &b, &e);
+    for (i = b; i < e; i++)
+        pvk_spv_recurrence(ctx, fidx, in.w[i], phi, depth - 1, budget);
+}
+
+/* Multiplicative recurrences, `s = s * a + b` with s a loop header's phi:
+ * their adds get PVK_SPV_F_RECURRENCE, and pvk_spv_set writes them with
+ * contraction off. Metal contracting one into fma(s, a, b) slows the loop
+ * down: ggml's wkv6 state update took 24% longer (M4 Max, Relaxed or Safe
+ * math, 64 or 512 threadgroups), the unfused loop 3% less than with nothing
+ * contracted. So does an add of a product to such a phi (`t = a * b + s`)
+ * that the loop doesn't take back: wkv6's `tf * kv + s` contracted took 4%
+ * longer. Adds into an accumulator (`acc += x * y`, the add taken back:
+ * n-body) contract as before, as do the others. Their other operands, and
+ * their products' factors, get PVK_SPV_F_OUTSIDE: arithmetic there is not
+ * forwarded into the add (pvk_spv_forward), so contracts. */
+static void pvk_spv_recurrences(struct pvk_spv *ctx, uint32_t fidx)
+{
+    const struct pvk_spv_func *fn = ctx->funcs[fidx - 1];
+    struct pvk_spv_insn m;
+    uint32_t bi, i;
+    for (bi = 0; bi < fn->nblocks; bi++) {
+        const struct pvk_spv_block *blk = &fn->blocks[bi];
+        uint32_t off = blk->begin;
+        if (!blk->has_phi || !blk->merge || pvk_spv_insn_at(ctx, blk->merge).op != PVK_SPV_OpLoopMerge)
+            continue;
+        while (off < blk->end) {
+            struct pvk_spv_insn in = pvk_spv_insn_at(ctx, off);
+            off += in.wc;
+            if (in.op == PVK_SPV_OpLine || in.op == PVK_SPV_OpNoLine)
+                continue;
+            if (in.op != PVK_SPV_OpPhi)
+                break;
+            for (i = 3; i + 1 < in.wc; i += 2) {
+                uint32_t budget = 256;
+                pvk_spv_recurrence(ctx, fidx, in.w[i], in.w[2], 8, &budget);
+            }
+        }
+    }
+    for (bi = 0; bi < fn->nblocks; bi++) { /* products added to a phi, not taken back */
+        const struct pvk_spv_block *blk = &fn->blocks[bi];
+        uint32_t off = blk->begin;
+        while (off < blk->end) {
+            struct pvk_spv_insn in = pvk_spv_insn_at(ctx, off);
+            struct pvk_spv_id *x;
+            off += in.wc;
+            if ((in.op != PVK_SPV_OpFAdd && in.op != PVK_SPV_OpFSub) || in.wc != 5 || in.w[2] >= ctx->nids)
+                continue;
+            x = &ctx->ids[in.w[2]];
+            if (x->flags & (PVK_SPV_F_LOOPED | PVK_SPV_F_RECURRENCE))
+                continue;
+            for (i = 3; i < 5; i++) {
+                uint32_t budget = 64;
+                if (pvk_spv_product(ctx, in.w[i], &m) && !pvk_spv_product(ctx, in.w[7 - i], &m) &&
+                    pvk_spv_from_loop_phi(ctx, fidx, in.w[7 - i], 4, &budget)) {
+                    pvk_spv_uncontracted(ctx, x, &in);
+                    break;
+                }
+            }
+        }
+    }
+}
+
 /* Functions reachable from the entry point, callees before callers; rejects
  * recursion. Globals and buffer-size use become transitive. */
 static void pvk_spv_call_graph(struct pvk_spv *ctx)
@@ -48138,7 +48347,8 @@ static const char *pvk_spv_enclose(struct pvk_spv *ctx, const char *e)
  * it there (not a phi copy or a pointer, which read it later), made by a
  * pure instruction: arithmetic, conversions, composites, GLSL.std.450 (in
  * modules with float controls only data movement: an operation forwarded
- * into another may contract with it), or a load with no write, barrier or
+ * into another may contract with it; and none into a recurrence's add but
+ * its products, pvk_spv_recurrences), or a load with no write, barrier or
  * call (pvk_spv_writes) before the use, unless of push constants or inputs.
  * Also a descriptor's load: its name, not a copy (a texture and sampler
  * copied to a local cost Metal's compiler about 30 ms a shader: vkQuake's
@@ -48150,11 +48360,11 @@ static bool pvk_spv_forward(struct pvk_spv *ctx, uint32_t rid, const char *expr)
     struct pvk_spv_id *x = pvk_spv_get(ctx, rid);
     struct pvk_spv_type *t = pvk_spv_type(ctx, x->type);
     uint32_t b, e, i, depth = 0;
-    bool reads = false, arith = false, packed = false;
+    bool reads = false, arith = false, packed = false, inner = false;
 
-    x->flags &= ~(PVK_SPV_F_FORWARDED | PVK_SPV_F_READS);
+    x->flags &= ~(PVK_SPV_F_FORWARDED | PVK_SPV_F_READS | PVK_SPV_F_ARITH);
     if (!in || pvk_spv_shape(ctx, in->op) != 2 || in->w[2] != rid || x->uses > 1 || !pvk_spv_local(x) ||
-        (x->flags & PVK_SPV_F_PINNED))
+        (x->flags & (PVK_SPV_F_PINNED | PVK_SPV_F_RECURRENCE)))
         return false;
     if (t->op == PVK_SPV_OpTypeVector)
         t = pvk_spv_type(ctx, t->elem);
@@ -48242,17 +48452,19 @@ static bool pvk_spv_forward(struct pvk_spv *ctx, uint32_t rid, const char *expr)
             if (at && strstr(at + 1, o->msl)) /* computed twice (a shuffle's components): not again */
                 return false;
             reads |= (o->flags & PVK_SPV_F_READS) != 0;
+            inner |= (o->flags & PVK_SPV_F_ARITH) != 0;
             if (o->depth >= depth)
                 depth = o->depth + 1;
         }
     }
     if ((reads && (x->flags & PVK_SPV_F_MOVED)) || depth > PVK_SPV_FORWARD_DEPTH ||
-        ((x->flags & PVK_SPV_F_REPEATED) && strpbrk(expr, "([ ?"))) /* (written as often: names only) */
+        ((x->flags & PVK_SPV_F_REPEATED) && strpbrk(expr, "([ ?")) || /* (written as often: names only) */
+        ((x->flags & PVK_SPV_F_OUTSIDE) && (arith || inner))) /* (pvk_spv_recurrences) */
         return false;
     if (packed && pvk_spv_type(ctx, x->type)->op == PVK_SPV_OpTypeVector) /* (packed in memory: converted) */
         expr = pvk_spv_fmt(ctx, "%s(%s)", pvk_spv_type(ctx, x->type)->msl, expr);
     x->msl = pvk_spv_enclose(ctx, expr);
-    x->flags |= PVK_SPV_F_FORWARDED | (reads ? PVK_SPV_F_READS : 0);
+    x->flags |= PVK_SPV_F_FORWARDED | (reads ? PVK_SPV_F_READS : 0) | (arith || inner ? PVK_SPV_F_ARITH : 0);
     x->depth = depth;
     return true;
 }
@@ -48279,10 +48491,20 @@ static void pvk_spv_set(struct pvk_spv *ctx, uint32_t rid, const char *expr)
         pvk_spv_fail(ctx, "id %u is not a value", rid);
     if (pvk_spv_forward(ctx, rid, expr))
         return;
-    if (pvk_spv_local(x) && !pvk_spv_hoist(ctx, x, type))
-        pvk_spv_line(ctx, "%s %s = %s;", type, x->msl, expr);
-    else
+    if (x->flags & PVK_SPV_F_RECURRENCE) { /* (pvk_spv_recurrences) */
+        if (pvk_spv_local(x) && !pvk_spv_hoist(ctx, x, type))
+            pvk_spv_line(ctx, "%s %s;", type, x->msl);
+        pvk_spv_line(ctx, "{");
+        ctx->indent++;
+        pvk_spv_line(ctx, "#pragma METAL fp contract(off)");
         pvk_spv_line(ctx, "%s = %s;", x->msl, expr);
+        ctx->indent--;
+        pvk_spv_line(ctx, "}");
+    } else if (pvk_spv_local(x) && !pvk_spv_hoist(ctx, x, type)) {
+        pvk_spv_line(ctx, "%s %s = %s;", type, x->msl, expr);
+    } else {
+        pvk_spv_line(ctx, "%s = %s;", x->msl, expr);
+    }
 }
 
 static const char *pvk_spv_mat_col(struct pvk_spv *ctx, const char *e, const struct pvk_spv_node *n, uint32_t c)
@@ -55112,6 +55334,47 @@ static bool pvk_spv_fast_math(struct pvk_spv *ctx)
     return true;
 }
 
+/* Whether a module that compiles with safe math (pvk_spv_fast_math) may
+ * contract all the same: Vulkan allows it unless NoContraction says
+ * otherwise, or (float_controls2) FPFastMath* flags without AllowContract:
+ * an FPFastMathMode decoration, or an FPFastMathDefault, under which a float
+ * type without one has no flags. Safe math fuses a multiply and an add only
+ * within a statement, and such modules have one per value (no arithmetic
+ * forwarded, pvk_spv_forward), so `#pragma METAL fp contract(fast)` lets
+ * Metal fuse across them: a vertex transform took 0.431 ms for 0.636 (M4
+ * Max; relaxed math 0.383), and the engine migration's vertex shaders,
+ * which declare SignedZeroInfNanPreserve, compile so. A fused result keeps
+ * signed zeros, Inf and NaN, and rounds to nearest even once. */
+static bool pvk_spv_contracts(struct pvk_spv *ctx)
+{
+    uint32_t i = 5, floats = 0, defaults = 0; /* bits: 16-bit, 32-bit, 64-bit, other float types */
+    bool fpdefault = false;
+    while (i < ctx->nw) {
+        const uint32_t *w = ctx->w + i;
+        uint32_t op = w[0] & 0xffffu, n = w[0] >> 16;
+        if (!n || n > ctx->nw - i || op == PVK_SPV_OpFunction) /* (annotations and types come before the functions) */
+            break;
+        if (op == PVK_SPV_OpTypeFloat && n >= 3)
+            floats |= w[2] == 16 ? 1u : w[2] == 32 ? 2u : w[2] == 64 ? 4u : 8u;
+        if ((op == PVK_SPV_OpExecutionMode || op == PVK_SPV_OpExecutionModeId) && n >= 5 && w[1] == ctx->entry_fid &&
+            w[2] == 6028) { /* FPFastMathDefault */
+            uint32_t f = (uint32_t)pvk_spv_const_uint(ctx, w[4]), width = pvk_spv_type(ctx, w[3])->width;
+            if (!(f & 0x10010u)) /* Fast, AllowContract */
+                return false;
+            fpdefault = true;
+            defaults |= width == 16 ? 1u : width == 32 ? 2u : width == 64 ? 4u : 8u;
+        }
+        if ((op == PVK_SPV_OpDecorate || op == PVK_SPV_OpMemberDecorate) && n >= (op == PVK_SPV_OpDecorate ? 3u : 4u)) {
+            uint32_t at = op == PVK_SPV_OpDecorate ? 2 : 3; /* the decoration's word */
+            uint32_t dec = w[at], arg = n > at + 1 ? w[at + 1] : 0;
+            if (dec == 42 || (dec == 40 && !(arg & 0x10010u))) /* NoContraction, FPFastMathMode */
+                return false;
+        }
+        i += n;
+    }
+    return !fpdefault || !(floats & ~defaults);
+}
+
 /* Whether the module reads storage images or texels of them
  * (OpImageRead, OpImageSparseRead, OpImageTexelPointer; subpass inputs
  * count too): only then must a storage image write be fenced for the
@@ -55137,6 +55400,7 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
     struct pvk_sb *out = &ctx->head;
     uint32_t version, i, g;
     const char *kernel;
+    bool contract;
 
     if (!words || word_count < 5)
         pvk_spv_fail(ctx, "SPIR-V module is too short");
@@ -55199,6 +55463,10 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
     }
     pvk_spv_assign_resources(ctx);
     res->fast_math = pvk_spv_fast_math(ctx);
+    contract = !res->fast_math && pvk_spv_contracts(ctx);
+    if (res->fast_math || contract)
+        for (i = 0; i < ctx->norder; i++)
+            pvk_spv_recurrences(ctx, ctx->order[i]);
     ctx->storage_reads = pvk_spv_storage_reads(ctx);
     if (ctx->options && ctx->options->dispatch_base) {
         uint32_t end = res->has_push_constants ? pvk_spv_round(res->push_constant_offset + res->push_constant_size, 16) : 0;
@@ -55246,6 +55514,8 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
                   kernel);
     if (res->fast_math)
         pvk_sb_printf(ctx, out, "#define PVK_FAST_MATH 1 /* Vulkan's default floating-point environment */\n\n");
+    if (contract)
+        pvk_sb_printf(ctx, out, "#pragma METAL fp contract(fast) /* safe math that Vulkan lets contract */\n\n");
     if (ctx->use_array) {
         pvk_sb_append(ctx, out, pvk_spv_templates, sizeof(pvk_spv_templates) - 1);
         if (strcmp(ctx->dev, "device") != 0)
