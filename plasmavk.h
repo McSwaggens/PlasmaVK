@@ -32967,6 +32967,7 @@ enum pvk_inform {
     PVK_INFORM_FORK_PASSES,      /* ... in a render pass instance of several Metal passes */
     PVK_INFORM_FORK_QUERY,       /* ... in a render pass instance within an occlusion query */
     PVK_INFORM_FORK_FETCHES,     /* ... in a render pass instance reading input attachments from tile memory */
+    PVK_INFORM_FORK_BATCH,       /* ... in a batch with too few packets of such secondaries */
     PVK_INFORM_ICB_MEMORY,       /* count draws draw record by record: indirect command buffers at their budget */
     PVK_INFORM_COUNT
 };
@@ -56330,6 +56331,38 @@ static bool pvk_scan_needed(uint32_t scan)
 #define PVK_PAR_PACKETS 128u
 #define PVK_PAR_FORK_PACKETS 256u
 
+/* The fewest packets of secondaries that may fork a batch must have for
+ * any of them to fork (struct pvk_command_buffer.fork_packets, summed as
+ * render pass instances are recorded). It is per batch, not per pass: two
+ * passes of Sascha Willems' size (below) in one batch fork again, and a
+ * pass that encoding keeps whole after all (pvk_render_begin_group) still
+ * counts. A pass that forks is a Metal pass suspended and resumed across
+ * command buffers, and between them the GPU may run other processes' work
+ * (the window server's, an application's interface: Metal System Trace
+ * showed the pass's vertex work stopped for it); it then now and then
+ * stood idle before going on with the pass, which it did not do with a
+ * pass in one command buffer. Sascha Willems' multithreading forks an
+ * execute of about 350 secondaries (2450 packets) every frame, for a
+ * vkQueueSubmit of 48 instead of 58 us: 0.45 frames in 10k came 2 to 10 ms
+ * late, as their GPU work started 2 ms late or ran 9 ms instead of 0.6
+ * (none in 740k frames below this threshold, one in 811k encoded in order;
+ * M4 Max, macOS 27.2). Whether larger forks are free of it is not settled
+ * (frames over the median + 2 ms against the same frames encoded in
+ * order, quiet machine): bench_frame mt4_secondary at 3840x2160 (5 passes
+ * forked a frame, 14600 packets; GPU-bound either way) 19 in 440k, one
+ * burst, against 0 in 400k; at 1920x1080, where the parallel frames are
+ * GPU-bound and those encoded in order wait on their fences and leave the
+ * GPU about 13% idle, 21 in 375k against 7 in 400k, and 44 against 1 in
+ * the rounds where both ran in the same state; bench_draw_calls
+ * secondary_x1_2000 (one pass of 2000 secondaries, 14000 packets) 1 in
+ * 1.08M against 0 in 1.04M. 4 primaries encoded as jobs (mt4_primary:
+ * several command buffers in a commit, no forked pass) had 1 in 400k
+ * against 0 at 3840x2160, and at 1920x1080 fewer bursts than
+ * mt4_secondary in the same rounds (4 against 13). Other processes'
+ * rendering (a browser's) varied between those runs, so what the rest is
+ * owed to was not found. */
+#define PVK_PAR_FORK_BATCH 4096u
+
 /* The encoder tracks PVK_MAX_PUSH_CONSTANTS_SIZE (section 7) bytes of push
  * constants, the base workgroup of vkCmdDispatchBase after them. */
 
@@ -56403,8 +56436,10 @@ struct pvk_command_buffer {
     /* For parallel encoding (section 16, PARALLEL ENCODING), with its
      * secondaries': the packets recorded, their kinds (bits 1 << op),
      * PVK_PAR_*, and its barriers together: the Metal stages each stage
-     * after them waits for (struct pvk_order.after, pvk_waits_add) */
-    uint32_t packets, ops, par;
+     * after them waits for (struct pvk_order.after, pvk_waits_add);
+     * fork_packets: those of the secondaries other threads may encode
+     * (struct pvk_cmd_execute.fork, saturating) */
+    uint32_t packets, ops, par, fork_packets;
     pvk_MTLStages order[PVK_ORDER_STAGES];
     const struct pvk_pipeline *gfx_bound; /* the graphics pipeline bound (pvk_gfx_icb_make) */
 };
@@ -56463,7 +56498,7 @@ static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release
     cb->executes = false;
     cb->scan = cb->scan_outer = 0;
     cb->scan_pass = NULL;
-    cb->packets = cb->ops = cb->par = 0;
+    cb->packets = cb->ops = cb->par = cb->fork_packets = 0;
     memset(cb->order, 0, sizeof(cb->order));
     cb->gfx_bound = NULL;
     if (release) {
@@ -58570,7 +58605,8 @@ struct pvk_cmd_begin_pass {
     uint32_t resolve_clear_combined;    /* a depth/stencil format (else depth or stencil only) */
     VkClearDepthStencilValue resolve_clear_value;
     uint32_t scan; /* PVK_SCAN_* of what it recorded until its END_PASS (struct pvk_command_buffer.scan) */
-    uint32_t forks; /* its EXECUTE_COMMANDS packets with fork set */
+    uint32_t forks;        /* its EXECUTE_COMMANDS packets with fork set */
+    uint32_t fork_packets; /* ... and their secondaries' packets (saturating) */
 };
 
 /* The subpass, or local-read mapping, of the draws that follow. */
@@ -58966,8 +59002,11 @@ static void pvk_cmd_scan_end(struct pvk_command_buffer *cb)
                    "SINT views, depth bounds)");
         c->forks = 0;
     }
-    if (c->forks)
+    if (c->forks) {
         cb->par |= PVK_PAR_FORKS;
+        cb->fork_packets =
+            c->fork_packets > UINT32_MAX - cb->fork_packets ? UINT32_MAX : cb->fork_packets + c->fork_packets;
+    }
     cb->scan_pass = NULL;
 }
 
@@ -59010,6 +59049,7 @@ static void pvk_cmd_fork(struct pvk_command_buffer *cb, struct pvk_cmd_execute *
     else {
         c->fork = 1;
         pass->forks++;
+        pass->fork_packets = packets > UINT32_MAX - pass->fork_packets ? UINT32_MAX : pass->fork_packets + packets;
     }
 }
 
@@ -60130,17 +60170,24 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
  *   one that suspends a render pass instance goes with the next), and jobs
  *   of the secondaries an EXECUTE_COMMANDS packet runs in a render pass
  *   instance (struct pvk_cmd_execute.fork: only state, draws and clears,
- *   PVK_PAR_FORK_PACKETS packets or more). Those continue the instance's
- *   Metal pass across command buffers: its render encoder suspends, theirs
- *   resume and suspend, and the next of its job resumes (Metal 4 stitches
- *   them into one pass when they are committed together, loads at its
- *   start, stores and resolves at its end; nothing follows the encoder that
- *   ends the pass in its command buffer: a copy there faulted, M4 Max,
- *   macOS 27.2). A thread encodes on a lane of the queue's (struct
- *   pvk_lane): argument tables, command allocators, upload ring and
- *   indirect command buffer chunks of its own. A job's encoders start after
- *   the barriers of the jobs before it, recorded with their command buffers
- *   (struct pvk_command_buffer.order); a job of primaries ends
+ *   PVK_PAR_FORK_PACKETS packets or more, in a batch with
+ *   PVK_PAR_FORK_BATCH packets of such secondaries or more). Those continue
+ *   the instance's Metal pass across command buffers: its render encoder
+ *   suspends, theirs resume and suspend, and the next of its job resumes
+ *   (Metal 4 stitches them into one pass when they are committed together,
+ *   loads at its start, stores and resolves at its end; nothing follows the
+ *   encoder that ends the pass in its command buffer: a copy there faulted,
+ *   M4 Max, macOS 27.2). The GPU may run other processes' work between the
+ *   parts of such a pass, and then now and then stood idle for milliseconds
+ *   before going on with it: Sascha Willems' multithreading, whose fork
+ *   saved 10 us a frame, showed that; whether larger forks are free of it
+ *   is not settled (PVK_PAR_FORK_BATCH; the threshold is per batch, so
+ *   several small forks in one batch still fork). A thread encodes on a
+ *   lane of the queue's (struct pvk_lane): argument tables, command
+ *   allocators, upload ring and indirect command buffer chunks of its own.
+ *   A job's encoders start after the barriers of the jobs before it,
+ *   recorded with their command buffers (struct
+ *   pvk_command_buffer.order); a job of primaries ends
  *   with its timestamps and occlusion availability written, and its event
  *   and timestamp notes join the batch's in order. A render pass instance
  *   that is scanned (pvk_pass_scanned; among others for count draws and
@@ -60974,6 +61021,7 @@ struct pvk_encoder {
     struct pvk_orders *orders;
     struct pvk_notes *notes;
     struct pvk_job *job;
+    bool forks;       /* secondaries the job executes may fork (struct pvk_batch.forks) */
     uint64_t serial;  /* timeline value of this submission */
     id cb;            /* MTL4CommandBuffer */
     id enc;           /* MTL4ComputeCommandEncoder, made by the first command that needs it */
@@ -62898,9 +62946,8 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
  *                          new fan), padded with degenerate triangles to
  *                          3 * (count - 2) indices
  *   count buffers          the records below the count encoded as commands
- *                          of an indirect command buffer (below) and, or
- *                          else, the records copied, those past the count
- *                          zeroed
+ *                          of an indirect command buffer (below), or the
+ *                          records copied, those past the count zeroed
  *   indirect fans          records turned into indexed draws of the
  *                          device's fan pattern (non-indexed, up to 65536
  *                          vertices per draw) or of indices rewritten per
@@ -63470,9 +63517,7 @@ static const char pvk_prepass_points_msl[] =
 /* Draws through an indirect command buffer. Count draws (pvk_pp_icb):
  * thread d encodes record d as command first + d if d is below the count
  * (no instances or vertices: a command that does nothing), thread 0 the
- * range of them to execute; and copies the record as pvk_pp_records
- * would, for a pass that turns out unable to execute the commands
- * (pvk_encode_draw_indirect). Multi-draws (pvk_pp_icb_compact), whose
+ * range of them to execute. Multi-draws (pvk_pp_icb_compact), whose
  * records GPU culling may leave mostly empty: threadgroup g encodes those
  * of records 1024g to 1024g + 1023 that draw something, in order, after
  * the commands of those before (it counts them again: at most 63 blocks),
@@ -63492,7 +63537,7 @@ static const char pvk_prepass_icb_msl[] =
     "struct pvk_icb {\n"
     "    command_buffer icb;\n"
     "    device const uchar *records; device const uint *count; device const uchar *indices; device uint *range;\n"
-    "    device const pvk_icb_table *table; constant uint *draw_index; device uint *out_records;\n"
+    "    device const pvk_icb_table *table; constant uint *draw_index;\n"
     "    uint n, first, stride, index_size, elements, prim, has_count, pad;\n"
     "};\n"
     /* the vertices (indices from *at) record s draws, 0: nothing */
@@ -63529,11 +63574,6 @@ static const char pvk_prepass_icb_msl[] =
     "{\n"
     "    uint count = a.has_count != 0u ? min(a.count[0], a.n) : a.n, at = 0u;\n"
     "    if (d == 0u) { a.range[0] = a.first; a.range[1] = count; }\n"
-    "    if (d < a.n && a.out_records) { /* the records copied too (pvk_pp_records), those past the count zeroed */\n"
-    "        uint words = a.index_size != 0u ? 5u : 4u;\n"
-    "        device const uint *src = pvk_icb_record(a, d);\n"
-    "        for (uint k = 0u; k < words; k++) a.out_records[d * words + k] = d < count ? src[k] : 0u;\n"
-    "    }\n"
     "    if (d >= count) return;\n"
     "    device const uint *s = pvk_icb_record(a, d);\n"
     "    pvk_icb_draw(a, a.first + d, d, s, pvk_icb_vertices(a, s, at), at);\n"
@@ -63579,7 +63619,6 @@ struct pvk_icb_table {
 struct pvk_icb_args {
     pvk_MTLResourceID icb;
     uint64_t records, count, indices, range, table, draw_index;
-    uint64_t out_records; /* count draws: the records copied as pvk_pp_records does (0: not) */
     uint32_t n, first, stride, index_size, elements, prim, has_count, pad;
 };
 
@@ -63879,13 +63918,6 @@ static void pvk_prepass_indirect(struct pvk_encoder *e, const struct pvk_draw_tr
             ia.has_count = d->count_address != 0;
             ia.stride = d->stride;
             ia.prim = pvk_primitive_type(t->topology);
-            if (d->count_address) { /* its records as well, drawn one by one where the pass cannot execute
-                                     * the commands (pvk_encode_draw_indirect); a multi-draw has its own */
-                res->record_stride = d->indexed ? 20 : 16;
-                if (!(ia.out_records = pvk_prepass_memory(e, (uint64_t)res->record_stride * ia.n)))
-                    return;
-                res->records = ia.out_records;
-            }
             pvk_prepass_dispatch(e, d->count_address ? PVK_PP_ICB : PVK_PP_ICB_COMPACT, &ia, sizeof(ia), ia.n);
             res->icb = chunk->icb;
             res->range = ia.range;
@@ -65858,13 +65890,14 @@ static void pvk_render_begin_group(struct pvk_encoder *e, const struct pvk_cmd_b
     r->hidden = (c->hidden | t->hidden) &
                 ((c->depth.texture ? PVK_HIDDEN_DEPTH : 0u) | (c->stencil.texture ? PVK_HIDDEN_STENCIL : 0u));
     memset(r->hidden_slot, PVK_NO_SLOT, sizeof(r->hidden_slot));
-    /* Other threads encode the secondaries it executes (PARALLEL ENCODING)
-     * in a pass whole that needs nothing but its draws: no split, no depth
-     * or stencil copies, input attachments in tile memory, occlusion
-     * queries or draw preprocessing. (Its pending timestamps are written:
+    /* Other threads encode the secondaries it executes (PARALLEL ENCODING;
+     * in a batch whose secondaries fork, pvk_par_plan) in a pass whole that
+     * needs nothing but its draws: no split, no depth or stencil copies,
+     * input attachments in tile memory, occlusion queries or draw
+     * preprocessing. (Its pending timestamps are written:
      * pvk_encode_begin_pass.) */
     r->forks = 0;
-    if (c->forks && e->job) {
+    if (c->forks && e->forks) {
         if (group || !first || !last || r->split)
             pvk_inform(e->device, PVK_INFORM_FORK_PASSES, "PlasmaVK-parallel-encoding",
                        "secondaries executed in a render pass instance are encoded in order, not by other threads: "
@@ -65979,7 +66012,14 @@ static bool pvk_pass_scanned(const struct pvk_encoder *e, const struct pvk_cmd_b
  * for depth/stencil copies (they would add attachments too), for colors
  * split for tile memory (pvk_render_fits) or read from textures (t->tex:
  * should Metal refuse the pass whole, pvk_encode_begin_pass), SNORM ones
- * (pvk_render_rebind). */
+ * (pvk_render_rebind). That is exactly when pvk_render_flush could set
+ * another one: the copies are r->hidden's bits (pvk_render_begin_group),
+ * SNORM variants and rebinds need a pipeline with int_colors, which the
+ * scan sees bound (t->int_colors), and a pass is split only if it does not
+ * fit (t->nsplit) or leaves colors to textures (t->tex); one Metal refuses
+ * though it fits is not drawn at all (VK_ERROR_OUT_OF_DEVICE_MEMORY). So
+ * the commands are executed (pvk_encode_draw_indirect), and a count draw's
+ * records are not copied for drawing them one by one. */
 static void pvk_prepass_later(struct pvk_encoder *e, const struct pvk_cmd_begin_pass *c, const struct pvk_draw_track *t)
 {
     uint32_t copies = (c->depth.texture ? PVK_HIDDEN_DEPTH : 0u) | (c->stencil.texture ? PVK_HIDDEN_STENCIL : 0u), i;
@@ -66024,14 +66064,11 @@ static void pvk_encode_begin_pass(struct pvk_encoder *e, const struct pvk_cmd_be
         pvk_prepass_later(e, c, &track);
     }
     pvk_encoder_end(e);
-    /* A render encoder that may suspend writes no timestamps (PARALLEL
-     * ENCODING): an encoder of their own does, before the pass. Metal starts
-     * a pass's draws about 50 ns per draw after the commit, so such a
-     * timestamp also counts that wait, which one the pass's encoder writes
-     * does not: 347 against 690-840 us between the timestamps around a pass
-     * of 10000 draws, its vertex and fragment work as long or shorter
-     * (Metal System Trace; M4 Max, macOS 27.2). */
-    if (e->job && c->forks)
+    /* Timestamps pending before a pass that may fork (PARALLEL ENCODING: in
+     * a batch whose secondaries fork) are written now, by their encoder (as
+     * before any encoder, section 14), so that the pass may still fork:
+     * pvk_render_begin_group forks only with none pending. */
+    if (e->forks && c->forks)
         pvk_encode_stamps(e);
     if (e->result != VK_SUCCESS)
         return;
@@ -66429,6 +66466,10 @@ static bool pvk_render_flush(struct pvk_encoder *e, id icb_pso)
         if (gp && tex)
             pvk_render_tex_inputs(e, p);
     }
+    /* Any other pipeline set above for a pipeline with an indirect command
+     * buffer variant must be one pvk_prepass_later's gate rules out: count
+     * draws in a pass it allowed have no copied records to fall back on, and
+     * pvk_encode_draw_indirect would draw them with the variant's pipeline. */
     if (icb_pso && pso == p->mtl_pipeline) /* (its indirect command buffer variant) */
         pso = icb_pso;
     if (pso != r->pso_set) { /* (pipelines may share a state, section 17) */
@@ -66883,16 +66924,29 @@ static void pvk_encode_draw_indirect(struct pvk_encoder *e, const struct pvk_cmd
             return;
         }
         /* The pass draws the pipeline with another Metal pipeline than the
-         * commands could inherit (it is not as pvk_prepass_later judged it):
-         * the records are drawn one by one below, as without the variant
-         * (count draws: the copies the kernel made). Reported once per
-         * pipeline. */
+         * commands could inherit, which pvk_prepass_later rules out: a
+         * multi-draw draws its own records one by one below; a count draw,
+         * whose records past the count must not draw (none were copied),
+         * executes the commands with the Metal pipeline they were encoded
+         * for set, drawn as in a pass without depth/stencil copies, SNORM
+         * views or a split for tile memory. Reported once per pipeline. */
         if (r->pipeline && !pvk_gfx_icb_bypassed(r->pipeline->gfx))
-            pvk_logd(e->device, PVK_LOG_INFO, "PlasmaVK-indirect-command-buffer-variant", VK_OBJECT_TYPE_PIPELINE,
+            pvk_logd(e->device, c->count_address ? PVK_LOG_WARN : PVK_LOG_INFO,
+                     "PlasmaVK-indirect-command-buffer-variant", VK_OBJECT_TYPE_PIPELINE,
                      (uint64_t)(uintptr_t)r->pipeline,
-                     "a count draw or long multi-draw draws its records one by one, not as the commands of its "
-                     "pipeline's indirect command buffer variant: its pass draws the pipeline with another Metal "
-                     "pipeline than the commands could inherit");
+                     c->count_address
+                         ? "a count draw is drawn with its pipeline's indirect command buffer variant, not the Metal "
+                           "pipeline its pass draws the pipeline with for depth/stencil copies, SNORM attachments or "
+                           "a split for tile memory"
+                         : "a long multi-draw draws its records one by one, not as the commands of its pipeline's "
+                           "indirect command buffer variant: its pass draws the pipeline with another Metal "
+                           "pipeline than the commands could inherit");
+        if (c->count_address) {
+            pvk_MTL4RenderCommandEncoder_setRenderPipelineState(r->enc, res->pso);
+            r->pso_set = res->pso; /* (the next draw sets the pass's again) */
+            pvk_MTL4RenderCommandEncoder_executeCommandsInBuffer_indirectBuffer(r->enc, res->icb, res->range);
+            return;
+        }
     }
     if (res && res->records) {
         records = res->records;
@@ -67605,6 +67659,7 @@ struct pvk_batch {
     uint64_t serial, completed;
     pvk_MTLStages wait_before;
     bool drawn; /* (struct pvk_encoder.drawn) */
+    bool forks; /* its secondaries may fork (pvk_par_plan) */
     unsigned int qos; /* the submitting thread's QoS class, for the threads that take its jobs */
     struct pvk_job **jobs;
     uint32_t job_count, job_capacity;
@@ -67854,6 +67909,7 @@ static void pvk_job_run(struct pvk_job *j, struct pvk_lane *lane, const VkSubmit
     e.orders = &j->orders;
     e.notes = j->notes;
     e.job = j;
+    e.forks = b->forks;
     e.serial = b->serial;
     e.completed = b->completed;
     e.wait_before = b->wait_before;
@@ -67996,20 +68052,21 @@ static uint32_t pvk_par_split(const VkSubmitInfo2 *submit, uint64_t cap, uint32_
 
 /* Whether batch `submit` is encoded in parallel, and (true) into which jobs
  * of consecutive primaries: starts[0, *count) their first ones (at most
- * PVK_PAR_THREADS + 1). In parallel when it has primaries of
- * PVK_PAR_PACKETS packets or more for two jobs, or secondaries that fork,
- * and nothing of it must encode in order (PVK_PAR_SERIAL, label regions;
- * the debug layer and queue label regions, whose debug groups go with
- * command buffers); and never for devices with allocation callbacks, which
- * Vulkan calls only on the thread of the command. The jobs' largest is as
- * small as it can be (the fewest packets per job that make no more jobs
- * than threads: a binary search). */
+ * PVK_PAR_THREADS + 1), and whether its secondaries fork (*fork). In
+ * parallel when it has primaries of PVK_PAR_PACKETS packets or more for
+ * two jobs, or secondaries that fork (PVK_PAR_FORK_BATCH packets of them
+ * or more in the batch), and nothing of it must encode in order
+ * (PVK_PAR_SERIAL, label regions; the debug layer and queue label regions,
+ * whose debug groups go with command buffers); and never for devices with
+ * allocation callbacks, which Vulkan calls only on the thread of the
+ * command. The jobs' largest is as small as it can be (the fewest packets
+ * per job that make no more jobs than threads: a binary search). */
 static bool pvk_par_plan(const struct pvk_queue *queue, const VkSubmitInfo2 *submit, uint32_t *starts,
-                         uint32_t *count)
+                         uint32_t *count, bool *fork)
 {
     const struct pvk_device *device = queue->device;
     uint32_t i, n = submit->commandBufferInfoCount, jobs;
-    uint64_t total = 0, lo, hi;
+    uint64_t total = 0, fork_packets = 0, lo, hi;
     bool forks = false;
     if (!device->par_ready)
         return false;
@@ -68047,7 +68104,17 @@ static bool pvk_par_plan(const struct pvk_queue *queue, const VkSubmitInfo2 *sub
         }
         total += cb->packets;
         forks |= (cb->par & PVK_PAR_FORKS) != 0;
+        fork_packets += cb->fork_packets;
     }
+    if (forks && fork_packets < PVK_PAR_FORK_BATCH) {
+        pvk_inform(device, PVK_INFORM_FORK_BATCH, "PlasmaVK-parallel-encoding",
+                   "secondaries executed in a render pass instance are encoded in order, not by other threads: a "
+                   "batch executes fewer than %u packets of such secondaries (a pass they continue across command "
+                   "buffers may wait on the GPU while other processes render)",
+                   PVK_PAR_FORK_BATCH);
+        forks = false;
+    }
+    *fork = forks;
     jobs = (uint32_t)(total / PVK_PAR_PACKETS);
     jobs = jobs > PVK_PAR_THREADS + 1 ? PVK_PAR_THREADS + 1 : jobs > n ? n : jobs;
     if (jobs < 2) {
@@ -68105,7 +68172,7 @@ static bool pvk_job_flatten(struct pvk_submission *s, const struct pvk_job *j, c
  * and their command buffers s->commit in order. */
 static VkResult pvk_encode_parallel(struct pvk_queue *queue, struct pvk_submission *s, const VkSubmitInfo2 *submit,
                                     uint64_t serial, pvk_MTLStages wait_before, uint64_t completed,
-                                    const uint32_t *starts, uint32_t count)
+                                    const uint32_t *starts, uint32_t count, bool forks)
 {
     struct pvk_device *device = queue->device;
     const VkAllocationCallbacks *alloc = pvk_device_alloc(device);
@@ -68121,6 +68188,7 @@ static VkResult pvk_encode_parallel(struct pvk_queue *queue, struct pvk_submissi
     b.completed = completed;
     b.wait_before = wait_before;
     b.drawn = queue->drawn > completed;
+    b.forks = forks;
     b.qos = pvk_qos_class_self();
     memset(later, 0, sizeof(later));
     for (k = 0; k < count && result == VK_SUCCESS; k++) {
@@ -68213,6 +68281,7 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
 {
     struct pvk_encoder e;
     uint32_t i, starts[PVK_PAR_THREADS + 1], jobs;
+    bool forks = false;
 
     memset(&e, 0, sizeof(e));
     e.device = queue->device;
@@ -68244,8 +68313,8 @@ static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission 
     }
     if (queue->orders.sem && queue->orders.sem_serial <= e.completed + 1) /* (all work before it done) */
         queue->orders.sem = 0;
-    if (pvk_par_plan(queue, submit, starts, &jobs) && pvk_par_ready(queue))
-        return pvk_encode_parallel(queue, s, submit, serial, e.wait_before, e.completed, starts, jobs);
+    if (pvk_par_plan(queue, submit, starts, &jobs, &forks) && pvk_par_ready(queue))
+        return pvk_encode_parallel(queue, s, submit, serial, e.wait_before, e.completed, starts, jobs, forks);
     e.cursor.cbs = submit->pCommandBufferInfos;
     e.cursor.count = submit->commandBufferInfoCount;
     pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(s->cb, s->allocator);

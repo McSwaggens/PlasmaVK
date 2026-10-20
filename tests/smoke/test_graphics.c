@@ -1675,6 +1675,30 @@ static void submit(VkCommandBuffer cb)
     vkFreeCommandBuffers(device, cmd_pool, 1, &cb);
 }
 
+/* submit(), returning how many upload chunks of their own (more than
+ * PVK_UPLOAD_CHUNK_SIZE bytes: one large upload's, such as copied indirect
+ * records) its encoding made: the queue's lanes hold them until it is done
+ * and recycled (vkQueueWaitIdle). */
+static uint32_t submit_large_uploads(VkCommandBuffer cb)
+{
+    const struct pvk_queue *q = (const struct pvk_queue *)queue;
+    const struct pvk_upload_chunk *c;
+    VkSubmitInfo info;
+    uint32_t n = 0, i;
+    vkEndCommandBuffer(cb);
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    info.commandBufferCount = 1;
+    info.pCommandBuffers = &cb;
+    CHECK_VK(vkQueueSubmit(queue, 1, &info, VK_NULL_HANDLE), VK_SUCCESS);
+    for (i = 0; i <= q->lane_count; i++)
+        for (c = (i ? &q->lanes[i - 1] : &q->lane)->retired; c; c = c->next)
+            n += c->size != PVK_UPLOAD_CHUNK_SIZE;
+    CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+    vkFreeCommandBuffers(device, cmd_pool, 1, &cb);
+    return n;
+}
+
 /* A secondary command buffer that renders on its own (no inheritance). */
 static VkCommandBuffer begin_secondary(void)
 {
@@ -4767,7 +4791,9 @@ static void test_multi_draw_secondary(void)
  *            indirect command buffer has left), pushed row 1
  *   row 7    8-bit indices (widened), count 1 of 2
  * Records past a count would draw pixel (15, row). In the primary, or in a
- * secondary executed in its render pass instance (without the query). */
+ * secondary executed in its render pass instance (without the query). With
+ * the pipeline's indirect command buffer variant, no records are copied
+ * (row 6's 1 MB would take an upload chunk of its own). */
 static void count_draws(int secondary)
 {
     static const VkVertexInputBindingDescription binding = { 0, 8, VK_VERTEX_INPUT_RATE_VERTEX };
@@ -4798,6 +4824,7 @@ static void count_draws(int secondary)
     VkPipeline pipeline;
     VkCommandBuffer cb, rec;
     VkDeviceSize zero_offset = 0;
+    uint32_t large;
     int bad = 0;
 
     REQUIRE(features.multiDrawIndirect && features.drawIndirectFirstInstance && ind.data);
@@ -4893,9 +4920,15 @@ static void count_draws(int secondary)
     }
     vkCmdEndRendering(cb);
     download(cb, &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
-    submit(cb);
+    large = submit_large_uploads(cb);
     if (secondary)
         vkFreeCommandBuffers(device, cmd_pool, 1, &rec);
+    if (pvk_gfx_icb_ready(((struct pvk_pipeline *)pipeline)->gfx)) {
+        CHECK(large == 0);
+        if (large)
+            fprintf(stderr, "count draws%s: %u upload chunks of their own (records copied)\n",
+                    secondary ? " (secondary)" : "", large);
+    }
     for (y = 0; y < H; y++)
         for (x = 0; x < W; x++) {
             const uint32_t *got = (const uint32_t *)out.data + 4 * (y * W + x);
@@ -4933,14 +4966,17 @@ static void count_draws(int secondary)
     free_img(&target);
 }
 
-/* Not tested: a count draw whose pass sets another Metal pipeline than its
- * indirect command buffer's commands inherit, which pvk_encode_draw_indirect
- * then draws record by record from the copies pvk_pp_icb makes (reported
- * once per pipeline at PLASMAVK_LOG=info). The pipeline set is another one
- * only for a pass with a depth copy, SNORM attachments drawn through SINT
- * views or a split for tile memory, which pvk_prepass_later rules out from
- * the same scan, so the case is Metal refusing a pass pvk_render_fits
- * accepted, which no command sequence provokes. */
+/* Not tested: a count draw or long multi-draw whose pass sets another Metal
+ * pipeline than its indirect command buffer's commands inherit, which
+ * pvk_encode_draw_indirect reports once per pipeline and draws anyway (a
+ * multi-draw record by record, a count draw's commands with the variant's
+ * pipeline set). The pipeline set is another one only for a pass with a
+ * depth copy, SNORM attachments drawn through SINT views or variants, or a
+ * split for tile memory (or colors read from textures), which
+ * pvk_prepass_later rules out from the same scan; a pass Metal refuses
+ * though pvk_render_fits accepted it is not split but not drawn at all
+ * (VK_ERROR_OUT_OF_DEVICE_MEMORY). No command sequence provokes it, so
+ * count draws copy no records for it (count_draws checks). */
 static void test_count_draws(void)
 {
     count_draws(false);
@@ -13441,6 +13477,77 @@ static void test_parallel_passes(void)
     free_img(&color);
 }
 
+/* Secondaries a render pass instance executes fork only in a batch that
+ * executes PVK_PAR_FORK_BATCH packets of such secondaries or more: 4 of 256
+ * rectangles (about 2050 packets, enough for jobs) are encoded in order
+ * into the batch's one command buffer, and that is reported; 4 of 1024
+ * fork; and so do two primaries that each execute 2 of 640 (2560 packets
+ * each, 5120 in the batch), the second loading what the first stored. */
+static void test_parallel_fork_batch(void)
+{
+    static const char *const what[3] = { "too few packets to fork", "a batch that forks",
+                                         "two primaries that fork together" };
+    struct pvk_device *d = (struct pvk_device *)device;
+    struct pvk_queue *q = (struct pvk_queue *)queue;
+    struct img color = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkPipeline pipeline = par_pipeline(VK_NULL_HANDLE);
+    VkCommandBuffer cbs[2], secs[4];
+    VkSubmitInfo si;
+    uint32_t c, k, p, primaries, per, at, commits;
+
+    REQUIRE(pipeline);
+    for (c = 0; c < 3; c++) {
+        primaries = c == 2 ? 2 : 1;
+        per = c == 0 ? 256 : c == 1 ? 1024 : 640; /* rectangles per secondary */
+        par_scene(600 + c);
+        at = 0;
+        for (p = 0; p < primaries; p++) {
+            uint32_t n = 4 / primaries;
+            cbs[p] = begin_cmd();
+            if (p)
+                par_attachment_barrier(cbs[p - 1]);
+            par_begin(cbs[p], &color, &depth, p == 0, VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT);
+            for (k = 0; k < n; k++) {
+                VkCommandBuffer sec = secs[p * n + k] = par_secondary(VK_NULL_HANDLE);
+                vkCmdBindPipeline(sec, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                par_draw(sec, at, per);
+                at += per;
+                vkEndCommandBuffer(sec);
+            }
+            vkCmdExecuteCommands(cbs[p], n, &secs[p * n]);
+            vkCmdEndRendering(cbs[p]);
+        }
+        download(cbs[primaries - 1], &color, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        for (p = 0; p < primaries; p++)
+            vkEndCommandBuffer(cbs[p]);
+        memset(&si, 0, sizeof(si));
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = primaries;
+        si.pCommandBuffers = cbs;
+        CHECK_VK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE), VK_SUCCESS);
+        /* the batch's command buffers (pvk_job_flatten; 0: its one) */
+        commits = q->lane.pending_tail ? q->lane.pending_tail->commit_count : 0;
+        CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+        vkFreeCommandBuffers(device, cmd_pool, primaries, cbs);
+        vkFreeCommandBuffers(device, cmd_pool, 4, secs);
+        CHECK(par_bad(&out, at, what[c]) == 0);
+        if (c == 0) {
+            CHECK(commits == 0);
+            CHECK(__atomic_load_n(&d->informed, __ATOMIC_RELAXED) & (1u << PVK_INFORM_FORK_BATCH));
+        } else {
+            CHECK(commits > 2 * primaries); /* (each primary's jobs and the parts around them) */
+        }
+        if (pvk_test_failures)
+            fprintf(stderr, "%s: %u command buffers\n", what[c], commits);
+    }
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&depth);
+    free_img(&color);
+}
+
 /* A render pass instance suspended and resumed across the primaries of a
  * batch (one job), and two instances over four primaries (two jobs). */
 static void test_parallel_suspend(void)
@@ -13690,10 +13797,11 @@ static void test_parallel_order(void)
 }
 
 /* Frames of two in flight, each a batch of a random number of primaries,
- * some executing secondaries in their render pass instances, with uploads
- * (push constants and vkCmdUpdateBuffer of 64 KB, more than an upload chunk
- * a frame): what parallel encoding takes and gives back (lanes, command
- * allocators, upload chunks) over 40 frames. */
+ * some executing secondaries in their render pass instances (large enough
+ * that the batch forks them, PVK_PAR_FORK_BATCH, when the rectangles left
+ * allow), with uploads (push constants and vkCmdUpdateBuffer of 64 KB, more
+ * than an upload chunk a frame): what parallel encoding takes and gives
+ * back (lanes, command allocators, upload chunks) over 40 frames. */
 static void test_parallel_stress(void)
 {
     enum { FRAMES = 40, SLOTS = 2 };
@@ -13744,7 +13852,7 @@ static void test_parallel_stress(void)
         par_scene(seeds[s]);
         primaries = 1 + frame % 7;
         for (k = 0; k < primaries; k++) {
-            uint32_t count = 256 + par_random() % 512;
+            uint32_t count = (frame + k) % 3 == 0 ? 2048 + par_random() % 1024 : 256 + par_random() % 512;
             VkCommandBuffer cb = cbs[s][ncbs[s]++] = begin_cmd();
             if (k < 4) { /* 128 KB of updates in each of the first four */
                 for (i = 0; i < 16384; i++)
@@ -14127,6 +14235,7 @@ int main(void)
     RUN(test_parallel_primaries);
     RUN(test_parallel_secondaries);
     RUN(test_parallel_passes);
+    RUN(test_parallel_fork_batch);
     RUN(test_parallel_suspend);
     RUN(test_parallel_queries);
     RUN(test_parallel_order);
