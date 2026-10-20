@@ -32632,6 +32632,7 @@ struct pvk_device {
      * and other sparse resources, section 7, SPARSE RESOURCES) */
     pvk_MTL4VisibilityOptions visibility;
     int lost;              /* a command buffer failed: VK_ERROR_DEVICE_LOST (atomic) */
+    int dropped;           /* a draw left without its preprocessing was reported (pvk_pp_pop; atomic) */
     long feedback_pending; /* commit feedback handlers still to run (atomic) */
     /* Parallel encoding (section 16, PARALLEL ENCODING): the encoding
      * threads, started by the first batch with jobs for them, and the jobs
@@ -61277,6 +61278,17 @@ struct pvk_encoder {
     uint32_t depth;
     const struct pvk_cmd_block *sub_block;
     size_t sub_at;
+    /* ... and at each depth below it, the EXECUTE_COMMANDS packet executing
+     * the command buffer of the next depth, which of its list that is and
+     * the packet after it (depth 0: the cursor): an instance suspended in a
+     * secondary is resumed where they go on (pvk_prepass_scan). execute NULL:
+     * a job's secondaries (PARALLEL ENCODING), in an instance begun before */
+    struct pvk_outer {
+        const struct pvk_cmd_execute *execute;
+        uint32_t index;
+        const struct pvk_cmd_block *block;
+        size_t at;
+    } outer[8];
     struct pvk_pp_result *pp;   /* draw preprocessing results of the render pass, in draw order */
     uint32_t pp_count, pp_next, pp_capacity;
     struct pvk_pp_later *later; /* ... and those of them made once its scan ends */
@@ -63283,8 +63295,8 @@ static void pvk_encode_clear(struct pvk_encoder *e, const struct pvk_cmd_clear *
  *
  * Draw preprocessing: when a render pass instance begins, its packets are
  * scanned up to its end (through suspensions, into the batch's later command
- * buffers, and into secondaries) for draws Metal cannot do as recorded
- * (pvk_draw_conv), tracking the state that decides it (struct
+ * buffers, into secondaries and out of them) for draws Metal cannot do as
+ * recorded (pvk_draw_conv), tracking the state that decides it (struct
  * pvk_draw_track). Each gets compute work, encoded before the render
  * encoder, that writes what the draw then uses (struct pvk_pp_result, in
  * draw order):
@@ -64072,11 +64084,17 @@ static struct pvk_pp_result *pvk_pp_push(struct pvk_encoder *e)
     return &e->pp[e->pp_count++];
 }
 
-/* The next result, if it was made for this conversion. */
+/* The next result, if it was made for this conversion; NULL (the draw is
+ * not drawn) only when out of memory, or reported: its render pass
+ * instance's scan missed it (pvk_prepass_scan). */
 static const struct pvk_pp_result *pvk_pp_pop(struct pvk_encoder *e, uint32_t conv)
 {
     if (e->pp_next < e->pp_count && e->pp[e->pp_next].conv == conv)
         return &e->pp[e->pp_next++];
+    if (e->result == VK_SUCCESS && !__atomic_exchange_n(&e->device->dropped, 1, __ATOMIC_RELAXED))
+        pvk_logd(e->device, PVK_LOG_ERROR, "PlasmaVK-draw-dropped", VK_OBJECT_TYPE_DEVICE, 0,
+                 "a draw that needs preprocessing (count draws, long multi-draws, triangle fans, indices widened, "
+                 "polygon points) had none and is not drawn: a PlasmaVK bug (reported once)");
     return NULL;
 }
 
@@ -64463,7 +64481,8 @@ static void pvk_track_pipeline(struct pvk_draw_track *t, const struct pvk_pipeli
     t->pipeline_int = p->gfx->int_colors;
 }
 
-static bool pvk_scan_cb(struct pvk_encoder *e, struct pvk_draw_track *t, const struct pvk_command_buffer *cb, uint32_t depth);
+static bool pvk_scan_from(struct pvk_encoder *e, struct pvk_draw_track *t, const struct pvk_cmd_block *b, size_t at,
+                          uint32_t depth);
 
 /* One packet of the scan; true at the END_PASS that ends the instance. */
 static uint32_t pvk_topology_class(uint32_t topology)
@@ -64580,7 +64599,8 @@ static bool pvk_scan_packet(struct pvk_encoder *e, struct pvk_draw_track *t, con
         const struct pvk_cmd_execute *x = (const struct pvk_cmd_execute *)c;
         const VkCommandBuffer *list = (const VkCommandBuffer *)(x + 1);
         for (i = 0; i < x->count && depth < 8; i++)
-            pvk_scan_cb(e, t, (const struct pvk_command_buffer *)list[i], depth + 1);
+            if (pvk_scan_from(e, t, ((const struct pvk_command_buffer *)list[i])->first, 0, depth + 1))
+                return true; /* resumed in a secondary, which ends it */
         break;
     }
     case PVK_CMD_QUERY: {
@@ -64597,18 +64617,18 @@ static bool pvk_scan_packet(struct pvk_encoder *e, struct pvk_draw_track *t, con
     return false;
 }
 
-static bool pvk_scan_cb(struct pvk_encoder *e, struct pvk_draw_track *t, const struct pvk_command_buffer *cb, uint32_t depth)
+/* The scan of a command buffer at `depth` from packet `at` of block b on;
+ * true at the END_PASS that ends the instance. */
+static bool pvk_scan_from(struct pvk_encoder *e, struct pvk_draw_track *t, const struct pvk_cmd_block *b, size_t at,
+                          uint32_t depth)
 {
-    const struct pvk_cmd_block *b;
-    for (b = cb->first; b; b = b->next) {
-        size_t at = 0;
+    for (; b && e->result == VK_SUCCESS; b = b->next, at = 0)
         while (at < b->used && e->result == VK_SUCCESS) {
             const struct pvk_cmd *c = (const struct pvk_cmd *)((const char *)b->data + at);
             at += c->size;
             if (pvk_scan_packet(e, t, c, depth))
                 return true;
         }
-    }
     return false;
 }
 
@@ -64635,27 +64655,29 @@ static const struct pvk_cmd *pvk_cursor_next(struct pvk_cursor *cur)
 }
 
 /* Preprocesses the draws of the render pass instance starting at the cursor,
- * or, begun in a secondary command buffer, in the rest of it (where it ends
- * or is suspended). */
+ * or begun in a secondary command buffer: in the rest of it and, suspended
+ * there, in the command buffers after it that resume it, up to where it
+ * ends (the batch's later secondaries and primaries: struct
+ * pvk_encoder.outer). Its resumed parts take no scan of their own
+ * (pvk_encode_begin_pass): their draws need their results from this one. */
 static void pvk_prepass_scan(struct pvk_encoder *e, struct pvk_draw_track *t)
 {
     struct pvk_cursor cur = e->cursor;
     const struct pvk_cmd *c;
-    if (e->depth) {
-        const struct pvk_cmd_block *b = e->sub_block;
-        size_t at = e->sub_at;
-        for (; b && e->result == VK_SUCCESS; b = b->next, at = 0)
-            while (at < b->used && e->result == VK_SUCCESS) {
-                c = (const struct pvk_cmd *)((const char *)b->data + at);
-                at += c->size;
-                if (pvk_scan_packet(e, t, c, e->depth))
-                    return;
-            }
-        /* suspended: draws not scanned resume it, which may test depth
-         * bounds (only with the depth copy) */
-        if (e->device->features.core.depthBounds)
-            t->hidden |= PVK_HIDDEN_DEPTH;
+    uint32_t d = e->depth, i;
+    if (d && pvk_scan_from(e, t, e->sub_block, e->sub_at, d))
         return;
+    while (d--) {
+        const struct pvk_outer *o = &e->outer[d];
+        const VkCommandBuffer *list;
+        if (!o->execute)
+            return;
+        list = (const VkCommandBuffer *)(o->execute + 1);
+        for (i = o->index + 1; i < o->execute->count; i++)
+            if (pvk_scan_from(e, t, ((const struct pvk_command_buffer *)list[i])->first, 0, d + 1))
+                return;
+        if (d && pvk_scan_from(e, t, o->block, o->at, d))
+            return;
     }
     while (e->result == VK_SUCCESS && (c = pvk_cursor_next(&cur)))
         if (pvk_scan_packet(e, t, c, 0))
@@ -67870,8 +67892,13 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
                 if (x->fork && e->render.forks && e->render.enc && !depth) /* other threads encode them */
                     pvk_par_fork(e, list, x->count);
                 else
-                    for (i = 0; i < x->count && depth < 8; i++)
+                    for (i = 0; i < x->count && depth < 8; i++) {
+                        e->outer[depth].execute = x;
+                        e->outer[depth].index = i;
+                        e->outer[depth].block = b;
+                        e->outer[depth].at = at;
                         pvk_encode_cb(e, (const struct pvk_command_buffer *)list[i], depth + 1);
+                    }
                 e->pipeline_dirty = true; /* the state after it is undefined */
                 break;
             }

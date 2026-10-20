@@ -9300,6 +9300,117 @@ static void test_suspend_secondary(void)
     free_img(&target);
 }
 
+/* Part k of suspend_draws' instance: the left half red (k 0, suspending it)
+ * or the right half green (k 1, resuming it). */
+static void suspend_part(VkCommandBuffer cb, VkRenderingInfo *info, VkPipeline pipeline, int k)
+{
+    info->flags = k ? VK_RENDERING_RESUMING_BIT : VK_RENDERING_SUSPENDING_BIT;
+    vkCmdBeginRendering(cb, info);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    if (k)
+        rect(cb, 0, -1, 1, 1, 0, 1, 0, 1, 0);
+    else
+        rect(cb, -1, -1, 0, 1, 1, 0, 0, 1, 0);
+    vkCmdEndRendering(cb);
+}
+
+/* A render pass instance drawn as draw_via does (how: 0, 1 or 2), begun in a
+ * secondary command buffer and resumed in the next one of the same
+ * vkCmdExecuteCommands (where 0), in one of a later vkCmdExecuteCommands
+ * (1), in the primary (2) or in a secondary of the next primary (3); or
+ * begun in the primary and resumed in a secondary (4), with another pass
+ * after it. Count draws and long multi-draws are preprocessed before the
+ * instance begins, so its scan must see the parts that resume it. */
+static void suspend_draws(int where, int how)
+{
+    static const float black[4] = { 0, 0, 0, 1 };
+    struct img target = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img other = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkRenderingAttachmentInfo att;
+    VkRenderingInfo info;
+    VkCommandBuffer cbs[2], sec[2];
+    VkSubmitInfo si;
+    VkPipeline pipeline;
+    struct pipe p;
+    char what[64];
+    int k;
+
+    pipe_init(&p, spv_rect_vs, sizeof(spv_rect_vs), spv_rect_fs, sizeof(spv_rect_fs));
+    pipeline = make_pipe(&p);
+    REQUIRE(pipeline);
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = target.view;
+    att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    memcpy(att.clearValue.color.float32, black, 16);
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea.extent.width = W;
+    info.renderArea.extent.height = H;
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &att;
+    via = how;
+    for (k = 0; k < 2; k++) {
+        sec[k] = begin_secondary();
+        if ((where == 2 && k == 1) || (where == 4 && k == 0))
+            continue; /* (the primary's part) */
+        suspend_part(sec[k], &info, pipeline, k);
+    }
+    cbs[0] = begin_cmd();
+    cbs[1] = where == 3 ? begin_cmd() : cbs[0];
+    if (where == 0) {
+        vkCmdExecuteCommands(cbs[0], 2, sec);
+    } else if (where == 4) {
+        suspend_part(cbs[0], &info, pipeline, 0);
+        vkCmdExecuteCommands(cbs[0], 1, &sec[1]);
+        /* the instance ends in the secondary: the next one is not its */
+        att.imageView = other.view;
+        info.flags = 0;
+        vkCmdBeginRendering(cbs[0], &info);
+        vkCmdBindPipeline(cbs[0], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        rect(cbs[0], -1, -1, 1, 1, 0, 0, 1, 1, 0);
+        vkCmdEndRendering(cbs[0]);
+    } else {
+        vkCmdExecuteCommands(cbs[0], 1, &sec[0]);
+        if (where == 2)
+            suspend_part(cbs[1], &info, pipeline, 1);
+        else
+            vkCmdExecuteCommands(cbs[1], 1, &sec[1]);
+    }
+    for (k = 0; k < 2; k++)
+        vkEndCommandBuffer(sec[k]);
+    download(cbs[1], &target, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+    for (k = 0; k < (where == 3 ? 2 : 1); k++)
+        vkEndCommandBuffer(cbs[k]);
+    memset(&si, 0, sizeof(si));
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = where == 3 ? 2 : 1;
+    si.pCommandBuffers = cbs;
+    CHECK_VK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE), VK_SUCCESS);
+    CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+    via_end();
+    snprintf(what, sizeof(what), "suspended in secondaries (%d, drawn %d)", where, how);
+    CHECK(count_bad(&out, expect_left_red_right_green, what) == 0);
+    vkFreeCommandBuffers(device, cmd_pool, where == 3 ? 2 : 1, cbs);
+    vkFreeCommandBuffers(device, cmd_pool, 2, sec);
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&other);
+    free_img(&target);
+}
+
+static void test_suspend_secondary_draws(void)
+{
+    int where, how;
+    for (where = 0; where < 5; where++)
+        for (how = 0; how < 3; how++)
+            suspend_draws(where, how);
+}
+
 /* An imageless framebuffer, and a render pass without attachments counting
  * samples with an occlusion query. */
 static void test_imageless_noattachment(void)
@@ -14196,6 +14307,7 @@ int main(void)
     RUN(test_msaa_int_resolve);
     RUN(test_msaa_int_resolve_area);
     RUN(test_suspend_secondary);
+    RUN(test_suspend_secondary_draws);
     RUN(test_imageless_noattachment);
     RUN(test_dual_source);
     RUN(test_dual_source_unwritten);
