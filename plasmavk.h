@@ -31642,6 +31642,7 @@ static inline void pvk_MTLRenderPipelineDescriptor_setInputPrimitiveTopology(id 
 static inline id pvk_MTLRenderPipelineDescriptor_colorAttachments(id self) { PVK_SEL_CACHE("colorAttachments"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline id pvk_MTLRenderPipelineColorAttachmentDescriptorArray_objectAtIndexedSubscript(id self, unsigned long attachmentIndex) { PVK_SEL_CACHE("objectAtIndexedSubscript:"); return PVK_MSG(id, (id, SEL, unsigned long))(self, pvk_sel_, attachmentIndex); }
 static inline void pvk_MTLRenderPipelineColorAttachmentDescriptor_setPixelFormat(id self, pvk_MTLPixelFormat pixelFormat) { PVK_SEL_CACHE("setPixelFormat:"); PVK_MSG(void, (id, SEL, pvk_MTLPixelFormat))(self, pvk_sel_, pixelFormat); }
+static inline void pvk_MTLRenderPipelineColorAttachmentDescriptor_setWriteMask(id self, pvk_MTLColorWriteMask writeMask) { PVK_SEL_CACHE("setWriteMask:"); PVK_MSG(void, (id, SEL, pvk_MTLColorWriteMask))(self, pvk_sel_, writeMask); }
 /* Graphics: render passes, render pipelines, draws (sections 15-17) */
 static inline void pvk_MTL4RenderPassDescriptor_setRenderTargetWidth(id self, unsigned long renderTargetWidth) { PVK_SEL_CACHE("setRenderTargetWidth:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, renderTargetWidth); }
 static inline void pvk_MTL4RenderPassDescriptor_setRenderTargetHeight(id self, unsigned long renderTargetHeight) { PVK_SEL_CACHE("setRenderTargetHeight:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, renderTargetHeight); }
@@ -31758,6 +31759,8 @@ static inline void pvk_MTL4CommandQueue_signalDrawable(id self, id drawable) { P
 static inline void pvk_MTL4CommandQueue_waitForDrawable(id self, id drawable) { PVK_SEL_CACHE("waitForDrawable:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, drawable); }
 static inline void pvk_MTL4CommandBuffer_useResidencySet(id self, id residencySet) { PVK_SEL_CACHE("useResidencySet:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, residencySet); }
 static inline IOSurfaceRef pvk_MTLTexture_iosurface(id self) { PVK_SEL_CACHE("iosurface"); return PVK_MSG(IOSurfaceRef, (id, SEL))(self, pvk_sel_); }
+static inline bool pvk_MTLTexture_isFramebufferOnly(id self) { PVK_SEL_CACHE("isFramebufferOnly"); return PVK_MSG(bool, (id, SEL))(self, pvk_sel_); }
+static inline pvk_MTLPixelFormat pvk_MTLTexture_pixelFormat(id self) { PVK_SEL_CACHE("pixelFormat"); return PVK_MSG(pvk_MTLPixelFormat, (id, SEL))(self, pvk_sel_); }
 static inline void pvk_MTL4ComputeCommandEncoder_copyFromTexture_toTexture(id self, id sourceTexture, id destinationTexture) { PVK_SEL_CACHE("copyFromTexture:toTexture:"); PVK_MSG(void, (id, SEL, id, id))(self, pvk_sel_, sourceTexture, destinationTexture); }
 static inline void pvk_CATransaction_begin(void) { PVK_CLASS_CACHE("CATransaction"); PVK_SEL_CACHE("begin"); PVK_MSG(void, (id, SEL))((id)pvk_cls_, pvk_sel_); }
 static inline void pvk_CATransaction_commit(void) { PVK_CLASS_CACHE("CATransaction"); PVK_SEL_CACHE("commit"); PVK_MSG(void, (id, SEL))((id)pvk_cls_, pvk_sel_); }
@@ -57394,6 +57397,7 @@ enum pvk_blit_function {
     PVK_RESOLVE_U_MS, PVK_RESOLVE_U_MSARRAY,             /* sample 0 */
     PVK_RESOLVE_I_MS, PVK_RESOLVE_I_MSARRAY,
     PVK_BLIT_PRESENT,                                    /* a swapchain image into a drawable (section 18) */
+    PVK_BLIT_FETCH,                                      /* color attachment 0 into 1: drawables' copies (section 18) */
     PVK_BLIT_FUNCTION_COUNT
 };
 
@@ -62084,6 +62088,13 @@ static const struct pvk_blit_part {
       "fragment float4 pvk_present(float4 pos [[position]], texture2d<float> t [[texture(0)]])\n"
       "{\n"
       "    return t.read(uint2(pos.xy));\n"
+      "}\n"
+      "struct pvk_fetch_out { float4 c [[color(1)]]; };\n"
+      "fragment pvk_fetch_out pvk_fetch(float4 c [[color(0)]])\n"
+      "{\n"
+      "    pvk_fetch_out o;\n"
+      "    o.c = c;\n"
+      "    return o;\n"
       "}\n" },
     { PVK_BLIT_LIB_2D, PVK_MSL_BLITS_2D("float", "f") },
     { PVK_BLIT_LIB_2D, PVK_MSL_LINEAR_BLITS_2D },
@@ -62138,6 +62149,7 @@ static const char *const pvk_blit_function_names[PVK_BLIT_FUNCTION_COUNT] = {
     "pvk_blit_u_3d",    "pvk_blit_i_2d",       "pvk_blit_i_2darray", "pvk_blit_i_3d",     "pvk_blit_fl_2d",
     "pvk_blit_fl_2darray", "pvk_blit_fl_3d",   "pvk_resolve_f_ms", "pvk_resolve_f_msarray", "pvk_resolve_u_ms",
     "pvk_resolve_u_msarray", "pvk_resolve_i_ms", "pvk_resolve_i_msarray", "pvk_present",
+    "pvk_fetch",
 };
 
 struct pvk_blit_pipeline {
@@ -62246,7 +62258,7 @@ static void pvk_blit_libraries_warm(struct pvk_device *device)
 /* The library of an internal function (enum pvk_blit_function). */
 static uint32_t pvk_blit_function_library(uint32_t function)
 {
-    if (function == PVK_BLIT_PRESENT)
+    if (function == PVK_BLIT_PRESENT || function == PVK_BLIT_FETCH)
         return PVK_BLIT_LIB_PRESENT;
     return function == PVK_BLIT_F_2D || function == PVK_BLIT_F_2DARRAY || function == PVK_BLIT_FL_2D ||
                    function == PVK_BLIT_FL_2DARRAY
@@ -62258,6 +62270,8 @@ static uint32_t pvk_blit_function_library(uint32_t function)
  * layers, 3D slices): it has a layered variant. */
 static bool pvk_blit_reads_layer(uint32_t function)
 {
+    if (function >= PVK_BLIT_PRESENT)
+        return false;
     return function >= PVK_RESOLVE_F_MS ? (function - PVK_RESOLVE_F_MS) % 2 == 1 : function % 3 != 0;
 }
 
@@ -62295,6 +62309,14 @@ static id pvk_blit_pipeline(struct pvk_device *device, uint32_t function, pvk_MT
                 pvk_MTLRenderPipelineColorAttachmentDescriptorArray_objectAtIndexedSubscript(
                     pvk_MTLRenderPipelineDescriptor_colorAttachments(desc), 0),
                 format);
+            if (function == PVK_BLIT_FETCH) { /* reads attachment 0, writes 1 */
+                id colors = pvk_MTLRenderPipelineDescriptor_colorAttachments(desc);
+                pvk_MTLRenderPipelineColorAttachmentDescriptor_setWriteMask(
+                    pvk_MTLRenderPipelineColorAttachmentDescriptorArray_objectAtIndexedSubscript(colors, 0),
+                    PVK_MTLColorWriteMaskNone);
+                pvk_MTLRenderPipelineColorAttachmentDescriptor_setPixelFormat(
+                    pvk_MTLRenderPipelineColorAttachmentDescriptorArray_objectAtIndexedSubscript(colors, 1), format);
+            }
             pso = pvk_MTLDevice_newRenderPipelineStateWithDescriptor_error(mtl, desc, &err);
             if (!pso)
                 pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
@@ -68233,35 +68255,100 @@ static VkResult pvk_encode_parallel(struct pvk_queue *queue, struct pvk_submissi
     return result;
 }
 
+/* A copy of a swapchain image's contents that a framebufferOnly drawable
+ * takes part in (pvk_wsi_encode_copies): a render pass with the source as
+ * color attachment 0 (loaded, stored as it was) and the destination as 1,
+ * whose fragments read the source's pixel (framebuffer fetch) and write
+ * it. */
+static bool pvk_wsi_fetch_copy(struct pvk_device *device, id cb, const struct pvk_wsi_copy *c)
+{
+    id pso = pvk_blit_pipeline(device, PVK_BLIT_FETCH, pvk_MTLTexture_pixelFormat(c->src), false), pass, colors, att;
+    id enc = NULL;
+    void *pool = objc_autoreleasePoolPush();
+    pvk_MTLViewport vp;
+
+    if (pso && (pass = pvk_MTL4RenderPassDescriptor_new())) {
+        colors = pvk_MTL4RenderPassDescriptor_colorAttachments(pass);
+        att = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(colors, 0);
+        pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, c->src);
+        pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, PVK_MTLLoadActionLoad);
+        pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
+        att = pvk_MTLRenderPassColorAttachmentDescriptorArray_objectAtIndexedSubscript(colors, 1);
+        pvk_MTLRenderPassAttachmentDescriptor_setTexture(att, c->dst);
+        pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(att, PVK_MTLLoadActionDontCare);
+        pvk_MTLRenderPassAttachmentDescriptor_setStoreAction(att, PVK_MTLStoreActionStore);
+        enc = pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(cb, pass);
+        pvk_release(pass);
+    }
+    if (enc) {
+        vp.originX = vp.originY = 0.0;
+        vp.width = (double)pvk_MTLTexture_width(c->dst);
+        vp.height = (double)pvk_MTLTexture_height(c->dst);
+        vp.znear = 0.0;
+        vp.zfar = 1.0;
+        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(enc, PVK_STAGES_ALL,
+                                                                                      PVK_STAGES_RENDER,
+                                                                                      device->visibility);
+        pvk_MTL4RenderCommandEncoder_setRenderPipelineState(enc, pso);
+        pvk_MTL4RenderCommandEncoder_setViewport(enc, vp);
+        pvk_MTL4RenderCommandEncoder_drawPrimitives_vertexStart_vertexCount(enc, PVK_MTLPrimitiveTypeTriangle, 0, 3);
+        pvk_MTL4CommandEncoder_barrierAfterStages_beforeQueueStages_visibilityOptions(enc, PVK_STAGES_RENDER,
+                                                                                      PVK_STAGES_ALL, device->visibility);
+        pvk_MTL4CommandEncoder_endEncoding(enc);
+    }
+    objc_autoreleasePoolPop(pool);
+    return enc != NULL;
+}
+
+/* Copies of swapchain images' contents (section 18's pvk_wsi_copy), in
+ * order: after all earlier work on the queue, and before all later work.
+ * The textures of framebufferOnly drawables can only be render targets
+ * (not copied, nor read by shaders): a copy from or to one is a render pass
+ * (pvk_wsi_fetch_copy); a run of others are a compute encoder's texture
+ * copies. Both are the same size and pixel format. false: out of memory. */
+static bool pvk_wsi_encode_copies(struct pvk_device *device, id cb, const struct pvk_wsi_copy *copies, uint32_t count)
+{
+    pvk_MTL4VisibilityOptions visibility = device->visibility;
+    uint32_t i = 0, k;
+    id enc;
+    while (i < count) {
+        if (pvk_MTLTexture_isFramebufferOnly(copies[i].src) || pvk_MTLTexture_isFramebufferOnly(copies[i].dst)) {
+            if (!pvk_wsi_fetch_copy(device, cb, &copies[i]))
+                return false;
+            i++;
+            continue;
+        }
+        if (!(enc = pvk_MTL4CommandBuffer_computeCommandEncoder(cb)))
+            return false;
+        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(enc, PVK_STAGES_ALL,
+                                                                                      PVK_MTLStageBlit, visibility);
+        for (k = i; i < count && !pvk_MTLTexture_isFramebufferOnly(copies[i].src) &&
+                    !pvk_MTLTexture_isFramebufferOnly(copies[i].dst);
+             i++) {
+            if (i > k)
+                pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
+                    enc, PVK_MTLStageBlit, PVK_MTLStageBlit, visibility);
+            pvk_MTL4ComputeCommandEncoder_copyFromTexture_toTexture(enc, copies[i].src, copies[i].dst);
+        }
+        pvk_MTL4CommandEncoder_barrierAfterStages_beforeQueueStages_visibilityOptions(enc, PVK_MTLStageBlit,
+                                                                                      PVK_STAGES_ALL, visibility);
+        pvk_MTL4CommandEncoder_endEncoding(enc);
+    }
+    return true;
+}
+
 /* The copies of swapchain images' contents a batch makes before its
- * commands (section 18, SWAPCHAIN IMAGES), in order: after all earlier work
- * on the queue, and before all later work. */
+ * commands (section 18, SWAPCHAIN IMAGES). */
 static void pvk_wsi_copies(struct pvk_encoder *e, const struct pvk_submission *s)
 {
-    pvk_MTL4VisibilityOptions visibility = e->device->visibility;
     uint32_t i;
-    id enc;
     if (!s->wsi_copy_count)
         return;
     for (i = 0; i < s->wsi_copy_count; i++)
         if (s->wsi_copies[i].residency && (!i || s->wsi_copies[i].residency != s->wsi_copies[i - 1].residency))
             pvk_MTL4CommandBuffer_useResidencySet(e->cb, s->wsi_copies[i].residency);
-    enc = pvk_MTL4CommandBuffer_computeCommandEncoder(e->cb);
-    if (!enc) {
+    if (!pvk_wsi_encode_copies(e->device, e->cb, s->wsi_copies, s->wsi_copy_count))
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
-        return;
-    }
-    pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(enc, PVK_STAGES_ALL, PVK_MTLStageBlit,
-                                                                                  visibility);
-    for (i = 0; i < s->wsi_copy_count; i++) {
-        if (i)
-            pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
-                enc, PVK_MTLStageBlit, PVK_MTLStageBlit, visibility);
-        pvk_MTL4ComputeCommandEncoder_copyFromTexture_toTexture(enc, s->wsi_copies[i].src, s->wsi_copies[i].dst);
-    }
-    pvk_MTL4CommandEncoder_barrierAfterStages_beforeQueueStages_visibilityOptions(enc, PVK_MTLStageBlit, PVK_STAGES_ALL,
-                                                                                  visibility);
-    pvk_MTL4CommandEncoder_endEncoding(enc);
 }
 
 static VkResult pvk_encode_batch(struct pvk_queue *queue, struct pvk_submission *s, const VkSubmitInfo2 *submit,
@@ -74206,8 +74293,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
  *   without a copy: the copy took 62/185/306 us of GPU time per frame at
  *   1080p/4K/5K, the present now 8 (MoltenVK's 9), and vkQueuePresentKHR
  *   70-120 us of CPU, now 8-11; the acquire's drawable adds 25, the queue's
- *   wait for it 20 to the submission (M4 Max, bench_present). Drawables
- *   that are not framebufferOnly cost the frame 1-3% of GPU time at 4K-5K.
+ *   wait for it 20 to the submission (M4 Max, bench_present).
  *
  *   An image keeps its contents from a present to its next acquire
  *   (VK_KHR_swapchain: presentation is read-only, and an image transitioned
@@ -74226,27 +74312,39 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
  *   part of the image, and no transition from UNDEFINED came first) copies
  *   them into the drawable before the batch, and a drawable whose IOSurface
  *   has another image's contents moves them to that image's own texture
- *   first (pvk_wsi_spill). The copies need drawables that are not
- *   framebufferOnly.
+ *   first (pvk_wsi_spill). The copies are a compute encoder's texture
+ *   copies, but no copy or shader can read the textures of framebufferOnly
+ *   drawables, only render passes: a copy from or to one is a render pass
+ *   with the source as color attachment 0 and the destination as 1, whose
+ *   fragments read the one (framebuffer fetch) and write the other (section
+ *   16's pvk_wsi_fetch_copy). So the drawables are framebufferOnly unless
+ *   the images also have transfer usage, whose commands copy from and to
+ *   drawables (as MoltenVK's are then): drawables that are not cost a frame
+ *   rendered into them 1.5% of GPU time at 4K and 4.6% at 5K (M4 Max,
+ *   bench_present with color attachment images: 789 against 777 us, 1325
+ *   against 1263).
  *
  *   Other images, and images whose first use cannot take a drawable (none
  *   within a second, the layer resized by someone else, a retired
  *   swapchain), render to their own textures, and vkQueuePresentKHR copies
  *   them into a drawable, as it does an image presented without a use since
- *   acquired (from wherever its contents are). The copy is a draw: a
- *   triangle over the drawable, a render target, reads the image's texels
- *   (section 16's pvk_present, its pipeline and render pass made with the
- *   swapchain), so drawables can be framebufferOnly. It ends 10-25% sooner
- *   after the frame's work than a compute encoder's texture copy (M4 Max,
- *   frames of smooth gradients: 52 against 67 us at 1080p, 171 against 220
- *   at 4K, 300 against 400 at 5K; less for incompressible noise). A view
- *   that is not an image's own texture (an array view, say), or an image
- *   bound to the memory of one (VkBindImageMemorySwapchainInfoKHR), keeps
- *   the swapchain to copies. The swapchain configures the layer: device,
- *   pixelFormat, drawableSize (the image extent), maximumDrawableCount (the
- *   image count, 2 or 3: Core Animation's range), framebufferOnly (YES for
- *   copies only), colorspace and EDR, displaySyncEnabled, and opaque for
- *   compositeAlpha OPAQUE / PRE_MULTIPLIED (INHERIT leaves it alone).
+ *   acquired (from wherever its contents are; out of a framebufferOnly
+ *   drawable, which the draw cannot read, they move to the image's own
+ *   texture first). The copy is a draw: a triangle over the drawable, a
+ *   render target, reads the image's texels (section 16's pvk_present, its
+ *   pipeline and render pass made with the swapchain), so drawables can be
+ *   framebufferOnly. It ends 10-25% sooner after the frame's work than a
+ *   compute encoder's texture copy (M4 Max, frames of smooth gradients: 52
+ *   against 67 us at 1080p, 171 against 220 at 4K, 300 against 400 at 5K;
+ *   less for incompressible noise). A view that is not an image's own
+ *   texture (an array view, say), or an image bound to the memory of one
+ *   (VkBindImageMemorySwapchainInfoKHR), keeps the swapchain to copies. The
+ *   swapchain configures the layer: device, pixelFormat, drawableSize (the
+ *   image extent), maximumDrawableCount (the image count, 2 or 3: Core
+ *   Animation's range), framebufferOnly (YES but for images rendering to
+ *   drawables with transfer usage), colorspace and EDR, displaySyncEnabled,
+ *   and opaque for compositeAlpha OPAQUE / PRE_MULTIPLIED (INHERIT leaves it
+ *   alone).
  *
  * ACQUIRE AND PRESENT
  *   vkQueuePresentKHR presents the drawable an image rendered to, or copies
@@ -74328,6 +74426,7 @@ struct pvk_swapchain {
      * its layer it replaced (oldSwapchain) and that replaced it, while they
      * exist (under pvk_swapchain_lock) */
     bool direct;
+    bool framebuffer_only; /* the layer's drawables are (SWAPCHAIN IMAGES) */
     struct pvk_swapchain *older, *newer;
     id residency; /* with a layer: its MTLResidencySet, which has its drawables' textures (retained) */
     VkExtent2D extent;
@@ -74714,6 +74813,8 @@ static void pvk_swapchain_free(struct pvk_swapchain *sc, const VkAllocationCallb
 static VkResult pvk_swapchain_present_init(struct pvk_swapchain *sc)
 {
     sc->present_pso = pvk_blit_pipeline(sc->device, PVK_BLIT_PRESENT, sc->mtl_format, false);
+    if (sc->direct && sc->framebuffer_only) /* (also that of its copies, pvk_wsi_fetch_copy) */
+        pvk_blit_pipeline(sc->device, PVK_BLIT_FETCH, sc->mtl_format, false);
     sc->present_pass = pvk_MTL4RenderPassDescriptor_new();
     if (!sc->present_pso || !sc->present_pass)
         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -74732,7 +74833,7 @@ static void pvk_swapchain_configure(struct pvk_swapchain *sc, const VkSwapchainC
     if (pvk_CAMetalLayer_device(layer) != mtl) /* a new device invalidates the layer's residency set */
         pvk_CAMetalLayer_setDevice(layer, mtl);
     pvk_CAMetalLayer_setPixelFormat(layer, sc->mtl_format);
-    pvk_CAMetalLayer_setFramebufferOnly(layer, !sc->direct); /* (drawables copied from and to) */
+    pvk_CAMetalLayer_setFramebufferOnly(layer, sc->framebuffer_only);
     size.width = info->imageExtent.width;
     size.height = info->imageExtent.height;
     pvk_CAMetalLayer_setDrawableSize(layer, size);
@@ -74823,6 +74924,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice _device, const VkSw
         old->newer = sc;
     }
     pthread_mutex_unlock(&pvk_swapchain_lock);
+    /* Drawables are framebufferOnly unless images render to them and
+     * transfers copy from or to them (SWAPCHAIN IMAGES). */
+    sc->framebuffer_only =
+        !sc->direct || !(pCreateInfo->imageUsage & (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
     if (sc->layer) {
         pool = objc_autoreleasePoolPush();
         if (result == VK_SUCCESS)
@@ -75191,17 +75296,17 @@ static void pvk_wsi_batch(struct pvk_queue *queue, struct pvk_submission *s, con
  * ones are not loaded; unless a view resized the layer since the present
  * found it in date: then the draw covers what both have. Before it, the
  * contents of other images in the drawable's IOSurface move out
- * (pvk_wsi_spill). */
-static VkResult pvk_present_encode(struct pvk_queue *queue, struct pvk_swapchain *sc,
-                                   const struct pvk_swapchain_image *img, id source, id drawable,
-                                   struct pvk_submission **out)
+ * (pvk_wsi_spill), and contents in a framebufferOnly drawable, which the
+ * draw cannot read, to the image's own texture. */
+static VkResult pvk_present_encode(struct pvk_queue *queue, struct pvk_swapchain *sc, struct pvk_swapchain_image *img,
+                                   id source, id drawable, struct pvk_submission **out)
 {
     struct pvk_submission *s = pvk_queue_get_submission(queue);
     id texture = pvk_CAMetalDrawable_texture(drawable), residency = sc->residency, enc;
     unsigned long w = pvk_MTLTexture_width(texture), h = pvk_MTLTexture_height(texture);
     IOSurfaceRef surface = pvk_MTLTexture_iosurface(texture);
+    bool unreadable = pvk_MTLTexture_isFramebufferOnly(source), copied;
     pvk_MTLViewport vp;
-    uint32_t i;
 
     if (!s)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -75213,30 +75318,28 @@ static VkResult pvk_present_encode(struct pvk_queue *queue, struct pvk_swapchain
     pvk_MTL4CommandBuffer_beginCommandBufferWithAllocator(s->cb, s->allocator);
     if (residency) /* the drawables' textures */
         pvk_MTL4CommandBuffer_useResidencySet(s->cb, residency);
-    if (surface) { /* (also after the swapchain fell back to copies) */
+    if (surface || unreadable) { /* (also after the swapchain fell back to copies) */
         pthread_mutex_lock(&pvk_swapchain_lock);
-        pvk_wsi_spill(sc, img, surface, residency, s->wsi_copies, &s->wsi_copy_count);
+        if (surface)
+            pvk_wsi_spill(sc, img, surface, residency, s->wsi_copies, &s->wsi_copy_count);
+        if (unreadable) {
+            if (img->content == source && pvk_wsi_copy(s->wsi_copies, &s->wsi_copy_count, source, img->own, residency))
+                pvk_wsi_content(img, img->own, NULL);
+            source = img->own;
+        }
         pthread_mutex_unlock(&pvk_swapchain_lock);
     }
     if (s->wsi_copy_count)
         pvk_logd(queue->device, PVK_LOG_DEBUG, "PlasmaVK-wsi-present-copy", VK_OBJECT_TYPE_SWAPCHAIN_KHR,
-                 (uint64_t)(uintptr_t)sc, "presenting swapchain image %u moves %u other images' contents first",
+                 (uint64_t)(uintptr_t)sc, "presenting swapchain image %u moves %u images' contents first",
                  (uint32_t)(img - sc->images), s->wsi_copy_count);
-    if (s->wsi_copy_count && (enc = pvk_MTL4CommandBuffer_computeCommandEncoder(s->cb))) {
-        pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(
-            enc, PVK_STAGES_ALL, PVK_MTLStageBlit, queue->device->visibility);
-        for (i = 0; i < s->wsi_copy_count; i++)
-            pvk_MTL4ComputeCommandEncoder_copyFromTexture_toTexture(enc, s->wsi_copies[i].src, s->wsi_copies[i].dst);
-        pvk_MTL4CommandEncoder_barrierAfterStages_beforeQueueStages_visibilityOptions(
-            enc, PVK_MTLStageBlit, PVK_STAGES_ALL, queue->device->visibility);
-        pvk_MTL4CommandEncoder_endEncoding(enc);
-    }
+    copied = pvk_wsi_encode_copies(queue->device, s->cb, s->wsi_copies, s->wsi_copy_count);
     s->wsi_copy_count = 0;
     pvk_MTLRenderPassAttachmentDescriptor_setTexture(sc->present_attachment, texture);
     pvk_MTLRenderPassAttachmentDescriptor_setLoadAction(
         sc->present_attachment,
         vp.width == (double)w && vp.height == (double)h ? PVK_MTLLoadActionDontCare : PVK_MTLLoadActionLoad);
-    enc = pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(s->cb, sc->present_pass);
+    enc = copied ? pvk_MTL4CommandBuffer_renderCommandEncoderWithDescriptor(s->cb, sc->present_pass) : NULL;
     pvk_MTLRenderPassAttachmentDescriptor_setTexture(sc->present_attachment, NULL); /* holds no drawable */
     if (enc) {
         /* After all earlier work on the queue, as encoders after semaphore
