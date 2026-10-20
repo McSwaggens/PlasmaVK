@@ -16,6 +16,24 @@
  *   headless_1080p, headless_2160p,         the same frames presented to a
  *   headless_2880p                          VK_EXT_headless_surface: no
  *                                           drawable, the control
+ *   engine_layer, engine_layer_unpaced,     an engine's windowed frame loop
+ *   engine_headless                         at 3456x1956: the frame is
+ *                                           tonemapped into an image of the
+ *                                           swapchain's format, which a
+ *                                           vkCmdBlitImage of the whole
+ *                                           extent (a copy) writes into the
+ *                                           swapchain image as the frame's
+ *                                           last command (images: color
+ *                                           attachment and transfer usage);
+ *                                           the acquire comes first, then the
+ *                                           wait for the slot's fence and
+ *                                           1 ms of CPU work (an engine's
+ *                                           scene update and recording),
+ *                                           and the frame waits for the
+ *                                           acquire at the transfer stage.
+ *                                           Paced at 60 Hz, unpaced
+ *                                           (IMMEDIATE where offered), and
+ *                                           the headless control
  *
  * Reported per frame:
  *   gpu_us          the frame's command buffer (timestamps at its start and end)
@@ -25,7 +43,12 @@
  *                   the two submissions, such as resolving the frame's
  *                   timestamps; the headless control has all but the present
  *   acquire_us, cpu_us (reset, record and vkQueueSubmit), present_us
- *                   CPU time of the calls
+ *                   CPU time of the calls (engine configurations: cpu_us
+ *                   includes the 1 ms of CPU work)
+ *   submit_us       vkQueueSubmit alone
+ *   frame_us        from one frame's start to the next's
+ *   blit_gpu_us     engine configurations: from a timestamp before the blit
+ *                   into the swapchain image to the frame's end
  *
  * A layer outside a window releases drawables at the display's rate, so the
  * loop runs at 60 frames per second, as a vsynced game does: present then
@@ -60,6 +83,7 @@ __asm__(".linker_option \"-framework\", \"QuartzCore\"\n"
 #define FRAME_INTERVAL_US 16666.7 /* 60 Hz */
 #define STALL_US 100000.0         /* acquire + present of a frame the layer stalled */
 #define STALLS 3
+#define ENGINE_CPU_US 1000.0 /* engine configurations: CPU work between the acquire and the submit */
 #define SCENE_FORMAT VK_FORMAT_R16G16B16A16_SFLOAT
 #define SWAPCHAIN_FORMAT VK_FORMAT_B8G8R8A8_UNORM
 
@@ -68,15 +92,20 @@ struct config {
     int layer; /* 0: headless surface */
     uint32_t width, height;
     int frames;
+    int engine;   /* tonemapped offscreen, then blitted into the swapchain image */
+    int unpaced;  /* no 60 Hz pacing, IMMEDIATE where offered */
 };
 
 static const struct config configs[] = {
-    { "layer_1080p", 1, 1920, 1080, 150 },
-    { "layer_2160p", 1, 3840, 2160, 150 },
-    { "layer_2880p", 1, 5120, 2880, 150 },
-    { "headless_1080p", 0, 1920, 1080, 150 },
-    { "headless_2160p", 0, 3840, 2160, 150 },
-    { "headless_2880p", 0, 5120, 2880, 150 },
+    { "layer_1080p", 1, 1920, 1080, 150, 0, 0 },
+    { "layer_2160p", 1, 3840, 2160, 150, 0, 0 },
+    { "layer_2880p", 1, 5120, 2880, 150, 0, 0 },
+    { "headless_1080p", 0, 1920, 1080, 150, 0, 0 },
+    { "headless_2160p", 0, 3840, 2160, 150, 0, 0 },
+    { "headless_2880p", 0, 5120, 2880, 150, 0, 0 },
+    { "engine_layer", 1, 3456, 1956, 150, 1, 0 },
+    { "engine_layer_unpaced", 1, 3456, 1956, 300, 1, 1 },
+    { "engine_headless", 0, 3456, 1956, 150, 1, 0 },
 };
 
 /* rect_instanced.vert's per-instance attributes: HDR colors. */
@@ -90,6 +119,7 @@ static struct {
     PFN_vkGetPhysicalDeviceSurfaceSupportKHR GetPhysicalDeviceSurfaceSupportKHR;
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR GetPhysicalDeviceSurfaceCapabilitiesKHR;
     PFN_vkGetPhysicalDeviceSurfaceFormatsKHR GetPhysicalDeviceSurfaceFormatsKHR;
+    PFN_vkGetPhysicalDeviceSurfacePresentModesKHR GetPhysicalDeviceSurfacePresentModesKHR;
     PFN_vkCreateMetalSurfaceEXT CreateMetalSurfaceEXT;
     PFN_vkCreateHeadlessSurfaceEXT CreateHeadlessSurfaceEXT;
     PFN_vkDestroySurfaceKHR DestroySurfaceKHR;
@@ -129,6 +159,7 @@ static void init(struct bench_vk *vk)
     LOAD_INSTANCE(GetPhysicalDeviceSurfaceSupportKHR)
     LOAD_INSTANCE(GetPhysicalDeviceSurfaceCapabilitiesKHR)
     LOAD_INSTANCE(GetPhysicalDeviceSurfaceFormatsKHR)
+    LOAD_INSTANCE(GetPhysicalDeviceSurfacePresentModesKHR)
     LOAD_INSTANCE(CreateMetalSurfaceEXT)
     LOAD_INSTANCE(DestroySurfaceKHR)
     if (have_headless) {
@@ -168,7 +199,7 @@ static void layer_release(id layer)
 /* ---- Frames ---- */
 
 #define SLOTS 2   /* frames in flight */
-#define QUERIES 3 /* per slot: frame start, frame end, after the present */
+#define QUERIES 4 /* per slot: frame start, frame end, after the present, before the blit (engine) */
 
 struct scene {
     struct bench_vk *vk;
@@ -190,10 +221,12 @@ struct scene {
     VkSurfaceKHR surface;
     VkSwapchainKHR swapchain;
     uint32_t image_count;
+    int immediate; /* the swapchain's present mode is IMMEDIATE (else FIFO) */
     VkImage images[8];
     VkImageView views[8];
     VkSemaphore rendered[8]; /* per image: signalled by the frame, waited for by its present */
-    struct bench_image target; /* the HDR scene */
+    struct bench_image target;    /* the HDR scene */
+    struct bench_image composite; /* engine configurations: the tonemapped frame */
     struct bench_buffer instances, readback;
     struct bench_rect rects[RECTS];
     float colors[RECTS][4];
@@ -209,6 +242,17 @@ static void sleep_until(double t_us)
         ts.tv_nsec = (long)((wait - (double)ts.tv_sec * 1e6) * 1000.0);
         nanosleep(&ts, NULL);
     }
+}
+
+/* sleep_until, but on time: sleeps of 14.5 ms overslept by 4 to 7 ms
+ * (M4 Max, macOS 27.2, nanosleep and mach_wait_until alike, also at the
+ * user-interactive QoS class), which made a 60 Hz loop 50 Hz; the last
+ * 8 ms spin. */
+static void wait_until(double t_us)
+{
+    sleep_until(t_us - 8000.0);
+    while (bench_now_us() < t_us)
+        ;
 }
 
 static void record_frame(struct scene *s, VkCommandBuffer cmd, uint32_t slot, uint32_t index, int verify)
@@ -271,10 +315,18 @@ static void record_frame(struct scene *s, VkCommandBuffer cmd, uint32_t slot, ui
                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-    /* Tonemapping into the swapchain image (the acquire's wait is at color output). */
-    bench_image_barrier(cmd, &swap_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
-                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    /* Tonemapping into the swapchain image (the acquire's wait is at color
+     * output), or (engine) into the composite image, last frame's blit done. */
+    if (cfg->engine) {
+        swap_color.imageView = s->composite.view;
+        bench_image_barrier(cmd, &s->composite, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_BLIT_BIT, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    } else {
+        bench_image_barrier(cmd, &swap_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    }
     rendering.pColorAttachments = &swap_color;
     vkd.CmdBeginRendering(cmd, &rendering);
     bench_cmd_viewport(cmd, cfg->width, cfg->height);
@@ -282,13 +334,40 @@ static void record_frame(struct scene *s, VkCommandBuffer cmd, uint32_t slot, ui
     vkd.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s->layout, 0, 1, &s->set, 0, NULL);
     vkd.CmdDraw(cmd, 3, 1, 0, 0);
     vkd.CmdEndRendering(cmd);
-    if (verify)
-        bench_cmd_copy_image_to_buffer(cmd, &swap_image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                       VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, s->readback.buffer);
-    bench_image_barrier(cmd, &swap_image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                        VK_PIPELINE_STAGE_2_NONE, 0);
+    if (cfg->engine) {
+        /* The frame's last command: a blit of the whole extent, same size
+         * and format (the acquire's wait is at the transfer stage). */
+        VkImageBlit blit = {
+            .srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+            .srcOffsets = { { 0, 0, 0 }, { (int32_t)cfg->width, (int32_t)cfg->height, 1 } },
+            .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+            .dstOffsets = { { 0, 0, 0 }, { (int32_t)cfg->width, (int32_t)cfg->height, 1 } },
+        };
+        bench_image_barrier(cmd, &s->composite, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                            VK_ACCESS_2_TRANSFER_READ_BIT);
+        bench_image_barrier(cmd, &swap_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_BLIT_BIT, 0, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                            VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        vkd.CmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, s->queries, QUERIES * slot + 3);
+        vkd.CmdBlitImage(cmd, s->composite.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s->images[index],
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+        if (verify)
+            bench_cmd_copy_image_to_buffer(cmd, &swap_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                           VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                           s->readback.buffer);
+        bench_image_barrier(cmd, &swap_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE, 0);
+    } else {
+        if (verify)
+            bench_cmd_copy_image_to_buffer(cmd, &swap_image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                           VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, s->readback.buffer);
+        bench_image_barrier(cmd, &swap_image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE, 0);
+    }
     vkd.CmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, s->queries, QUERIES * slot + 1);
     BENCH_VK(vkd.EndCommandBuffer(cmd));
 }
@@ -350,7 +429,8 @@ static int config_begin(struct scene *s)
         .imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
         .imageExtent = { cfg->width, cfg->height },
         .imageArrayLayers = 1,
-        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                      (cfg->engine ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : 0),
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .presentMode = VK_PRESENT_MODE_FIFO_KHR,
         .clipped = VK_TRUE,
@@ -388,7 +468,7 @@ static int config_begin(struct scene *s)
         bench_fatal("the queue cannot present to the surface");
     BENCH_VK(vkx.GetPhysicalDeviceSurfaceCapabilitiesKHR(vk->physical_device, s->surface, &caps));
     if ((caps.supportedUsageFlags & info.imageUsage) != info.imageUsage)
-        bench_fatal("swapchain images cannot be color attachments and transfer sources");
+        bench_fatal("swapchain images cannot be color attachments and transfer sources and destinations");
     if (caps.currentExtent.width != 0xFFFFFFFFu &&
         (caps.currentExtent.width != cfg->width || caps.currentExtent.height != cfg->height))
         bench_fatal("the surface is %ux%u, not %ux%u", caps.currentExtent.width, caps.currentExtent.height,
@@ -412,6 +492,14 @@ static int config_begin(struct scene *s)
         surface_destroy(s);
         return 0;
     }
+    if (cfg->unpaced) {
+        VkPresentModeKHR modes[8];
+        count = 8;
+        BENCH_VK(vkx.GetPhysicalDeviceSurfacePresentModesKHR(vk->physical_device, s->surface, &count, modes));
+        for (i = 0; i < count; i++)
+            if (modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR)
+                info.presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+    }
     info.surface = s->surface;
     info.minImageCount = caps.minImageCount > 3 ? caps.minImageCount : 3;
     if (caps.maxImageCount && info.minImageCount > caps.maxImageCount)
@@ -422,6 +510,7 @@ static int config_begin(struct scene *s)
                               : (VkCompositeAlphaFlagBitsKHR)(caps.supportedCompositeAlpha &
                                                                (~caps.supportedCompositeAlpha + 1));
     BENCH_VK(vkd.CreateSwapchainKHR(vk->device, &info, NULL, &s->swapchain));
+    s->immediate = info.presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR;
     s->image_count = 8;
     BENCH_VK(vkd.GetSwapchainImagesKHR(vk->device, s->swapchain, &s->image_count, s->images));
     for (i = 0; i < s->image_count; i++) {
@@ -440,6 +529,9 @@ static int config_begin(struct scene *s)
     inst = bench_alloc(sizeof(*inst) * RECTS);
     bench_image_create(vk, &s->target, SCENE_FORMAT, cfg->width, cfg->height, 1, VK_SAMPLE_COUNT_1_BIT,
                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 0);
+    if (cfg->engine)
+        bench_image_create(vk, &s->composite, SWAPCHAIN_FORMAT, cfg->width, cfg->height, 1, VK_SAMPLE_COUNT_1_BIT,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 0);
     scene.imageView = s->target.view;
     vkd.UpdateDescriptorSets(vk->device, 1, &write, 0, NULL);
     bench_rect_scene(s->rects, RECTS, (int)cfg->width, (int)cfg->height, (int)cfg->width / 8, 0, seed);
@@ -470,6 +562,8 @@ static void config_end(struct scene *s)
     vkd.DestroySwapchainKHR(vk->device, s->swapchain, NULL);
     surface_destroy(s);
     bench_image_destroy(vk, &s->target);
+    if (s->cfg->engine)
+        bench_image_destroy(vk, &s->composite);
     bench_buffer_destroy(vk, &s->instances);
     bench_buffer_destroy(vk, &s->readback);
 }
@@ -478,6 +572,7 @@ static void config_end(struct scene *s)
 struct samples {
     int n, n_gpu, n_present;
     double *acquire_us, *cpu_us, *present_us, *gpu_us, *present_gpu_us;
+    double *submit_us, *frame_us, *blit_gpu_us;
     double *marker_delay; /* CPU time from the frame's vkQueueSubmit to the marker's submission */
 };
 
@@ -488,14 +583,34 @@ static void collect(struct scene *s, struct samples *m, uint32_t slot, int sampl
 {
     struct bench_vk *vk = s->vk;
     uint64_t ts[QUERIES], mask = vk->timestamp_bits >= 64 ? ~0ull : (1ull << vk->timestamp_bits) - 1;
+    uint32_t n = s->cfg->engine ? QUERIES : 3; /* (the 4th: only before an engine configuration's blit) */
     double gpu;
-    if (vkd.GetQueryPoolResults(vk->device, s->queries, QUERIES * slot, QUERIES, sizeof(ts), ts, sizeof(uint64_t),
+    if (vkd.GetQueryPoolResults(vk->device, s->queries, QUERIES * slot, n, sizeof(ts), ts, sizeof(uint64_t),
                                 VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
         return;
     gpu = (double)((ts[1] - ts[0]) & mask) * vk->timestamp_period / 1000.0;
+    if (s->cfg->engine)
+        m->blit_gpu_us[m->n_gpu] = (double)((ts[1] - ts[3]) & mask) * vk->timestamp_period / 1000.0;
     m->gpu_us[m->n_gpu++] = gpu;
     if (m->marker_delay[sample] < gpu)
         m->present_gpu_us[m->n_present++] = (double)((ts[2] - ts[1]) & mask) * vk->timestamp_period / 1000.0;
+}
+
+/* Waits for the slot's previous frame and its marker, and collects that
+ * frame's GPU times when it was measured. */
+static void slot_wait(struct scene *s, struct samples *m, uint32_t slot, int *busy, int *sample_of)
+{
+    struct bench_vk *vk = s->vk;
+    VkFence fences[2] = { s->frame_fences[slot], s->marker_fences[slot] };
+    if (!busy[slot])
+        return;
+    bench_fence_wait(vk, fences[0]);
+    bench_fence_wait(vk, fences[1]);
+    BENCH_VK(vkd.ResetFences(vk->device, 2, fences));
+    busy[slot] = 0;
+    if (sample_of[slot] >= 0)
+        collect(s, m, slot, sample_of[slot]);
+    sample_of[slot] = -1;
 }
 
 /* Runs a configuration: one verified frame, warm-up, then frames measured. */
@@ -505,7 +620,7 @@ static void run(struct scene *s)
     const struct config *cfg = s->cfg;
     int frames = bench_frames(cfg->frames), total, f;
     int busy[SLOTS] = { 0, 0 }, sample_of[SLOTS] = { -1, -1 }, stalls = 0;
-    double last_start = 0.0;
+    double last_start = 0.0, prev_start = 0.0;
     struct samples m;
     struct bench_json j;
 
@@ -518,11 +633,15 @@ static void run(struct scene *s)
     m.gpu_us = bench_alloc(sizeof(double) * (size_t)frames);
     m.present_gpu_us = bench_alloc(sizeof(double) * (size_t)frames);
     m.marker_delay = bench_alloc(sizeof(double) * (size_t)frames);
+    m.submit_us = bench_alloc(sizeof(double) * (size_t)frames);
+    m.frame_us = bench_alloc(sizeof(double) * (size_t)frames);
+    m.blit_gpu_us = bench_alloc(sizeof(double) * (size_t)frames);
 
     for (f = 0; f < total; f++) {
         uint32_t slot = (uint32_t)f % SLOTS, index = 0;
         int measured = f > WARMUP, verify_frame = f == 0;
-        VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkPipelineStageFlags wait_stage =
+            cfg->engine ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         VkSubmitInfo submit = {
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
             .waitSemaphoreCount = 1,
@@ -552,25 +671,25 @@ static void run(struct scene *s)
         double t0, t1, t2, t3, t4, t5;
 
         /* A vsynced game's pace, after the slot's previous frame. */
-        if (f > 1)
+        if (f > 1 && !cfg->unpaced && cfg->engine)
+            wait_until(last_start + FRAME_INTERVAL_US);
+        else if (f > 1 && !cfg->unpaced)
             sleep_until(last_start + FRAME_INTERVAL_US);
+        prev_start = last_start;
         last_start = bench_now_us();
-        if (busy[slot]) {
-            VkFence fences[2] = { s->frame_fences[slot], s->marker_fences[slot] };
-            bench_fence_wait(vk, fences[0]);
-            bench_fence_wait(vk, fences[1]);
-            BENCH_VK(vkd.ResetFences(vk->device, 2, fences));
-            busy[slot] = 0;
-            if (sample_of[slot] >= 0)
-                collect(s, &m, slot, sample_of[slot]);
-            sample_of[slot] = -1;
-        }
+        if (!cfg->engine)
+            slot_wait(s, &m, slot, busy, sample_of);
 
         t0 = bench_now_us();
         r = vkd.AcquireNextImageKHR(vk->device, s->swapchain, UINT64_MAX, s->acquired[slot], VK_NULL_HANDLE, &index);
         if (r < 0)
             bench_vk_fail(r, "vkAcquireNextImageKHR");
         t1 = bench_now_us();
+        if (cfg->engine) { /* the slot's fence after the acquire, then the frame's CPU work */
+            slot_wait(s, &m, slot, busy, sample_of);
+            while (bench_now_us() < t1 + ENGINE_CPU_US)
+                ;
+        }
         BENCH_VK(vkd.ResetCommandPool(vk->device, s->pools[slot], 0));
         record_frame(s, s->frame_cmds[slot], slot, index, verify_frame);
         submit.pSignalSemaphores = &s->rendered[index];
@@ -605,6 +724,8 @@ static void run(struct scene *s)
             m.cpu_us[m.n] = t3 - t1;
             m.present_us[m.n] = t4 - t3;
             m.marker_delay[m.n] = t5 - t2;
+            m.submit_us[m.n] = t3 - t2;
+            m.frame_us[m.n] = last_start - prev_start;
             sample_of[slot] = m.n++;
         }
     }
@@ -622,13 +743,19 @@ static void run(struct scene *s)
         bench_json_int(&j, "width", cfg->width);
         bench_json_int(&j, "height", cfg->height);
         bench_json_int(&j, "images", s->image_count);
+        bench_json_str(&j, "present_mode", s->immediate ? "immediate" : "fifo");
+        bench_json_int(&j, "paced_hz", cfg->unpaced ? 0 : 60);
         bench_json_int(&j, "frames", m.n);
         bench_json_int(&j, "present_frames", m.n_present);
         bench_json_stats(&j, "acquire_us", m.acquire_us, m.n);
         bench_json_stats(&j, "cpu_us", m.cpu_us, m.n);
         bench_json_stats(&j, "present_us", m.present_us, m.n);
+        bench_json_stats(&j, "submit_us", m.submit_us, m.n);
+        bench_json_stats(&j, "frame_us", m.frame_us, m.n);
         bench_json_stats(&j, "gpu_us", m.gpu_us, m.n_gpu);
         bench_json_stats(&j, "present_gpu_us", m.present_gpu_us, m.n_present);
+        if (cfg->engine)
+            bench_json_stats(&j, "blit_gpu_us", m.blit_gpu_us, m.n_gpu);
         bench_json_end(&j);
     }
     free(m.acquire_us);
@@ -637,6 +764,9 @@ static void run(struct scene *s)
     free(m.gpu_us);
     free(m.present_gpu_us);
     free(m.marker_delay);
+    free(m.submit_us);
+    free(m.frame_us);
+    free(m.blit_gpu_us);
 }
 
 /* ---- Setup ---- */

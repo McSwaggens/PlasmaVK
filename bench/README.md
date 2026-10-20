@@ -66,6 +66,16 @@ the swapchain image and presents.
   asleep) is skipped.
 - `headless_1080p`, `headless_2160p`, `headless_2880p`: the same frames
   presented to a `VK_EXT_headless_surface`, the control.
+- `engine_layer`, `engine_layer_unpaced`, `engine_headless`: an engine's
+  windowed frame loop at 3456x1956. The frame is tonemapped into an image of
+  the swapchain's format, and a `vkCmdBlitImage` of the whole extent (a
+  copy) writes it into the swapchain image as the frame's last command. The
+  acquire comes first, then the wait for the frame slot's fence and 1 ms of
+  CPU work; the frame waits for the acquire at the transfer stage. Paced at
+  60 Hz, unpaced (`IMMEDIATE` where offered), and on a headless surface.
+  `blit_gpu_us` is the blit's GPU time, `frame_us` the frame period. A layer
+  in no window has no compositor holding its drawables, so this cannot show
+  a wait for the display as a windowed engine sees it.
 
 `bench_startup`:
 - `process_first`: a fresh process per iteration (`posix_spawn` of the
