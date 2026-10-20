@@ -33,6 +33,8 @@
  *   BENCH_ALL_FEATURES=1 create the device with every core feature it
  *                        supports, as DXVK, vkd3d-proton and Zink do (lines
  *                        say "all_features":true)
+ *   BENCH_FRAME_LOG=path the frame loop appends every measured frame's
+ *                        times to this file (bench_loop_log)
  */
 #ifndef PVK_BENCH_H
 #define PVK_BENCH_H

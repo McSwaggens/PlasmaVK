@@ -1384,9 +1384,37 @@ static inline void bench_loop_run(struct bench_loop *loop, bench_record_fn recor
     bench_loop_wait_all(loop);
 }
 
-/* Appends "frames" and the timing statistics of the last run. */
+/* BENCH_FRAME_LOG: appends the last run's measured frames, in order, to the
+ * file it names, one CSV line each: bench, impl, config, frame (from 0),
+ * cpu_us, submit_us, frame_us, gpu_us (empty without a GPU time for every
+ * frame). */
+static inline void bench_loop_log(const struct bench_loop *loop)
+{
+    const char *path = getenv("BENCH_FRAME_LOG");
+    int gpu = loop->gpu_count == loop->count, i;
+    FILE *f;
+    if (!path || !*path)
+        return;
+    f = fopen(path, "a");
+    if (!f) {
+        fprintf(stderr, "%s: BENCH_FRAME_LOG: cannot open %s\n", bench_name, path);
+        return;
+    }
+    for (i = 0; i < loop->count; i++) {
+        fprintf(f, "%s,%s,%s,%d,%.2f,%.2f,%.2f,", bench_name, bench_impl(), bench_config ? bench_config : "", i,
+                loop->cpu[i], loop->submit[i], loop->frame[i]);
+        if (gpu)
+            fprintf(f, "%.2f", loop->gpu[i]);
+        fputc('\n', f);
+    }
+    fclose(f);
+}
+
+/* Appends "frames" and the timing statistics of the last run (and logs its
+ * frames: bench_loop_log). */
 static inline void bench_loop_report(struct bench_loop *loop, struct bench_json *j)
 {
+    bench_loop_log(loop); /* (before the statistics sort the samples) */
     bench_json_int(j, "frames", loop->count);
     bench_json_stats(j, "cpu_us", loop->cpu, loop->count);
     bench_json_stats(j, "submit_us", loop->submit, loop->count);

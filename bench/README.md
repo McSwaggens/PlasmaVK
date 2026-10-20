@@ -293,6 +293,7 @@ The benchmarks read these environment variables:
 | `BENCH_IMPL=name` | The `impl` label of every line (default `plasmavk`, or `loader` in loader builds), to tell drivers or two PlasmaVK builds apart. |
 | `BENCH_GPU_TIMING=0` | The frame loop writes no timestamps, so lines have no `gpu_us`. The two timestamps and their query reset can cost an implementation GPU time of their own, so use this when `frame_us` should be the application's frame alone. Lines say `"gpu_timing":false`. |
 | `BENCH_ALL_FEATURES=1` | Create the device with every core feature it supports, as DXVK, vkd3d-proton and Zink do, instead of only what the benchmark uses. Some features change an implementation's paths: `sparseBinding` its allocations, `depthBounds` and `dynamicRenderingLocalRead` its depth-writing pipelines, `robustBufferAccess` its shaders. Lines say `"all_features":true`. `startup` creates its own devices and ignores this. |
+| `BENCH_FRAME_LOG=path` | Benchmarks with a frame loop (those that report `frame_us`) append every measured frame to this file, in order, one CSV line each: `bench,impl,config,frame,cpu_us,submit_us,frame_us,gpu_us` (`gpu_us` empty without timestamps). The statistics only summarize a run; counting the rare late frame (a hitch) needs every frame. Results on stdout are unchanged. |
 
 While working on a benchmark, run it under the validation layers with sync
 validation turned on (they are found through the same loader):
