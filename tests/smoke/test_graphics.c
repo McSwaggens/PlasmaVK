@@ -13477,6 +13477,77 @@ static void test_parallel_passes(void)
     free_img(&color);
 }
 
+/* Secondaries a render pass instance executes fork only in a batch that
+ * executes PVK_PAR_FORK_BATCH packets of such secondaries or more: 4 of 256
+ * rectangles (about 2050 packets, enough for jobs) are encoded in order
+ * into the batch's one command buffer, and that is reported; 4 of 1024
+ * fork; and so do two primaries that each execute 2 of 640 (2560 packets
+ * each, 5120 in the batch), the second loading what the first stored. */
+static void test_parallel_fork_batch(void)
+{
+    static const char *const what[3] = { "too few packets to fork", "a batch that forks",
+                                         "two primaries that fork together" };
+    struct pvk_device *d = (struct pvk_device *)device;
+    struct pvk_queue *q = (struct pvk_queue *)queue;
+    struct img color = make_img(VK_FORMAT_R8G8B8A8_UNORM, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct img depth = make_img(VK_FORMAT_D32_SFLOAT, W, H, 1, VK_SAMPLE_COUNT_1_BIT);
+    struct buf out = make_buf(W * H * 4);
+    VkPipeline pipeline = par_pipeline(VK_NULL_HANDLE);
+    VkCommandBuffer cbs[2], secs[4];
+    VkSubmitInfo si;
+    uint32_t c, k, p, primaries, per, at, commits;
+
+    REQUIRE(pipeline);
+    for (c = 0; c < 3; c++) {
+        primaries = c == 2 ? 2 : 1;
+        per = c == 0 ? 256 : c == 1 ? 1024 : 640; /* rectangles per secondary */
+        par_scene(600 + c);
+        at = 0;
+        for (p = 0; p < primaries; p++) {
+            uint32_t n = 4 / primaries;
+            cbs[p] = begin_cmd();
+            if (p)
+                par_attachment_barrier(cbs[p - 1]);
+            par_begin(cbs[p], &color, &depth, p == 0, VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT);
+            for (k = 0; k < n; k++) {
+                VkCommandBuffer sec = secs[p * n + k] = par_secondary(VK_NULL_HANDLE);
+                vkCmdBindPipeline(sec, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                par_draw(sec, at, per);
+                at += per;
+                vkEndCommandBuffer(sec);
+            }
+            vkCmdExecuteCommands(cbs[p], n, &secs[p * n]);
+            vkCmdEndRendering(cbs[p]);
+        }
+        download(cbs[primaries - 1], &color, 0, VK_IMAGE_ASPECT_COLOR_BIT, &out);
+        for (p = 0; p < primaries; p++)
+            vkEndCommandBuffer(cbs[p]);
+        memset(&si, 0, sizeof(si));
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = primaries;
+        si.pCommandBuffers = cbs;
+        CHECK_VK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE), VK_SUCCESS);
+        /* the batch's command buffers (pvk_job_flatten; 0: its one) */
+        commits = q->lane.pending_tail ? q->lane.pending_tail->commit_count : 0;
+        CHECK_VK(vkQueueWaitIdle(queue), VK_SUCCESS);
+        vkFreeCommandBuffers(device, cmd_pool, primaries, cbs);
+        vkFreeCommandBuffers(device, cmd_pool, 4, secs);
+        CHECK(par_bad(&out, at, what[c]) == 0);
+        if (c == 0) {
+            CHECK(commits == 0);
+            CHECK(__atomic_load_n(&d->informed, __ATOMIC_RELAXED) & (1u << PVK_INFORM_FORK_BATCH));
+        } else {
+            CHECK(commits > 2 * primaries); /* (each primary's jobs and the parts around them) */
+        }
+        if (pvk_test_failures)
+            fprintf(stderr, "%s: %u command buffers\n", what[c], commits);
+    }
+    vkDestroyPipeline(device, pipeline, NULL);
+    free_buf(&out);
+    free_img(&depth);
+    free_img(&color);
+}
+
 /* A render pass instance suspended and resumed across the primaries of a
  * batch (one job), and two instances over four primaries (two jobs). */
 static void test_parallel_suspend(void)
@@ -13726,10 +13797,11 @@ static void test_parallel_order(void)
 }
 
 /* Frames of two in flight, each a batch of a random number of primaries,
- * some executing secondaries in their render pass instances, with uploads
- * (push constants and vkCmdUpdateBuffer of 64 KB, more than an upload chunk
- * a frame): what parallel encoding takes and gives back (lanes, command
- * allocators, upload chunks) over 40 frames. */
+ * some executing secondaries in their render pass instances (large enough
+ * that the batch forks them, PVK_PAR_FORK_BATCH, when the rectangles left
+ * allow), with uploads (push constants and vkCmdUpdateBuffer of 64 KB, more
+ * than an upload chunk a frame): what parallel encoding takes and gives
+ * back (lanes, command allocators, upload chunks) over 40 frames. */
 static void test_parallel_stress(void)
 {
     enum { FRAMES = 40, SLOTS = 2 };
@@ -13780,7 +13852,7 @@ static void test_parallel_stress(void)
         par_scene(seeds[s]);
         primaries = 1 + frame % 7;
         for (k = 0; k < primaries; k++) {
-            uint32_t count = 256 + par_random() % 512;
+            uint32_t count = (frame + k) % 3 == 0 ? 2048 + par_random() % 1024 : 256 + par_random() % 512;
             VkCommandBuffer cb = cbs[s][ncbs[s]++] = begin_cmd();
             if (k < 4) { /* 128 KB of updates in each of the first four */
                 for (i = 0; i < 16384; i++)
@@ -14163,6 +14235,7 @@ int main(void)
     RUN(test_parallel_primaries);
     RUN(test_parallel_secondaries);
     RUN(test_parallel_passes);
+    RUN(test_parallel_fork_batch);
     RUN(test_parallel_suspend);
     RUN(test_parallel_queries);
     RUN(test_parallel_order);
