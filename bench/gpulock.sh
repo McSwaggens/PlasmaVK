@@ -127,7 +127,9 @@ if [ "$mode" = excl ]; then
 	printf '%s\n%s\n' $$ "$info" >"$want"
 	while :; do
 		clean
-		first=$(ls "$L/want" 2>/dev/null | sort | head -1)
+		# (want files of callers of an older gpulock.sh, named by a pid alone, keep no place: those callers
+		# take the lock whenever it is free, and would otherwise always come first)
+		first=$(ls "$L/want" 2>/dev/null | grep '^s' | sort | head -1)
 		if [ "$L/want/$first" = "$want" ] && mkdir "$L/excl" 2>/dev/null; then
 			echo "$info" >"$L/excl/info"; echo $$ >"$L/excl/pid"; me=$L/excl; break
 		fi
