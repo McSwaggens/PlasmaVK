@@ -1,11 +1,17 @@
 /* Window system integration (section 18): Metal surfaces, swapchains,
  * acquire and present. The CAMetalLayers are not in a window: such layers
  * still vend drawables, so this runs headless. Presented contents are read
- * back from the drawables, which a CAMetalLayer subclass records. */
+ * back from the drawables, which a CAMetalLayer subclass records. Every
+ * test runs twice: then again in a process of its own under Metal's
+ * validation (test_metal_validation). */
 #define PLASMAVK_IMPLEMENTATION
 #include "../../plasmavk.h"
 
+#include <mach-o/dyld.h>
+#include <spawn.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <time.h>
 
 #include "../pvk_test.h"
@@ -1886,6 +1892,412 @@ static void test_wait_placement(void)
     check_split(3);
 }
 
+/* ---- Contents in textures only PlasmaVK holds ---- */
+
+enum { RB_W = 16, RB_H = 8 };
+
+struct resized_back {
+    id layer;
+    VkSurfaceKHR surface;
+    VkSwapchainKHR swapchain;
+    VkImage image[3];
+    VkImageView view[3];
+    VkBuffer buffer;
+    VkDeviceMemory memory;
+    VkFence fence;
+    VkSemaphore rendered;
+    bool transfers;
+    uint32_t images, frame, *data;
+    uint32_t dropped; /* uses whose copies read textures Core Animation dropped (white box) */
+    uint32_t want[3][RB_W * RB_H]; /* each image's contents (BGRA bytes), 0: undefined */
+};
+
+/* An image, its acquire's fence waited for. */
+static VkResult rb_acquire(struct resized_back *t, uint64_t timeout, uint32_t *index)
+{
+    VkResult r = vkAcquireNextImageKHR(device, t->swapchain, timeout, VK_NULL_HANDLE, t->fence, index);
+    if (r >= 0) {
+        vkWaitForFences(device, 1, &t->fence, VK_TRUE, 2000000000ull);
+        vkResetFences(device, 1, &t->fence);
+    }
+    return r;
+}
+
+/* A render pass that writes the left half of image `index` (all: all of
+ * it, after a transition from UNDEFINED), which then needs the rest of its
+ * contents; with transfers they are read first (a copy to the buffer,
+ * checked). */
+static void rb_use(struct resized_back *t, uint32_t index, bool all)
+{
+    uint32_t color = 0xff000000u | (t->frame * 0x050b11u + 0x102030u), before[RB_W * RB_H], k;
+    VkCommandBuffer cb = begin(0);
+    VkRenderingAttachmentInfo att;
+    VkRenderingInfo ri;
+    VkClearAttachment ca;
+    VkClearRect rect;
+    VkBufferImageCopy region;
+    bool read = t->transfers && !all;
+
+    REQUIRE(cb);
+    memcpy(before, t->want[index], sizeof(before));
+    memset(&att, 0, sizeof(att));
+    att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    att.imageView = t->view[index];
+    att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    att.loadOp = all ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : VK_ATTACHMENT_LOAD_OP_LOAD;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    memset(&ri, 0, sizeof(ri));
+    ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    ri.renderArea.extent.width = RB_W;
+    ri.renderArea.extent.height = RB_H;
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachments = &att;
+    memset(&ca, 0, sizeof(ca));
+    ca.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ca.clearValue.color.float32[0] = (float)((color >> 16) & 255) / 255.0f; /* (BGRA bytes: R is byte 2) */
+    ca.clearValue.color.float32[1] = (float)((color >> 8) & 255) / 255.0f;
+    ca.clearValue.color.float32[2] = (float)(color & 255) / 255.0f;
+    ca.clearValue.color.float32[3] = 1.0f;
+    memset(&rect, 0, sizeof(rect));
+    rect.rect.extent.width = all ? RB_W : RB_W / 2;
+    rect.rect.extent.height = RB_H;
+    rect.layerCount = 1;
+    memset(&region, 0, sizeof(region));
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent.width = RB_W;
+    region.imageExtent.height = RB_H;
+    region.imageExtent.depth = 1;
+    if (read) {
+        barrier(cb, t->image[index], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        vkCmdCopyImageToBuffer(cb, t->image[index], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t->buffer, 1, &region);
+        barrier(cb, t->image[index], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    } else {
+        barrier(cb, t->image[index], all ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    }
+    vkCmdBeginRendering(cb, &ri);
+    vkCmdClearAttachments(cb, 1, &ca, 1, &rect);
+    vkCmdEndRendering(cb);
+    barrier(cb, t->image[index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    REQUIRE_VK(submit(0, cb, VK_NULL_HANDLE, t->rendered, t->fence));
+    t->dropped += last_submission(0)->wsi_residency != NULL; /* (its own residency set: section 18's pvk_wsi_read) */
+    REQUIRE_VK(vkWaitForFences(device, 1, &t->fence, VK_TRUE, 2000000000ull));
+    REQUIRE_VK(vkResetFences(device, 1, &t->fence));
+    for (k = 0; read && k < RB_W * RB_H; k++)
+        if (before[k] && t->data[k] != before[k]) {
+            PVK_TEST_FAIL("frame %u (%u images): image %u read 0x%08x at %u, not 0x%08x", t->frame, t->images, index,
+                          t->data[k], k, before[k]);
+            break;
+        }
+    for (k = 0; k < RB_W * RB_H; k++)
+        if (all || k % RB_W < RB_W / 2)
+            t->want[index][k] = color;
+}
+
+/* Presents image `index`, after rb_use or with no use since acquired, and
+ * reads back the drawable that shows it. */
+static void rb_present(struct resized_back *t, uint32_t index, bool used, VkResult expect, const char *what)
+{
+    /* (white box: the drawable the acquire or the first use took, which shows it) */
+    id shown = pvk_retain(((struct pvk_swapchain *)t->swapchain)->images[index].drawable), drawable;
+    uint32_t texels[RB_W * RB_H], k;
+
+    pvk_release(last_drawable);
+    last_drawable = NULL;
+    CHECK_VK(present(0, t->swapchain, index, used ? t->rendered : VK_NULL_HANDLE), expect);
+    CHECK_VK(vkQueueWaitIdle(queues[0]), VK_SUCCESS);
+    vkResetCommandPool(device, pools[0], 0);
+    drawable = shown ? shown : last_drawable;
+    if (expect == VK_SUCCESS && !drawable) {
+        PVK_TEST_FAIL("frame %u (%u images, %s): image %u shown by no drawable", t->frame, t->images, what, index);
+    } else if (expect == VK_SUCCESS) {
+        read_drawable(drawable, t->layer, texels, RB_W, RB_H);
+        for (k = 0; k < RB_W * RB_H; k++)
+            if (t->want[index][k] && texels[k] != t->want[index][k]) {
+                PVK_TEST_FAIL("frame %u (%u images%s, %s): image %u presented 0x%08x at %u, not 0x%08x", t->frame,
+                              t->images, t->transfers ? "" : ", color attachment only", what, index, texels[k], k,
+                              t->want[index][k]);
+                break;
+            }
+    }
+    pvk_release(shown);
+    pvk_release(last_drawable);
+    last_drawable = NULL;
+    t->frame++;
+}
+
+/* The drawableSize set to w x h by someone else, and a drawable of it
+ * taken (a view that sizes the drawables itself, drawing at the new size). */
+static void rb_resize(struct resized_back *t, uint32_t w, uint32_t h)
+{
+    void *pool = objc_autoreleasePoolPush();
+    pvk_CGSize size;
+    size.width = w;
+    size.height = h;
+    pvk_CAMetalLayer_setDrawableSize(t->layer, size);
+    if (w != RB_W)
+        pvk_CAMetalLayer_nextDrawable(t->layer);
+    pvk_release(last_drawable);
+    last_drawable = NULL;
+    objc_autoreleasePoolPop(pool);
+}
+
+/* A swapchain of `images` images (with transfers: also transfer usage) on
+ * t's surface, replacing old; its views, buffer, fence and semaphore. */
+static bool rb_init(struct resized_back *t, uint32_t images, bool transfers, VkSwapchainKHR old)
+{
+    VkSwapchainCreateInfoKHR info = swapchain_info(t->surface, VK_FORMAT_B8G8R8A8_UNORM,
+                                                   VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, RB_W, RB_H, images);
+    VkBufferCreateInfo binfo;
+    VkMemoryAllocateInfo alloc;
+    VkMemoryRequirements req;
+    uint32_t count = 3, i;
+
+    t->images = images;
+    t->transfers = transfers;
+    info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (transfers)
+        info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    info.oldSwapchain = old;
+    if (vkCreateSwapchainKHR(device, &info, NULL, &t->swapchain) != VK_SUCCESS ||
+        vkGetSwapchainImagesKHR(device, t->swapchain, &count, t->image) != VK_SUCCESS || count != images)
+        return false;
+    CHECK(((struct pvk_swapchain *)t->swapchain)->direct); /* (white box) */
+    for (i = 0; i < images; i++)
+        if ((t->view[i] = make_view(t->image[i])) == VK_NULL_HANDLE)
+            return false;
+    memset(&binfo, 0, sizeof(binfo));
+    binfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    binfo.size = sizeof(t->want[0]);
+    binfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (vkCreateBuffer(device, &binfo, NULL, &t->buffer) != VK_SUCCESS)
+        return false;
+    vkGetBufferMemoryRequirements(device, t->buffer, &req);
+    memset(&alloc, 0, sizeof(alloc));
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = shared_type;
+    if (vkAllocateMemory(device, &alloc, NULL, &t->memory) != VK_SUCCESS ||
+        vkBindBufferMemory(device, t->buffer, t->memory, 0) != VK_SUCCESS ||
+        vkMapMemory(device, t->memory, 0, VK_WHOLE_SIZE, 0, (void **)&t->data) != VK_SUCCESS)
+        return false;
+    t->fence = make_fence();
+    t->rendered = make_semaphore(VK_SEMAPHORE_TYPE_BINARY);
+    return t->fence && t->rendered;
+}
+
+/* What rb_init made (the swapchain unless destroyed already). */
+static void rb_finish(struct resized_back *t)
+{
+    uint32_t i;
+    CHECK_VK(vkQueueWaitIdle(queues[0]), VK_SUCCESS);
+    vkResetCommandPool(device, pools[0], 0);
+    vkDestroySwapchainKHR(device, t->swapchain, NULL);
+    for (i = 0; i < t->images; i++)
+        vkDestroyImageView(device, t->view[i], NULL);
+    vkDestroyBuffer(device, t->buffer, NULL);
+    vkFreeMemory(device, t->memory, NULL);
+    vkDestroyFence(device, t->fence, NULL);
+    vkDestroySemaphore(device, t->rendered, NULL);
+}
+
+/* Someone else resizes the layer's drawables and back: Core Animation
+ * drops its drawables, also from the layer's residency set, and the
+ * images' contents are left in textures only PlasmaVK holds (section 18's
+ * pvk_wsi_content, pvk_wsi_read). Every image is then held and used in a
+ * way that needs its contents (a LOAD_OP_LOAD render pass over half of it;
+ * with transfers a copy to a buffer first): their first uses copy them
+ * into the drawables out of such textures, which must outlive the copies
+ * (released at once, the copies' encoding crashed) and be resident (else
+ * a draw out of one reads zeros under Metal's shader validation).
+ * Then the size changes as a first use takes its drawable (the acquire,
+ * with a finite timeout, took none): that use renders to the image's own
+ * texture, its contents copied there out of such a texture, and its
+ * present finds the swapchain out of date. With the size back, every image
+ * is presented without a use since acquired: a draw of its contents, out
+ * of such textures (or out of the image's own texture, where contents in a
+ * framebufferOnly drawable move first). Then every image is used once
+ * more. Every drawable presented, and every copy, is read back. */
+static void check_resized_back(uint32_t images, bool transfers)
+{
+    static struct resized_back t;
+    uint32_t held[3], round, i;
+
+    memset(&t, 0, sizeof(t));
+    t.layer = make_layer(RB_W, RB_H, 1.0);
+    t.surface = make_surface(t.layer);
+    REQUIRE(t.surface);
+    REQUIRE(rb_init(&t, images, transfers, VK_NULL_HANDLE));
+
+    /* Every image's contents in a drawable: written whole, then in part. */
+    for (round = 0; round < 2; round++) {
+        for (i = 0; i < images; i++)
+            REQUIRE_VK(rb_acquire(&t, UINT64_MAX, &held[i]));
+        for (i = 0; i < images; i++) {
+            rb_use(&t, held[i], round == 0);
+            rb_present(&t, held[i], true, VK_SUCCESS, "contents in drawables");
+        }
+    }
+    CHECK(t.dropped == 0);
+    rb_resize(&t, RB_W + 8, RB_H + 8);
+    rb_resize(&t, RB_W, RB_H);
+    for (i = 0; i < images; i++)
+        REQUIRE_VK(rb_acquire(&t, UINT64_MAX, &held[i]));
+    for (i = 0; i < images; i++) {
+        rb_use(&t, held[i], false);
+        rb_present(&t, held[i], true, VK_SUCCESS, "after a resize and back");
+    }
+    if (!t.dropped) /* (Core Animation keeps the one shown last) */
+        PVK_TEST_FAIL("%u images: no first use read contents of a drawable Core Animation dropped", images);
+    /* resized as the first use takes its drawable */
+    REQUIRE_VK(rb_acquire(&t, 2000000000ull, &held[0]));
+    grow_next = 8;
+    rb_use(&t, held[0], false);
+    CHECK(grow_next == 0); /* (the first use took a drawable) */
+    grow_next = 0;
+    rb_present(&t, held[0], true, VK_ERROR_OUT_OF_DATE_KHR, "resized at its first use");
+    rb_resize(&t, RB_W, RB_H);
+    for (i = 0; i < images; i++)
+        REQUIRE_VK(rb_acquire(&t, UINT64_MAX, &held[i]));
+    for (i = 0; i < images; i++)
+        rb_present(&t, held[i], false, VK_SUCCESS, "presented without a use");
+    for (i = 0; i < images; i++)
+        REQUIRE_VK(rb_acquire(&t, UINT64_MAX, &held[i]));
+    for (i = 0; i < images; i++) {
+        rb_use(&t, held[i], false);
+        rb_present(&t, held[i], true, VK_SUCCESS, "used again");
+    }
+    rb_finish(&t);
+    vkDestroySurfaceKHR(instance, t.surface, NULL);
+    pvk_release(t.layer);
+}
+
+struct rb_signal {
+    VkSemaphore semaphore;
+    long delay_ns;
+};
+
+/* Signals a timeline semaphore to 1 after a delay (another thread). */
+static void *rb_signal_later(void *arg)
+{
+    const struct rb_signal *s = arg;
+    struct timespec ts;
+    VkSemaphoreSignalInfo signal;
+    ts.tv_sec = 0;
+    ts.tv_nsec = s->delay_ns;
+    nanosleep(&ts, NULL);
+    memset(&signal, 0, sizeof(signal));
+    signal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
+    signal.semaphore = s->semaphore;
+    signal.value = 1;
+    vkSignalSemaphore(device, &signal);
+    return NULL;
+}
+
+/* An image held from a retired swapchain, its contents in a drawable's
+ * IOSurface, as the newer swapchain's first use takes a drawable of that
+ * surface: the contents move to the held image's own texture first, a copy
+ * in the newer swapchain's batch (section 18's pvk_wsi_spill), which the
+ * application need not wait for before destroying the retired swapchain.
+ * The batch waits for the host (the queue's thread commits it), and the
+ * retired swapchain, destroyed meanwhile, waits until the copy is done
+ * (white box: the image's copy_queue). */
+static void test_retired_spill(void)
+{
+    static struct resized_back a, b;
+    struct pvk_swapchain_image *held_img;
+    struct rb_signal later;
+    VkTimelineSemaphoreSubmitInfo values;
+    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    VkSubmitInfo submit_info;
+    VkSemaphore host = make_semaphore(VK_SEMAPHORE_TYPE_TIMELINE);
+    VkCommandBuffer cb;
+    pthread_t thread;
+    uint64_t one = 1, zero = 0, start, waited;
+    uint32_t held, index, frame, k;
+    bool spilled = false;
+
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    a.layer = b.layer = make_layer(RB_W, RB_H, 1.0);
+    a.surface = b.surface = make_surface(a.layer);
+    REQUIRE(a.surface && host);
+    REQUIRE(rb_init(&a, 2, true, VK_NULL_HANDLE));
+    for (frame = 0; frame < 4; frame++) {
+        REQUIRE_VK(rb_acquire(&a, UINT64_MAX, &index));
+        rb_use(&a, index, frame < 2);
+        rb_present(&a, index, true, VK_SUCCESS, "retired spill, before");
+    }
+    REQUIRE_VK(rb_acquire(&a, 2000000000ull, &held)); /* (a finite timeout: it takes no drawable) */
+    held_img = &((struct pvk_swapchain *)a.swapchain)->images[held];
+    REQUIRE(held_img->surface && !held_img->drawable);
+    REQUIRE(rb_init(&b, 2, true, a.swapchain));
+    for (frame = 0; frame < 12 && !spilled; frame++) {
+        REQUIRE_VK(rb_acquire(&b, UINT64_MAX, &index));
+        if (pvk_MTLTexture_iosurface(pvk_CAMetalDrawable_texture(
+                ((struct pvk_swapchain *)b.swapchain)->images[index].drawable)) != held_img->surface) {
+            rb_use(&b, index, true);
+            rb_present(&b, index, true, VK_SUCCESS, "retired spill, newer");
+            continue;
+        }
+        cb = begin(0);
+        REQUIRE(cb);
+        record_clear(cb, b.image[index], 0, 1, 0, 1);
+        vkEndCommandBuffer(cb);
+        memset(&values, 0, sizeof(values));
+        values.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+        values.waitSemaphoreValueCount = 1;
+        values.pWaitSemaphoreValues = &one;
+        values.signalSemaphoreValueCount = 1;
+        values.pSignalSemaphoreValues = &zero;
+        memset(&submit_info, 0, sizeof(submit_info));
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.pNext = &values;
+        submit_info.waitSemaphoreCount = 1;
+        submit_info.pWaitSemaphores = &host;
+        submit_info.pWaitDstStageMask = &stage;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &cb;
+        submit_info.signalSemaphoreCount = 1;
+        submit_info.pSignalSemaphores = &b.rendered;
+        REQUIRE_VK(vkQueueSubmit(queues[0], 1, &submit_info, b.fence));
+        CHECK(held_img->copy_queue == (struct pvk_queue *)queues[0]);
+        later.semaphore = host;
+        later.delay_ns = 100000000;
+        REQUIRE(pthread_create(&thread, NULL, rb_signal_later, &later) == 0);
+        start = now_ns();
+        vkDestroySwapchainKHR(device, a.swapchain, NULL);
+        waited = now_ns() - start;
+        pthread_join(thread, NULL);
+        a.swapchain = VK_NULL_HANDLE;
+        if (waited < 50000000)
+            PVK_TEST_FAIL("the retired swapchain was destroyed in %llu us, before the copy into its image",
+                          (unsigned long long)(waited / 1000));
+        REQUIRE_VK(vkWaitForFences(device, 1, &b.fence, VK_TRUE, 2000000000ull));
+        REQUIRE_VK(vkResetFences(device, 1, &b.fence));
+        for (k = 0; k < RB_W * RB_H; k++)
+            b.want[index][k] = 0xff00ff00u;
+        rb_present(&b, index, true, VK_SUCCESS, "retired spill, the spill");
+        spilled = true;
+    }
+    CHECK(spilled);
+    rb_finish(&a);
+    rb_finish(&b);
+    vkDestroySemaphore(device, host, NULL);
+    vkDestroySurfaceKHR(instance, a.surface, NULL);
+    pvk_release(a.layer);
+}
+
+static void test_resized_back(void)
+{
+    check_resized_back(2, true);
+    check_resized_back(3, true);
+    check_resized_back(2, false);
+    check_resized_back(3, false);
+}
+
 /* Present modes, color spaces, composite alpha and two swapchains in one
  * present (vkAcquireNextImage2KHR for one of them). */
 static void test_layer_configuration(void)
@@ -2161,6 +2573,36 @@ static void test_lazy_present_threads(void)
     pthread_mutex_destroy(&lz.queue0_lock);
 }
 
+/* Every test again, in a child process under Metal's API and shader
+ * validation (MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1, which Metal reads
+ * when it makes its first device): it aborts on what Metal does not allow,
+ * as a copy or shader that touches a framebufferOnly drawable's texture.
+ * Not when this process runs so already (MTL_DEBUG_LAYER set). */
+static void test_metal_validation(void)
+{
+    extern char **environ;
+    char path[4096], *argv[2];
+    uint32_t size = sizeof(path);
+    pid_t pid;
+    int status = 0, spawned;
+    REQUIRE(_NSGetExecutablePath(path, &size) == 0);
+    argv[0] = path;
+    argv[1] = NULL;
+    setenv("MTL_DEBUG_LAYER", "1", 1);
+    setenv("MTL_SHADER_VALIDATION", "1", 1);
+    printf("-- every test again under MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1\n");
+    fflush(stdout);
+    fflush(stderr);
+    spawned = posix_spawn(&pid, path, NULL, NULL, argv, environ) == 0 && waitpid(pid, &status, 0) == pid;
+    unsetenv("MTL_DEBUG_LAYER");
+    unsetenv("MTL_SHADER_VALIDATION");
+    if (!spawned)
+        PVK_TEST_FAIL("could not run %s", path);
+    else if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        PVK_TEST_FAIL("under Metal's validation: %s %d", WIFEXITED(status) ? "exit status" : "signal",
+                      WIFEXITED(status) ? WEXITSTATUS(status) : WTERMSIG(status));
+}
+
 int main(void)
 {
     void *pool = objc_autoreleasePoolPush();
@@ -2177,9 +2619,13 @@ int main(void)
     RUN(test_direct);
     RUN(test_transfers_into_drawables);
     RUN(test_wait_placement);
+    RUN(test_resized_back);
+    RUN(test_retired_spill);
     RUN(test_layer_configuration);
     RUN(test_headless);
     RUN(test_lazy_present_threads);
+    if (!getenv("MTL_DEBUG_LAYER"))
+        RUN(test_metal_validation);
     teardown();
     objc_autoreleasePoolPop(pool);
     return TEST_RESULT();

@@ -31508,6 +31508,7 @@ static inline pvk_MTLGPUAddress pvk_MTLBuffer_gpuAddress(id self) { PVK_SEL_CACH
 static inline id pvk_MTLResidencySetDescriptor_new(void) { PVK_CLASS_CACHE("MTLResidencySetDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
 static inline void pvk_MTLResidencySet_addAllocation(id self, id allocation) { PVK_SEL_CACHE("addAllocation:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, allocation); }
 static inline void pvk_MTLResidencySet_removeAllocation(id self, id allocation) { PVK_SEL_CACHE("removeAllocation:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, allocation); }
+static inline bool pvk_MTLResidencySet_containsAllocation(id self, id anAllocation) { PVK_SEL_CACHE("containsAllocation:"); return PVK_MSG(bool, (id, SEL, id))(self, pvk_sel_, anAllocation); }
 static inline void pvk_MTLResidencySet_commit(id self) { PVK_SEL_CACHE("commit"); PVK_MSG(void, (id, SEL))(self, pvk_sel_); }
 static inline void pvk_MTL4CommandQueue_addResidencySet(id self, id residencySet) { PVK_SEL_CACHE("addResidencySet:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, residencySet); }
 static inline id pvk_NSString_stringWithUTF8String(const char * nullTerminatedCString) { PVK_CLASS_CACHE("NSString"); PVK_SEL_CACHE("stringWithUTF8String:"); return PVK_MSG(id, (id, SEL, const char *))((id)pvk_cls_, pvk_sel_, nullTerminatedCString); }
@@ -60605,6 +60606,15 @@ struct pvk_submission {
         id src, dst;
         id residency; /* the layer's MTLResidencySet, for drawables' textures; NULL: none */
     } wsi_copies[PVK_WSI_COPIES];
+    /* Drawables' textures that had images' contents until the submission
+     * moved them (the sources of its copies among them), and the one a
+     * present's draw reads: retained until it is done (section 18's
+     * pvk_wsi_content); a residency set of its own for those it reads that
+     * the layer's set no longer has (section 18's pvk_wsi_read; NULL:
+     * none) */
+    id *wsi_held;
+    uint32_t wsi_held_count, wsi_held_capacity;
+    id wsi_residency;
 };
 
 struct pvk_event_value {
@@ -60737,6 +60747,10 @@ static void pvk_submission_reset(struct pvk_submission *s)
     s->commit_count = 0;
     while (s->wsi_wait_count)
         pvk_release(s->wsi_waits[--s->wsi_wait_count]);
+    while (s->wsi_held_count)
+        pvk_release(s->wsi_held[--s->wsi_held_count]);
+    pvk_release(s->wsi_residency);
+    s->wsi_residency = NULL;
     s->wsi_split = s->wsi_copy_count = 0;
 }
 
@@ -60765,6 +60779,10 @@ static void pvk_submissions_free(struct pvk_device *device, struct pvk_submissio
             pvk_release(s->more[--s->more_count]);
         while (s->wsi_wait_count)
             pvk_release(s->wsi_waits[--s->wsi_wait_count]);
+        while (s->wsi_held_count)
+            pvk_release(s->wsi_held[--s->wsi_held_count]);
+        pvk_release(s->wsi_residency);
+        pvk_free(pvk_device_alloc(device), s->wsi_held);
         pvk_free(pvk_device_alloc(device), s->more);
         pvk_free(pvk_device_alloc(device), s->commit);
         pvk_release(s->cb);
@@ -68772,7 +68790,9 @@ static void pvk_wsi_split(struct pvk_encoder *e)
 }
 
 /* The copies of swapchain images' contents a batch makes before its
- * commands (section 18, SWAPCHAIN IMAGES). */
+ * commands (section 18, SWAPCHAIN IMAGES). Its drawables' textures are
+ * resident through the layer's set, or through the submission's own when
+ * Core Animation dropped them (pvk_wsi_read). */
 static void pvk_wsi_copies(struct pvk_encoder *e, const struct pvk_submission *s)
 {
     uint32_t i;
@@ -68781,6 +68801,10 @@ static void pvk_wsi_copies(struct pvk_encoder *e, const struct pvk_submission *s
     for (i = 0; i < s->wsi_copy_count; i++)
         if (s->wsi_copies[i].residency && (!i || s->wsi_copies[i].residency != s->wsi_copies[i - 1].residency))
             pvk_MTL4CommandBuffer_useResidencySet(e->cb, s->wsi_copies[i].residency);
+    if (s->wsi_residency) {
+        pvk_MTLResidencySet_commit(s->wsi_residency);
+        pvk_MTL4CommandBuffer_useResidencySet(e->cb, s->wsi_residency);
+    }
     if (!pvk_wsi_encode_copies(e->device, e->cb, s->wsi_copies, s->wsi_copy_count))
         e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
@@ -74756,7 +74780,15 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
  *   part of the image, and no transition from UNDEFINED came first) copies
  *   them into the drawable before the batch, and a drawable whose IOSurface
  *   has another image's contents moves them to that image's own texture
- *   first (pvk_wsi_spill). The copies are a compute encoder's texture
+ *   first (pvk_wsi_spill). A drawable's texture the contents leave stays
+ *   retained until the submission that moved them is done (its copies read
+ *   it, and the image's earlier work may still), as does one a present's
+ *   draw reads: Core Animation drops its drawables when someone else
+ *   resizes them, also from the layer's residency set (a texture the copies
+ *   or the draw read is then resident through a set of the submission's
+ *   own), and Metal 4's command buffers retain nothing. Copies into another
+ *   swapchain's images (an image held from a retired one) hold back its
+ *   destruction until done. The copies are a compute encoder's texture
  *   copies, but no copy or shader can read the textures of framebufferOnly
  *   drawables, only render passes: a copy from or to one is a render pass
  *   with the source as color attachment 0 and the destination as 1, whose
@@ -74858,6 +74890,11 @@ struct pvk_swapchain_image {
      * surface (retained), or NULL: undefined */
     id content;
     IOSurfaceRef surface;
+    /* The last copy of its contents into own that another swapchain's work
+     * made (pvk_wsi_spill): done once copy_queue's timeline reaches
+     * copy_value; NULL: none */
+    struct pvk_queue *copy_queue;
+    uint64_t copy_value;
 };
 
 struct pvk_swapchain {
@@ -75204,8 +75241,23 @@ static void pvk_wsi_slot_set(struct pvk_device *device, const struct pvk_swapcha
 }
 
 /* Waits (up to 5 s: a present may wait for a semaphore that is never
- * signalled) until the presentation engine is done with the images, then
- * frees the swapchain. */
+ * signalled) until queue's timeline reaches value for image i, for what. */
+static void pvk_swapchain_image_wait(struct pvk_swapchain *sc, uint32_t i, struct pvk_queue *queue, uint64_t value,
+                                     uint64_t start, const char *what)
+{
+    while (queue && !pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(queue->timeline, value, 100)) {
+        if (pvk_device_lost(sc->device) || pvk_now_ns() - start > 5000000000ull) {
+            pvk_logd(sc->device, PVK_LOG_ERROR, "PlasmaVK-vkDestroySwapchainKHR-busy", VK_OBJECT_TYPE_SWAPCHAIN_KHR,
+                     (uint64_t)(uintptr_t)sc, "vkDestroySwapchainKHR: %s image %u is not done", what, i);
+            break;
+        }
+    }
+}
+
+/* Waits until the presentation engine is done with the images, and other
+ * swapchains' work with copying contents into their own textures (the
+ * application need not wait for a newer swapchain's work before destroying
+ * the retired one: pvk_wsi_spill), then frees the swapchain. */
 static void pvk_swapchain_free(struct pvk_swapchain *sc, const VkAllocationCallbacks *alloc)
 {
     struct pvk_device *device = sc->device;
@@ -75227,16 +75279,10 @@ static void pvk_swapchain_free(struct pvk_swapchain *sc, const VkAllocationCallb
     for (i = 0; i < sc->image_count; i++)
         pvk_wsi_slot_free(device, &sc->images[i]);
     pthread_mutex_unlock(&pvk_swapchain_lock);
-    for (i = 0; i < sc->image_count; i++) {
+    for (i = 0; i < sc->image_count; i++) { /* (unlinked: no other swapchain's work copies into them now) */
         struct pvk_swapchain_image *img = &sc->images[i];
-        while (img->release_queue && !pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(img->release_queue->timeline,
-                                                                                         img->release_value, 100)) {
-            if (pvk_device_lost(device) || pvk_now_ns() - start > 5000000000ull) {
-                pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-vkDestroySwapchainKHR-busy", VK_OBJECT_TYPE_SWAPCHAIN_KHR,
-                         (uint64_t)(uintptr_t)sc, "vkDestroySwapchainKHR: a present of image %u is not done", i);
-                break;
-            }
-        }
+        pvk_swapchain_image_wait(sc, i, img->release_queue, img->release_value, start, "a present of");
+        pvk_swapchain_image_wait(sc, i, img->copy_queue, img->copy_value, start, "a copy of contents into");
         pvk_release(img->drawable); /* (acquired, never presented) */
         if (img->surface)
             pvk_release(img->content);
@@ -75607,44 +75653,89 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImage2KHR(VkDevice device, const VkA
 
 /* ---- Rendering to drawables ---- */
 
-/* Copies a submission makes before its commands (pvk_wsi_copies, section
- * 16); false when it has no room left. */
-static bool pvk_wsi_copy(struct pvk_wsi_copy *copies, uint32_t *count, id src, id dst, id residency)
+/* Submission s takes over a reference to texture, released once s is done
+ * (pvk_submission_reset); at once when out of memory. */
+static void pvk_wsi_hold(struct pvk_device *device, struct pvk_submission *s, id texture)
 {
-    if (*count == PVK_WSI_COPIES)
+    if (pvk_grow(pvk_device_alloc(device), &s->wsi_held, &s->wsi_held_capacity, s->wsi_held_count, 1, 4,
+                 sizeof(*s->wsi_held), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE))
+        s->wsi_held[s->wsi_held_count++] = texture;
+    else
+        pvk_release(texture);
+}
+
+/* Submission s reads texture, a drawable's that has an image's contents
+ * (its copies, or a present's draw): resident through the layer's set
+ * (residency), or once Core Animation dropped the drawable (someone else
+ * resized them: the set no longer has its texture, which PlasmaVK alone
+ * holds) through a residency set of s's own. (Metal's shader validation
+ * reads zeros otherwise.) */
+static void pvk_wsi_read(struct pvk_device *device, struct pvk_submission *s, id texture, id residency)
+{
+    id desc;
+    if (!residency || pvk_MTLResidencySet_containsAllocation(residency, texture))
+        return;
+    if (!s->wsi_residency && (desc = pvk_MTLResidencySetDescriptor_new())) {
+        s->wsi_residency =
+            pvk_MTLDevice_newResidencySetWithDescriptor_error(device->physical_device->mtl_device, desc, NULL);
+        pvk_release(desc);
+    }
+    if (s->wsi_residency) /* (else out of memory) */
+        pvk_MTLResidencySet_addAllocation(s->wsi_residency, texture);
+}
+
+/* A copy of image img's contents into dst that submission s makes before
+ * its commands (pvk_wsi_copies, section 16; a present's before its draw);
+ * pvk_wsi_content then gives s the texture to hold. false when s has no
+ * room left. */
+static bool pvk_wsi_copy(struct pvk_submission *s, const struct pvk_swapchain_image *img, id dst, id residency)
+{
+    struct pvk_wsi_copy *c;
+    if (s->wsi_copy_count == PVK_WSI_COPIES)
         return false;
-    copies[*count].src = src;
-    copies[*count].dst = dst;
-    copies[*count].residency = residency;
-    ++*count;
+    c = &s->wsi_copies[s->wsi_copy_count++];
+    c->src = img->content;
+    c->dst = dst;
+    c->residency = residency;
+    if (img->surface)
+        pvk_wsi_read(img->sc->device, s, img->content, residency);
     return true;
 }
 
 /* The contents of image img are now in texture: its own (surface NULL), a
  * drawable's of IOSurface surface, or NULL: undefined. The image's uses
  * resolve to where they are, also after a present (the application may
- * not use the image then, but the CTS reads presented images back). Under
+ * not use the image then, but the CTS reads presented images back). A
+ * drawable's texture they leave, submission s (which moves them) holds
+ * until it is done: its copies read the texture, and the image's earlier
+ * work may still (s comes after that), while nothing else need hold it:
+ * Core Animation drops its drawables when someone else resizes them, and
+ * Metal 4's command buffers retain nothing (released at once, a copy out
+ * of it crashed when encoded after a resize and back). Under
  * pvk_swapchain_lock. */
-static void pvk_wsi_content(struct pvk_swapchain_image *img, id texture, IOSurfaceRef surface)
+static void pvk_wsi_content(struct pvk_submission *s, struct pvk_swapchain_image *img, id texture, IOSurfaceRef surface)
 {
     if (texture != img->content) {
         if (img->surface)
-            pvk_release(img->content);
+            pvk_wsi_hold(img->sc->device, s, img->content);
         img->content = surface ? pvk_retain(texture) : texture;
         img->surface = surface;
     }
     pvk_wsi_slot_set(img->sc->device, img, surface ? texture : NULL, surface ? img->sc->residency : NULL);
 }
 
-/* Drawable texture `texture`, of IOSurface `surface`, is about to be
- * written for image `img`: the contents of any other image of the layer
- * still in that surface (it was presented, and Core Animation hands its
- * drawables out in any order) move to that image's own texture first, by
- * copies made before the writes. Under pvk_swapchain_lock. */
-static void pvk_wsi_spill(struct pvk_swapchain *sc, const struct pvk_swapchain_image *img, IOSurfaceRef surface,
-                          id residency, struct pvk_wsi_copy *copies, uint32_t *count)
+/* A drawable's texture, of IOSurface `surface`, is about to be written for
+ * image `img` by queue's submission s: the contents of any other image of
+ * the layer still in that surface (it was presented, and Core Animation
+ * hands its drawables out in any order) move to that image's own texture
+ * first, by copies made before the writes. A swapchain other than img's
+ * (the application need not wait for s before destroying it) waits for
+ * those copies when destroyed (pvk_swapchain_free). Under
+ * pvk_swapchain_lock. */
+static void pvk_wsi_spill(struct pvk_queue *queue, struct pvk_submission *s, const struct pvk_swapchain_image *img,
+                          IOSurfaceRef surface, id residency)
 {
-    struct pvk_swapchain *x;
+    struct pvk_swapchain *sc = img->sc, *x;
     uint32_t j;
     while (sc->newer)
         sc = sc->newer;
@@ -75653,12 +75744,17 @@ static void pvk_wsi_spill(struct pvk_swapchain *sc, const struct pvk_swapchain_i
             struct pvk_swapchain_image *other = &x->images[j];
             if (other == img || other->surface != surface)
                 continue;
-            if (x->retired && !other->acquired) /* never acquired again */
-                pvk_wsi_content(other, NULL, NULL);
-            else if (pvk_wsi_copy(copies, count, other->content, other->own, residency))
-                pvk_wsi_content(other, other->own, NULL);
-            else /* (more than a submission's copies: not expected) */
-                pvk_wsi_content(other, NULL, NULL);
+            if (x->retired && !other->acquired) { /* never acquired again */
+                pvk_wsi_content(s, other, NULL, NULL);
+            } else if (pvk_wsi_copy(s, other, other->own, residency)) {
+                pvk_wsi_content(s, other, other->own, NULL);
+                if (x != img->sc) {
+                    other->copy_queue = queue;
+                    other->copy_value = s->serial;
+                }
+            } else { /* (more than a submission's copies: not expected) */
+                pvk_wsi_content(s, other, NULL, NULL);
+            }
         }
     }
 }
@@ -75692,17 +75788,17 @@ static void pvk_wsi_first_use(struct pvk_queue *queue, struct pvk_submission *s,
     residency = sc->residency;
     pthread_mutex_lock(&pvk_swapchain_lock);
     if (drawable) {
-        pvk_wsi_spill(sc, img, surface, residency, s->wsi_copies, &s->wsi_copy_count);
+        pvk_wsi_spill(queue, s, img, surface, residency);
         if (img->surface != surface && preserve && img->content)
-            pvk_wsi_copy(s->wsi_copies, &s->wsi_copy_count, img->content, texture, residency);
-        pvk_wsi_content(img, texture, surface);
+            pvk_wsi_copy(s, img, texture, residency);
+        pvk_wsi_content(s, img, texture, surface);
         img->direct = true;
         s->wsi_waits[s->wsi_wait_count++] = pvk_retain(drawable);
         img->waited = 1u << (uint32_t)(queue - device->queues);
     } else {
         if (preserve && img->content && img->content != img->own)
-            pvk_wsi_copy(s->wsi_copies, &s->wsi_copy_count, img->content, img->own, residency);
-        pvk_wsi_content(img, img->own, NULL);
+            pvk_wsi_copy(s, img, img->own, residency);
+        pvk_wsi_content(s, img, img->own, NULL);
     }
     pthread_mutex_unlock(&pvk_swapchain_lock);
     if (!drawable || s->wsi_copy_count > copies) /* (not the common case) */
@@ -75744,7 +75840,10 @@ static void pvk_wsi_batch(struct pvk_queue *queue, struct pvk_submission *s, con
  * found it in date: then the draw covers what both have. Before it, the
  * contents of other images in the drawable's IOSurface move out
  * (pvk_wsi_spill), and contents in a framebufferOnly drawable, which the
- * draw cannot read, to the image's own texture. */
+ * draw cannot read, to the image's own texture. A drawable's texture the
+ * draw reads, the submission holds until it is done and keeps resident (as
+ * those its copies read: pvk_wsi_content, pvk_wsi_read): the image's next
+ * first use may move the contents before the GPU gets to the draw. */
 static VkResult pvk_present_encode(struct pvk_queue *queue, struct pvk_swapchain *sc, struct pvk_swapchain_image *img,
                                    id source, id drawable, struct pvk_submission **out)
 {
@@ -75757,6 +75856,7 @@ static VkResult pvk_present_encode(struct pvk_queue *queue, struct pvk_swapchain
 
     if (!s)
         return VK_ERROR_OUT_OF_HOST_MEMORY;
+    s->serial = queue->serial + 1; /* (pvk_queue_present's, for pvk_wsi_spill) */
     vp.originX = vp.originY = 0.0;
     vp.width = (double)(w < sc->extent.width ? w : sc->extent.width);
     vp.height = (double)(h < sc->extent.height ? h : sc->extent.height);
@@ -75768,13 +75868,21 @@ static VkResult pvk_present_encode(struct pvk_queue *queue, struct pvk_swapchain
     if (surface || unreadable) { /* (also after the swapchain fell back to copies) */
         pthread_mutex_lock(&pvk_swapchain_lock);
         if (surface)
-            pvk_wsi_spill(sc, img, surface, residency, s->wsi_copies, &s->wsi_copy_count);
+            pvk_wsi_spill(queue, s, img, surface, residency);
         if (unreadable) {
-            if (img->content == source && pvk_wsi_copy(s->wsi_copies, &s->wsi_copy_count, source, img->own, residency))
-                pvk_wsi_content(img, img->own, NULL);
+            if (img->content == source && pvk_wsi_copy(s, img, img->own, residency))
+                pvk_wsi_content(s, img, img->own, NULL);
             source = img->own;
         }
         pthread_mutex_unlock(&pvk_swapchain_lock);
+    }
+    if (source != img->own) {
+        pvk_wsi_hold(queue->device, s, pvk_retain(source));
+        pvk_wsi_read(queue->device, s, source, residency);
+    }
+    if (s->wsi_residency) {
+        pvk_MTLResidencySet_commit(s->wsi_residency);
+        pvk_MTL4CommandBuffer_useResidencySet(s->cb, s->wsi_residency);
     }
     if (s->wsi_copy_count)
         pvk_logd(queue->device, PVK_LOG_DEBUG, "PlasmaVK-wsi-present-copy", VK_OBJECT_TYPE_SWAPCHAIN_KHR,
