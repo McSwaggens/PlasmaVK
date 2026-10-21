@@ -31926,6 +31926,16 @@ static void pvk_free_raw(const VkAllocationCallbacks *alloc, void *p)
         free(p);
 }
 
+/* A copy of string s (NULL when out of memory). */
+static char *pvk_strdup_alloc(const VkAllocationCallbacks *alloc, const char *s)
+{
+    size_t n = strlen(s) + 1;
+    char *d = pvk_alloc(alloc, n, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (d)
+        memcpy(d, s, n);
+    return d;
+}
+
 /* Room for `need` more items in an array of `count` items (the address of
  * its pointer in `items`, its capacity in `capacity`), doubling from `min`
  * items. False when out of memory: the array is untouched. */
@@ -32006,6 +32016,11 @@ static void pvk_free(const VkAllocationCallbacks *alloc, void *p)
 }
 
 /* ---- Helpers ---- */
+
+static float pvk_clamp01(float x)
+{
+    return x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x;
+}
 
 static int pvk_find_extension(const VkExtensionProperties *list, uint32_t count, const char *name)
 {
@@ -33263,6 +33278,9 @@ static void pvk_memory_budget(const struct pvk_physical_device *pd, VkPhysicalDe
  * no setBytes), so any size works: Vulkan 1.4's minimum. */
 #define PVK_MAX_PUSH_CONSTANTS_SIZE 256u
 #define PVK_MAX_PUSH_DESCRIPTORS 32u /* Vulkan's minimum */
+/* Vulkan's minimum, a count draw's loop length (section 16): draws record
+ * at most this many. */
+#define PVK_MAX_DRAW_INDIRECT_COUNT 65535u
 
 static void pvk_physical_device_init_memory_limits(struct pvk_physical_device *pd)
 {
@@ -33431,7 +33449,7 @@ static void pvk_physical_device_init_limits(struct pvk_physical_device *pd)
     l->mipmapPrecisionBits = 8;
     l->maxDrawIndexedIndexValue = UINT32_MAX; /* fullDrawIndexUint32 */
     /* multiDrawIndirect: Metal draws a multi-draw's records one by one (section 16, "Draw indices"); Vulkan's minimum */
-    l->maxDrawIndirectCount = 65535;
+    l->maxDrawIndirectCount = PVK_MAX_DRAW_INDIRECT_COUNT;
     l->maxSamplerLodBias = 15.984375f;        /* MTLSamplerDescriptor.lodBias: S4.6 in [-16, 15.999] */
     l->maxSamplerAnisotropy = 16.0f;          /* MTLSamplerDescriptor.maxAnisotropy: 1 to 16 */
     l->maxViewports = 16;                     /* multiViewport (FST: 16 viewports and scissors) */
@@ -34327,13 +34345,8 @@ static const VkImageLayout pvk_host_copy_layout_list[] = {
  * most *count layouts are written and *count is set to the number written. */
 static void pvk_host_copy_layouts(uint32_t *count, VkImageLayout *layouts)
 {
-    uint32_t n = PVK_ARRAY_SIZE(pvk_host_copy_layout_list);
-    if (layouts) {
-        if (*count < n)
-            n = *count;
-        memcpy(layouts, pvk_host_copy_layout_list, n * sizeof(*layouts));
-    }
-    *count = n;
+    (void)pvk_enumerate(pvk_host_copy_layout_list, sizeof(*layouts), PVK_ARRAY_SIZE(pvk_host_copy_layout_list), count,
+                        layouts);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
@@ -36131,6 +36144,15 @@ static VkResult pvk_device_features(const struct pvk_physical_device *pd, const 
 #define PVK_PRIVATE_DATA_ROOM 64u      /* initial table size, a power of two */
 #define PVK_PRIVATE_DATA_GONE UINT64_MAX /* handle of a deleted entry */
 
+/* A table of entries that start with their uint64_t handle (0: empty,
+ * PVK_PRIVATE_DATA_GONE: deleted), open addressing by pvk_private_data_hash:
+ * private data, object names (VK_EXT_debug_utils) and the debug layer's
+ * objects. */
+struct pvk_handle_table {
+    void *entries;
+    uint32_t capacity, used, live; /* used: live and deleted entries */
+};
+
 struct pvk_private_data_entry {
     uint64_t handle; /* 0: empty */
     uint64_t value;
@@ -36142,8 +36164,7 @@ struct pvk_private_data_slot {
     VkAllocationCallbacks alloc;
     bool has_alloc;
     bool reserved;                 /* from the device's reserve, and returned there */
-    uint32_t capacity, used, live; /* used: live and deleted entries */
-    struct pvk_private_data_entry *entries;
+    struct pvk_handle_table table; /* of struct pvk_private_data_entry */
 };
 
 static pthread_mutex_t pvk_private_data_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -36159,44 +36180,102 @@ static uint32_t pvk_private_data_hash(uint64_t handle, uint32_t capacity)
     return (uint32_t)((handle * 0x9e3779b97f4a7c15ull) >> 32) & (capacity - 1);
 }
 
-/* The entry of handle, or NULL. Lock held. */
-static struct pvk_private_data_entry *pvk_private_data_find(const struct pvk_private_data_slot *slot, uint64_t handle)
+/* Entry i of a handle table of entries of esize bytes. */
+static void *pvk_handle_entry(const struct pvk_handle_table *t, size_t esize, uint32_t i)
+{
+    return (char *)t->entries + esize * i;
+}
+
+static uint64_t pvk_handle_of(const void *entry)
+{
+    uint64_t handle;
+    memcpy(&handle, entry, sizeof(handle));
+    return handle;
+}
+
+/* The entry of handle, or NULL. */
+static void *pvk_handle_find(const struct pvk_handle_table *t, size_t esize, uint64_t handle)
 {
     uint32_t i, n;
-    if (!slot->capacity)
+    if (!t->capacity)
         return NULL;
-    for (i = pvk_private_data_hash(handle, slot->capacity), n = 0; n < slot->capacity;
-         i = (i + 1) & (slot->capacity - 1), n++) {
-        if (slot->entries[i].handle == handle)
-            return &slot->entries[i];
-        if (!slot->entries[i].handle)
+    for (i = pvk_private_data_hash(handle, t->capacity), n = 0; n < t->capacity; i = (i + 1) & (t->capacity - 1), n++) {
+        void *e = pvk_handle_entry(t, esize, i);
+        if (pvk_handle_of(e) == handle)
+            return e;
+        if (!pvk_handle_of(e))
             return NULL;
     }
     return NULL;
 }
 
+/* Rebuilds the table with `capacity` entries (a power of two); false when
+ * out of memory. */
+static bool pvk_handle_rehash(struct pvk_handle_table *t, size_t esize, uint32_t capacity,
+                              const VkAllocationCallbacks *alloc, VkSystemAllocationScope scope)
+{
+    struct pvk_handle_table old = *t;
+    uint32_t i, j;
+    if (!(t->entries = pvk_alloc(alloc, esize * capacity, scope))) {
+        *t = old;
+        return false;
+    }
+    t->capacity = capacity;
+    t->used = t->live;
+    for (i = 0; i < old.capacity; i++) {
+        const void *e = pvk_handle_entry(&old, esize, i);
+        uint64_t handle = pvk_handle_of(e);
+        if (!handle || handle == PVK_PRIVATE_DATA_GONE)
+            continue;
+        for (j = pvk_private_data_hash(handle, capacity); pvk_handle_of(pvk_handle_entry(t, esize, j));
+             j = (j + 1) & (capacity - 1))
+            ;
+        memcpy(pvk_handle_entry(t, esize, j), e, esize);
+    }
+    pvk_free_raw(alloc, old.entries);
+    return true;
+}
+
+/* A new entry of handle (not in the table), zeroed; NULL when out of memory.
+ * The table grows from `room` entries, at most 3/4 full (deletions
+ * included), and to at least twice its live entries. */
+static void *pvk_handle_add(struct pvk_handle_table *t, size_t esize, uint64_t handle, uint32_t room,
+                            const VkAllocationCallbacks *alloc, VkSystemAllocationScope scope)
+{
+    uint32_t i;
+    void *e;
+    if (!t->capacity || (t->used + 1) * 4 > t->capacity * 3) {
+        uint32_t capacity = t->capacity ? t->capacity : room;
+        while ((t->live + 1) * 2 > capacity)
+            capacity *= 2;
+        if (!pvk_handle_rehash(t, esize, capacity, alloc, scope))
+            return NULL;
+    }
+    for (i = pvk_private_data_hash(handle, t->capacity);
+         pvk_handle_of(e = pvk_handle_entry(t, esize, i)) && pvk_handle_of(e) != PVK_PRIVATE_DATA_GONE;
+         i = (i + 1) & (t->capacity - 1))
+        ;
+    if (!pvk_handle_of(e))
+        t->used++;
+    t->live++;
+    memset(e, 0, esize);
+    memcpy(e, &handle, sizeof(handle));
+    return e;
+}
+
+/* The entry of handle, or NULL. Lock held. */
+static struct pvk_private_data_entry *pvk_private_data_find(const struct pvk_private_data_slot *slot, uint64_t handle)
+{
+    return pvk_handle_find(&slot->table, sizeof(struct pvk_private_data_entry), handle);
+}
+
 /* Rebuilds the table with `capacity` entries (a power of two). Lock held. */
 static VkResult pvk_private_data_rehash(struct pvk_private_data_slot *slot, uint32_t capacity)
 {
-    struct pvk_private_data_entry *old = slot->entries, *entries;
-    uint32_t i, old_capacity = slot->capacity;
-
-    entries = pvk_alloc(pvk_private_data_alloc(slot), sizeof(*entries) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-    if (!entries)
-        return VK_ERROR_OUT_OF_HOST_MEMORY;
-    slot->entries = entries;
-    slot->capacity = capacity;
-    slot->used = slot->live;
-    for (i = 0; i < old_capacity; i++) {
-        uint32_t j;
-        if (!old[i].handle || old[i].handle == PVK_PRIVATE_DATA_GONE)
-            continue;
-        for (j = pvk_private_data_hash(old[i].handle, capacity); entries[j].handle; j = (j + 1) & (capacity - 1))
-            ;
-        entries[j] = old[i];
-    }
-    pvk_free_raw(pvk_private_data_alloc(slot), old);
-    return VK_SUCCESS;
+    return pvk_handle_rehash(&slot->table, sizeof(struct pvk_private_data_entry), capacity,
+                             pvk_private_data_alloc(slot), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT)
+               ? VK_SUCCESS
+               : VK_ERROR_OUT_OF_HOST_MEMORY;
 }
 
 static void pvk_private_data_delete(struct pvk_private_data_slot *slot, struct pvk_private_data_entry *entry)
@@ -36204,7 +36283,7 @@ static void pvk_private_data_delete(struct pvk_private_data_slot *slot, struct p
     pvk_mark_add(pvk_private_data_marks, entry->handle, -1);
     entry->handle = PVK_PRIVATE_DATA_GONE;
     entry->value = 0;
-    slot->live--;
+    slot->table.live--;
     __atomic_sub_fetch(&pvk_private_data_entries, 1, __ATOMIC_RELEASE);
 }
 
@@ -36212,7 +36291,6 @@ static void pvk_private_data_delete(struct pvk_private_data_slot *slot, struct p
 static VkResult pvk_private_data_set(struct pvk_private_data_slot *slot, uint64_t handle, uint64_t value)
 {
     struct pvk_private_data_entry *entry = pvk_private_data_find(slot, handle);
-    uint32_t i;
 
     if (entry) {
         if (value)
@@ -36223,21 +36301,10 @@ static VkResult pvk_private_data_set(struct pvk_private_data_slot *slot, uint64_
     }
     if (!value)
         return VK_SUCCESS;
-    if (!slot->capacity || (slot->used + 1) * 4 > slot->capacity * 3) { /* at most 3/4 full, deletions included */
-        uint32_t capacity = slot->capacity ? slot->capacity : PVK_PRIVATE_DATA_ROOM;
-        while ((slot->live + 1) * 2 > capacity)
-            capacity *= 2;
-        if (pvk_private_data_rehash(slot, capacity) != VK_SUCCESS)
-            return VK_ERROR_OUT_OF_HOST_MEMORY;
-    }
-    for (i = pvk_private_data_hash(handle, slot->capacity);
-         slot->entries[i].handle && slot->entries[i].handle != PVK_PRIVATE_DATA_GONE; i = (i + 1) & (slot->capacity - 1))
-        ;
-    if (!slot->entries[i].handle)
-        slot->used++;
-    slot->entries[i].handle = handle;
-    slot->entries[i].value = value;
-    slot->live++;
+    if (!(entry = pvk_handle_add(&slot->table, sizeof(*entry), handle, PVK_PRIVATE_DATA_ROOM,
+                                 pvk_private_data_alloc(slot), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT)))
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    entry->value = value;
     pvk_mark_add(pvk_private_data_marks, handle, 1);
     __atomic_add_fetch(&pvk_private_data_entries, 1, __ATOMIC_RELEASE);
     return VK_SUCCESS;
@@ -36287,7 +36354,7 @@ static void pvk_private_data_free_reserve(struct pvk_device *device)
     struct pvk_private_data_slot *slot = device->private_data_reserve, *next;
     for (; slot; slot = next) {
         next = slot->next;
-        pvk_free_raw(pvk_private_data_alloc(slot), slot->entries);
+        pvk_free_raw(pvk_private_data_alloc(slot), slot->table.entries);
         pvk_free_raw(pvk_device_alloc(device), slot);
     }
     device->private_data_reserve = NULL;
@@ -36332,26 +36399,28 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPrivateDataSlot(VkDevice device, VkPrivateDa
                                                     const VkAllocationCallbacks *pAllocator)
 {
     struct pvk_private_data_slot *slot = (struct pvk_private_data_slot *)privateDataSlot;
+    struct pvk_private_data_entry *entries;
     uint32_t i;
     (void)device;
     (void)pAllocator; /* must match creation; the stored copy is authoritative */
     if (!slot)
         return;
     pthread_mutex_lock(&pvk_private_data_lock);
-    for (i = 0; i < slot->capacity; i++)
-        if (slot->entries[i].handle && slot->entries[i].handle != PVK_PRIVATE_DATA_GONE)
-            pvk_mark_add(pvk_private_data_marks, slot->entries[i].handle, -1);
+    entries = slot->table.entries;
+    for (i = 0; i < slot->table.capacity; i++)
+        if (entries[i].handle && entries[i].handle != PVK_PRIVATE_DATA_GONE)
+            pvk_mark_add(pvk_private_data_marks, entries[i].handle, -1);
     if (slot->prev)
         slot->prev->next = slot->next;
     else
         pvk_private_data_slots = slot->next;
     if (slot->next)
         slot->next->prev = slot->prev;
-    __atomic_sub_fetch(&pvk_private_data_entries, (long)slot->live, __ATOMIC_RELEASE);
-    slot->live = slot->used = 0;
+    __atomic_sub_fetch(&pvk_private_data_entries, (long)slot->table.live, __ATOMIC_RELEASE);
+    slot->table.live = slot->table.used = 0;
     if (slot->reserved) { /* back to the reserve, emptied */
-        if (slot->entries)
-            memset(slot->entries, 0, sizeof(*slot->entries) * slot->capacity);
+        if (entries)
+            memset(entries, 0, sizeof(*entries) * slot->table.capacity);
         slot->prev = NULL;
         slot->next = slot->device->private_data_reserve;
         slot->device->private_data_reserve = slot;
@@ -36359,7 +36428,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPrivateDataSlot(VkDevice device, VkPrivateDa
     }
     pthread_mutex_unlock(&pvk_private_data_lock);
     if (slot) {
-        pvk_free_raw(pvk_private_data_alloc(slot), slot->entries);
+        pvk_free_raw(pvk_private_data_alloc(slot), slot->table.entries);
         pvk_free_raw(pvk_private_data_alloc(slot), slot);
     }
 }
@@ -36417,8 +36486,7 @@ struct pvk_name {
 struct pvk_names {
     struct pvk_names *prev, *next; /* pvk_names_tables */
     struct pvk_device *device;
-    uint32_t capacity, used, live; /* used: live and deleted entries */
-    struct pvk_name *entries;
+    struct pvk_handle_table table; /* of struct pvk_name */
 };
 
 static pthread_mutex_t pvk_names_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -36427,16 +36495,7 @@ static struct pvk_names *pvk_names_tables;
 /* Lock held. */
 static struct pvk_name *pvk_names_find(const struct pvk_names *t, uint64_t handle)
 {
-    uint32_t i, n;
-    if (!t || !t->capacity)
-        return NULL;
-    for (i = pvk_private_data_hash(handle, t->capacity), n = 0; n < t->capacity; i = (i + 1) & (t->capacity - 1), n++) {
-        if (t->entries[i].handle == handle)
-            return &t->entries[i];
-        if (!t->entries[i].handle)
-            return NULL;
-    }
-    return NULL;
+    return t ? pvk_handle_find(&t->table, sizeof(struct pvk_name), handle) : NULL;
 }
 
 /* Lock held. */
@@ -36453,7 +36512,7 @@ static void pvk_names_clear(struct pvk_names *t, struct pvk_name *e)
     e->handle = PVK_PRIVATE_DATA_GONE;
     e->name = NULL;
     e->tags = NULL;
-    t->live--;
+    t->table.live--;
     __atomic_sub_fetch(&pvk_named_objects, 1, __ATOMIC_RELEASE);
 }
 
@@ -36464,7 +36523,6 @@ static struct pvk_name *pvk_names_entry(struct pvk_device *device, uint64_t hand
     const VkAllocationCallbacks *alloc = pvk_device_alloc(device);
     struct pvk_names *t = device->names;
     struct pvk_name *e;
-    uint32_t i;
 
     if (!t) {
         if (!(t = pvk_alloc(alloc, sizeof(*t), VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)))
@@ -36478,37 +36536,11 @@ static struct pvk_name *pvk_names_entry(struct pvk_device *device, uint64_t hand
     }
     if ((e = pvk_names_find(t, handle)))
         return e;
-    if (!t->capacity || (t->used + 1) * 4 > t->capacity * 3) { /* at most 3/4 full, deletions included */
-        struct pvk_name *old = t->entries, *entries;
-        uint32_t capacity = t->capacity ? t->capacity : 64, old_capacity = t->capacity, j;
-        while ((t->live + 1) * 2 > capacity)
-            capacity *= 2;
-        if (!(entries = pvk_alloc(alloc, sizeof(*entries) * capacity, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)))
-            return NULL;
-        for (i = 0; i < old_capacity; i++) {
-            if (!old[i].handle || old[i].handle == PVK_PRIVATE_DATA_GONE)
-                continue;
-            for (j = pvk_private_data_hash(old[i].handle, capacity); entries[j].handle; j = (j + 1) & (capacity - 1))
-                ;
-            entries[j] = old[i];
-        }
-        pvk_free_raw(alloc, old);
-        t->entries = entries;
-        t->capacity = capacity;
-        t->used = t->live;
-    }
-    for (i = pvk_private_data_hash(handle, t->capacity);
-         t->entries[i].handle && t->entries[i].handle != PVK_PRIVATE_DATA_GONE; i = (i + 1) & (t->capacity - 1))
-        ;
-    if (!t->entries[i].handle)
-        t->used++;
-    t->entries[i].handle = handle;
-    t->entries[i].name = NULL;
-    t->entries[i].tags = NULL;
-    t->live++;
+    if (!(e = pvk_handle_add(&t->table, sizeof(*e), handle, 64, alloc, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)))
+        return NULL;
     pvk_mark_add(pvk_names_marks, handle, 1);
     __atomic_add_fetch(&pvk_named_objects, 1, __ATOMIC_RELEASE);
-    return &t->entries[i];
+    return e;
 }
 
 static void pvk_names_forget(const void *object)
@@ -36542,13 +36574,15 @@ static bool pvk_name_get(uint64_t handle, char *buf, size_t size)
 static void pvk_names_free(struct pvk_device *device)
 {
     struct pvk_names *t = device->names;
+    struct pvk_name *entries;
     uint32_t i;
     if (!t)
         return;
     pthread_mutex_lock(&pvk_names_lock);
-    for (i = 0; i < t->capacity; i++)
-        if (t->entries[i].handle && t->entries[i].handle != PVK_PRIVATE_DATA_GONE)
-            pvk_names_clear(t, &t->entries[i]);
+    entries = t->table.entries;
+    for (i = 0; i < t->table.capacity; i++)
+        if (entries[i].handle && entries[i].handle != PVK_PRIVATE_DATA_GONE)
+            pvk_names_clear(t, &entries[i]);
     if (t->prev)
         t->prev->next = t->next;
     else
@@ -36556,7 +36590,7 @@ static void pvk_names_free(struct pvk_device *device)
     if (t->next)
         t->next->prev = t->prev;
     pthread_mutex_unlock(&pvk_names_lock);
-    pvk_free_raw(pvk_device_alloc(device), t->entries);
+    pvk_free_raw(pvk_device_alloc(device), t->table.entries);
     pvk_free_raw(pvk_device_alloc(device), t);
     device->names = NULL;
 }
@@ -36670,23 +36704,12 @@ struct pvk_live {
 };
 
 static pthread_mutex_t pvk_live_lock = PTHREAD_MUTEX_INITIALIZER;
-static struct pvk_live *pvk_live_table; /* malloc'd: the layer's own memory */
-static uint32_t pvk_live_capacity, pvk_live_used, pvk_live_count;
+static struct pvk_handle_table pvk_live_table; /* of struct pvk_live, malloc'd: the layer's own memory */
 
 /* Lock held. */
 static struct pvk_live *pvk_live_find(uint64_t handle)
 {
-    uint32_t i, n;
-    if (!pvk_live_capacity)
-        return NULL;
-    for (i = pvk_private_data_hash(handle, pvk_live_capacity), n = 0; n < pvk_live_capacity;
-         i = (i + 1) & (pvk_live_capacity - 1), n++) {
-        if (pvk_live_table[i].handle == handle)
-            return &pvk_live_table[i];
-        if (!pvk_live_table[i].handle)
-            return NULL;
-    }
-    return NULL;
+    return pvk_handle_find(&pvk_live_table, sizeof(struct pvk_live), handle);
 }
 
 /* Records a new object (debug layer only). */
@@ -36695,42 +36718,14 @@ static void pvk_live_add(const struct pvk_device *device, VkObjectType type, con
 {
     uint64_t handle = (uint64_t)(uintptr_t)object;
     struct pvk_live *e;
-    uint32_t i;
     if (!device->debug || !object)
         return;
     pthread_mutex_lock(&pvk_live_lock);
-    if (!(e = pvk_live_find(handle))) {
-        if ((pvk_live_used + 1) * 4 > pvk_live_capacity * 3) {
-            struct pvk_live *old = pvk_live_table, *table;
-            uint32_t capacity = pvk_live_capacity ? pvk_live_capacity : 1024, old_capacity = pvk_live_capacity, j;
-            while ((pvk_live_count + 1) * 2 > capacity)
-                capacity *= 2;
-            if (!(table = calloc(capacity, sizeof(*table)))) {
-                pthread_mutex_unlock(&pvk_live_lock);
-                return; /* untracked: its checks are skipped */
-            }
-            for (i = 0; i < old_capacity; i++) {
-                if (!old[i].handle || old[i].handle == PVK_PRIVATE_DATA_GONE)
-                    continue;
-                for (j = pvk_private_data_hash(old[i].handle, capacity); table[j].handle; j = (j + 1) & (capacity - 1))
-                    ;
-                table[j] = old[i];
-            }
-            free(old);
-            pvk_live_table = table;
-            pvk_live_capacity = capacity;
-            pvk_live_used = pvk_live_count;
-        }
-        for (i = pvk_private_data_hash(handle, pvk_live_capacity);
-             pvk_live_table[i].handle && pvk_live_table[i].handle != PVK_PRIVATE_DATA_GONE;
-             i = (i + 1) & (pvk_live_capacity - 1))
-            ;
-        if (!pvk_live_table[i].handle)
-            pvk_live_used++;
-        pvk_live_count++;
-        e = &pvk_live_table[i];
+    if (!(e = pvk_live_find(handle)) &&
+        !(e = pvk_handle_add(&pvk_live_table, sizeof(*e), handle, 1024, NULL, VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE))) {
+        pthread_mutex_unlock(&pvk_live_lock);
+        return; /* untracked: its checks are skipped */
     }
-    e->handle = handle;
     e->device = device;
     e->parent = parent;
     e->type = type;
@@ -36744,7 +36739,7 @@ static void pvk_live_remove(const void *object)
     pthread_mutex_lock(&pvk_live_lock);
     if ((e = pvk_live_find((uint64_t)(uintptr_t)object))) {
         e->handle = PVK_PRIVATE_DATA_GONE;
-        pvk_live_count--;
+        pvk_live_table.live--;
     }
     pthread_mutex_unlock(&pvk_live_lock);
 }
@@ -36844,15 +36839,15 @@ static void pvk_live_leaks(const struct pvk_device *device)
     char what[256];
 
     pthread_mutex_lock(&pvk_live_lock);
-    for (i = 0; i < pvk_live_capacity; i++) {
-        struct pvk_live *e = &pvk_live_table[i];
+    for (i = 0; i < pvk_live_table.capacity; i++) {
+        struct pvk_live *e = pvk_handle_entry(&pvk_live_table, sizeof(*e), i);
         if (!e->handle || e->handle == PVK_PRIVATE_DATA_GONE || e->device != device)
             continue;
         if (n < PVK_ARRAY_SIZE(leaked))
             leaked[n++] = *e;
         total++;
         e->handle = PVK_PRIVATE_DATA_GONE;
-        pvk_live_count--;
+        pvk_live_table.live--;
     }
     pthread_mutex_unlock(&pvk_live_lock);
     for (i = 0; i < n; i++)
@@ -36876,10 +36871,8 @@ static bool pvk_labels_push(struct pvk_labels *l, const VkAllocationCallbacks *a
     memset(item, 0, sizeof(*item));
     item->text = text ? text : "";
     if (copy) {
-        size_t n = strlen(item->text) + 1;
-        if (!(item->owned = pvk_alloc(alloc, n, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT)))
+        if (!(item->owned = pvk_strdup_alloc(alloc, item->text)))
             return false;
-        memcpy(item->owned, item->text, n);
         item->text = item->owned;
     }
     if (color)
@@ -36975,11 +36968,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkSetDebugUtilsObjectNameEXT(VkDevice _device, co
         return VK_ERROR_VALIDATION_FAILED_EXT;
     if (!handle)
         return VK_SUCCESS;
-    if (len) {
-        if (!(copy = pvk_alloc(alloc, len + 1, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT)))
-            return VK_ERROR_OUT_OF_HOST_MEMORY;
-        memcpy(copy, name, len + 1);
-    }
+    if (len && !(copy = pvk_strdup_alloc(alloc, name)))
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
     pthread_mutex_lock(&pvk_names_lock);
     e = copy ? pvk_names_entry(device, handle) : pvk_names_find(device->names, handle);
     if (e) {
@@ -37166,6 +37156,8 @@ static void pvk_device_commit_residency(struct pvk_device *device)
     pthread_mutex_unlock(&device->residency_lock);
 }
 
+static id pvk_placement_heap_new(id mtl, pvk_MTLResourceOptions options, VkDeviceSize size, bool sparse);
+
 /* With sparseBinding: what vkQueueBindSparse maps after unbinding to make
  * the unbinds take effect (section 16): a one-block placement heap, a
  * one-block placement sparse buffer and a texture of one tile (128x128
@@ -37187,15 +37179,7 @@ static VkResult pvk_device_init_sparse(struct pvk_device *device)
     pvk_MTL4CommandQueue_addResidencySet(device->sparse_queue, device->residency_set);
     pool = objc_autoreleasePoolPush();
 
-    desc = pvk_MTLHeapDescriptor_new();
-    if (desc) {
-        pvk_MTLHeapDescriptor_setType(desc, PVK_MTLHeapTypePlacement);
-        pvk_MTLHeapDescriptor_setResourceOptions(desc, options);
-        pvk_MTLHeapDescriptor_setSize(desc, PVK_SPARSE_BLOCK);
-        pvk_MTLHeapDescriptor_setMaxCompatiblePlacementSparsePageSize(desc, PVK_SPARSE_PAGE);
-        device->sparse_heap = pvk_MTLDevice_newHeapWithDescriptor(mtl, desc);
-        pvk_release(desc);
-    }
+    device->sparse_heap = pvk_placement_heap_new(mtl, options, PVK_SPARSE_BLOCK, true);
     device->sparse_flush_buffer =
         pvk_MTLDevice_newBufferWithLength_options_placementSparsePageSize(mtl, PVK_SPARSE_BLOCK, options, PVK_SPARSE_PAGE);
     desc = pvk_MTLTextureDescriptor_new();
@@ -38941,7 +38925,7 @@ static void pvk_image_init_planes(const struct pvk_physical_device *pd, struct p
         }
         pvk_texture_requirements(pd, image, pl->fmt->mtl, pl->width, pl->height, pl->row_pitch, &pl->size, &pl->align);
         if (!(image->flags & VK_IMAGE_CREATE_DISJOINT_BIT)) {
-            pl->offset = (end + pl->align - 1) / pl->align * pl->align;
+            pl->offset = pvk_round_up(end, pl->align);
             end = pl->offset + pl->size;
         }
     }
@@ -39145,7 +39129,6 @@ static bool pvk_sparse_residency_init(struct pvk_device *device, const struct pv
     pvk_MTLResourceOptions options = PVK_MTLResourceStorageModePrivate | PVK_MTLResourceHazardTrackingModeUntracked;
     uint32_t lv, w, h, d, tiles = 0;
     void *pool;
-    id desc;
 
     if (!(image->usage & VK_IMAGE_USAGE_STORAGE_BIT))
         return true;
@@ -39171,15 +39154,8 @@ static bool pvk_sparse_residency_init(struct pvk_device *device, const struct pv
     l->res_tail_tiles = tiles;
     if (tiles) {
         pool = objc_autoreleasePoolPush();
-        desc = pvk_MTLHeapDescriptor_new();
-        if (desc) {
-            pvk_MTLHeapDescriptor_setType(desc, PVK_MTLHeapTypePlacement);
-            pvk_MTLHeapDescriptor_setResourceOptions(desc, options);
-            pvk_MTLHeapDescriptor_setSize(desc, (unsigned long)tiles * PVK_SPARSE_BLOCK);
-            pvk_MTLHeapDescriptor_setMaxCompatiblePlacementSparsePageSize(desc, PVK_SPARSE_PAGE);
-            l->res_heap = pvk_MTLDevice_newHeapWithDescriptor(device->physical_device->mtl_device, desc);
-            pvk_release(desc);
-        }
+        l->res_heap = pvk_placement_heap_new(device->physical_device->mtl_device, options,
+                                             (VkDeviceSize)tiles * PVK_SPARSE_BLOCK, true);
         objc_autoreleasePoolPop(pool);
         if (!l->res_heap) {
             pvk_release(l->residency);
@@ -39284,7 +39260,7 @@ static void pvk_image_memory_requirements(const struct pvk_device *device, const
         /* All planes, one after the other (pvk_image_init_planes). */
         for (p = 0; p < image->plane_count; p++) {
             const struct pvk_image_plane *pl = &image->planes[p];
-            size = ((size + pl->align - 1) / pl->align * pl->align) + pl->size;
+            size = pvk_round_up(size, pl->align) + pl->size;
             if (pl->align > align)
                 align = pl->align;
         }
@@ -39669,6 +39645,11 @@ static uint32_t pvk_mip_extent(uint32_t extent, uint32_t level)
     return extent ? extent : 1;
 }
 
+static uint32_t pvk_layer_count(const VkImageSubresourceLayers *sub, const struct pvk_image *image)
+{
+    return sub->layerCount == VK_REMAINING_ARRAY_LAYERS ? image->layers - sub->baseArrayLayer : sub->layerCount;
+}
+
 /* The layout of a subresource: linear images' rows in memory, otherwise the
  * tightly packed texels of VK_HOST_IMAGE_COPY_MEMCPY (VkSubresourceHostMemcpySize). */
 static void pvk_image_subresource_layout(const struct pvk_image *image, const VkImageSubresource *sub,
@@ -39787,6 +39768,41 @@ static pvk_MTLTextureSwizzle pvk_view_swizzle(const struct pvk_format *f, VkComp
     return (pvk_MTLTextureSwizzle)(PVK_MTLTextureSwizzleRed + channel);
 }
 
+static const pvk_MTLTextureSwizzleChannels pvk_swizzle_identity = {
+    PVK_MTLTextureSwizzleRed, PVK_MTLTextureSwizzleGreen, PVK_MTLTextureSwizzleBlue, PVK_MTLTextureSwizzleAlpha
+};
+
+static bool pvk_swizzle_is_identity(pvk_MTLTextureSwizzleChannels s)
+{
+    return s.red == PVK_MTLTextureSwizzleRed && s.green == PVK_MTLTextureSwizzleGreen &&
+           s.blue == PVK_MTLTextureSwizzleBlue && s.alpha == PVK_MTLTextureSwizzleAlpha;
+}
+
+/* Releases a view's textures (and evicts those made resident). */
+static void pvk_image_view_release(struct pvk_device *device, struct pvk_image_view *view)
+{
+    uint32_t p;
+    for (p = 0; p < 2; p++) {
+        if (view->planes[p] && view->resident)
+            pvk_device_evict(device, view->planes[p]);
+        pvk_release(view->planes[p]);
+    }
+    if (view->resident && view->mtl_residency)
+        pvk_device_evict(device, view->mtl_residency);
+    pvk_release(view->mtl_residency);
+    if (view->resident && view->mtl_storage)
+        pvk_device_evict(device, view->mtl_storage);
+    pvk_release(view->mtl_storage);
+    if (view->resident && view->mtl_stencil)
+        pvk_device_evict(device, view->mtl_stencil);
+    pvk_release(view->mtl_stencil);
+    if (view->resident)
+        pvk_device_evict(device, view->mtl_texture);
+    pvk_release(view->mtl_texture);
+    pvk_release(view->mtl_attachment);
+    pvk_release(view->mtl_int_attachment);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImageViewCreateInfo *pCreateInfo,
                                                  const VkAllocationCallbacks *pAllocator, VkImageView *pView)
 {
@@ -39874,10 +39890,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
         swizzle.blue = pvk_view_swizzle(f, pCreateInfo->components.b, 2);
         swizzle.alpha = pvk_view_swizzle(f, pCreateInfo->components.a, 3);
     } else {
-        swizzle.red = PVK_MTLTextureSwizzleRed;
-        swizzle.green = PVK_MTLTextureSwizzleGreen;
-        swizzle.blue = PVK_MTLTextureSwizzleBlue;
-        swizzle.alpha = PVK_MTLTextureSwizzleAlpha;
+        swizzle = pvk_swizzle_identity;
     }
 
     if (image->memoryless) {
@@ -39887,8 +39900,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
     } else if (!image->plane_count && !image->sparse && format == image->fmt->mtl && type == image->mtl_type &&
                levels.location == 0 && levels.length == image->levels && slices.location == 0 &&
                slices.length == (image->type == VK_IMAGE_TYPE_3D ? 1 : image->layers) &&
-               swizzle.red == PVK_MTLTextureSwizzleRed && swizzle.green == PVK_MTLTextureSwizzleGreen &&
-               swizzle.blue == PVK_MTLTextureSwizzleBlue && swizzle.alpha == PVK_MTLTextureSwizzleAlpha) {
+               pvk_swizzle_is_identity(swizzle)) {
         /* All of the image as it is: the image's texture itself, which a
          * view would only duplicate (about 0.6 us to make, 0.2 us to free). */
         view->mtl_texture = pvk_retain(image->mtl_texture);
@@ -39900,10 +39912,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
         /* The other planes of a multi-planar image, for Y'CbCr sampling
          * (their components are the identity, as a conversion requires). */
         for (p = 1; planes && p < image->plane_count; p++) {
-            pvk_MTLTextureSwizzleChannels identity = { PVK_MTLTextureSwizzleRed, PVK_MTLTextureSwizzleGreen,
-                                                       PVK_MTLTextureSwizzleBlue, PVK_MTLTextureSwizzleAlpha };
             view->planes[p - 1] = pvk_MTLTexture_newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(
-                image->planes[p].mtl_texture, image->planes[p].fmt->mtl, type, levels, slices, identity);
+                image->planes[p].mtl_texture, image->planes[p].fmt->mtl, type, levels, slices, pvk_swizzle_identity);
             if (!view->planes[p - 1]) {
                 pvk_release(view->mtl_texture);
                 view->mtl_texture = NULL;
@@ -39939,8 +39949,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
         objc_autoreleasePoolPop(pool);
     }
     if (!view->mtl_texture) {
-        pvk_release(view->planes[0]);
-        pvk_release(view->planes[1]);
+        pvk_image_view_release(device, view);
         pvk_free(alloc, view);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -39948,18 +39957,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
      * a depth/stencil image (X32_Stencil8, for sampling) as the image's own
      * format: Metal renders to no X32_Stencil8 view. */
     if (!image->memoryless && (image->mtl_usage & PVK_MTLTextureUsageRenderTarget) &&
-        (swizzle.red != PVK_MTLTextureSwizzleRed || swizzle.green != PVK_MTLTextureSwizzleGreen ||
-         swizzle.blue != PVK_MTLTextureSwizzleBlue || swizzle.alpha != PVK_MTLTextureSwizzleAlpha ||
-         format == PVK_MTLPixelFormatX32_Stencil8)) {
-        pvk_MTLTextureSwizzleChannels identity;
-        identity.red = PVK_MTLTextureSwizzleRed;
-        identity.green = PVK_MTLTextureSwizzleGreen;
-        identity.blue = PVK_MTLTextureSwizzleBlue;
-        identity.alpha = PVK_MTLTextureSwizzleAlpha;
+        (!pvk_swizzle_is_identity(swizzle) || format == PVK_MTLPixelFormatX32_Stencil8)) {
         pool = objc_autoreleasePoolPush();
         view->mtl_attachment = pvk_MTLTexture_newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(
             image->mtl_texture, format == PVK_MTLPixelFormatX32_Stencil8 ? f->mtl : format, type, levels, slices,
-            identity);
+            pvk_swizzle_identity);
         objc_autoreleasePoolPop(pool);
     } else {
         view->mtl_attachment = pvk_retain(view->mtl_texture);
@@ -39967,14 +39969,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
     if (view->mtl_attachment && !image->memoryless && pvk_snorm_as_sint(format) &&
         (image->mtl_usage & (PVK_MTLTextureUsageRenderTarget | PVK_MTLTextureUsagePixelFormatView)) ==
             (PVK_MTLTextureUsageRenderTarget | PVK_MTLTextureUsagePixelFormatView)) {
-        pvk_MTLTextureSwizzleChannels identity;
-        identity.red = PVK_MTLTextureSwizzleRed;
-        identity.green = PVK_MTLTextureSwizzleGreen;
-        identity.blue = PVK_MTLTextureSwizzleBlue;
-        identity.alpha = PVK_MTLTextureSwizzleAlpha;
         pool = objc_autoreleasePoolPush();
         view->mtl_int_attachment = pvk_MTLTexture_newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(
-            image->mtl_texture, pvk_snorm_as_sint(format), type, levels, slices, identity);
+            image->mtl_texture, pvk_snorm_as_sint(format), type, levels, slices, pvk_swizzle_identity);
         objc_autoreleasePoolPop(pool);
         if (!view->mtl_int_attachment) {
             pvk_release(view->mtl_attachment);
@@ -39982,12 +39979,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
         }
     }
     if (!view->mtl_attachment) {
-        pvk_release(view->mtl_texture);
-        pvk_release(view->mtl_storage);
-        pvk_release(view->mtl_stencil);
-        pvk_release(view->mtl_residency);
-        pvk_release(view->planes[0]);
-        pvk_release(view->planes[1]);
+        pvk_image_view_release(device, view);
         pvk_free(alloc, view);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -40025,28 +40017,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice _device, const VkImage
 VKAPI_ATTR void VKAPI_CALL vkDestroyImageView(VkDevice device, VkImageView imageView, const VkAllocationCallbacks *pAllocator)
 {
     struct pvk_image_view *view = (struct pvk_image_view *)imageView;
-    uint32_t p;
     if (!view || !pvk_live_destroy((struct pvk_device *)device, VK_OBJECT_TYPE_IMAGE_VIEW, view, pAllocator))
         return;
-    for (p = 0; p < 2; p++) {
-        if (view->planes[p] && view->resident)
-            pvk_device_evict((struct pvk_device *)device, view->planes[p]);
-        pvk_release(view->planes[p]);
-    }
-    if (view->resident && view->mtl_residency)
-        pvk_device_evict((struct pvk_device *)device, view->mtl_residency);
-    pvk_release(view->mtl_residency);
-    if (view->resident && view->mtl_storage)
-        pvk_device_evict((struct pvk_device *)device, view->mtl_storage);
-    pvk_release(view->mtl_storage);
-    if (view->resident && view->mtl_stencil)
-        pvk_device_evict((struct pvk_device *)device, view->mtl_stencil);
-    pvk_release(view->mtl_stencil);
-    if (view->resident)
-        pvk_device_evict((struct pvk_device *)device, view->mtl_texture);
-    pvk_release(view->mtl_texture);
-    pvk_release(view->mtl_attachment);
-    pvk_release(view->mtl_int_attachment);
+    pvk_image_view_release((struct pvk_device *)device, view);
     pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), view);
 }
 
@@ -40674,8 +40647,7 @@ static VkResult pvk_host_copy(struct pvk_device *device, struct pvk_image *image
         region.extent.height = image->type == VK_IMAGE_TYPE_1D ? 1 : pvk_mip_extent(height, r->sub.mipLevel);
         region.extent.depth = image->type == VK_IMAGE_TYPE_3D ? pvk_mip_extent(image->extent.depth, r->sub.mipLevel) : 1;
     }
-    layers = region.sub.layerCount == VK_REMAINING_ARRAY_LAYERS ? image->layers - region.sub.baseArrayLayer
-                                                                : region.sub.layerCount;
+    layers = pvk_layer_count(&region.sub, image);
     row_bytes = (VkDeviceSize)(((region.row_length ? region.row_length : region.extent.width) + f->block_w - 1) / f->block_w) * bytes;
     image_bytes = (VkDeviceSize)(((region.image_height ? region.image_height : region.extent.height) + f->block_h - 1) /
                                  f->block_h) * row_bytes;
@@ -40760,9 +40732,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCopyImageToImage(VkDevice _device, const VkCopy
         struct pvk_host_region r;
         VkDeviceSize size;
         uint32_t sw, sh, dw, dh; /* level 0 extents of the aspects (planes) */
-        uint32_t layers = c->srcSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS
-                              ? src->layers - c->srcSubresource.baseArrayLayer
-                              : c->srcSubresource.layerCount;
+        uint32_t layers = pvk_layer_count(&c->srcSubresource, src);
         uint32_t w, h, d = whole ? (src->type == VK_IMAGE_TYPE_3D ? pvk_mip_extent(src->extent.depth, c->srcSubresource.mipLevel) : 1)
                                  : c->extent.depth;
         const VkImageAspectFlags ds = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
@@ -43501,7 +43471,7 @@ struct pvk_spv_const {
      * function constant args[0] itself; PVK_SPV_OpCopyObject, constant
      * args[0]; else OpSpecConstantOp sop of the scalar constants args. */
     uint64_t deps;
-    uint32_t sop, nargs;
+    uint32_t sop;
     uint32_t args[3];
 };
 
@@ -44385,7 +44355,6 @@ static uint32_t pvk_spv_synthetic_fc(struct pvk_spv *ctx, uint32_t type, uint64_
     struct pvk_spv_const *c = pvk_spv_get(ctx, id)->c;
     c->deps = deps;
     c->sop = sop;
-    c->nargs = nargs;
     for (i = 0; i < nargs; i++)
         c->args[i] = args[i];
     PVK_SPV_PUSH(ctx, ctx->const_order, ctx->nconsts, ctx->cap_consts, id);
@@ -44620,7 +44589,6 @@ static void pvk_spv_fc_copy(struct pvk_spv_const *c, uint32_t src)
 {
     if (c->deps && !c->parts) {
         c->sop = PVK_SPV_OpCopyObject;
-        c->nargs = 1;
         c->args[0] = src;
     }
 }
@@ -44701,7 +44669,6 @@ static void pvk_spv_spec_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in, 
                     c->value = pvk_spv_const_bits(ctx, cv ? a : b);
                     c->deps = d;
                     c->sop = PVK_SPV_OpSelect;
-                    c->nargs = 3;
                     memcpy(c->args, args, sizeof(args));
                 } else {
                     parts[k] = pvk_spv_synthetic_fc(ctx, r->elem, pvk_spv_const_bits(ctx, cv ? args[1] : args[2]), d,
@@ -44771,7 +44738,6 @@ static void pvk_spv_spec_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in, 
                 c->value = value;
                 if ((c->deps = d)) {
                     c->sop = op;
-                    c->nargs = nops;
                     memcpy(c->args, parts_k, sizeof(uint32_t) * nops);
                 }
             } else {
@@ -44917,7 +44883,6 @@ static void pvk_spv_parse_constant(struct pvk_spv *ctx, const struct pvk_spv_ins
         if (fc) {
             c->deps = (uint64_t)1 << slot;
             c->sop = 0;
-            c->nargs = 1;
             c->args[0] = slot;
         } else if (pvk_spv_specialization(ctx, x->spec_id, &v)) {
             c->value = t->op == PVK_SPV_OpTypeBool ? (v != 0) : (v & pvk_spv_mask(t->width));
@@ -47633,23 +47598,6 @@ static bool pvk_spv_kind_matches(VkDescriptorType kind, VkDescriptorType type, b
     }
 }
 
-/* Size of one descriptor in a set table (section 11), 0 if unsupported. */
-static uint32_t pvk_spv_desc_size(VkDescriptorType type)
-{
-    switch (type) {
-    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC: case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
-    case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-        return 16;
-    case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-    case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER: case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-    case VK_DESCRIPTOR_TYPE_SAMPLER: case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
-        return 8;
-    default:
-        return 0;
-    }
-}
-
 static struct pvk_spv_binding *pvk_spv_binding_of(struct pvk_spv *ctx, uint32_t set, uint32_t binding)
 {
     uint32_t i;
@@ -47721,7 +47669,7 @@ static void pvk_spv_default_layout(struct pvk_spv *ctx, uint32_t first, uint32_t
         b->layout.type = type;
         b->layout.count = runtime ? 0 : count;
         b->layout.variable_count = runtime;
-        b->layout.stride = pvk_spv_desc_size(type);
+        b->layout.stride = pvk_descriptor_stride(type);
         b->layout.offset = (uint32_t)pvk_spv_round((uint32_t)cur, 16);
         cur = (uint64_t)b->layout.offset + (uint64_t)b->layout.stride * count;
         if (cur > (1u << 30))
@@ -47801,7 +47749,7 @@ static void pvk_spv_binding_members(struct pvk_spv *ctx)
 
         pvk_spv_resource_kind(ctx, b->var, &obj0);
         b->array = !inline_block && (l->count != 1 || l->variable_count);
-        b->size = inline_block ? pvk_spv_type(ctx, obj0)->size : pvk_spv_desc_size(l->type);
+        b->size = inline_block ? pvk_spv_type(ctx, obj0)->size : pvk_descriptor_stride(l->type);
         b->align = inline_block ? pvk_spv_type(ctx, obj0)->align : 8;
         if (!b->size)
             pvk_spv_fail(ctx, "set %u binding %u: unsupported descriptor type %d", b->set, l->binding, (int)l->type);
@@ -49438,6 +49386,52 @@ static void pvk_spv_coherence(struct pvk_spv *ctx)
         ctx->dev = "device coherent(device)";
 }
 
+/* The Metal function of an atomic read-modify-write opcode ("fetch_add"...),
+ * NULL for other opcodes. */
+static const char *pvk_spv_atomic_name(uint32_t op)
+{
+    switch (op) {
+    case PVK_SPV_OpAtomicExchange: return "exchange";
+    case PVK_SPV_OpAtomicIAdd: case PVK_SPV_OpAtomicFAddEXT: return "fetch_add";
+    case PVK_SPV_OpAtomicISub: return "fetch_sub";
+    case PVK_SPV_OpAtomicSMin: case PVK_SPV_OpAtomicUMin: return "fetch_min";
+    case PVK_SPV_OpAtomicSMax: case PVK_SPV_OpAtomicUMax: return "fetch_max";
+    case PVK_SPV_OpAtomicAnd: return "fetch_and";
+    case PVK_SPV_OpAtomicOr: return "fetch_or";
+    case PVK_SPV_OpAtomicXor: return "fetch_xor";
+    default: return NULL;
+    }
+}
+
+/* Whether an atomic on an integer of signedness sg operates as signed. */
+static bool pvk_spv_atomic_signed(uint32_t op, bool sg)
+{
+    if (op == PVK_SPV_OpAtomicSMin || op == PVK_SPV_OpAtomicSMax)
+        return true;
+    if (op == PVK_SPV_OpAtomicUMin || op == PVK_SPV_OpAtomicUMax)
+        return false;
+    return sg;
+}
+
+/* Whether an atomic has a value operand (word `first`). */
+static bool pvk_spv_atomic_has_value(const struct pvk_spv_insn *in, uint32_t first)
+{
+    return in->wc > first && in->op != PVK_SPV_OpAtomicIIncrement && in->op != PVK_SPV_OpAtomicIDecrement &&
+           in->op != PVK_SPV_OpAtomicLoad && in->op != PVK_SPV_OpAtomicCompareExchange &&
+           in->op != PVK_SPV_OpAtomicCompareExchangeWeak;
+}
+
+/* An atomic's memory scope and semantics (a compare-exchange's with the
+ * acquire of its Unequal semantics). */
+static void pvk_spv_atomic_order(struct pvk_spv *ctx, const struct pvk_spv_insn *in, uint32_t *scope, uint32_t *sem)
+{
+    bool store = in->op == PVK_SPV_OpAtomicStore;
+    *scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 2 : 4));
+    *sem = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 3 : 5));
+    if (in->op == PVK_SPV_OpAtomicCompareExchange || in->op == PVK_SPV_OpAtomicCompareExchangeWeak)
+        *sem |= pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 6)) & PVK_SPV_SEM_ACQUIRE;
+}
+
 /* Atomics on a texel (OpImageTexelPointer): Metal texture atomics, on
  * 32-bit integer storage images and texel buffers. */
 static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in, const struct pvk_spv_ptr *p)
@@ -49459,19 +49453,11 @@ static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn 
         pvk_spv_fail(ctx, "image atomics need a readable and writable storage image");
     if (!store && pvk_spv_get(ctx, rid)->type != p->type)
         pvk_spv_fail(ctx, "atomic result type differs from the pointee type");
-    scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 2 : 4));
-    sem = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 3 : 5));
-    if (in->op == PVK_SPV_OpAtomicCompareExchange || in->op == PVK_SPV_OpAtomicCompareExchangeWeak)
-        sem |= pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 6)) & PVK_SPV_SEM_ACQUIRE;
-    tsg = sg = st->is_signed;
-    if (in->op == PVK_SPV_OpAtomicSMin || in->op == PVK_SPV_OpAtomicSMax)
-        sg = true;
-    if (in->op == PVK_SPV_OpAtomicUMin || in->op == PVK_SPV_OpAtomicUMax)
-        sg = false;
+    pvk_spv_atomic_order(ctx, in, &scope, &sem);
+    tsg = st->is_signed;
+    sg = pvk_spv_atomic_signed(in->op, tsg);
     t4 = pvk_spv_fmt(ctx, "%s4", st->msl);
-    if (in->wc > first && in->op != PVK_SPV_OpAtomicIIncrement && in->op != PVK_SPV_OpAtomicIDecrement &&
-        in->op != PVK_SPV_OpAtomicLoad && in->op != PVK_SPV_OpAtomicCompareExchange &&
-        in->op != PVK_SPV_OpAtomicCompareExchangeWeak)
+    if (pvk_spv_atomic_has_value(in, first))
         v = pvk_spv_ival(ctx, in->w[first], sg);
 
     switch (in->op) {
@@ -49517,16 +49503,9 @@ static void pvk_spv_image_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn 
         e = pvk_spv_fmt(ctx, "%s.atomic_fetch_%s(%s, %s(1)).x", img,
                         in->op == PVK_SPV_OpAtomicIIncrement ? "add" : "sub", args, t4);
         break;
-    case PVK_SPV_OpAtomicExchange: what = "exchange"; break;
-    case PVK_SPV_OpAtomicIAdd: what = "fetch_add"; break;
-    case PVK_SPV_OpAtomicISub: what = "fetch_sub"; break;
-    case PVK_SPV_OpAtomicSMin: case PVK_SPV_OpAtomicUMin: what = "fetch_min"; break;
-    case PVK_SPV_OpAtomicSMax: case PVK_SPV_OpAtomicUMax: what = "fetch_max"; break;
-    case PVK_SPV_OpAtomicAnd: what = "fetch_and"; break;
-    case PVK_SPV_OpAtomicOr: what = "fetch_or"; break;
-    case PVK_SPV_OpAtomicXor: what = "fetch_xor"; break;
     default:
-        pvk_spv_fail(ctx, "unsupported image atomic (opcode %u)", in->op);
+        if (in->op == PVK_SPV_OpAtomicFAddEXT || !(what = pvk_spv_atomic_name(in->op)))
+            pvk_spv_fail(ctx, "unsupported image atomic (opcode %u)", in->op);
     }
     if (what && !v)
         pvk_spv_fail(ctx, "atomic without a value operand");
@@ -49573,11 +49552,7 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
         pvk_spv_fail(ctx, "64-bit atomics are not supported yet");
     if (!(t->op == PVK_SPV_OpTypeInt && t->width == 32) && !(t->op == PVK_SPV_OpTypeFloat && t->width == 32))
         pvk_spv_fail(ctx, "atomics need a 32-bit integer or float");
-    sg = t->is_signed;
-    if (in->op == PVK_SPV_OpAtomicSMin || in->op == PVK_SPV_OpAtomicSMax)
-        sg = true;
-    if (in->op == PVK_SPV_OpAtomicUMin || in->op == PVK_SPV_OpAtomicUMax)
-        sg = false;
+    sg = pvk_spv_atomic_signed(in->op, t->is_signed);
     if (t->op == PVK_SPV_OpTypeFloat) {
         if (in->op != PVK_SPV_OpAtomicLoad && in->op != PVK_SPV_OpAtomicStore && in->op != PVK_SPV_OpAtomicExchange &&
             in->op != PVK_SPV_OpAtomicFAddEXT)
@@ -49588,16 +49563,11 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
             pvk_spv_fail(ctx, "OpAtomicFAddEXT on an integer");
         atype = sg ? "atomic_int" : "atomic_uint";
     }
-    scope = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 2 : 4));
-    sem = pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, store ? 3 : 5));
-    if (in->op == PVK_SPV_OpAtomicCompareExchange || in->op == PVK_SPV_OpAtomicCompareExchangeWeak)
-        sem |= pvk_spv_const_u32(ctx, pvk_spv_arg(ctx, in, 6)) & PVK_SPV_SEM_ACQUIRE; /* Unequal */
+    pvk_spv_atomic_order(ctx, in, &scope, &sem);
     own = p->storage == PVK_SPV_StorageWorkgroup ? PVK_SPV_SemanticsWorkgroupMemory : PVK_SPV_SemanticsUniformMemory;
     obj = p->vec ? pvk_spv_fmt(ctx, "(%s %s*)%s", space, atype, pvk_spv_comp_addr(ctx, p)) /* a vector component */
                  : pvk_spv_fmt(ctx, "(%s %s*)&%s", space, atype, p->expr);
-    if (in->wc > first && in->op != PVK_SPV_OpAtomicIIncrement && in->op != PVK_SPV_OpAtomicIDecrement &&
-        in->op != PVK_SPV_OpAtomicLoad && in->op != PVK_SPV_OpAtomicCompareExchange &&
-        in->op != PVK_SPV_OpAtomicCompareExchangeWeak)
+    if (pvk_spv_atomic_has_value(in, first))
         v = t->op == PVK_SPV_OpTypeFloat ? pvk_spv_val(ctx, in->w[first]) : pvk_spv_ival(ctx, in->w[first], sg);
 
     switch (in->op) {
@@ -49644,18 +49614,9 @@ static void pvk_spv_atomic(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
                         obj, sg ? "1" : "1u", ord);
         break;
     default: {
-        const char *what;
-        switch (in->op) {
-        case PVK_SPV_OpAtomicExchange: what = "exchange"; break;
-        case PVK_SPV_OpAtomicIAdd: case PVK_SPV_OpAtomicFAddEXT: what = "fetch_add"; break;
-        case PVK_SPV_OpAtomicISub: what = "fetch_sub"; break;
-        case PVK_SPV_OpAtomicSMin: case PVK_SPV_OpAtomicUMin: what = "fetch_min"; break;
-        case PVK_SPV_OpAtomicSMax: case PVK_SPV_OpAtomicUMax: what = "fetch_max"; break;
-        case PVK_SPV_OpAtomicAnd: what = "fetch_and"; break;
-        case PVK_SPV_OpAtomicOr: what = "fetch_or"; break;
-        case PVK_SPV_OpAtomicXor: what = "fetch_xor"; break;
-        default: pvk_spv_fail(ctx, "unsupported atomic (opcode %u)", in->op);
-        }
+        const char *what = pvk_spv_atomic_name(in->op);
+        if (!what)
+            pvk_spv_fail(ctx, "unsupported atomic (opcode %u)", in->op);
         if (!v)
             pvk_spv_fail(ctx, "atomic without a value operand");
         e = pvk_spv_fmt(ctx, "atomic_%s_explicit(%s, %s, %s)", what, obj, v, ord);
@@ -53873,6 +53834,15 @@ static bool pvk_spv_dominates(const uint32_t *idom, uint32_t a, uint32_t b)
     return b == a;
 }
 
+/* *x |= v; whether *x grew. */
+static bool pvk_or_grew(uint32_t *x, uint32_t v)
+{
+    if ((*x | v) == *x)
+        return false;
+    *x |= v;
+    return true;
+}
+
 /* Fragment shaders reading input attachments by framebuffer fetch: for each
  * output location, the input attachment indices its value, or whether it is
  * written, depends on. Data flows through values and through function,
@@ -53996,10 +53966,7 @@ static bool pvk_spv_fetch_deps(struct pvk_spv *ctx, struct pvk_spv_func *fn, uin
                     return false;
                 if (op == PVK_SPV_OpKill || op == PVK_SPV_OpTerminateInvocation ||
                     op == PVK_SPV_OpDemoteToHelperInvocation) {
-                    if ((global | c) != global) {
-                        global |= c;
-                        changed = true;
-                    }
+                    changed |= pvk_or_grew(&global, c);
                     continue;
                 }
                 if (ins.wc >= 3 && ins.w[2] && ins.w[2] < bound && pvk_spv_get(ctx, ins.w[2])->insn == off - ins.wc)
@@ -54071,29 +54038,20 @@ static bool pvk_spv_fetch_deps(struct pvk_spv *ctx, struct pvk_spv_func *fn, uin
                         return false; /* memory others see */
                     if (x->p->storage == PVK_SPV_StorageOutput) {
                         if (x->flags & PVK_SPV_F_BUILTIN) {
-                            if ((global | v) != global) {
-                                global |= v; /* FragDepth, SampleMask: every output */
-                                changed = true;
-                            }
+                            changed |= pvk_or_grew(&global, v); /* FragDepth, SampleMask: every output */
                         } else if (!(x->flags & PVK_SPV_F_LOCATION)) {
                             return false;
                         } else {
                             bool arr = pvk_spv_type(ctx, x->p->type)->op == PVK_SPV_OpTypeArray; /* (else f is a component) */
                             uint32_t lo = x->location + (arr && f < 64 ? f : 0u), hi = !arr || f < 64 ? lo : 7u;
                             for (k = lo; k <= hi && k < 8; k++)
-                                if ((deps[k] | v) != deps[k]) {
-                                    deps[k] |= v;
-                                    changed = true;
-                                }
+                                changed |= pvk_or_grew(&deps[k], v);
                         }
                     }
                     if (!mem[var])
                         mem[var] = pvk_spv_alloc(ctx, sizeof(uint32_t) * (DYN + 1));
                     m = &mem[var][f];
-                    if ((*m | v) != *m) {
-                        *m |= v;
-                        changed = true;
-                    }
+                    changed |= pvk_or_grew(m, v);
                     continue;
                 case PVK_SPV_OpPhi:
                     for (k = 3; k + 1 < ins.wc; k += 2) {
@@ -54109,10 +54067,8 @@ static bool pvk_spv_fetch_deps(struct pvk_spv *ctx, struct pvk_spv_func *fn, uin
                         v |= ins.w[k] < bound ? t[ins.w[k]] : 0;
                     break;
                 }
-                if (r && (t[r] | v) != t[r]) {
-                    t[r] |= v;
-                    changed = true;
-                }
+                if (r)
+                    changed |= pvk_or_grew(&t[r], v);
             }
         }
         for (b = 0; b < nb; b++) { /* control */
@@ -54146,10 +54102,7 @@ static bool pvk_spv_fetch_deps(struct pvk_spv *ctx, struct pvk_spv_func *fn, uin
                 }
                 target = returns ? UINT32_MAX : breaks ? loop_of[b] : b;
                 if (returns || (breaks && target == UINT32_MAX)) {
-                    if ((global | v) != global) {
-                        global |= v;
-                        changed = true;
-                    }
+                    changed |= pvk_or_grew(&global, v);
                     continue;
                 }
                 if (target != b) { /* the loop around it */
@@ -54160,10 +54113,7 @@ static bool pvk_spv_fetch_deps(struct pvk_spv *ctx, struct pvk_spv_func *fn, uin
             } else { /* a loop's condition, a break or continue: the loop */
                 target = loop ? b : loop_of[b];
                 if (target == UINT32_MAX) {
-                    if ((global | v) != global) {
-                        global |= v;
-                        changed = true;
-                    }
+                    changed |= pvk_or_grew(&global, v);
                     continue;
                 }
                 m = pvk_spv_label_block(ctx, fidx, pvk_spv_insn_at(ctx, fn->blocks[target].merge).w[1]);
@@ -54171,10 +54121,8 @@ static bool pvk_spv_fetch_deps(struct pvk_spv *ctx, struct pvk_spv_func *fn, uin
                     in[l] = pvk_spv_dominates(idom, target, l) && !pvk_spv_dominates(idom, m, l);
             }
             for (l = 0; l < nb; l++)
-                if (in[l] && (ctl[l] | v) != ctl[l]) {
-                    ctl[l] |= v;
-                    changed = true;
-                }
+                if (in[l])
+                    changed |= pvk_or_grew(&ctl[l], v);
         }
     }
     for (k = 0; k < 8; k++)
@@ -56313,23 +56261,31 @@ struct pvk_query_copy_args {
 static id pvk_compile_compute(struct pvk_device *device, const char *msl, const char *entry, unsigned long max_threads,
                               char *error, size_t error_size); /* section 17 */
 
-static pthread_mutex_t pvk_query_lock = PTHREAD_MUTEX_INITIALIZER; /* queues of a device encode concurrently */
+/* Internal kernel `entry` (a `what` kernel) of the device, *slot, compiled
+ * on first use under `lock` (queues of a device encode concurrently); NULL,
+ * logged, when it could not be made. */
+static id pvk_internal_kernel(struct pvk_device *device, pthread_mutex_t *lock, id *slot, const char *msl,
+                              const char *entry, unsigned long max_threads, const char *what)
+{
+    id pso;
+    pthread_mutex_lock(lock);
+    if (!*slot) {
+        char error[256];
+        if (!(*slot = pvk_compile_compute(device, msl, entry, max_threads, error, sizeof(error))))
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
+                     "internal %s kernel %s: %s", what, entry, error);
+    }
+    pso = *slot;
+    pthread_mutex_unlock(lock);
+    return pso;
+}
+
+static pthread_mutex_t pvk_query_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static id pvk_device_query_copy_pipeline(struct pvk_device *device)
 {
-    id pso;
-    pthread_mutex_lock(&pvk_query_lock);
-    if (!device->query_copy_pipeline) {
-        char error[256];
-        device->query_copy_pipeline =
-            pvk_compile_compute(device, pvk_query_copy_msl, "pvk_query_copy", 64, error, sizeof(error));
-        if (!device->query_copy_pipeline)
-            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
-                     "internal query copy kernel: %s", error);
-    }
-    pso = device->query_copy_pipeline;
-    pthread_mutex_unlock(&pvk_query_lock);
-    return pso;
+    return pvk_internal_kernel(device, &pvk_query_lock, &device->query_copy_pipeline, pvk_query_copy_msl,
+                               "pvk_query_copy", 64, "query copy");
 }
 
 /* ==========================================================================
@@ -56924,10 +56880,8 @@ struct pvk_cmd_update {
 
 struct pvk_cmd_barrier {
     struct pvk_cmd hdr;
-    VkPipelineStageFlags2 src_stages, dst_stages;
-    VkAccessFlags2 src_access, dst_access;
-    pvk_MTLStages src, dst; /* the Metal stages of src_stages and dst_stages (pvk_barrier_stages) */
-    pvk_MTLStages src_undrawn; /* ... of src_stages when no transfer that draws may run (pvk_barrier_src_undrawn) */
+    pvk_MTLStages src, dst; /* the Metal stages of the barrier's source and destination (pvk_barrier_stages) */
+    pvk_MTLStages src_undrawn; /* ... of its source when no transfer that draws may run (pvk_barrier_src_undrawn) */
 };
 
 struct pvk_cmd_bind_pipeline {
@@ -57238,18 +57192,15 @@ static pvk_MTLStages pvk_barrier_src_undrawn(VkPipelineStageFlags2 stages);
 static void pvk_waits_add(pvk_MTLStages *waits, pvk_MTLStages after, pvk_MTLStages before);
 static void pvk_waits_join(pvk_MTLStages *waits, const pvk_MTLStages *later);
 
+/* (Metal's barriers are by stage: access masks add nothing.) */
 static void pvk_cmd_barrier(struct pvk_command_buffer *cb, VkPipelineStageFlags2 src_stages,
-                            VkPipelineStageFlags2 dst_stages, VkAccessFlags2 src_access, VkAccessFlags2 dst_access)
+                            VkPipelineStageFlags2 dst_stages)
 {
     struct pvk_cmd_barrier *c = pvk_cmd_append(cb, PVK_CMD_BARRIER, sizeof(*c));
     pvk_MTLStages src = pvk_barrier_stages(src_stages, true), dst = pvk_barrier_stages(dst_stages, false);
     if (!c)
         return;
     pvk_waits_add(cb->order, src, dst); /* (what pvk_encode_barrier orders) */
-    c->src_stages = src_stages;
-    c->dst_stages = dst_stages;
-    c->src_access = src_access;
-    c->dst_access = dst_access;
     c->src = src;
     c->dst = dst;
     c->src_undrawn = src_stages & PVK_TRANSFER_STAGES ? pvk_barrier_src_undrawn(src_stages) : src;
@@ -57263,57 +57214,40 @@ VKAPI_ATTR void VKAPI_CALL vkCmdPipelineBarrier(VkCommandBuffer commandBuffer, V
                                                 uint32_t imageMemoryBarrierCount,
                                                 const VkImageMemoryBarrier *pImageMemoryBarriers)
 {
-    VkAccessFlags2 src = 0, dst = 0;
     uint32_t i;
     (void)dependencyFlags;
-    for (i = 0; i < memoryBarrierCount; i++) {
-        src |= pMemoryBarriers[i].srcAccessMask;
-        dst |= pMemoryBarriers[i].dstAccessMask;
-    }
-    for (i = 0; i < bufferMemoryBarrierCount; i++) {
-        src |= pBufferMemoryBarriers[i].srcAccessMask;
-        dst |= pBufferMemoryBarriers[i].dstAccessMask;
-    }
-    for (i = 0; i < imageMemoryBarrierCount; i++) {
-        src |= pImageMemoryBarriers[i].srcAccessMask;
-        dst |= pImageMemoryBarriers[i].dstAccessMask;
+    (void)memoryBarrierCount;
+    (void)pMemoryBarriers;
+    (void)bufferMemoryBarrierCount;
+    (void)pBufferMemoryBarriers;
+    for (i = 0; i < imageMemoryBarrierCount; i++)
         if (pImageMemoryBarriers[i].oldLayout == VK_IMAGE_LAYOUT_UNDEFINED) /* contents discarded */
             pvk_cmd_wsi((struct pvk_command_buffer *)commandBuffer,
                         (const struct pvk_image *)pImageMemoryBarriers[i].image, false);
-    }
     /* The VkPipelineStageFlags bits have the same values in VkPipelineStageFlags2. */
-    pvk_cmd_barrier((struct pvk_command_buffer *)commandBuffer, srcStageMask, dstStageMask, src, dst);
+    pvk_cmd_barrier((struct pvk_command_buffer *)commandBuffer, srcStageMask, dstStageMask);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdPipelineBarrier2(VkCommandBuffer commandBuffer, const VkDependencyInfo *pDependencyInfo)
 {
     VkPipelineStageFlags2 src_stages = 0, dst_stages = 0;
-    VkAccessFlags2 src = 0, dst = 0;
     uint32_t i;
     for (i = 0; i < pDependencyInfo->memoryBarrierCount; i++) {
-        const VkMemoryBarrier2 *b = &pDependencyInfo->pMemoryBarriers[i];
-        src_stages |= b->srcStageMask;
-        dst_stages |= b->dstStageMask;
-        src |= b->srcAccessMask;
-        dst |= b->dstAccessMask;
+        src_stages |= pDependencyInfo->pMemoryBarriers[i].srcStageMask;
+        dst_stages |= pDependencyInfo->pMemoryBarriers[i].dstStageMask;
     }
     for (i = 0; i < pDependencyInfo->bufferMemoryBarrierCount; i++) {
-        const VkBufferMemoryBarrier2 *b = &pDependencyInfo->pBufferMemoryBarriers[i];
-        src_stages |= b->srcStageMask;
-        dst_stages |= b->dstStageMask;
-        src |= b->srcAccessMask;
-        dst |= b->dstAccessMask;
+        src_stages |= pDependencyInfo->pBufferMemoryBarriers[i].srcStageMask;
+        dst_stages |= pDependencyInfo->pBufferMemoryBarriers[i].dstStageMask;
     }
     for (i = 0; i < pDependencyInfo->imageMemoryBarrierCount; i++) {
         const VkImageMemoryBarrier2 *b = &pDependencyInfo->pImageMemoryBarriers[i];
         src_stages |= b->srcStageMask;
         dst_stages |= b->dstStageMask;
-        src |= b->srcAccessMask;
-        dst |= b->dstAccessMask;
         if (b->oldLayout == VK_IMAGE_LAYOUT_UNDEFINED) /* contents discarded */
             pvk_cmd_wsi((struct pvk_command_buffer *)commandBuffer, (const struct pvk_image *)b->image, false);
     }
-    pvk_cmd_barrier((struct pvk_command_buffer *)commandBuffer, src_stages, dst_stages, src, dst);
+    pvk_cmd_barrier((struct pvk_command_buffer *)commandBuffer, src_stages, dst_stages);
 }
 
 /* ---- Compute commands ---- */
@@ -57512,7 +57446,9 @@ static void pvk_cmd_bind_sets(struct pvk_command_buffer *cb, uint32_t bind_point
         c->index = first + i;
         c->address = set->address;
         c->contents = set->contents;
-        c->size = set->size;
+        c->size = layout->size; /* (the table, not its room in the pool: what a copy takes) */
+        if (layout->variable)
+            c->size += (uint64_t)set->variable_count * layout->bindings[layout->binding_count - 1].stride;
         c->dynamic_count = layout->dynamic_count;
         d = (struct pvk_dynamic_offset *)(c + 1);
         for (k = 0; k < layout->dynamic_count; k++) {
@@ -57745,11 +57681,6 @@ struct pvk_cmd_clear {
     double depth_value;
     uint32_t stencil;
 };
-
-static uint32_t pvk_layer_count(const VkImageSubresourceLayers *sub, const struct pvk_image *image)
-{
-    return sub->layerCount == VK_REMAINING_ARRAY_LAYERS ? image->layers - sub->baseArrayLayer : sub->layerCount;
-}
 
 /* Whether a write at offset, extent covers all of a swapchain's image (one
  * level and layer: struct pvk_wsi_use). */
@@ -58484,7 +58415,6 @@ struct pvk_render_pass {
      * ones (TOP_OF_PIPE first, BOTTOM_OF_PIPE second) order nothing. Those
      * between its Metal passes: struct pvk_rp_pass.after. */
     VkPipelineStageFlags2 in_src, in_dst, out_src, out_dst;
-    VkAccessFlags2 in_src_access, in_dst_access, out_src_access, out_dst_access;
 };
 
 struct pvk_framebuffer {
@@ -59062,8 +58992,7 @@ static bool pvk_pass_resolve_in_area(const VkRect2D *area, const struct pvk_pass
  * multiview, the views of view_mask first used here when an earlier pass
  * used others (the load op applies to each view at its first use). */
 static void pvk_pass_att_actions(struct pvk_pass_attachment *pa, VkAttachmentLoadOp load, VkAttachmentStoreOp store,
-                                 bool first, bool last, const VkRect2D *area, uint32_t view_mask, uint32_t fresh,
-                                 bool memoryless)
+                                 bool first, bool last, const VkRect2D *area, uint32_t view_mask, uint32_t fresh)
 {
     uint32_t l = PVK_MTLLoadActionLoad, s = PVK_MTLStoreActionStore;
     bool partial = pvk_pass_partial(area, pa, view_mask);
@@ -59085,7 +59014,7 @@ static void pvk_pass_att_actions(struct pvk_pass_attachment *pa, VkAttachmentLoa
     }
     if (last && store == VK_ATTACHMENT_STORE_OP_DONT_CARE && !partial)
         s = PVK_MTLStoreActionDontCare;
-    if (memoryless) { /* tile memory only */
+    if (pa->memoryless) { /* tile memory only (pvk_pass_att_view) */
         if (l == PVK_MTLLoadActionLoad)
             l = PVK_MTLLoadActionDontCare;
         s = PVK_MTLStoreActionDontCare;
@@ -59299,7 +59228,7 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
         if (mp->resolves[s] != VK_ATTACHMENT_UNUSED)
             pvk_pass_att_resolve(pa, r->views[mp->resolves[s]], pvk_rp_committed(cb, r, mp->resolves[s]));
         pvk_pass_att_actions(pa, att->load_op, att->store_op, att->first_use >= mp->first, att->last_use <= mp->last,
-                             &r->area, mp->view_mask, pvk_rp_fresh_views(pass, a, mp), pa->memoryless != 0);
+                             &r->area, mp->view_mask, pvk_rp_fresh_views(pass, a, mp));
         pa->clear = r->clears[a];
         pvk_cmd_wsi_pass(cb, pa, r->views[a], att->undefined,
                          mp->resolves[s] != VK_ATTACHMENT_UNUSED ? r->views[mp->resolves[s]] : NULL,
@@ -59312,7 +59241,6 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
         bool first = att->first_use >= mp->first, last = att->last_use <= mp->last;
         uint32_t fresh = pvk_rp_fresh_views(pass, mp->depth, mp);
         id committed = pvk_rp_committed(cb, r, mp->depth);
-        bool memoryless = view && view->image->memoryless && !committed;
         if (pvk_format_has_depth(att->fmt)) {
             pvk_pass_att_view(&c->depth, view, committed);
             if (mp->depth_resolve != VK_ATTACHMENT_UNUSED && mp->depth_resolve_mode != VK_RESOLVE_MODE_NONE) {
@@ -59320,8 +59248,7 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
                                      pvk_rp_committed(cb, r, mp->depth_resolve));
                 c->depth.resolve_filter = pvk_depth_resolve_filter(mp->depth_resolve_mode);
             }
-            pvk_pass_att_actions(&c->depth, att->load_op, att->store_op, first, last, &r->area, mp->view_mask, fresh,
-                                 memoryless);
+            pvk_pass_att_actions(&c->depth, att->load_op, att->store_op, first, last, &r->area, mp->view_mask, fresh);
             c->depth.clear = r->clears[mp->depth];
         }
         if (pvk_format_has_stencil(att->fmt)) {
@@ -59330,7 +59257,7 @@ static void pvk_cmd_begin_rp_pass(struct pvk_command_buffer *cb, const struct pv
                 pvk_pass_att_resolve(&c->stencil, r->views[mp->depth_resolve],
                                      pvk_rp_committed(cb, r, mp->depth_resolve));
             pvk_pass_att_actions(&c->stencil, att->stencil_load_op, att->stencil_store_op, first, last, &r->area,
-                                 mp->view_mask, fresh, memoryless);
+                                 mp->view_mask, fresh);
             c->stencil.clear = r->clears[mp->depth];
         }
     }
@@ -59410,7 +59337,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass2(VkCommandBuffer commandBuffer, 
     if (!(r = pvk_cb_render_get(cb, pass->attachment_count)))
         return;
     if (pass->in_src) /* (subpass dependencies into the instance) */
-        pvk_cmd_barrier(cb, pass->in_src, pass->in_dst, pass->in_src_access, pass->in_dst_access);
+        pvk_cmd_barrier(cb, pass->in_src, pass->in_dst);
     cb->render_group = pvk_cmd_group_begin(cb, "vkCmdBeginRenderPass", VK_OBJECT_TYPE_RENDER_PASS, pass,
                                            VK_OBJECT_TYPE_FRAMEBUFFER, fb);
     for (s = pRenderPassBegin->pNext; s; s = s->pNext)
@@ -59482,7 +59409,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass2(VkCommandBuffer commandBuffer, co
     (void)pSubpassEndInfo;
     pvk_cmd_end_pass(cb, 0);
     if (pass && pass->out_src) /* (subpass dependencies out of the instance) */
-        pvk_cmd_barrier(cb, pass->out_src, pass->out_dst, pass->out_src_access, pass->out_dst_access);
+        pvk_cmd_barrier(cb, pass->out_src, pass->out_dst);
     if (cb->render) {
         cb->render->pass = NULL;
         cb->render->active = false;
@@ -59562,8 +59489,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
         pvk_pass_att_view(pa, view, pvk_dr_committed(cb, info, view, &a, 1));
         if (a->resolveMode != VK_RESOLVE_MODE_NONE)
             pvk_pass_att_resolve(pa, (const struct pvk_image_view *)a->resolveImageView, NULL);
-        pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, info->viewMask, 0,
-                             pa->memoryless != 0);
+        pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, info->viewMask, 0);
         pa->clear = a->clearValue;
         pvk_cmd_wsi_pass(cb, pa, view, false,
                          a->resolveMode != VK_RESOLVE_MODE_NONE ? (const struct pvk_image_view *)a->resolveImageView : NULL,
@@ -59585,8 +59511,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBeginRendering(VkCommandBuffer commandBuffer, co
             if (!k)
                 pa->resolve_filter = pvk_depth_resolve_filter(a->resolveMode);
         }
-        pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, info->viewMask, 0,
-                             pa->memoryless != 0);
+        pvk_pass_att_actions(pa, a->loadOp, a->storeOp, first, last, &info->renderArea, info->viewMask, 0);
         pa->clear = a->clearValue;
     }
     pvk_cmd_subpass_dynamic(cb, r);
@@ -60032,7 +59957,7 @@ static void pvk_cmd_draw_indirect(VkCommandBuffer commandBuffer, VkBuffer buffer
     if (c) {
         c->address = b->gpu_address + offset;
         c->count_address = cnt ? cnt->gpu_address + countBufferOffset : 0;
-        c->draw_count = drawCount;
+        c->draw_count = drawCount < PVK_MAX_DRAW_INDIRECT_COUNT ? drawCount : PVK_MAX_DRAW_INDIRECT_COUNT;
         c->stride = stride ? stride : (indexed ? 20u : 16u); /* drawCount 1 may pass stride 0 */
         c->indexed = indexed;
         c->pad = 0;
@@ -61097,6 +61022,13 @@ static uint32_t pvk_tile_add(uint32_t total, const struct pvk_format *f)
     return pvk_tile_add_bytes(total, f->bytes);
 }
 
+/* Whether `total` bytes a sample (pvk_tile_add) of `samples` samples fit
+ * Metal's tile memory. */
+static bool pvk_tile_fits(uint32_t total, uint32_t samples)
+{
+    return total <= PVK_TILE_BYTES && total * (samples ? samples : 1u) <= PVK_TILE_PIXEL_BYTES;
+}
+
 /* A depth/stencil state (pvk_ds_state). */
 struct pvk_ds_key {
     uint32_t depth_compare; /* pvk_MTLCompareFunction */
@@ -61734,15 +61666,10 @@ static void pvk_labels_batch_end(struct pvk_queue *queue, id cb)
         if (l->items[i].synthetic)
             pvk_labels_remove(l, alloc, i);
     for (i = 0; i < l->count; i++) {
-        size_t n = strlen(l->items[i].text) + 1;
         if (l->items[i].owned)
             continue;
-        if (!(l->items[i].owned = pvk_alloc(alloc, n, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT))) {
-            l->items[i].text = "";
-            continue;
-        }
-        memcpy(l->items[i].owned, l->items[i].text, n);
-        l->items[i].text = l->items[i].owned;
+        l->items[i].owned = pvk_strdup_alloc(alloc, l->items[i].text);
+        l->items[i].text = l->items[i].owned ? l->items[i].owned : "";
     }
     for (i = 0; cb && i < queue->queue_labels.count; i++)
         pvk_MTL4CommandBuffer_popDebugGroup(cb);
@@ -63714,7 +63641,7 @@ static pvk_MTLGPUAddress pvk_draw_indices(struct pvk_device *device)
     pvk_MTLGPUAddress address;
     pthread_mutex_lock(&pvk_graphics_lock);
     if (!device->draw_indices) {
-        uint32_t n = device->physical_device->properties.limits.maxDrawIndirectCount, i;
+        uint32_t n = PVK_MAX_DRAW_INDIRECT_COUNT, i;
         id b = pvk_MTLDevice_newBufferWithLength_options(
             device->physical_device->mtl_device, (unsigned long)n * 4,
             PVK_MTLResourceStorageModeShared | PVK_MTLResourceHazardTrackingModeUntracked);
@@ -63991,8 +63918,6 @@ struct pvk_icb_args {
 
 enum { PVK_PP_WIDEN, PVK_PP_FAN, PVK_PP_RECORDS, PVK_PP_POINTS, PVK_PP_ICB, PVK_PP_ICB_COMPACT, PVK_PP_KERNEL_COUNT };
 
-static id pvk_compile_compute(struct pvk_device *device, const char *msl, const char *entry, unsigned long max_threads,
-                              char *error, size_t error_size);
 static pvk_MTLPrimitiveType pvk_primitive_type(uint32_t topology);
 
 /* What a draw needs preprocessed (struct pvk_pp_result.conv). */
@@ -64013,11 +63938,22 @@ static bool pvk_icb_draws(const struct pvk_draw_track *t)
     return t->gfx && t->gfx->icb;
 }
 
+/* Whether a polygon-points pipeline draws primitives of a topology as
+ * points: triangles (POLYGON POINTS). */
+static bool pvk_points_topology(uint32_t topology)
+{
+    return topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST || topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
+           topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+}
+
+static uint32_t pvk_points_mode(uint32_t topology)
+{
+    return topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ? 1u : topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN ? 2u : 0u;
+}
+
 static uint32_t pvk_draw_conv(const struct pvk_draw_track *t, const struct pvk_cmd *c)
 {
-    if (t->gfx && t->gfx->points &&
-        (t->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST || t->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
-         t->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN)) { /* polygon points (POLYGON POINTS) */
+    if (t->gfx && t->gfx->points && pvk_points_topology(t->topology)) { /* polygon points (POLYGON POINTS) */
         bool restart = t->restart && t->index_address && t->topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         if (c->op == PVK_CMD_DRAW_INDEXED)
             return restart ? PVK_CV_POINTS : 0;
@@ -64055,23 +63991,11 @@ static id pvk_prepass_pipeline(struct pvk_device *device, unsigned kernel)
     static const char *const names[PVK_PP_KERNEL_COUNT] = { "pvk_pp_widen", "pvk_pp_fan", "pvk_pp_records",
                                                             "pvk_pp_points", "pvk_pp_icb", "pvk_pp_icb_compact" };
     static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER; /* (pvk_device_warm may hold it while compiling) */
-    id pso;
-    pthread_mutex_lock(&lock);
-    if (!device->prepass_pipelines[kernel]) {
-        char error[256];
-        const char *msl = kernel == PVK_PP_POINTS                             ? pvk_prepass_points_msl
-                          : kernel == PVK_PP_ICB || kernel == PVK_PP_ICB_COMPACT ? pvk_prepass_icb_msl
-                                                                                  : pvk_prepass_msl;
-        device->prepass_pipelines[kernel] = pvk_compile_compute(device, msl, names[kernel],
-                                                                kernel == PVK_PP_ICB_COMPACT ? 1024 : 64, error,
-                                                                sizeof(error));
-        if (!device->prepass_pipelines[kernel])
-            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
-                     "internal draw preprocessing kernel %s: %s", names[kernel], error);
-    }
-    pso = device->prepass_pipelines[kernel];
-    pthread_mutex_unlock(&lock);
-    return pso;
+    const char *msl = kernel == PVK_PP_POINTS                             ? pvk_prepass_points_msl
+                      : kernel == PVK_PP_ICB || kernel == PVK_PP_ICB_COMPACT ? pvk_prepass_icb_msl
+                                                                              : pvk_prepass_msl;
+    return pvk_internal_kernel(device, &lock, &device->prepass_pipelines[kernel], msl, names[kernel],
+                               kernel == PVK_PP_ICB_COMPACT ? 1024 : 64, "draw preprocessing");
 }
 
 /* Room for one more result. */
@@ -64258,8 +64182,6 @@ static void pvk_prepass_indirect(struct pvk_encoder *e, const struct pvk_draw_tr
         struct pvk_icb_chunk *chunk;
         memset(&ia, 0, sizeof(ia));
         ia.n = d->draw_count;
-        if (ia.n > e->device->physical_device->properties.limits.maxDrawIndirectCount)
-            ia.n = e->device->physical_device->properties.limits.maxDrawIndirectCount;
         if (d->indexed && (conv & PVK_CV_WIDEN)) {
             ia.indices = res->indices;
             ia.index_size = res->index_type == PVK_MTLIndexTypeUInt16 ? 2 : 4;
@@ -64302,9 +64224,7 @@ static void pvk_prepass_indirect(struct pvk_encoder *e, const struct pvk_draw_tr
         return;
     a.records = d->address;
     a.stride = d->stride;
-    a.n = d->draw_count; /* the encoder draws at most maxDrawIndirectCount */
-    if (a.n > e->device->physical_device->properties.limits.maxDrawIndirectCount)
-        a.n = e->device->physical_device->properties.limits.maxDrawIndirectCount;
+    a.n = d->draw_count; /* (at most maxDrawIndirectCount: pvk_cmd_draw_indirect) */
     a.has_count = d->count_address != 0;
     a.count = d->count_address;
     a.index_size = d->indexed ? isize : 0;
@@ -64371,7 +64291,7 @@ static void pvk_prepass_draw(struct pvk_encoder *e, const struct pvk_draw_track 
     a.index_size = isize;
     a.restart = t->restart;
     if (conv & PVK_CV_POINTS) { /* polygon points (POLYGON POINTS) */
-        a.pmode = t->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ? 1 : t->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN ? 2 : 0;
+        a.pmode = pvk_points_mode(t->topology);
         if (c->op == PVK_CMD_DRAW_INDEXED) { /* a strip or fan with primitive restart */
             const struct pvk_cmd_draw_indexed *d = (const struct pvk_cmd_draw_indexed *)c;
             uint64_t total = d->index_count >= 3 ? 3ull * (d->index_count - 2) : 0;
@@ -64389,8 +64309,6 @@ static void pvk_prepass_draw(struct pvk_encoder *e, const struct pvk_draw_track 
             a.records = d->address;
             a.stride = d->stride;
             a.n = d->draw_count;
-            if (a.n > e->device->physical_device->properties.limits.maxDrawIndirectCount)
-                a.n = e->device->physical_device->properties.limits.maxDrawIndirectCount;
             a.has_count = d->count_address != 0;
             a.count = d->count_address;
             a.index_size = d->indexed ? isize : 0;
@@ -64896,7 +64814,8 @@ static void pvk_render_internal_end(struct pvk_encoder *e)
     r->ds_state = NULL;
     r->pso_set = NULL;
     r->dirty = PVK_RD_ALL;
-    r->sent.valid = 0; /* (the internal draws set state) */
+    /* (the internal draws set state, but not the blend color or e->table's vertex table) */
+    r->sent.valid &= PVK_RD_VERTEX | PVK_RD_BLEND;
     pvk_render_counting(e, true);
 }
 
@@ -65646,7 +65565,7 @@ static void pvk_render_resolve_clear(struct pvk_encoder *e)
                 p[i] = (uint8_t)b->resolve_clear_value.stencil;
             } else if (bytes == 2) {
                 float d = b->resolve_clear_value.depth;
-                uint16_t v = (uint16_t)((d < 0.0f ? 0.0f : d > 1.0f ? 1.0f : d) * 65535.0f + 0.5f);
+                uint16_t v = (uint16_t)(pvk_clamp01(d) * 65535.0f + 0.5f);
                 memcpy(p + 2 * i, &v, 2);
             } else {
                 memcpy(p + 4 * i, &b->resolve_clear_value.depth, 4);
@@ -66143,7 +66062,7 @@ static bool pvk_render_fits(const struct pvk_cmd_begin_pass *c, uint32_t slots)
             total = pvk_tile_add(total, c->colors[s].fmt);
             samples = c->colors[s].samples > samples ? c->colors[s].samples : samples;
         }
-    return total <= PVK_TILE_BYTES && total * samples <= PVK_TILE_PIXEL_BYTES;
+    return pvk_tile_fits(total, samples);
 }
 
 /* Color slots of BEGIN_PASS packet c in groups that fit tile memory
@@ -66163,10 +66082,10 @@ static uint32_t pvk_render_groups(const struct pvk_cmd_begin_pass *c, uint32_t *
         if (!c->colors[s].texture)
             continue;
         b = pvk_tile_add(0, c->colors[s].fmt);
-        if (b > PVK_TILE_BYTES || b * samples > PVK_TILE_PIXEL_BYTES)
+        if (!pvk_tile_fits(b, samples))
             return 0;
         next = pvk_tile_add(cur, c->colors[s].fmt);
-        if (cur && (next > PVK_TILE_BYTES || next * samples > PVK_TILE_PIXEL_BYTES)) {
+        if (cur && !pvk_tile_fits(next, samples)) {
             n++;
             next = b;
         }
@@ -66771,11 +66690,6 @@ static bool pvk_render_discards(const struct pvk_render *r)
             pvk_topology_triangles(d->topology));
 }
 
-static float pvk_clamp01(float x)
-{
-    return x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x;
-}
-
 static id pvk_gfx_variant(struct pvk_device *device, struct pvk_pipeline *p, unsigned kind);
 static id pvk_gfx_group_variant(struct pvk_device *device, struct pvk_pipeline *p, const uint8_t *map, uint32_t group,
                                 bool tex);
@@ -67088,14 +67002,7 @@ static bool pvk_render_flush(struct pvk_encoder *e, id icb_pso)
 /* Whether the bound pipeline draws these triangles as polygon points (POLYGON POINTS). */
 static bool pvk_render_points(const struct pvk_render *r)
 {
-    return r->pipeline->gfx->points && (r->dyn.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ||
-                                        r->dyn.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
-                                        r->dyn.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
-}
-
-static uint32_t pvk_points_mode(uint32_t topology)
-{
-    return topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ? 1u : topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN ? 2u : 0u;
+    return r->pipeline->gfx->points && pvk_points_topology(r->dyn.topology);
 }
 
 /* Triangles of n vertices or indices. */
@@ -67269,7 +67176,7 @@ static void pvk_encode_draw_indirect(struct pvk_encoder *e, const struct pvk_cmd
     pvk_MTLPrimitiveType prim = pvk_primitive_type(r->dyn.topology);
     uint64_t records = c->address, stride = c->stride, indices = t.index_address, indices_size = t.index_size;
     uint32_t type = t.index_type == VK_INDEX_TYPE_UINT16 ? PVK_MTLIndexTypeUInt16 : PVK_MTLIndexTypeUInt32;
-    uint32_t n = c->draw_count, max = e->device->physical_device->properties.limits.maxDrawIndirectCount, d;
+    uint32_t n = c->draw_count, d; /* (at most maxDrawIndirectCount: pvk_cmd_draw_indirect) */
     bool indexed = c->indexed != 0;
 
     if (conv && !res)
@@ -67337,8 +67244,6 @@ static void pvk_encode_draw_indirect(struct pvk_encoder *e, const struct pvk_cmd
     }
     if (conv & PVK_CV_FAN)
         indexed = true; /* non-indexed fans draw the fan pattern */
-    if (n > max) /* drawCount, and the count of a count buffer, are at most maxDrawIndirectCount */
-        n = max;
     if (pvk_render_points(r)) { /* records of points and struct pvk_msl_points per draw */
         if (!res || !res->points || !res->records || !pvk_render_points_bind(e, NULL))
             return;
@@ -69638,10 +69543,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue _queue, uint32_t submitCoun
 {
     struct pvk_queue *queue = (struct pvk_queue *)_queue;
     const VkAllocationCallbacks *alloc = pvk_device_alloc(queue->device);
-    size_t nsem = 0, ncb = 0, size;
-    VkSemaphoreSubmitInfo *sems;
-    VkCommandBufferSubmitInfo *cbs;
-    VkSubmitInfo2 *submits;
+    size_t nsem = 0, ncb = 0;
+    /* (most submits fit: no allocation) */
+    VkSubmitInfo2 stack_submits[4], *submits = stack_submits;
+    VkSemaphoreSubmitInfo stack_sems[16], *sems = stack_sems;
+    VkCommandBufferSubmitInfo stack_cbs[16], *cbs = stack_cbs;
     VkResult result;
     uint32_t i, j;
 
@@ -69651,12 +69557,19 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue _queue, uint32_t submitCoun
     }
     if (!submitCount)
         return pvk_queue_submit_checked(queue, 0, NULL, fence, false);
-    size = sizeof(*submits) * submitCount + sizeof(*sems) * nsem + sizeof(*cbs) * ncb;
-    submits = pvk_alloc(alloc, size, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-    if (!submits)
-        return VK_ERROR_OUT_OF_HOST_MEMORY;
-    sems = (VkSemaphoreSubmitInfo *)(submits + submitCount);
-    cbs = (VkCommandBufferSubmitInfo *)(sems + nsem);
+    if (submitCount > PVK_ARRAY_SIZE(stack_submits) || nsem > PVK_ARRAY_SIZE(stack_sems) ||
+        ncb > PVK_ARRAY_SIZE(stack_cbs)) {
+        submits = pvk_alloc(alloc, sizeof(*submits) * submitCount + sizeof(*sems) * nsem + sizeof(*cbs) * ncb,
+                            VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+        if (!submits)
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        sems = (VkSemaphoreSubmitInfo *)(submits + submitCount);
+        cbs = (VkCommandBufferSubmitInfo *)(sems + nsem);
+    } else {
+        memset(submits, 0, sizeof(*submits) * submitCount);
+        memset(sems, 0, sizeof(*sems) * nsem);
+        memset(cbs, 0, sizeof(*cbs) * ncb);
+    }
     for (i = 0; i < submitCount; i++) {
         const VkSubmitInfo *in = &pSubmits[i];
         const VkTimelineSemaphoreSubmitInfo *values = NULL;
@@ -69685,7 +69598,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue _queue, uint32_t submitCoun
                                    values ? values->signalSemaphoreValueCount : 0);
     }
     result = pvk_queue_submit_checked(queue, submitCount, submits, fence, false);
-    pvk_free(alloc, submits);
+    if (submits != stack_submits)
+        pvk_free_raw(alloc, submits);
     return result;
 }
 
@@ -70154,13 +70068,6 @@ static VkResult pvk_queue_present(struct pvk_queue *queue, uint32_t nwaits, cons
 
 /* ---- Waiting ---- */
 
-static uint64_t pvk_now_ns(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
-}
-
 /* State of waitable i: 1 signaled; 0 signaled once *event reaches *value;
  * -1 nothing to wait on yet (a fence not submitted). */
 typedef int (*pvk_wait_state)(const void *objects, const uint64_t *values, uint32_t i, id *event, uint64_t *value);
@@ -70170,7 +70077,7 @@ typedef int (*pvk_wait_state)(const void *objects, const uint64_t *values, uint3
 static VkResult pvk_wait(struct pvk_device *device, uint32_t count, bool all, uint64_t timeout, pvk_wait_state state,
                          const void *objects, const uint64_t *values)
 {
-    uint64_t start = timeout && timeout != UINT64_MAX ? pvk_now_ns() : 0;
+    uint64_t start = timeout && timeout != UINT64_MAX ? pvk_clock_ns(CLOCK_MONOTONIC) : 0;
 
     for (;;) {
         uint32_t i, pending = 0;
@@ -70202,7 +70109,7 @@ static VkResult pvk_wait(struct pvk_device *device, uint32_t count, bool all, ui
         if (timeout == UINT64_MAX) {
             remaining = UINT64_MAX;
         } else {
-            uint64_t elapsed = pvk_now_ns() - start;
+            uint64_t elapsed = pvk_clock_ns(CLOCK_MONOTONIC) - start;
             if (elapsed >= timeout)
                 return VK_TIMEOUT;
             remaining = timeout - elapsed;
@@ -70254,7 +70161,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkDeviceWaitIdle(VkDevice _device)
  * already; a submission stuck on a semaphore nobody signals is given 5 s. */
 static void pvk_device_finish(struct pvk_device *device)
 {
-    uint64_t start = pvk_now_ns();
+    uint64_t start = pvk_clock_ns(CLOCK_MONOTONIC);
     uint32_t i;
     for (i = 0; i < device->queue_count; i++) {
         struct pvk_queue *queue = &device->queues[i];
@@ -70279,7 +70186,8 @@ static void pvk_device_finish(struct pvk_device *device)
             pthread_join(device->par_thread[i].thread, NULL);
         device->par_threads = 0;
     }
-    while (__atomic_load_n(&device->feedback_pending, __ATOMIC_ACQUIRE) > 0 && pvk_now_ns() - start < 10000000000ull) {
+    while (__atomic_load_n(&device->feedback_pending, __ATOMIC_ACQUIRE) > 0 &&
+           pvk_clock_ns(CLOCK_MONOTONIC) - start < 10000000000ull) {
         struct timespec ts;
         ts.tv_sec = 0;
         ts.tv_nsec = 100000;
@@ -71119,18 +71027,8 @@ static pthread_mutex_t pvk_internal_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static id pvk_device_fill_pipeline(struct pvk_device *device)
 {
-    id pso;
-    pthread_mutex_lock(&pvk_internal_lock); /* queues of a device encode concurrently */
-    if (!device->fill_pipeline) {
-        char error[256];
-        device->fill_pipeline = pvk_compile_compute(device, pvk_fill_msl, "pvk_fill_buffer", 256, error, sizeof(error));
-        if (!device->fill_pipeline)
-            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-internal-shader", VK_OBJECT_TYPE_DEVICE, 0,
-                     "internal fill kernel: %s", error);
-    }
-    pso = device->fill_pipeline;
-    pthread_mutex_unlock(&pvk_internal_lock);
-    return pso;
+    return pvk_internal_kernel(device, &pvk_internal_lock, &device->fill_pipeline, pvk_fill_msl, "pvk_fill_buffer",
+                               256, "fill");
 }
 
 /* Compiles the internal shaders whose source is fixed on a thread of the
@@ -71849,14 +71747,21 @@ struct pvk_cache_info {
     /* graphics pipelines: dispatch_base is "layered" (the vertex shader
      * writes Layer or ViewportIndex), dispatch_base_offset "invariant"
      * (Position is invariant: compile with preserveInvariance), workgroup[0]
-     * PVK_GFX_* flags */
+     * PVK_GFX_* flags, workgroup[1] the color locations the fragment shader
+     * writes, workgroup[2] the colors it fetches */
 };
 
 #define PVK_GFX_DRAW_INDEX 0x1u    /* the vertex shader reads DrawIndex */
 #define PVK_GFX_READS_DEPTH 0x2u   /* the fragment shader reads the depth copy */
 #define PVK_GFX_READS_STENCIL 0x4u /* ... the stencil copy */
 #define PVK_GFX_FETCHES 0x8u       /* ... color attachments (framebuffer fetch) */
-#define PVK_GFX_OUTPUTS 0x10u      /* workgroup[1]: the color locations it writes, workgroup[2]: the colors it fetches */
+
+/* The push constant bytes a shader reads: the end of its range, 16-aligned
+ * (struct pvk_cache_info.push_size). */
+static uint32_t pvk_push_size(const struct pvk_msl_result *r)
+{
+    return r->has_push_constants ? (r->push_constant_offset + r->push_constant_size + 15) & ~15u : 0;
+}
 
 /* The libraries a graphics pipeline's Metal pipeline was made of
  * (pvk_gfx_compile), which its indirect command buffer variant is made of
@@ -72389,8 +72294,7 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
             return VK_ERROR_UNKNOWN;
         }
         memset(&ci, 0, sizeof(ci));
-        if (res->has_push_constants)
-            ci.push_size = (res->push_constant_offset + res->push_constant_size + 15) & ~15u;
+        ci.push_size = pvk_push_size(res);
         ci.set_mask = res->set_mask;
         ci.dispatch_base = res->dispatch_base;
         ci.dispatch_base_offset = res->dispatch_base_offset;
@@ -72439,6 +72343,26 @@ static VkResult pvk_compute_pipeline_create(struct pvk_device *device, struct pv
     return VK_SUCCESS;
 }
 
+/* Pipeline i of a batch of n was made with result r: registered, or the
+ * batch's result (its first failure) and, with
+ * VK_PIPELINE_CREATE_2_EARLY_RETURN_ON_FAILURE_BIT, the batch ends (true),
+ * the pipelines after i VK_NULL_HANDLE. */
+static bool pvk_pipeline_batch_step(struct pvk_device *device, VkResult r, VkPipeline *pipelines, uint32_t i, uint32_t n,
+                                    VkPipelineCreateFlags flags, const void *pNext, bool has_alloc, VkResult *result)
+{
+    if (r == VK_SUCCESS) {
+        pvk_live_add(device, VK_OBJECT_TYPE_PIPELINE, pipelines[i], NULL, has_alloc);
+        return false;
+    }
+    if (*result == VK_SUCCESS)
+        *result = r;
+    if (!(pvk_pipeline_flags(flags, pNext) & VK_PIPELINE_CREATE_2_EARLY_RETURN_ON_FAILURE_BIT))
+        return false;
+    while (++i < n)
+        pipelines[i] = VK_NULL_HANDLE;
+    return true;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateComputePipelines(VkDevice device, VkPipelineCache pipelineCache,
                                                         uint32_t createInfoCount,
                                                         const VkComputePipelineCreateInfo *pCreateInfos,
@@ -72451,18 +72375,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateComputePipelines(VkDevice device, VkPipel
     for (i = 0; i < createInfoCount; i++) {
         VkResult r = pvk_compute_pipeline_create((struct pvk_device *)device, (struct pvk_pipeline_cache *)pipelineCache,
                                                  &pCreateInfos[i], alloc, &pPipelines[i]);
-        if (r == VK_SUCCESS) {
-            pvk_live_add((struct pvk_device *)device, VK_OBJECT_TYPE_PIPELINE, pPipelines[i], NULL, pAllocator != NULL);
-            continue;
-        }
-        if (result == VK_SUCCESS)
-            result = r;
-        if (pvk_pipeline_flags(pCreateInfos[i].flags, pCreateInfos[i].pNext) &
-            VK_PIPELINE_CREATE_2_EARLY_RETURN_ON_FAILURE_BIT) {
-            for (i++; i < createInfoCount; i++)
-                pPipelines[i] = VK_NULL_HANDLE;
+        if (pvk_pipeline_batch_step((struct pvk_device *)device, r, pPipelines, i, createInfoCount, pCreateInfos[i].flags,
+                                    pCreateInfos[i].pNext, pAllocator != NULL, &result))
             break;
-        }
     }
     return result;
 }
@@ -72591,7 +72506,7 @@ static uint32_t pvk_subpass_texture_inputs(const struct pvk_render_pass *rp, con
             for (j = 0; j < sp->input_count; j++)
                 if (others & (1u << j))
                     total = pvk_tile_add(total, rp->attachments[sp->inputs[j]].fmt);
-            if (total > PVK_TILE_BYTES || total * (samples ? samples : 1u) > PVK_TILE_PIXEL_BYTES)
+            if (!pvk_tile_fits(total, samples))
                 bits |= others;
         }
     }
@@ -72714,7 +72629,7 @@ static bool pvk_rp_can_merge(const struct pvk_render_pass *rp, const struct pvk_
         uint32_t storage;
         pvk_rp_pass_add(rp, &merged, k);
         storage = pvk_rp_storage(rp, &merged);
-        if (storage > PVK_TILE_BYTES || storage * (merged.samples ? merged.samples : 1u) > PVK_TILE_PIXEL_BYTES)
+        if (!pvk_tile_fits(storage, merged.samples))
             return false;
     }
     for (i = 0; i < info->dependencyCount; i++) {
@@ -72892,26 +72807,18 @@ static VkResult pvk_render_pass_create(struct pvk_device *device, const VkRender
     for (i = 0; i < info->dependencyCount; i++) {
         const VkSubpassDependency2 *d = &info->pDependencies[i];
         VkPipelineStageFlags2 src = d->srcStageMask, dst = d->dstStageMask;
-        VkAccessFlags2 src_access = d->srcAccessMask, dst_access = d->dstAccessMask;
         const VkBaseInStructure *ext;
         for (ext = d->pNext; ext; ext = ext->pNext)
             if (ext->sType == VK_STRUCTURE_TYPE_MEMORY_BARRIER_2) { /* (it replaces the masks) */
-                const VkMemoryBarrier2 *b = (const VkMemoryBarrier2 *)ext;
-                src = b->srcStageMask;
-                dst = b->dstStageMask;
-                src_access = b->srcAccessMask;
-                dst_access = b->dstAccessMask;
+                src = ((const VkMemoryBarrier2 *)ext)->srcStageMask;
+                dst = ((const VkMemoryBarrier2 *)ext)->dstStageMask;
             }
         if (d->srcSubpass == VK_SUBPASS_EXTERNAL && d->dstSubpass != VK_SUBPASS_EXTERNAL) {
             rp->in_src |= src;
             rp->in_dst |= dst;
-            rp->in_src_access |= src_access;
-            rp->in_dst_access |= dst_access;
         } else if (d->dstSubpass == VK_SUBPASS_EXTERNAL && d->srcSubpass != VK_SUBPASS_EXTERNAL) {
             rp->out_src |= src;
             rp->out_dst |= dst;
-            rp->out_src_access |= src_access;
-            rp->out_dst_access |= dst_access;
         } else if (d->srcSubpass < ns && d->dstSubpass < ns &&
                    rp->subpasses[d->srcSubpass].pass < rp->subpasses[d->dstSubpass].pass) {
             rp->passes[rp->subpasses[d->dstSubpass].pass].after |= pvk_barrier_stages(dst, false) & PVK_STAGES_RENDER;
@@ -73656,15 +73563,6 @@ static void pvk_gfx_variants_free(struct pvk_device *device, const VkAllocationC
     pvk_free(alloc, v);
 }
 
-static char *pvk_strdup_alloc(const VkAllocationCallbacks *alloc, const char *s)
-{
-    size_t n = strlen(s) + 1;
-    char *d = pvk_alloc(alloc, n, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-    if (d)
-        memcpy(d, s, n);
-    return d;
-}
-
 /* Variant `kind` of a pipeline (not retained), translated and compiled on
  * first use; NULL when the pipeline has none or it could not be made. No
  * application allocator calls: this also runs while encoding. */
@@ -73970,11 +73868,9 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
         vres = &vst->res;
         fres = fst ? &fst->res : &none;
         memset(ci, 0, sizeof(*ci));
-        if (vres->has_push_constants)
-            ci->push_size = (vres->push_constant_offset + vres->push_constant_size + 15) & ~15u;
-        if (fres->has_push_constants &&
-            ((fres->push_constant_offset + fres->push_constant_size + 15) & ~15u) > ci->push_size)
-            ci->push_size = (fres->push_constant_offset + fres->push_constant_size + 15) & ~15u;
+        ci->push_size = pvk_push_size(vres);
+        if (pvk_push_size(fres) > ci->push_size)
+            ci->push_size = pvk_push_size(fres);
         if (ci->push_size > PVK_MAX_PUSH_CONSTANTS_SIZE) {
             pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-translation", VK_OBJECT_TYPE_SHADER_MODULE,
                      (uint64_t)(uintptr_t)vs->module,
@@ -73991,7 +73887,6 @@ static VkResult pvk_gfx_build(struct pvk_device *device, struct pvk_pipeline_cac
         ci->workgroup[0] |= (fres->depth_stencil_fetches & 1u) ? PVK_GFX_READS_DEPTH : 0;
         ci->workgroup[0] |= (fres->depth_stencil_fetches & 2u) ? PVK_GFX_READS_STENCIL : 0;
         ci->workgroup[0] |= fres->color_fetches ? PVK_GFX_FETCHES : 0;
-        ci->workgroup[0] |= PVK_GFX_OUTPUTS;
         for (i = 0; i < fres->output_count; i++)
             if (fres->outputs[i].location < PVK_MAX_COLOR_ATTACHMENTS)
                 ci->workgroup[1] |= 1u << fres->outputs[i].location;
@@ -74077,8 +73972,7 @@ static uint32_t pvk_gfx_writes(const struct pvk_gfx_desc *d, const struct pvk_ca
 {
     uint32_t l, w = 0;
     for (l = 0; l < PVK_MAX_COLOR_ATTACHMENTS; l++)
-        if (d->formats[l] && d->write_masks[l] != PVK_MTLColorWriteMaskNone &&
-            (!(ci->workgroup[0] & PVK_GFX_OUTPUTS) || (ci->workgroup[1] >> l & 1u)))
+        if (d->formats[l] && d->write_masks[l] != PVK_MTLColorWriteMaskNone && (ci->workgroup[1] >> l & 1u))
             w |= 1u << l;
     return w;
 }
@@ -74475,7 +74369,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
             want_icb = false;
     memset(&icb, 0, sizeof(icb));
     result = pvk_gfx_build(device, cache, &src, &d, &vo, &fo, alloc, &ci, &pso, &hit,
-                           tile > PVK_TILE_BYTES || tile * d.samples > PVK_TILE_PIXEL_BYTES ? &kept : NULL,
+                           !pvk_tile_fits(tile, d.samples) ? &kept : NULL,
                            want_icb ? &icb : NULL);
     if (result == VK_SUCCESS && gfx.int_colors) {
         pvk_gfx_fragment_options(&fo_snorm, &d_snorm);
@@ -74487,7 +74381,7 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     /* Passes over tile memory may leave out colors their draws only fetch
      * (pvk_encode_begin_pass): shaders reading the ones it fetches and does
      * not write from textures, for its variants there (struct pvk_gfx_groups) */
-    if (result == VK_SUCCESS && kept.msl[0] && fs && !view_mask && (ci.workgroup[0] & PVK_GFX_OUTPUTS)) {
+    if (result == VK_SUCCESS && kept.msl[0] && fs && !view_mask) {
         uint32_t tex_colors[PVK_MAX_INPUT_ATTACHMENTS], writes = pvk_gfx_writes(&d, &ci);
         for (i = 0; i < PVK_MAX_INPUT_ATTACHMENTS; i++) {
             uint32_t l = input_colors[i];
@@ -74679,8 +74573,8 @@ static VkResult pvk_graphics_pipeline_create(struct pvk_device *device, struct p
     gfx.draw_index = (ci.workgroup[0] & PVK_GFX_DRAW_INDEX) != 0;
     gfx.fetches = (ci.workgroup[0] & PVK_GFX_FETCHES) != 0;
     gfx.writes = pvk_gfx_writes(&d, &ci);
-    for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++) /* (unknown: none, all written) */
-        if (d.formats[i] && (ci.workgroup[0] & PVK_GFX_OUTPUTS) && (ci.workgroup[2] >> i & 1u))
+    for (i = 0; i < PVK_MAX_COLOR_ATTACHMENTS; i++)
+        if (d.formats[i] && (ci.workgroup[2] >> i & 1u))
             gfx.fetched |= 1u << i;
     gfx.reads = reads;
     gfx.bounds = gfx.variants && (gfx.variants->want & (1u << PVK_VARIANT_BOUNDS));
@@ -74705,18 +74599,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateGraphicsPipelines(VkDevice device, VkPipe
     for (i = 0; i < createInfoCount; i++) {
         VkResult r = pvk_graphics_pipeline_create((struct pvk_device *)device, (struct pvk_pipeline_cache *)pipelineCache,
                                                   &pCreateInfos[i], alloc, &pPipelines[i]);
-        if (r == VK_SUCCESS) {
-            pvk_live_add((struct pvk_device *)device, VK_OBJECT_TYPE_PIPELINE, pPipelines[i], NULL, pAllocator != NULL);
-            continue;
-        }
-        if (result == VK_SUCCESS)
-            result = r;
-        if (pvk_pipeline_flags(pCreateInfos[i].flags, pCreateInfos[i].pNext) &
-            VK_PIPELINE_CREATE_2_EARLY_RETURN_ON_FAILURE_BIT) {
-            for (i++; i < createInfoCount; i++)
-                pPipelines[i] = VK_NULL_HANDLE;
+        if (pvk_pipeline_batch_step((struct pvk_device *)device, r, pPipelines, i, createInfoCount, pCreateInfos[i].flags,
+                                    pCreateInfos[i].pNext, pAllocator != NULL, &result))
             break;
-        }
     }
     return result;
 }
@@ -75277,7 +75162,7 @@ static void pvk_swapchain_image_wait(struct pvk_swapchain *sc, uint32_t i, struc
                                      uint64_t start, const char *what)
 {
     while (queue && !pvk_MTLSharedEvent_waitUntilSignaledValue_timeoutMS(queue->timeline, value, 100)) {
-        if (pvk_device_lost(sc->device) || pvk_now_ns() - start > 5000000000ull) {
+        if (pvk_device_lost(sc->device) || pvk_clock_ns(CLOCK_MONOTONIC) - start > 5000000000ull) {
             pvk_logd(sc->device, PVK_LOG_ERROR, "PlasmaVK-vkDestroySwapchainKHR-busy", VK_OBJECT_TYPE_SWAPCHAIN_KHR,
                      (uint64_t)(uintptr_t)sc, "vkDestroySwapchainKHR: %s image %u is not done", what, i);
             break;
@@ -75293,7 +75178,7 @@ static void pvk_swapchain_free(struct pvk_swapchain *sc, const VkAllocationCallb
 {
     struct pvk_device *device = sc->device;
     struct pvk_swapchain **p;
-    uint64_t start = pvk_now_ns();
+    uint64_t start = pvk_clock_ns(CLOCK_MONOTONIC);
     uint32_t i;
 
     pthread_mutex_lock(&pvk_swapchain_lock);
@@ -76052,9 +75937,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue _queue, const VkPresent
  *
  * Every command vkGetInstanceProcAddr / vkGetDeviceProcAddr can return,
  * with its scope, the core version that added it and the extension it
- * belongs to. Keep it alphabetical (for readers; lookup is linear). The
- * commands of extensions promoted to core are the core functions under the
- * extensions' names (vkCmdBeginRenderingKHR is vkCmdBeginRendering).
+ * belongs to. Keep it in strcmp order: pvk_entrypoint_find is a binary
+ * search. The commands of extensions promoted to core are the core functions
+ * under the extensions' names (vkCmdBeginRenderingKHR is vkCmdBeginRendering).
  * ========================================================================== */
 
 /* An entry's kind: its scope, OR'ed with PVK_CORE_1_x for commands added
@@ -76465,11 +76350,18 @@ static const struct pvk_entrypoint {
 /* The first entry of a command, or NULL. */
 static const struct pvk_entrypoint *pvk_entrypoint_find(const char *name)
 {
-    size_t i;
-    for (i = 0; name && i < PVK_ARRAY_SIZE(pvk_entrypoints); i++)
-        if (strcmp(pvk_entrypoints[i].name, name) == 0)
-            return &pvk_entrypoints[i];
-    return NULL;
+    size_t lo = 0, hi = PVK_ARRAY_SIZE(pvk_entrypoints);
+    if (!name)
+        return NULL;
+    while (lo < hi) { /* (the first entry not before name) */
+        size_t mid = lo + (hi - lo) / 2;
+        if (strcmp(pvk_entrypoints[mid].name, name) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo < PVK_ARRAY_SIZE(pvk_entrypoints) && strcmp(pvk_entrypoints[lo].name, name) == 0 ? &pvk_entrypoints[lo]
+                                                                                               : NULL;
 }
 
 /* The command's next entry (another way it comes), or NULL. */
