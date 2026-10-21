@@ -24,10 +24,13 @@ Users `#define PLASMAVK_IMPLEMENTATION` + `#include "plasmavk.h"`. No loader, no
 
 ## Verify
 - The Mac is shared by several sessions and agents, and timings are only valid when nothing else runs.
-  Wrap work in `bench/gpulock.sh` (it waits for the lock, then runs the command):
+  Wrap work in `bench/gpulock.sh` (it waits for the lock, then runs the command). It is also `~/bin/gpulock`,
+  which the engine and other codebases on this Mac use: one lock for all of them (`~/.gpulock`).
+  Exclusive runs queue first come, first served.
   - `bench/gpulock.sh shared make -j32 check`: builds and tests; any number at once.
   - `bench/gpulock.sh excl CMD`: benchmarks, profiles, anything timed or GPU-heavy; runs alone.
   - `bench/gpulock.sh cts deqp-vk ...`: the CTS; one at a time.
-  - `bench/gpulock.sh status`: who holds or waits. Exit code 75 means the wait timed out: retry.
+  - `bench/gpulock.sh status`: who holds or waits. Exit code 75 means the wait timed out: retry the same command
+    from the same directory within 2 minutes and an exclusive run keeps its place in the queue.
 - `make -j8 test`: smoke tests (ASan/UBSan), in parallel.
 - `make -j8 check`: all C dialects, ObjC with/without `<Metal/Metal.h>`, `VK_NO_PROTOTYPES`, C++, two-TU link, iOS, smoke tests, then the conformance suite (`tests/conformance`).
