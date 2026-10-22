@@ -42459,17 +42459,31 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  * ROBUSTNESS (options->robust_*: pvk_pipeline_robustness in section 17)
  *   Storage and uniform buffers: each load, store, atomic and copy through
  *   an access chain from a buffer descriptor is checked against the
- *   descriptor's range (pvk_inb: every accessed byte inside); outside it,
- *   loads read zero and stores and atomics do nothing (atomics return 0).
- *   A vector component is checked alone, a whole load or store (a struct,
- *   a vector straddling the end) as a whole, a row-major matrix column as
- *   its matrix. Texel buffers and images: texel reads and fetches outside
- *   the image (coordinates, level, layer, cube face, sample) read zero,
- *   writes and atomics are dropped; sampling needs no checks (the sampler
- *   clamps). Not checked: accesses through variable pointers and pointer
- *   parameters (bounds do not travel with a pointer value), push constants
- *   and inline uniform blocks (always in range), physical storage buffers
- *   (no robustness in Vulkan).
+ *   descriptor's range (pvk_inb: every accessed byte inside). In a module
+ *   with a loop, a load or store of a scalar or vector of up to 16 bytes
+ *   outside it goes to its address moved into the range (pvk_rb: onto the
+ *   last offset that fits it, or the range's start when the range is
+ *   smaller), as robustBufferAccess allows: an out-of-bounds load may read
+ *   and a store may change any value in the memory bound to the buffer,
+ *   and 16-byte descriptor offsets and buffer sizes
+ *   (PVK_BUFFER_OFFSET_ALIGNMENT) keep those 16 bytes in it. That needs no
+ *   branch: Metal moves the computation of a value stored under a
+ *   condition, even a uniform one, into the condition (ggml's wkv6 loop ran
+ *   1.9x slower), and selecting zero for loads cost up to 14%. A module
+ *   without loops keeps the checks: a small kernel loading and storing one
+ *   word ran 1.2x slower with pvk_rb, and up to 1.1x slower with no checks
+ *   at all. Other loads read zero outside the range; other stores, copies
+ *   and atomics are skipped (atomics return 0). A vector component is
+ *   checked alone, a whole load or store (a struct, a vector straddling the
+ *   end) as a whole, a row-major matrix column as its matrix.
+ *   robustBufferAccess2 (not reported) would need zeros and dropped stores
+ *   instead. Texel buffers and images:
+ *   texel reads and fetches outside the image (coordinates, level, layer,
+ *   cube face, sample) read zero, writes and atomics are dropped;
+ *   sampling needs no checks (the sampler clamps). Not checked: accesses
+ *   through variable pointers and pointer parameters (bounds do not travel
+ *   with a pointer value), push constants and inline uniform blocks (always
+ *   in range), physical storage buffers (no robustness in Vulkan).
  *
  * VARIABLE POINTERS (VariablePointersStorageBuffer, VariablePointers)
  *   StorageBuffer and Workgroup pointers that are selected (OpSelect, OpPhi),
@@ -43689,6 +43703,7 @@ struct pvk_spv {
     bool use_ia;                /* emit pvk_ia_tex, pvk_ia_tex_ms */
     bool derivatives;           /* a fragment shader uses derivatives or quad operations (pvk_spv_emit_stage) */
     bool storage_reads;         /* the module reads storage images (pvk_spv_storage_reads) */
+    bool rb_clamp;              /* robust scalar and vector accesses clamp (pvk_spv_rb_lvalue): it has loops */
     bool at_centroid;           /* interpolateAtCentroid is used: centroid inputs are read as it reads them */
     bool use_ycbcr;             /* emit pvk_ycbcr_d (Y'CBCR SAMPLING) */
     const struct pvk_ycbcr *ycbcr_fns[PVK_SPV_MAX_YCBCR]; /* conversions with a pvk_ycbcr_<k> function */
@@ -48107,7 +48122,8 @@ enum {
     PVK_SPV_H_SG_SCAN = 1u << 10,
     PVK_SPV_H_INB = 1u << 11,
     PVK_SPV_H_F16_RTZ = 1u << 12,
-    PVK_SPV_H_QUANTIZE = 1u << 13
+    PVK_SPV_H_QUANTIZE = 1u << 13,
+    PVK_SPV_H_RB = 1u << 14
 };
 
 static const char *pvk_spv_helper(struct pvk_spv *ctx, uint32_t bit, const char *name)
@@ -48691,6 +48707,23 @@ static const char *pvk_spv_bounds(struct pvk_spv *ctx, const struct pvk_spv_ptr 
     return pvk_spv_fmt(ctx, "pvk_inb(%s, reinterpret_cast<ulong>(&%s), sizeof(%s))", p->rb, p->expr, p->expr);
 }
 
+/* With robust buffer access in a module with loops (ctx->rb_clamp), p's
+ * scalar or vector of at most PVK_BUFFER_OFFSET_ALIGNMENT bytes moved into
+ * its descriptor's range (ROBUSTNESS; a component: its vector's address,
+ * plus it); NULL for anything else. */
+static const char *pvk_spv_rb_lvalue(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
+{
+    struct pvk_spv_type *t = pvk_spv_type(ctx, p->type);
+    if (!p->rb || !ctx->rb_clamp || p->node || p->rm_col || t->size > PVK_BUFFER_OFFSET_ALIGNMENT ||
+        (t->op != PVK_SPV_OpTypeInt && t->op != PVK_SPV_OpTypeFloat && t->op != PVK_SPV_OpTypeVector))
+        return NULL;
+    pvk_spv_helper(ctx, PVK_SPV_H_RB, "pvk_rb");
+    if (p->rb_vec)
+        return pvk_spv_fmt(ctx, "(*pvk_rb(%s, (%s %s*)&%s + (%s), %uul))", p->rb, pvk_spv_space(ctx, p), t->msl,
+                           p->rb_vec, p->rb_comp, t->size);
+    return pvk_spv_fmt(ctx, "(*pvk_rb(%s, &%s, sizeof(%s)))", p->rb, p->expr, p->expr);
+}
+
 /* A combined image sampler loaded from a binding with Y'CbCr conversions
  * (Y'CBCR SAMPLING). With a conversion, the value remembers it; when the
  * descriptors are pvk_ycbcr_d it is one, declared as such where it is
@@ -48719,7 +48752,9 @@ static void pvk_spv_ycbcr_load(struct pvk_spv *ctx, uint32_t rid, const struct p
         x->msl = pvk_spv_fmt(ctx, "(%s)", p->expr);
 }
 
-/* Value of what p points at, as result rid (zero outside a robust buffer). */
+/* Value of what p points at, as result rid (outside a robust buffer's
+ * range: zero, or in a module with loops a scalar or vector read inside
+ * it). */
 static void pvk_spv_load(struct pvk_spv *ctx, uint32_t rid, const struct pvk_spv_ptr *p)
 {
     struct pvk_spv_id *x = pvk_spv_get(ctx, rid);
@@ -48763,7 +48798,10 @@ static void pvk_spv_load(struct pvk_spv *ctx, uint32_t rid, const struct pvk_spv
     } else if (p->ycbcr && !p->desc_array) {
         pvk_spv_ycbcr_load(ctx, rid, p);
     } else {
-        pvk_spv_set(ctx, rid, ok ? pvk_spv_fmt(ctx, "%s ? %s : %s", ok, p->expr, pvk_spv_zero(ctx, p->type)) : p->expr);
+        const char *rb = pvk_spv_rb_lvalue(ctx, p);
+        if (!rb && ok)
+            rb = pvk_spv_fmt(ctx, "%s ? %s : %s", ok, p->expr, pvk_spv_zero(ctx, p->type));
+        pvk_spv_set(ctx, rid, rb ? rb : p->expr);
         x->residency = p->residency;
     }
 }
@@ -48793,10 +48831,15 @@ static bool pvk_spv_shared(const struct pvk_spv_ptr *p)
            p->storage == PVK_SPV_StorageUniform || p->storage == PVK_SPV_StorageWorkgroup;
 }
 
-/* *p = val (discarded outside a robust buffer). */
+/* *p = val (outside a robust buffer's range: discarded, or in a module
+ * with loops a scalar or vector written inside it). */
 static void pvk_spv_store(struct pvk_spv *ctx, const struct pvk_spv_ptr *p, const char *val, uint32_t vtype)
 {
-    const char *ok = pvk_spv_bounds(ctx, p);
+    const char *ok = pvk_spv_bounds(ctx, p), *dst = pvk_spv_rb_lvalue(ctx, p);
+    if (dst) /* a scalar or vector: stored inside the range, without a branch (ROBUSTNESS) */
+        ok = NULL;
+    else
+        dst = p->expr;
     if (!pvk_spv_writable(ctx, p))
         pvk_spv_fail(ctx, "store to read-only memory");
     if (p->desc_array)
@@ -48822,7 +48865,7 @@ static void pvk_spv_store(struct pvk_spv *ctx, const struct pvk_spv_ptr *p, cons
         }
     } else {
         ctx->keep_pad = pvk_spv_shared(p);
-        pvk_spv_copy(ctx, p->expr, p->node, p->type, val, NULL, vtype, 0);
+        pvk_spv_copy(ctx, dst, p->node, p->type, val, NULL, vtype, 0);
         ctx->keep_pad = false;
     }
     pvk_spv_if_close(ctx, ok);
@@ -48959,6 +49002,14 @@ static const char *const pvk_spv_helper_text[] = {
     "template <int N>\ninline vec<float, N> pvk_quantize_f16(vec<float, N> f)\n{\n"
     "    vec<float, N> h = vec<float, N>(vec<half, N>(f));\n"
     "    return select(h, copysign(vec<float, N>(0.0f), f), abs(h) < 6.103515625e-05f);\n}\n\n",
+    "/* Pointer p to n bytes moved into d's range: outside it, onto the last\n"
+    " * offset that fits them (rounded down to *p's alignment), or the start.\n"
+    " * 32-bit offsets: a range is under 4 GB. */\n"
+    "template <typename D, typename P>\ninline P pvk_rb(D d, P p, ulong n)\n{\n"
+    "    uint s = uint(min(d.size, 0xfffffffful)), m = uint(n);\n"
+    "    uint o = uint(reinterpret_cast<ulong>(p)) - uint(reinterpret_cast<ulong>(d.p));\n"
+    "    uint last = (max(s, m) - m) & ~(uint(alignof(decltype(*p))) - 1u);\n"
+    "    return reinterpret_cast<P>(reinterpret_cast<ulong>(d.p) + min(o, last));\n}\n\n",
 };
 
 static void pvk_spv_interpolate_at(struct pvk_spv *ctx, const struct pvk_spv_insn *in);
@@ -55348,6 +55399,19 @@ static bool pvk_spv_storage_reads(const struct pvk_spv *ctx)
     return false;
 }
 
+/* Whether a function the entry point reaches has a loop (ctx->rb_clamp). */
+static bool pvk_spv_loops(struct pvk_spv *ctx)
+{
+    uint32_t i, b;
+    for (i = 0; i < ctx->norder; i++) {
+        const struct pvk_spv_func *fn = ctx->funcs[ctx->order[i] - 1];
+        for (b = 0; b < fn->nblocks; b++)
+            if (fn->blocks[b].merge && pvk_spv_insn_at(ctx, fn->blocks[b].merge).op == PVK_SPV_OpLoopMerge)
+                return true;
+    }
+    return false;
+}
+
 static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t word_count)
 {
     struct pvk_msl_result *res = ctx->result;
@@ -55422,6 +55486,7 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         for (i = 0; i < ctx->norder; i++)
             pvk_spv_recurrences(ctx, ctx->order[i]);
     ctx->storage_reads = pvk_spv_storage_reads(ctx);
+    ctx->rb_clamp = pvk_spv_loops(ctx);
     if (ctx->options && ctx->options->dispatch_base) {
         uint32_t end = res->has_push_constants ? pvk_spv_round(res->push_constant_offset + res->push_constant_size, 16) : 0;
         if (ctx->options->dispatch_base_offset > 65536)
