@@ -6340,6 +6340,61 @@ static const uint32_t spv_math_contract[] = {
     0x00000024, 0x00000063, 0x0003003e, 0x00000028, 0x00000064, 0x000100fd, 0x00010038,
 };
 
+/*
+ * #version 450
+ * layout(local_size_x = 1) in;
+ * layout(std430, binding = 0) buffer B { vec4 a[4]; vec4 b[4]; float y, z; } buf;
+ * void main()
+ * {
+ *     buf.y = dot(buf.a[0], buf.b[0]) + dot(buf.a[1], buf.b[1]) + dot(buf.a[2], buf.b[2]);
+ *     buf.z = dot(buf.a[3], buf.b[3]) + buf.y;
+ * }
+ */
+static const uint32_t spv_math_dot_sum[] = {
+    0x07230203, 0x00010600, 0x0008000b, 0x00000034, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0006000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000e, 0x00060010, 0x00000004,
+    0x00000011, 0x00000001, 0x00000001, 0x00000001, 0x00030003, 0x00000002, 0x000001c2, 0x00040005,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x0000000c, 0x00000042, 0x00040006, 0x0000000c,
+    0x00000000, 0x00000061, 0x00040006, 0x0000000c, 0x00000001, 0x00000062, 0x00040006, 0x0000000c,
+    0x00000002, 0x00000079, 0x00040006, 0x0000000c, 0x00000003, 0x0000007a, 0x00030005, 0x0000000e,
+    0x00667562, 0x00040047, 0x0000000a, 0x00000006, 0x00000010, 0x00040047, 0x0000000b, 0x00000006,
+    0x00000010, 0x00030047, 0x0000000c, 0x00000002, 0x00050048, 0x0000000c, 0x00000000, 0x00000023,
+    0x00000000, 0x00050048, 0x0000000c, 0x00000001, 0x00000023, 0x00000040, 0x00050048, 0x0000000c,
+    0x00000002, 0x00000023, 0x00000080, 0x00050048, 0x0000000c, 0x00000003, 0x00000023, 0x00000084,
+    0x00040047, 0x0000000e, 0x00000021, 0x00000000, 0x00040047, 0x0000000e, 0x00000022, 0x00000000,
+    0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020,
+    0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040015, 0x00000008, 0x00000020, 0x00000000,
+    0x0004002b, 0x00000008, 0x00000009, 0x00000004, 0x0004001c, 0x0000000a, 0x00000007, 0x00000009,
+    0x0004001c, 0x0000000b, 0x00000007, 0x00000009, 0x0006001e, 0x0000000c, 0x0000000a, 0x0000000b,
+    0x00000006, 0x00000006, 0x00040020, 0x0000000d, 0x0000000c, 0x0000000c, 0x0004003b, 0x0000000d,
+    0x0000000e, 0x0000000c, 0x00040015, 0x0000000f, 0x00000020, 0x00000001, 0x0004002b, 0x0000000f,
+    0x00000010, 0x00000002, 0x0004002b, 0x0000000f, 0x00000011, 0x00000000, 0x00040020, 0x00000012,
+    0x0000000c, 0x00000007, 0x0004002b, 0x0000000f, 0x00000015, 0x00000001, 0x00040020, 0x00000025,
+    0x0000000c, 0x00000006, 0x0004002b, 0x0000000f, 0x00000027, 0x00000003, 0x00040017, 0x00000031,
+    0x00000008, 0x00000003, 0x0004002b, 0x00000008, 0x00000032, 0x00000001, 0x0006002c, 0x00000031,
+    0x00000033, 0x00000032, 0x00000032, 0x00000032, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200f8, 0x00000005, 0x00060041, 0x00000012, 0x00000013, 0x0000000e, 0x00000011,
+    0x00000011, 0x0004003d, 0x00000007, 0x00000014, 0x00000013, 0x00060041, 0x00000012, 0x00000016,
+    0x0000000e, 0x00000015, 0x00000011, 0x0004003d, 0x00000007, 0x00000017, 0x00000016, 0x00050094,
+    0x00000006, 0x00000018, 0x00000014, 0x00000017, 0x00060041, 0x00000012, 0x00000019, 0x0000000e,
+    0x00000011, 0x00000015, 0x0004003d, 0x00000007, 0x0000001a, 0x00000019, 0x00060041, 0x00000012,
+    0x0000001b, 0x0000000e, 0x00000015, 0x00000015, 0x0004003d, 0x00000007, 0x0000001c, 0x0000001b,
+    0x00050094, 0x00000006, 0x0000001d, 0x0000001a, 0x0000001c, 0x00050081, 0x00000006, 0x0000001e,
+    0x00000018, 0x0000001d, 0x00060041, 0x00000012, 0x0000001f, 0x0000000e, 0x00000011, 0x00000010,
+    0x0004003d, 0x00000007, 0x00000020, 0x0000001f, 0x00060041, 0x00000012, 0x00000021, 0x0000000e,
+    0x00000015, 0x00000010, 0x0004003d, 0x00000007, 0x00000022, 0x00000021, 0x00050094, 0x00000006,
+    0x00000023, 0x00000020, 0x00000022, 0x00050081, 0x00000006, 0x00000024, 0x0000001e, 0x00000023,
+    0x00050041, 0x00000025, 0x00000026, 0x0000000e, 0x00000010, 0x0003003e, 0x00000026, 0x00000024,
+    0x00060041, 0x00000012, 0x00000028, 0x0000000e, 0x00000011, 0x00000027, 0x0004003d, 0x00000007,
+    0x00000029, 0x00000028, 0x00060041, 0x00000012, 0x0000002a, 0x0000000e, 0x00000015, 0x00000027,
+    0x0004003d, 0x00000007, 0x0000002b, 0x0000002a, 0x00050094, 0x00000006, 0x0000002c, 0x00000029,
+    0x0000002b, 0x00050041, 0x00000025, 0x0000002d, 0x0000000e, 0x00000010, 0x0004003d, 0x00000006,
+    0x0000002e, 0x0000002d, 0x00050081, 0x00000006, 0x0000002f, 0x0000002c, 0x0000002e, 0x00050041,
+    0x00000025, 0x00000030, 0x0000000e, 0x00000027, 0x0003003e, 0x00000030, 0x0000002f, 0x000100fd,
+    0x00010038,
+};
+
 /* A safe-math module (SignedZeroInfNanPreserve) contracts across its
  * statements, as pipelines compile it: (1 + 2^-12)^2 - (1 + 2^-11) is the
  * fma's 2^-24, not 0, in r and the accumulator, while the multiplicative
@@ -6377,6 +6432,43 @@ static void test_math_contract(void)
     EXPECT(v.acc == 0x1p-24f, "acc = %a, want the fma's 0x1p-24", (double)v.acc);
     EXPECT(v.s == 0.0f, "s = %a, want 0 (uncontracted)", (double)v.s);
     EXPECT(v.t == 0.0f, "t = %a, want 0 (uncontracted)", (double)v.t);
+    mt_buffer_free(&buf);
+    pvk_release(pso);
+    pvk_msl_result_free(&res);
+}
+
+/* A sum of dot products in a fast-math module keeps them apart
+ * (pvk_spv_dot_sum): each is declared, and the sum adds their names; a dot
+ * product added to anything else stays in the expression. */
+static void test_math_dot_sum(void)
+{
+    struct { float a[4][4], b[4][4], y, z; } v;
+    struct pvk_msl_result res;
+    struct mt_buffer buf;
+    struct mt_binding b;
+    float want[4];
+    uint32_t i, c;
+    id pso = build(spv_math_dot_sum, PVK_ARRAY_SIZE(spv_math_dot_sum), NULL, &res);
+
+    REQUIRE(pso != NULL);
+    CHECK(res.fast_math);
+    CHECK(strstr(res.msl, "buf_14.y = ((_24 + _29) + _35);\n") != NULL);
+    CHECK(strstr(res.msl, "buf_14.z = (dot(") != NULL);
+    memset(&v, 0, sizeof(v));
+    for (i = 0; i < 4; i++) {
+        want[i] = 0.0f;
+        for (c = 0; c < 4; c++) {
+            v.a[i][c] = (float)(i + c + 1);
+            v.b[i][c] = (float)c - (float)i;
+            want[i] += v.a[i][c] * v.b[i][c];
+        }
+    }
+    buf = mt_buffer(sizeof(v), &v, sizeof(v));
+    b = bind(0, 0, &buf);
+    CHECK(mt_dispatch(pso, &res, &b, 1, NULL, 0, 1, 1, 1));
+    memcpy(&v, buf.data, sizeof(v));
+    EXPECT(v.y == want[0] + want[1] + want[2], "y = %g, want %g", (double)v.y, (double)(want[0] + want[1] + want[2]));
+    EXPECT(v.z == want[3] + v.y, "z = %g, want %g", (double)v.z, (double)(want[3] + v.y));
     mt_buffer_free(&buf);
     pvk_release(pso);
     pvk_msl_result_free(&res);
@@ -7665,6 +7757,7 @@ int main(void)
     RUN(test_float_controls);
     RUN(test_math_mode);
     RUN(test_math_contract);
+    RUN(test_math_dot_sum);
     RUN(test_f16_rtz);
     RUN(test_expect_assume);
     RUN(test_expect_assume_opt);

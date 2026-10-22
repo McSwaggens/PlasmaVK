@@ -42505,7 +42505,8 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   of the loop (pvk_spv_hoist). A pure scalar or vector used once in its
  *   block is instead written into its use, as SPIRV-Cross does
  *   (pvk_spv_forward): glslang names every intermediate value, and Metal
- *   compiles fewer statements faster. Access chains stay expressions until
+ *   compiles fewer statements faster. Not a dot product summed with other
+ *   dot products (pvk_spv_dot_sum). Access chains stay expressions until
  *   loaded or stored.
  *   Structured control flow is emitted recursively from the merge
  *   information: selections become if/else, OpSwitch a switch, loops
@@ -43405,6 +43406,7 @@ enum pvk_spv_kind {
 #define PVK_SPV_F_OUTSIDE 0x4000000u    /* in a recurrence's add, no arithmetic forwarded (pvk_spv_recurrences) */
 #define PVK_SPV_F_ARITH 0x8000000u      /* forwarded, with float arithmetic in its expression */
 #define PVK_SPV_F_LOOPED 0x10000000u    /* makes what a loop header's phi takes back (pvk_spv_recurrences) */
+#define PVK_SPV_F_DOTS 0x20000000u      /* a sum of dot products (pvk_spv_dot_sum) */
 /* member flags */
 #define PVK_SPV_M_OFFSET 0x1u
 #define PVK_SPV_M_ROW_MAJOR 0x2u
@@ -48452,6 +48454,19 @@ static const char *pvk_spv_result(struct pvk_spv *ctx, uint32_t rid)
     return x->msl;
 }
 
+/* Declares forwarded value rid here, as its expression (pvk_spv_forward). */
+static void pvk_spv_unforward(struct pvk_spv *ctx, uint32_t rid)
+{
+    struct pvk_spv_id *x = pvk_spv_get(ctx, rid);
+    const char *type = pvk_spv_data_type(ctx, x->type)->msl, *expr = x->msl;
+    x->msl = pvk_spv_name(ctx, rid);
+    x->flags &= ~(PVK_SPV_F_FORWARDED | PVK_SPV_F_READS | PVK_SPV_F_ARITH);
+    if (pvk_spv_hoist(ctx, x, type))
+        pvk_spv_line(ctx, "%s = %s;", x->msl, expr);
+    else
+        pvk_spv_line(ctx, "%s %s = %s;", type, x->msl, expr);
+}
+
 /* Defines result rid as expr. */
 static void pvk_spv_set(struct pvk_spv *ctx, uint32_t rid, const char *expr)
 {
@@ -50000,6 +50015,30 @@ static uint32_t pvk_spv_splat_of(struct pvk_spv *ctx, uint32_t v)
     if ((pvk_spv_get(ctx, in.w[3])->flags & PVK_SPV_F_READS) && !(x->flags & PVK_SPV_F_FORWARDED))
         return 0; /* (a forwarded load, read where the vector was: pvk_spv_forward) */
     return in.w[3];
+}
+
+/* Add or subtraction rid = a op b in a fast-math module: when a and b are
+ * both dot products or sums of them (PVK_SPV_F_DOTS), a forwarded dot product
+ * is declared here (pvk_spv_unforward), next to its operands, instead of
+ * being written into the sum. ggml's wkv6 adds `y += dot(r, t)` over 16
+ * float4s a token: written into y's expression, all 16 dot products ran
+ * where y is stored, and the loop took 1.56x as long as with them declared
+ * apart, for the same results bit for bit (M4 Max). Every value written as
+ * its own statement, in order, was as slow. */
+static void pvk_spv_dot_sum(struct pvk_spv *ctx, uint32_t rid, uint32_t a, uint32_t b)
+{
+    uint32_t i, v[2];
+    v[0] = a;
+    v[1] = b;
+    if (!ctx->result->fast_math)
+        return;
+    for (i = 0; i < 2; i++)
+        if (pvk_spv_get(ctx, v[i])->op != PVK_SPV_OpDot && !(pvk_spv_get(ctx, v[i])->flags & PVK_SPV_F_DOTS))
+            return;
+    for (i = 0; i < 2; i++)
+        if (pvk_spv_get(ctx, v[i])->op == PVK_SPV_OpDot && (pvk_spv_get(ctx, v[i])->flags & PVK_SPV_F_FORWARDED))
+            pvk_spv_unforward(ctx, v[i]);
+    pvk_spv_get(ctx, rid)->flags |= PVK_SPV_F_DOTS;
 }
 
 static const char *pvk_spv_binary_op(uint32_t op)
@@ -51683,6 +51722,8 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
     case PVK_SPV_OpFOrdGreaterThan: case PVK_SPV_OpFOrdLessThanEqual: case PVK_SPV_OpFOrdGreaterThanEqual:
     case PVK_SPV_OpLogicalOr: case PVK_SPV_OpLogicalAnd: case PVK_SPV_OpLogicalEqual: case PVK_SPV_OpLogicalNotEqual: {
         uint32_t splat = op == PVK_SPV_OpFDiv && ctx->result->fast_math ? pvk_spv_splat_of(ctx, pvk_spv_arg(ctx, in, 4)) : 0;
+        if (op == PVK_SPV_OpFAdd || op == PVK_SPV_OpFSub)
+            pvk_spv_dot_sum(ctx, rid, pvk_spv_arg(ctx, in, 3), pvk_spv_arg(ctx, in, 4));
         if (splat) { /* (pvk_spv_splat_of) */
             pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s * (1 / %s)", pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3)),
                                               pvk_spv_val(ctx, splat)));
