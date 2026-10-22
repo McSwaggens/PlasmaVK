@@ -42286,9 +42286,10 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  * COMPILING THE OUTPUT
  *   Needs MSL 3.2 or newer (atomic_thread_fence, texture atomics). Compile with
  *   MTLCompileOptions.mathMode = MTLMathModeSafe, or where the output defines
- *   PVK_FAST_MATH (result->fast_math: the module has no float controls,
- *   FPFastMath* short of every flag, NoContraction or FPRoundingMode, so
- *   Vulkan's default floating-point environment applies) MTLMathModeRelaxed
+ *   PVK_FAST_MATH (result->fast_math: the module has no float controls
+ *   for a width it has a float type of, FPFastMath* short of every flag,
+ *   NoContraction or FPRoundingMode, so Vulkan's default floating-point
+ *   environment applies) MTLMathModeRelaxed
  *   with MTLMathFloatingPointFunctionsFast (Metal's default functions, within
  *   Vulkan's precision of individual operations; precise ones cost the
  *   engine migration most of the gain). Not MTLMathModeFast: the CTS's
@@ -42434,7 +42435,8 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *     32 bits), shaderFloatControls2: the execution modes and FPFastMath*
  *     are accepted (MTLMathModeSafe keeps signed zeros, Inf, NaN and rounds
  *     to nearest even: stricter than any fast-math flag; contracting unless
- *     flags lack AllowContract, pvk_spv_contracts); FPRoundingMode RTZ
+ *     flags lack AllowContract, pvk_spv_contracts; a mode for a width the
+ *     module has no float type of is ignored); FPRoundingMode RTZ
  *     on conversions to half (16-bit storage) is pvk_f16_rtz. No denormal
  *     modes are reported.
  *   shaderExpectAssume: ExpectAssumeKHR; OpExpectKHR is its value,
@@ -54416,7 +54418,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         case PVK_SPV_ExecutionModeOriginUpperLeft:
         case PVK_SPV_ExecutionModeDepthReplacing:
         case 16: /* DepthUnchanged */
-        case 4459: case 4460: case 4461: case 4462: case 4463: /* float controls: safe math (pvk_spv_fast_math) */
+        case 4459: case 4460: case 4461: case 4462: case 4463: /* float controls: safe math where they apply (pvk_spv_fast_math) */
         case 6028: /* FPFastMathDefault: safe math, which any flags allow, unless it allows all */
             break;
         case PVK_SPV_ExecutionModeEarlyFragmentTests:
@@ -55343,24 +55345,34 @@ static const char *pvk_spv_kernel_name(struct pvk_spv *ctx)
     return pvk_spv_fmt(ctx, "%s", buf);
 }
 
+/* A bit for a float width: 8 to 248 bits, any other width the top one. */
+static uint32_t pvk_spv_width_bit(uint32_t width)
+{
+    return width >= 8 && width <= 248 && width % 8 == 0 ? 1u << (width / 8 - 1) : 1u << 31;
+}
+
 /* Whether the module asks for no more than Vulkan's default floating-point
  * environment (Precision and Operation of SPIR-V Instructions): without
  * float controls on the entry point, FPFastMath* short of every flag,
  * NoContraction or FPRoundingMode, Vulkan allows contraction,
  * reassociation and reciprocals, and assumes no signed zeros, Inf or NaN,
- * which is Metal's fast math. */
+ * which is Metal's fast math. A float control for a width the module has
+ * no OpTypeFloat of changes no result, so it doesn't count (ggml-vulkan
+ * adds RoundingModeRTE 16 to its shaders where RTE16 is supported). */
 static bool pvk_spv_fast_math(struct pvk_spv *ctx)
 {
     const uint32_t all = 0x1u | 0x2u | 0x4u | 0x8u | 0x10000u | 0x20000u | 0x40000u; /* NotNaN ... AllowTransform */
-    uint32_t i = 5;
+    uint32_t i = 5, controls = 0, floats = 0; /* pvk_spv_width_bit */
     while (i < ctx->nw) {
         const uint32_t *w = ctx->w + i;
         uint32_t op = w[0] & 0xffffu, n = w[0] >> 16;
-        if (!n || n > ctx->nw - i || op == PVK_SPV_OpFunction) /* (annotations come before the functions) */
+        if (!n || n > ctx->nw - i || op == PVK_SPV_OpFunction) /* (annotations and types come before the functions) */
             break;
+        if (op == PVK_SPV_OpTypeFloat && n >= 3)
+            floats |= pvk_spv_width_bit(w[2]);
         if ((op == PVK_SPV_OpExecutionMode || op == PVK_SPV_OpExecutionModeId) && n >= 3 && w[1] == ctx->entry_fid) {
-            if (w[2] >= 4459 && w[2] <= 4463) /* Denorm*, SignedZeroInfNanPreserve, RoundingMode* */
-                return false;
+            if (w[2] >= 4459 && w[2] <= 4463) /* Denorm*, SignedZeroInfNanPreserve, RoundingMode*: Target Width */
+                controls |= op == PVK_SPV_OpExecutionMode && n >= 4 ? pvk_spv_width_bit(w[3]) : ~0u;
             if (w[2] == 6028 && n >= 5) { /* FPFastMathDefault */
                 uint32_t f = (uint32_t)pvk_spv_const_uint(ctx, w[4]);
                 if (!(f & 0x10u) && (f & all) != all)
@@ -55377,7 +55389,7 @@ static bool pvk_spv_fast_math(struct pvk_spv *ctx)
         }
         i += n;
     }
-    return true;
+    return !(controls & floats);
 }
 
 /* Whether a module that compiles with safe math (pvk_spv_fast_math) may
