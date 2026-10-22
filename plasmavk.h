@@ -32864,7 +32864,6 @@ static VkBool32 pvk_vmessage(const struct pvk_msg *m, enum pvk_log_level level, 
     VkDebugUtilsLabelEXT queue_labels[PVK_MSG_LABELS], cb_labels[PVK_MSG_LABELS];
     VkDebugUtilsMessengerCallbackDataEXT data;
     VkDebugUtilsMessageTypeFlagsEXT type;
-    const VkAllocationCallbacks *alloc;
     struct pvk_instance *instance;
     struct pvk_msg none;
     VkBool32 skip = VK_FALSE;
@@ -32878,10 +32877,12 @@ static VkBool32 pvk_vmessage(const struct pvk_msg *m, enum pvk_log_level level, 
         pvk_msg_init(&none, NULL, NULL, 0);
         m = &none;
     }
-    alloc = m->instance ? pvk_instance_alloc(m->instance) : NULL;
+    /* A long text takes system memory: Metal's threads (a lost device) and
+     * the device's warm-up thread send messages too, and only the thread
+     * running a command may call the application's allocator. */
     va_copy(copy, args);
     n = vsnprintf(stack, sizeof(stack), fmt, args);
-    if (n >= (int)sizeof(stack) && (heap = pvk_alloc(alloc, (size_t)n + 1, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND))) {
+    if (n >= (int)sizeof(stack) && (heap = malloc((size_t)n + 1))) {
         vsnprintf(heap, (size_t)n + 1, fmt, copy);
         text = heap;
     }
@@ -32925,7 +32926,7 @@ static VkBool32 pvk_vmessage(const struct pvk_msg *m, enum pvk_log_level level, 
         else
             fprintf(stderr, "plasmavk: %s: %s\n", levels[level], text);
     }
-    pvk_free_raw(alloc, heap);
+    free(heap);
     return skip;
 }
 
@@ -62538,16 +62539,17 @@ static id pvk_msl_library(struct pvk_device *device, const char *msl, bool invar
 static struct pvk_library_task *pvk_msl_library_start(struct pvk_device *device, const char *msl, bool invariant);
 static id pvk_msl_library_wait(struct pvk_library_task *t, char *error, size_t error_size);
 
-/* The source of library `index` (the device's allocation; NULL: out of
- * memory). */
-static char *pvk_blit_library_msl(struct pvk_device *device, uint32_t index)
+/* The source of library `index` (system memory, free(): the device's
+ * warm-up thread makes it too, and only the thread running a command may
+ * call the application's allocator; NULL: out of memory). */
+static char *pvk_blit_library_msl(uint32_t index)
 {
     size_t i, n = sizeof(pvk_blit_prelude_msl);
     char *msl;
     for (i = 0; i < PVK_ARRAY_SIZE(pvk_blit_msl); i++)
         if (pvk_blit_msl[i].library == index)
             n += strlen(pvk_blit_msl[i].msl);
-    msl = pvk_alloc(pvk_device_alloc(device), n, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+    msl = malloc(n);
     if (msl) {
         strcpy(msl, pvk_blit_prelude_msl);
         for (i = 0; i < PVK_ARRAY_SIZE(pvk_blit_msl); i++)
@@ -62571,10 +62573,10 @@ static id pvk_blit_library(struct pvk_device *device, uint32_t index)
     id library;
     pthread_mutex_lock(&pvk_blit_library_locks[index]);
     if (!device->blit_libraries[index]) {
-        char *msl = pvk_blit_library_msl(device, index), error[256] = "out of memory";
+        char *msl = pvk_blit_library_msl(index), error[256] = "out of memory";
         if (msl)
             device->blit_libraries[index] = pvk_msl_library(device, msl, false, error, sizeof(error)); /* (safe math) */
-        pvk_free(pvk_device_alloc(device), msl);
+        free(msl);
         if (!device->blit_libraries[index])
             pvk_blit_library_failed(device, error);
     }
@@ -62599,9 +62601,9 @@ static void pvk_blit_libraries_warm(struct pvk_device *device)
         char *msl;
         tasks[i] = NULL;
         locked[i] = pthread_mutex_trylock(&pvk_blit_library_locks[i]) == 0; /* (never waits holding others) */
-        if (locked[i] && !device->blit_libraries[i] && (msl = pvk_blit_library_msl(device, i))) {
+        if (locked[i] && !device->blit_libraries[i] && (msl = pvk_blit_library_msl(i))) {
             tasks[i] = pvk_msl_library_start(device, msl, false);
-            pvk_free(pvk_device_alloc(device), msl);
+            free(msl);
         }
     }
     for (i = 0; i < PVK_BLIT_LIB_COUNT; i++) { /* (the order they come in) */
@@ -71139,7 +71141,9 @@ static id pvk_device_fill_pipeline(struct pvk_device *device)
  * does not have (an application's first launch) takes long: 50 to 415 ms
  * for the blit libraries, side by side (enum pvk_blit_lib), on M4 Max. A
  * first use meanwhile waits for the compile in progress under the getter's
- * lock. vkDestroyDevice stops it between steps. */
+ * lock. vkDestroyDevice stops it between steps. Its steps take system
+ * memory only: the application's allocator is called by the thread running
+ * a command alone (Memory Allocation > Host Memory). */
 static void *pvk_device_warm(void *arg)
 {
     struct pvk_device *device = arg;

@@ -293,6 +293,129 @@ static void test_internal_shaders_ahead(void)
     }
 }
 
+/* An allocator that counts the calls made on threads other than the one
+ * that made it, and the allocations still live. */
+struct thread_allocator {
+    VkAllocationCallbacks cb;
+    pthread_t thread;
+    int foreign; /* atomic */
+    long live;   /* atomic */
+};
+
+static void thread_allocator_note(struct thread_allocator *a)
+{
+    if (!pthread_equal(pthread_self(), a->thread))
+        __atomic_add_fetch(&a->foreign, 1, __ATOMIC_RELAXED);
+}
+
+static void *VKAPI_PTR thread_alloc(void *user, size_t size, size_t alignment, VkSystemAllocationScope scope)
+{
+    struct thread_allocator *a = user;
+    void *p = NULL;
+    (void)scope;
+    thread_allocator_note(a);
+    if (posix_memalign(&p, alignment < sizeof(void *) ? sizeof(void *) : alignment, size) != 0)
+        return NULL;
+    __atomic_add_fetch(&a->live, 1, __ATOMIC_RELAXED);
+    return p;
+}
+
+static void *VKAPI_PTR thread_realloc(void *user, void *original, size_t size, size_t alignment,
+                                      VkSystemAllocationScope scope)
+{
+    struct thread_allocator *a = user;
+    void *p;
+    (void)alignment;
+    (void)scope;
+    thread_allocator_note(a);
+    if (!original)
+        return thread_alloc(user, size, alignment, scope);
+    if (!size) {
+        free(original);
+        __atomic_sub_fetch(&a->live, 1, __ATOMIC_RELAXED);
+        return NULL;
+    }
+    p = realloc(original, size); /* (16-byte aligned: all PlasmaVK asks) */
+    return p;
+}
+
+static void VKAPI_PTR thread_free(void *user, void *memory)
+{
+    struct thread_allocator *a = user;
+    thread_allocator_note(a);
+    if (memory) {
+        free(memory);
+        __atomic_sub_fetch(&a->live, 1, __ATOMIC_RELAXED);
+    }
+}
+
+/* A message longer than pvk_vmessage's stack buffer, as a lost device's
+ * (pvk_commit_feedback, on Metal's thread) with a long error description. */
+static void *long_message(void *device)
+{
+    char text[2048];
+    memset(text, 'x', sizeof(text) - 1);
+    text[sizeof(text) - 1] = '\0';
+    pvk_logd(device, PVK_LOG_DEBUG, "PlasmaVK-test", VK_OBJECT_TYPE_DEVICE, 0, "%s", text);
+    return NULL;
+}
+
+/* The device's own threads and Metal's never call the application's
+ * allocator, only the thread running a command may (Memory Allocation >
+ * Host Memory): the internal shaders compiled ahead (white box:
+ * pvk_device_warm, waited for before vkDestroyDevice stops it) and messages
+ * sent from other threads take system memory. */
+static void test_internal_threads_allocator(void)
+{
+    float priority = 1.0f;
+    VkInstanceCreateInfo instance_info;
+    VkDeviceQueueCreateInfo queue_info;
+    VkDeviceCreateInfo info;
+    VkInstance own_instance = VK_NULL_HANDLE;
+    VkPhysicalDevice pd = VK_NULL_HANDLE;
+    VkDevice device = VK_NULL_HANDLE;
+    struct thread_allocator a;
+    struct pvk_device *d;
+    pthread_t sender;
+    uint32_t count = 1;
+
+    memset(&a, 0, sizeof(a));
+    a.cb.pUserData = &a;
+    a.cb.pfnAllocation = thread_alloc;
+    a.cb.pfnReallocation = thread_realloc;
+    a.cb.pfnFree = thread_free;
+    a.thread = pthread_self();
+    memset(&instance_info, 0, sizeof(instance_info));
+    instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    REQUIRE_VK(vkCreateInstance(&instance_info, &a.cb, &own_instance));
+    vkEnumeratePhysicalDevices(own_instance, &count, &pd);
+    memset(&queue_info, 0, sizeof(queue_info));
+    queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queue_info.queueCount = 1;
+    queue_info.pQueuePriorities = &priority;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    info.queueCreateInfoCount = 1;
+    info.pQueueCreateInfos = &queue_info;
+    if (pd && vkCreateDevice(pd, &info, &a.cb, &device) == VK_SUCCESS) {
+        d = (struct pvk_device *)device;
+        CHECK(d->warm_running);
+        if (d->warm_running) {
+            pthread_join(d->warm_thread, NULL); /* (it ends once all are made) */
+            d->warm_running = false;
+        }
+        CHECK(d->blit_libraries[PVK_BLIT_LIB_PRESENT] && d->fill_pipeline && d->ds_copy_library);
+        CHECK(pthread_create(&sender, NULL, long_message, d) == 0 && pthread_join(sender, NULL) == 0);
+        vkDestroyDevice(device, &a.cb);
+    } else {
+        PVK_TEST_FAIL("no device made with allocation callbacks");
+    }
+    vkDestroyInstance(own_instance, &a.cb);
+    if (a.foreign)
+        PVK_TEST_FAIL("%d allocator calls on the device's own threads", a.foreign);
+    CHECK(a.live == 0);
+}
+
 /* Every extension promoted to Vulkan 1.1-1.4 is listed, unless it needs a
  * feature the device lacks, and all of them can be enabled at once. */
 static void test_promoted_extensions(void)
@@ -556,6 +679,7 @@ int main(void)
     RUN(test_driver_properties);
     RUN(test_device_and_queues);
     RUN(test_internal_shaders_ahead);
+    RUN(test_internal_threads_allocator);
     RUN(test_promoted_extensions);
     RUN(test_promoted_extension_features);
     RUN(test_promoted_extension_commands);
