@@ -20,12 +20,13 @@
  * CONFIGURATION (define before including the implementation)
  *   PLASMAVK_FAST_MATH              compile shaders in Vulkan's default
  *                                    floating-point environment (no float
- *                                    controls) with MTLMathModeFast rather
- *                                    than MTLMathModeRelaxed: Metal may
- *                                    assume no Inf or NaN, so results that
+ *                                    controls but RoundingModeRTE) with
+ *                                    MTLMathModeFast rather than
+ *                                    MTLMathModeRelaxed: Metal may assume
+ *                                    no Inf or NaN, so results that
  *                                    overflow, or take Inf or NaN, may come
- *                                    out finite. Shaders that ask for float
- *                                    controls keep MTLMathModeSafe. Not
+ *                                    out finite. Shaders that ask for other
+ *                                    float controls keep MTLMathModeSafe. Not
  *                                    conformant: conformanceVersion is
  *                                    0.0.0.0 and driverInfo says so.
  *   PLASMAVK_QUAD_MERGING           let Apple GPUs pack fragments of two
@@ -33596,8 +33597,9 @@ static void pvk_physical_device_init_properties_1x(struct pvk_physical_device *p
      * 13, COMPILING THE OUTPUT): signed zeros, Inf and NaN are kept and
      * results rounded to nearest even; others with relaxed math (fast in a
      * PLASMAVK_FAST_MATH build), as Vulkan's default floating-point
-     * environment allows. MSL offers no control over denormals and has no
-     * 64-bit floats. */
+     * environment allows. Relaxed math rounds to nearest even too, so
+     * RoundingModeRTE alone keeps it. MSL offers no control over denormals
+     * and has no 64-bit floats. */
     p12->denormBehaviorIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE;
     p12->roundingModeIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE;
     p12->shaderSignedZeroInfNanPreserveFloat16 = VK_TRUE;
@@ -42287,9 +42289,10 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   Needs MSL 3.2 or newer (atomic_thread_fence, texture atomics). Compile with
  *   MTLCompileOptions.mathMode = MTLMathModeSafe, or where the output defines
  *   PVK_FAST_MATH (result->fast_math: the module has no float controls
- *   for a width it has a float type of, FPFastMath* short of every flag,
- *   NoContraction or FPRoundingMode, so Vulkan's default floating-point
- *   environment applies) MTLMathModeRelaxed
+ *   but RoundingModeRTE for a width it has a float type of, FPFastMath*
+ *   short of every flag, NoContraction or FPRoundingMode, so Vulkan's
+ *   default floating-point environment applies, rounding to nearest even
+ *   as Metal's does) MTLMathModeRelaxed
  *   with MTLMathFloatingPointFunctionsFast (Metal's default functions, within
  *   Vulkan's precision of individual operations; precise ones cost the
  *   engine migration most of the gain). Not MTLMathModeFast: the CTS's
@@ -42436,7 +42439,8 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *     are accepted (MTLMathModeSafe keeps signed zeros, Inf, NaN and rounds
  *     to nearest even: stricter than any fast-math flag; contracting unless
  *     flags lack AllowContract, pvk_spv_contracts; a mode for a width the
- *     module has no float type of is ignored); FPRoundingMode RTZ
+ *     module has no float type of is ignored, and RoundingModeRTE alone
+ *     keeps relaxed math, which rounds to nearest even too); FPRoundingMode RTZ
  *     on conversions to half (16-bit storage) is pvk_f16_rtz. No denormal
  *     modes are reported.
  *   shaderExpectAssume: ExpectAssumeKHR; OpExpectKHR is its value,
@@ -55358,7 +55362,12 @@ static uint32_t pvk_spv_width_bit(uint32_t width)
  * reassociation and reciprocals, and assumes no signed zeros, Inf or NaN,
  * which is Metal's fast math. A float control for a width the module has
  * no OpTypeFloat of changes no result, so it doesn't count (ggml-vulkan
- * adds RoundingModeRTE 16 to its shaders where RTE16 is supported). */
+ * adds RoundingModeRTE 16 to its shaders where RTE16 is supported).
+ * Neither does RoundingModeRTE for 16 or 32 bits: it only says which way
+ * correctly rounded operations round, and Metal's relaxed math rounds
+ * additions, subtractions, products and conversions (float to half
+ * included) to nearest even too, while the rearrangements it makes stay
+ * valid whatever the rounding mode (Evaluation of Expressions). */
 static bool pvk_spv_fast_math(struct pvk_spv *ctx)
 {
     const uint32_t all = 0x1u | 0x2u | 0x4u | 0x8u | 0x10000u | 0x20000u | 0x40000u; /* NotNaN ... AllowTransform */
@@ -55371,8 +55380,10 @@ static bool pvk_spv_fast_math(struct pvk_spv *ctx)
         if (op == PVK_SPV_OpTypeFloat && n >= 3)
             floats |= pvk_spv_width_bit(w[2]);
         if ((op == PVK_SPV_OpExecutionMode || op == PVK_SPV_OpExecutionModeId) && n >= 3 && w[1] == ctx->entry_fid) {
-            if (w[2] >= 4459 && w[2] <= 4463) /* Denorm*, SignedZeroInfNanPreserve, RoundingMode*: Target Width */
-                controls |= op == PVK_SPV_OpExecutionMode && n >= 4 ? pvk_spv_width_bit(w[3]) : ~0u;
+            bool mode = op == PVK_SPV_OpExecutionMode && n >= 4; /* (with a literal: Target Width) */
+            if (w[2] >= 4459 && w[2] <= 4463 && /* Denorm*, SignedZeroInfNanPreserve, RoundingMode* */
+                !(mode && w[2] == 4462 && (w[3] == 16 || w[3] == 32))) /* RoundingModeRTE 16, 32: Metal's (above) */
+                controls |= mode ? pvk_spv_width_bit(w[3]) : ~0u;
             if (w[2] == 6028 && n >= 5) { /* FPFastMathDefault */
                 uint32_t f = (uint32_t)pvk_spv_const_uint(ctx, w[4]);
                 if (!(f & 0x10u) && (f & all) != all)
