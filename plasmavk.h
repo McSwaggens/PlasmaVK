@@ -42465,15 +42465,18 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  * ROBUSTNESS (options->robust_*: pvk_pipeline_robustness in section 17)
  *   Storage and uniform buffers: each load, store, atomic and copy through
  *   an access chain from a buffer descriptor is checked against the
- *   descriptor's range (pvk_inb: every accessed byte inside). In a module
- *   with a loop, a load or store of a scalar or vector of up to 16 bytes
- *   outside it goes to its address moved into the range (pvk_rb: onto the
- *   last offset that fits it, or the range's start when the range is
- *   smaller), as robustBufferAccess allows: an out-of-bounds load may read
- *   and a store may change any value in the memory bound to the buffer,
- *   and 16-byte descriptor offsets and buffer sizes
- *   (PVK_BUFFER_OFFSET_ALIGNMENT) keep those 16 bytes in it. That needs no
- *   branch: Metal moves the computation of a value stored under a
+ *   descriptor's range (pvk_inb: every accessed byte inside, which ends at
+ *   a value's last matrix line, array element or member, not the padding
+ *   after it: pvk_spv_rb_extent; a value with more padding there than its
+ *   alignment is read, as stores write, member by member around padding,
+ *   pvk_spv_rb_piecewise). In a module with a loop, a load or store of
+ *   a scalar or vector of up to 16 bytes outside it goes to its address
+ *   moved into the range (pvk_rb: onto the last offset that fits it, or the
+ *   range's start when the range is smaller), as robustBufferAccess allows:
+ *   an out-of-bounds load may read and a store may change any value in the
+ *   memory bound to the buffer, and 16-byte descriptor offsets and buffer
+ *   sizes (PVK_BUFFER_OFFSET_ALIGNMENT) keep those 16 bytes in it. That
+ *   needs no branch: Metal moves the computation of a value stored under a
  *   condition, even a uniform one, into the condition (ggml's wkv6 loop ran
  *   1.9x slower), and selecting zero for loads cost up to 14%. A module
  *   without loops keeps the checks: a small kernel loading and storing one
@@ -43519,6 +43522,7 @@ struct pvk_spv_ptr {
     const struct pvk_spv_node *node; /* NULL: stored as the MSL value type */
     const char *rm_col; /* column of a row-major matrix (node): not addressable */
     uint32_t var;       /* root variable */
+    const struct pvk_spv_member *member; /* the struct member reached last: its matrices' layout */
     bool packed;        /* a vector stored as a packed_ vector: its value converts (pvk_spv_forward) */
     /* Descriptor arrays: expr points at the first element; indexing appends
      * desc_suffix (padding, combined half) to reach a descriptor's object. */
@@ -48518,8 +48522,17 @@ static const char *pvk_spv_mat_elem(struct pvk_spv *ctx, const char *e, const st
     return pvk_spv_fmt(ctx, "%s[%u]%s[%u]", e, c, n && n->padded ? ".v" : "", r);
 }
 
+/* Whether storage node n has padded slots (its lines', an array's). */
+static bool pvk_spv_node_has_pad(const struct pvk_spv_node *n)
+{
+    for (; n; n = n->child)
+        if (n->padded)
+            return true;
+    return false;
+}
+
 /* Whether type tid's MSL declaration has padding bytes (pad fields, padded
- * array slots, or alignment past its last member). */
+ * array slots or matrix lines, or alignment past its last member). */
 static bool pvk_spv_has_pad(struct pvk_spv *ctx, uint32_t tid, uint32_t depth)
 {
     struct pvk_spv_type *t = pvk_spv_type(ctx, tid);
@@ -48533,7 +48546,8 @@ static bool pvk_spv_has_pad(struct pvk_spv *ctx, uint32_t tid, uint32_t depth)
     if (t->tail_pad || (t->explicit_layout && t->end < t->size))
         return true;
     for (i = 0; i < t->nmembers; i++)
-        if (t->members[i].pad_before || pvk_spv_has_pad(ctx, t->members[i].type, depth + 1))
+        if (t->members[i].pad_before || pvk_spv_node_has_pad(t->members[i].node) ||
+            pvk_spv_has_pad(ctx, t->members[i].type, depth + 1))
             return true;
     return false;
 }
@@ -48666,6 +48680,7 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
         p->expr = pvk_spv_fmt(ctx, "%s.%s", p->expr, m->msl);
         p->node = m->node;
         p->type = m->type;
+        p->member = m;
         p->packed = mt->op == PVK_SPV_OpTypeVector && m->decl != mt->msl; /* (declared packed_) */
         return;
     }
@@ -48724,6 +48739,49 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
     }
 }
 
+/* The bytes of an access through p (ROBUSTNESS) where its storage ends in
+ * padding the layout leaves after its last matrix line, array element or
+ * struct member (a std140 mat2x3 spans 28 bytes of its 32), which the
+ * descriptor's range need not hold: the bytes up to there
+ * (pvk_spv_extent); 0 otherwise. *pad: the padding. A column of a
+ * row-major matrix: its matrix's. */
+static uint32_t pvk_spv_rb_extent(struct pvk_spv *ctx, const struct pvk_spv_ptr *p, uint32_t *pad)
+{
+    const struct pvk_spv_member *m = p->member;
+    uint32_t tid = p->type, size, full, depth = 0;
+    *pad = 0;
+    if (!p->rb || p->packed) /* (a packed vector has no padding) */
+        return 0;
+    if (p->rm_col) /* (the member's matrix, inside its arrays) */
+        for (tid = m->type; pvk_spv_type(ctx, tid)->op != PVK_SPV_OpTypeMatrix && depth++ < 64;)
+            tid = pvk_spv_type(ctx, tid)->elem;
+    size = pvk_spv_extent(ctx, tid, m ? m->matrix_stride : 0, m && (m->flags & PVK_SPV_M_ROW_MAJOR), 0);
+    full = p->node ? p->node->size : pvk_spv_type(ctx, tid)->size;
+    if (!size || size >= full)
+        return 0;
+    *pad = full - size;
+    return size;
+}
+
+/* MSL of the bytes of an access through p, for pvk_inb and pvk_rb:
+ * pvk_spv_rb_extent's, or sizeof its storage. */
+static const char *pvk_spv_rb_size(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
+{
+    uint32_t pad, size = pvk_spv_rb_extent(ctx, p, &pad);
+    return size ? pvk_spv_fmt(ctx, "%uul", size) : pvk_spv_fmt(ctx, "sizeof(%s)", p->expr);
+}
+
+/* Whether a robust read of p's whole value goes member by member around
+ * its padding (pvk_spv_copy with keep_pad): its range may end where the
+ * data does (pvk_spv_rb_extent), and a whole copy reads the padding after,
+ * which stays in memory (16-byte buffer sizes) only when less than the
+ * value's alignment (at most 16). Storage nodes copy line by line. */
+static bool pvk_spv_rb_piecewise(struct pvk_spv *ctx, const struct pvk_spv_ptr *p)
+{
+    uint32_t pad, align = pvk_spv_type(ctx, p->type)->align;
+    return !p->node && !p->rm_col && pvk_spv_rb_extent(ctx, p, &pad) && pad >= (align < 16 ? align : 16);
+}
+
 /* With robust buffer access, the check that pointer p's access lies in its
  * descriptor's range (ROBUSTNESS); NULL when unchecked. A column of a
  * row-major matrix is checked as the whole matrix. */
@@ -48738,7 +48796,7 @@ static const char *pvk_spv_bounds(struct pvk_spv *ctx, const struct pvk_spv_ptr 
         return pvk_spv_fmt(ctx, "pvk_inb(%s, reinterpret_cast<ulong>(&%s) + ulong(%s) * %uul, %uul)", p->rb, p->rb_vec,
                            p->rb_comp, size, size);
     }
-    return pvk_spv_fmt(ctx, "pvk_inb(%s, reinterpret_cast<ulong>(&%s), sizeof(%s))", p->rb, p->expr, p->expr);
+    return pvk_spv_fmt(ctx, "pvk_inb(%s, reinterpret_cast<ulong>(&%s), %s)", p->rb, p->expr, pvk_spv_rb_size(ctx, p));
 }
 
 /* With robust buffer access in a module with loops (ctx->rb_clamp), p's
@@ -48755,7 +48813,7 @@ static const char *pvk_spv_rb_lvalue(struct pvk_spv *ctx, const struct pvk_spv_p
     if (p->rb_vec)
         return pvk_spv_fmt(ctx, "(*pvk_rb(%s, (%s %s*)&%s + (%s), %uul))", p->rb, pvk_spv_space(ctx, p), t->msl,
                            p->rb_vec, p->rb_comp, t->size);
-    return pvk_spv_fmt(ctx, "(*pvk_rb(%s, &%s, sizeof(%s)))", p->rb, p->expr, p->expr);
+    return pvk_spv_fmt(ctx, "(*pvk_rb(%s, &%s, %s))", p->rb, p->expr, pvk_spv_rb_size(ctx, p));
 }
 
 /* A combined image sampler loaded from a binding with Y'CbCr conversions
@@ -48815,7 +48873,7 @@ static void pvk_spv_load(struct pvk_spv *ctx, uint32_t rid, const struct pvk_spv
             e = pvk_spv_fmt(ctx, "%s%s%s[%u]%s[%s]", e, r ? ", " : "", p->expr, r, p->node->padded ? ".v" : "", p->rm_col);
         e = pvk_spv_fmt(ctx, "%s)", e);
         pvk_spv_set(ctx, rid, ok ? pvk_spv_fmt(ctx, "%s ? %s : %s", ok, e, pvk_spv_zero(ctx, p->type)) : e);
-    } else if (p->node) {
+    } else if (p->node || (ok && pvk_spv_rb_piecewise(ctx, p))) {
         name = pvk_spv_result(ctx, rid);
         if (ok) {
             pvk_spv_line(ctx, "if (!%s)", ok);
@@ -48824,7 +48882,9 @@ static void pvk_spv_load(struct pvk_spv *ctx, uint32_t rid, const struct pvk_spv
             pvk_spv_line(ctx, "{");
             ctx->indent++;
         }
+        ctx->keep_pad = !p->node; /* (reading no padding past the range) */
         pvk_spv_copy(ctx, name, NULL, p->type, p->expr, p->node, p->type, 0);
+        ctx->keep_pad = false;
         if (ok) {
             ctx->indent--;
             pvk_spv_line(ctx, "}");
@@ -51609,7 +51669,7 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
         b = pvk_spv_bounds(ctx, sp);
         pvk_spv_if_open(ctx, a); /* robust buffer access: no write outside the range */
         pvk_spv_if_open(ctx, b);
-        ctx->keep_pad = pvk_spv_shared(d);
+        ctx->keep_pad = pvk_spv_shared(d) || (b && pvk_spv_rb_piecewise(ctx, sp));
         pvk_spv_copy(ctx, d->expr, d->node, d->type, sp->expr, sp->node, sp->type, 0);
         ctx->keep_pad = false;
         pvk_spv_if_close(ctx, b);
@@ -51618,7 +51678,9 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
             pvk_spv_line(ctx, "{");
             ctx->indent++;
             pvk_spv_line(ctx, "%s pvk_zero = {};", pvk_spv_type(ctx, d->type)->msl);
+            ctx->keep_pad = pvk_spv_shared(d);
             pvk_spv_copy(ctx, d->expr, d->node, d->type, "pvk_zero", NULL, d->type, 0);
+            ctx->keep_pad = false;
             ctx->indent--;
             pvk_spv_line(ctx, "}");
         }
