@@ -43478,6 +43478,7 @@ struct pvk_spv_type {
     uint32_t size, align;
     const char *slot;  /* arrays: element slot type */
     bool slot_padded;  /* arrays: element wrapped in pvk_padded (access .v) */
+    bool slot_packed;  /* arrays: elements are packed vectors (pvk_spv_ptr packed) */
     uint32_t stride;   /* arrays: ArrayStride or natural element size */
 };
 
@@ -43504,6 +43505,7 @@ struct pvk_spv_node {
     uint32_t kind;
     bool row_major;  /* MATRIX: lines are rows */
     bool padded;     /* child slots are pvk_padded: access .v */
+    bool packed;     /* MATRIX: lines are packed vectors (pvk_spv_ptr packed) */
     uint32_t count;  /* MATRIX: lines; ARRAY: elements (0: runtime) */
     const char *msl; /* storage type */
     uint32_t size, align;
@@ -43517,6 +43519,7 @@ struct pvk_spv_ptr {
     const struct pvk_spv_node *node; /* NULL: stored as the MSL value type */
     const char *rm_col; /* column of a row-major matrix (node): not addressable */
     uint32_t var;       /* root variable */
+    bool packed;        /* a vector stored as a packed_ vector: its value converts (pvk_spv_forward) */
     /* Descriptor arrays: expr points at the first element; indexing appends
      * desc_suffix (padding, combined half) to reach a descriptor's object. */
     bool desc_array;
@@ -45889,6 +45892,7 @@ static const struct pvk_spv_node *pvk_spv_member_node(struct pvk_spv *ctx, uint3
     struct pvk_spv_type *t = pvk_spv_type(ctx, tid);
     struct pvk_spv_node *n;
     struct pvk_spv_slot s;
+    const char *line;
 
     if (t->op == PVK_SPV_OpTypeMatrix) {
         struct pvk_spv_type *col = pvk_spv_type(ctx, t->elem), *sc = pvk_spv_type(ctx, col->elem);
@@ -45898,16 +45902,17 @@ static const struct pvk_spv_node *pvk_spv_member_node(struct pvk_spv *ctx, uint3
             return NULL;
         if (mstride == 0 && (row_major || !packed))
             pvk_spv_fail(ctx, "row-major matrix without MatrixStride");
+        line = pvk_spv_vec_msl(ctx, sc, ncomp, false);
         if (packed) /* lines aligned to their scalars (scalar block layout) */
-            s = pvk_spv_slot(ctx, pvk_spv_fmt(ctx, "packed_%s", pvk_spv_vec_msl(ctx, sc, ncomp, false)), ncomp * sc->size,
-                             sc->size, 0, mstride ? mstride : ncomp * sc->size);
+            s = pvk_spv_slot(ctx, line = pvk_spv_fmt(ctx, "packed_%s", line), ncomp * sc->size, sc->size, 0,
+                             mstride ? mstride : ncomp * sc->size);
         else
-            s = pvk_spv_slot(ctx, pvk_spv_vec_msl(ctx, sc, ncomp, false), lsize, lsize, ncomp == 3 ? sc->size : 0,
-                             mstride);
+            s = pvk_spv_slot(ctx, line, lsize, lsize, ncomp == 3 ? sc->size : 0, mstride);
         n = pvk_spv_alloc(ctx, sizeof(*n));
         n->kind = PVK_SPV_N_MATRIX;
         n->row_major = row_major;
         n->padded = s.padded;
+        n->packed = packed || (s.msl != line && !s.padded);
         n->count = lines;
         n->msl = pvk_spv_fmt(ctx, "pvk_array<%s, %u>", s.msl, lines);
         n->size = lines * s.size;
@@ -46564,6 +46569,7 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
                 if (pvk_spv_holds_matrices(ctx, e) && !pvk_spv_slot_fits(esize, ealign, vec3, stride))
                     stride = 0; /* stored as a struct member's node (lines): the value keeps the natural layout */
                 s = pvk_spv_slot(ctx, emsl, esize, ealign, vec3, stride);
+                t->slot_packed = emsl != e->msl || (s.msl != emsl && !s.padded);
             }
             t->slot = s.msl;
             t->slot_padded = s.padded;
@@ -48361,6 +48367,7 @@ static bool pvk_spv_forward(struct pvk_spv *ctx, uint32_t rid, const char *expr)
         case PVK_SPV_StoragePrivate:
         case PVK_SPV_StorageOutput:
             reads = true;
+            packed = p->packed; /* (a type with an explicit layout, as Slang declares variables) */
             break;
         case PVK_SPV_StorageUniform:
         case PVK_SPV_StorageStorageBuffer:
@@ -48645,17 +48652,21 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
         return;
     }
     p->desc = NULL; /* below the block */
+    p->packed = false;
     if (cidx >= 0) /* constant indices in decimal: the stage interface matches leaves by name */
         idx = pvk_spv_fmt(ctx, "%u", (uint32_t)cidx);
     switch (t->op) {
     case PVK_SPV_OpTypeStruct: {
         const struct pvk_spv_member *m;
+        const struct pvk_spv_type *mt;
         if (cidx < 0 || cidx >= (int64_t)t->nmembers)
             pvk_spv_fail(ctx, "struct member index must be a constant in range");
         m = &t->members[cidx];
+        mt = pvk_spv_type(ctx, m->type);
         p->expr = pvk_spv_fmt(ctx, "%s.%s", p->expr, m->msl);
         p->node = m->node;
         p->type = m->type;
+        p->packed = mt->op == PVK_SPV_OpTypeVector && m->decl != mt->msl; /* (declared packed_) */
         return;
     }
     case PVK_SPV_OpTypeArray:
@@ -48664,6 +48675,7 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
         if (p->node && p->node->kind != PVK_SPV_N_ARRAY)
             pvk_spv_fail(ctx, "internal: array storage mismatch");
         p->expr = pvk_spv_fmt(ctx, "%s[%s]%s", p->expr, idx, padded ? ".v" : "");
+        p->packed = !p->node && t->slot_packed;
         p->node = p->node ? p->node->child : NULL;
         p->type = t->elem;
         return;
@@ -48675,6 +48687,7 @@ static void pvk_spv_step(struct pvk_spv *ctx, struct pvk_spv_ptr *p, const char 
             return;
         }
         p->expr = pvk_spv_fmt(ctx, "%s[%s]%s", p->expr, idx, p->node && p->node->padded ? ".v" : "");
+        p->packed = p->node && p->node->packed;
         p->node = NULL;
         return;
     case PVK_SPV_OpTypeVector:
@@ -51684,6 +51697,8 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
             uint32_t obj = pvk_spv_arg(ctx, in, 3);
             pvk_spv_store(ctx, &p, pvk_spv_val(ctx, obj), pvk_spv_get(ctx, obj)->type);
         } else {
+            if (p.packed) /* (a packed vector of a struct or array: converted, as loads, pvk_spv_forward) */
+                p.expr = pvk_spv_fmt(ctx, "%s(%s)", pvk_spv_type(ctx, p.type)->msl, p.expr);
             pvk_spv_load(ctx, rid, &p);
         }
         return;
