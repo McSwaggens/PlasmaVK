@@ -74846,10 +74846,17 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
  *   and SRGB, RGBA16F, RGB10A2, BGR10A2) in sRGB, and with
  *   VK_EXT_swapchain_colorspace enabled the color spaces CoreGraphics names
  *   (the layer's colorspace; wantsExtendedDynamicRangeContent for extended
- *   and HDR ones). Present modes: FIFO, and IMMEDIATE where the layer has
- *   displaySyncEnabled (macOS). MAILBOX is not offered: Core Animation shows
- *   every drawable presented, it cannot replace a queued one. Every queue
- *   family can present. A headless surface has no layer: its currentExtent
+ *   and HDR ones). Present modes: FIFO. IMMEDIATE, the layer's
+ *   displaySyncEnabled off (macOS), is not offered: frames presented so
+ *   showed, for a refresh, bands of a window's rows as magenta blocks where
+ *   the frame differed from the one before, as if the display still read a
+ *   drawable being rendered to again (M4 Max, macOS 27.2: several a second
+ *   while a 190 fps game turned its view, on the built-in display and a
+ *   240 Hz one; whether the frame rendered to the drawable or was copied
+ *   into it at present, and also when the GPU had finished each frame before
+ *   it was presented; never seen with displaySyncEnabled on). MAILBOX is
+ *   not offered: Core Animation shows every drawable presented, it cannot
+ *   replace a queued one. Every queue family can present. A headless surface has no layer: its currentExtent
  *   is always 0xFFFFFFFF, FIFO and IMMEDIATE are offered, and a present
  *   shows nothing but otherwise behaves as one (it waits for its semaphores
  *   and releases the image when the queue gets there), never out of date:
@@ -74940,8 +74947,8 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
  *   swapchain configures the layer: device, pixelFormat, drawableSize (the
  *   image extent), maximumDrawableCount (the image count, 2 or 3: Core
  *   Animation's range), framebufferOnly (YES but for images rendering to
- *   drawables with transfer usage), colorspace and EDR, displaySyncEnabled,
- *   and opaque for compositeAlpha OPAQUE / PRE_MULTIPLIED (INHERIT leaves it
+ *   drawables with transfer usage), colorspace and EDR, displaySyncEnabled
+ *   (YES, also on a layer someone else turned it off on), and opaque for compositeAlpha OPAQUE / PRE_MULTIPLIED (INHERIT leaves it
  *   alone).
  *
  * ACQUIRE AND PRESENT
@@ -75222,7 +75229,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfacePresentModesKHR(VkPhysi
     uint32_t count = 0;
     (void)physicalDevice;
     modes[count++] = VK_PRESENT_MODE_FIFO_KHR;
-    if (!surface->layer || pvk_layer_has_display_sync(surface->layer))
+    if (!surface->layer) /* (a layer's IMMEDIATE corrupts frames: SURFACES) */
         modes[count++] = VK_PRESENT_MODE_IMMEDIATE_KHR;
     return pvk_enumerate(modes, sizeof(modes[0]), count, pPresentModeCount, pPresentModes);
 }
@@ -75451,7 +75458,7 @@ static void pvk_swapchain_configure(struct pvk_swapchain *sc, const VkSwapchainC
     pvk_CAMetalLayer_setDrawableSize(layer, size);
     pvk_CAMetalLayer_setMaximumDrawableCount(layer, sc->image_count);
     if (pvk_layer_has_display_sync(layer))
-        pvk_CAMetalLayer_setDisplaySyncEnabled(layer, info->presentMode != VK_PRESENT_MODE_IMMEDIATE_KHR);
+        pvk_CAMetalLayer_setDisplaySyncEnabled(layer, true);
     for (i = 0; i < PVK_ARRAY_SIZE(pvk_color_spaces); i++) {
         if (pvk_color_spaces[i].space == info->imageColorSpace) {
             pvk_CGColorSpaceRef cs = pvk_color_spaces[i].name ? pvk_CGColorSpaceCreateWithName(*pvk_color_spaces[i].name) : NULL;

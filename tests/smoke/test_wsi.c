@@ -360,7 +360,7 @@ static void test_surface_queries(void)
         fifo |= modes[i] == VK_PRESENT_MODE_FIFO_KHR;
         immediate |= modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR;
     }
-    CHECK(fifo && immediate); /* macOS: displaySyncEnabled */
+    CHECK(fifo && !immediate); /* a layer's IMMEDIATE corrupts frames */
 
     count = 1;
     CHECK_VK(vkGetPhysicalDevicePresentRectanglesKHR(pd, surface, &count, &rect), VK_SUCCESS);
@@ -2298,7 +2298,7 @@ static void test_resized_back(void)
     check_resized_back(3, false);
 }
 
-/* Present modes, color spaces, composite alpha and two swapchains in one
+/* Display sync, color spaces, composite alpha and two swapchains in one
  * present (vkAcquireNextImage2KHR for one of them). */
 static void test_layer_configuration(void)
 {
@@ -2316,10 +2316,10 @@ static void test_layer_configuration(void)
 
     REQUIRE(surfaces[0] && surfaces[1]);
     info = swapchain_info(surfaces[0], VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT, 16, 16, 3);
-    info.presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
     info.compositeAlpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
+    PVK_MSG(void, (id, SEL, bool))(layers[0], sel_registerName("setDisplaySyncEnabled:"), false); /* as someone else's */
     REQUIRE_VK(vkCreateSwapchainKHR(device, &info, NULL, &swapchains[0]));
-    CHECK(!PVK_MSG(bool, (id, SEL))(layers[0], sel_registerName("displaySyncEnabled")));
+    CHECK(PVK_MSG(bool, (id, SEL))(layers[0], sel_registerName("displaySyncEnabled")));
     CHECK(PVK_MSG(bool, (id, SEL))(layers[0], sel_registerName("wantsExtendedDynamicRangeContent")));
     CHECK(PVK_MSG(void *, (id, SEL))(layers[0], sel_registerName("colorspace")) != NULL);
     CHECK(!PVK_MSG(bool, (id, SEL))(layers[0], sel_registerName("isOpaque")));
