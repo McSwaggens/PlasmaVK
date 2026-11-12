@@ -46091,6 +46091,7 @@ static void pvk_spv_capability(struct pvk_spv *ctx, uint32_t cap)
     case 6016: case 6017: case 6018: case 6019: /* integer dot product */
     case 6029: /* FloatControls2 (FPFastMath* short of fast: MTLMathModeSafe, stricter than any) */
     case 4472: case 4478: /* RayQueryKHR, RayTraversalPrimitiveCullingKHR (RAY QUERIES) */
+    case 4479: /* RayTracingKHR: slangc declares it with an acceleration structure, whatever the stage */
         return;
     case 3: case 6: case 23: case 24:
         pvk_spv_fail(ctx, "only vertex, fragment and compute shaders are supported (no tessellation or geometry)");

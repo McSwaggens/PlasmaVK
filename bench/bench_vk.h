@@ -177,13 +177,16 @@ static inline void *bench_alloc(size_t size)
 /* NULL when the device lacks them; benchmarks check before use. Vulkan 1.4,
  * the indirect-count draws (some 1.3 portability drivers leave them out),
  * VK_KHR_swapchain and VK_EXT_debug_utils (when enabled, see struct
- * bench_vk_wants). */
+ * bench_vk_wants), VK_KHR_acceleration_structure (bench_vk.ray_query). */
 #define BENCH_DEVICE_COMMANDS_OPTIONAL(X)                                           \
     X(CmdPushDescriptorSet) X(CmdPushDescriptorSetWithTemplate)                     \
     X(CmdSetRenderingAttachmentLocations) X(CmdSetRenderingInputAttachmentIndices)  \
     X(CmdDrawIndirectCount) X(CmdDrawIndexedIndirectCount)                          \
     X(CreateSwapchainKHR) X(DestroySwapchainKHR) X(GetSwapchainImagesKHR)           \
-    X(AcquireNextImageKHR) X(QueuePresentKHR) X(SetDebugUtilsObjectNameEXT)
+    X(AcquireNextImageKHR) X(QueuePresentKHR) X(SetDebugUtilsObjectNameEXT)         \
+    X(CreateAccelerationStructureKHR) X(DestroyAccelerationStructureKHR)            \
+    X(GetAccelerationStructureBuildSizesKHR)                                        \
+    X(GetAccelerationStructureDeviceAddressKHR) X(CmdBuildAccelerationStructuresKHR)
 
 static struct bench_device_commands {
 #define BENCH_DECLARE(name) PFN_vk##name name;
@@ -202,7 +205,8 @@ enum {
     BENCH_NEED_MAINTENANCE4 = 1 << 2,    /* SPIR-V LocalSizeId (local_size_x_id) */
     BENCH_WANT_PUSH_DESCRIPTOR = 1 << 3, /* optional: see bench_vk.push_descriptor */
     BENCH_WANT_LOCAL_READ = 1 << 4,      /* optional: see bench_vk.local_read */
-    BENCH_WANT_UPDATE_AFTER_BIND = 1 << 5 /* optional: see bench_vk.update_after_bind */
+    BENCH_WANT_UPDATE_AFTER_BIND = 1 << 5, /* optional: see bench_vk.update_after_bind */
+    BENCH_WANT_RAY_QUERY = 1 << 6          /* optional: see bench_vk.ray_query */
 };
 
 /* The core features of Vulkan 1.0 to 1.4. */
@@ -273,7 +277,7 @@ struct bench_vk_wants {
     const char *device_extensions[8];
 };
 
-#define BENCH_MAX_EXTENSIONS 17 /* 8 + 8 wanted, VK_KHR_portability_subset */
+#define BENCH_MAX_EXTENSIONS 20 /* 8 + 8 wanted, VK_KHR_portability_subset, ray queries' three */
 
 struct bench_vk {
     VkInstance instance;
@@ -297,6 +301,8 @@ struct bench_vk {
     uint32_t extension_count;
     int update_after_bind; /* descriptorBindingSampledImageUpdateAfterBind and descriptorBindingPartiallyBound
                               enabled: bindless texture tables */
+    int ray_query;         /* VK_KHR_acceleration_structure and VK_KHR_ray_query enabled, with their features and
+                              bufferDeviceAddress */
 };
 
 static inline int bench_has_extension(const VkExtensionProperties *exts, uint32_t count, const char *name)
@@ -374,10 +380,17 @@ static inline void bench_vk_create_instance(struct bench_vk *vk, const struct be
  * BENCH_ALL_FEATURES set, every supported feature is enabled instead. */
 static inline void bench_vk_init_with(struct bench_vk *vk, unsigned needs, const struct bench_vk_wants *wants)
 {
+    static const char *const ray_exts[3] = { "VK_KHR_deferred_host_operations", "VK_KHR_acceleration_structure",
+                                             "VK_KHR_ray_query" };
     struct bench_features have, want;
+    VkPhysicalDeviceRayQueryFeaturesKHR ray_query = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR };
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR accel = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR,
+        .pNext = &ray_query,
+    };
     VkQueueFamilyProperties families[16];
     VkExtensionProperties *exts;
-    const char *device_exts[9];
+    const char *device_exts[12];
     uint32_t count = 0, i, n_device_exts = 0, api, minor;
     float priority = 1.0f;
     VkDeviceQueueCreateInfo queue_info = {
@@ -496,6 +509,23 @@ static inline void bench_vk_init_with(struct bench_vk *vk, unsigned needs, const
     if (wants)
         n_device_exts = bench_vk_pick_extensions(vk, exts, count, wants->device_extensions, 8, device_exts,
                                                  n_device_exts);
+    /* Ray queries: the three extensions, their features and buffer device
+     * addresses, or none of them. */
+    if ((needs & BENCH_WANT_RAY_QUERY) && have.v12.bufferDeviceAddress &&
+        bench_has_extension(exts, count, ray_exts[0]) && bench_has_extension(exts, count, ray_exts[1]) &&
+        bench_has_extension(exts, count, ray_exts[2])) {
+        VkPhysicalDeviceFeatures2 query = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &accel };
+        vkGetPhysicalDeviceFeatures2(vk->physical_device, &query);
+        if (accel.accelerationStructure && ray_query.rayQuery) {
+            accel.accelerationStructureCaptureReplay = accel.accelerationStructureIndirectBuild = VK_FALSE;
+            accel.accelerationStructureHostCommands = VK_FALSE;
+            accel.descriptorBindingAccelerationStructureUpdateAfterBind = VK_FALSE;
+            n_device_exts = bench_vk_pick_extensions(vk, exts, count, ray_exts, 3, device_exts, n_device_exts);
+            want.v12.bufferDeviceAddress = vk->enabled.v12.bufferDeviceAddress = VK_TRUE;
+            *(minor >= 4 ? &want.v14.pNext : &want.v13.pNext) = &accel;
+            vk->ray_query = 1;
+        }
+    }
     free(exts);
     device_info.enabledExtensionCount = n_device_exts;
     BENCH_VK(vkCreateDevice(vk->physical_device, &device_info, NULL, &vk->device));
@@ -565,13 +595,19 @@ static inline uint32_t bench_memory_type(const struct bench_vk *vk, uint32_t typ
     return UINT32_MAX;
 }
 
-static inline VkDeviceMemory bench_allocate(struct bench_vk *vk, const VkMemoryRequirements *req,
-                                            VkMemoryPropertyFlags required, VkMemoryPropertyFlags preferred,
-                                            VkMemoryPropertyFlags avoid, VkMemoryPropertyFlags *flags)
+static inline VkDeviceMemory bench_allocate_with(struct bench_vk *vk, const VkMemoryRequirements *req,
+                                                 VkMemoryPropertyFlags required, VkMemoryPropertyFlags preferred,
+                                                 VkMemoryPropertyFlags avoid, VkMemoryPropertyFlags *flags,
+                                                 VkMemoryAllocateFlags allocate)
 {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     uint32_t type = bench_memory_type(vk, req->memoryTypeBits, required, preferred, avoid);
-    VkMemoryAllocateInfo info = { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = req->size };
+    VkMemoryAllocateFlagsInfo allocate_info = { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO, .flags = allocate };
+    VkMemoryAllocateInfo info = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = allocate ? &allocate_info : NULL,
+        .allocationSize = req->size,
+    };
 
     if (req->size == 0 || type == UINT32_MAX)
         bench_fatal("no memory type for %llu bytes (memoryTypeBits 0x%x, flags 0x%x)",
@@ -581,6 +617,13 @@ static inline VkDeviceMemory bench_allocate(struct bench_vk *vk, const VkMemoryR
     if (flags)
         *flags = vk->mem.memoryTypes[type].propertyFlags;
     return memory;
+}
+
+static inline VkDeviceMemory bench_allocate(struct bench_vk *vk, const VkMemoryRequirements *req,
+                                            VkMemoryPropertyFlags required, VkMemoryPropertyFlags preferred,
+                                            VkMemoryPropertyFlags avoid, VkMemoryPropertyFlags *flags)
+{
+    return bench_allocate_with(vk, req, required, preferred, avoid, flags, 0);
 }
 
 struct bench_buffer {
@@ -607,7 +650,10 @@ static inline void bench_buffer_create(struct bench_vk *vk, struct bench_buffer 
     memset(&req, 0, sizeof(req));
     BENCH_VK(vkd.CreateBuffer(vk->device, &info, NULL, &b->buffer));
     vkd.GetBufferMemoryRequirements(vk->device, b->buffer, &req);
-    b->memory = bench_allocate(vk, &req, required, preferred, VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT, &b->flags);
+    /* (a buffer whose address is taken: memory that allows it) */
+    b->memory = bench_allocate_with(vk, &req, required, preferred, VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT, &b->flags,
+                                    usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT ? VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT
+                                                                                    : 0);
     BENCH_VK(vkd.BindBufferMemory(vk->device, b->buffer, b->memory, 0));
     b->size = size;
     if (b->flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {

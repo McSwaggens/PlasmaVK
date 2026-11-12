@@ -27,6 +27,7 @@ reports an error instead of fast-but-wrong numbers.
 | `bench_transfers` | Clears, blit mip chains, atlas blits, fills, an upscale and a resolve, as frames and level loads record them | `gpu_us` |
 | `bench_compute` | Small dispatches with and without barriers, and a bandwidth-bound prefix sum | `cpu_ns_per_dispatch`, `gelements_per_s` |
 | `bench_shaders_gpu` | Full-screen passes whose cost is their fragment shader's own code | `gpu_us` |
+| `bench_ray_query` | A light bake's rays: ray queries from a compute shader (Slang, compiled by slangc) over a terrain of 1.2 million triangles | `mrays_per_s`, `build_ms` |
 
 ## Configurations
 
@@ -274,6 +275,16 @@ must survive.
 - `forward_pbr_1080p`, `forward_pbr_2160p`: forward PBR over a mesh: three
   material maps, 5x5 PCF over a cascade array, 32 lights from a storage
   buffer and image-based lighting.
+
+`bench_ray_query`: a height field of 768x768 squares (1179648 triangles) in
+one bottom-level acceleration structure and one instance; a dispatch traces
+4194304 rays from above the terrain towards a sun. Needs
+VK_KHR_acceleration_structure and VK_KHR_ray_query (skips without). The
+shader is Slang source compiled by slangc. 96 of the rays are compared with
+a host trace of every triangle.
+- `closest_4m`: each ray's closest hit (distance, primitive, barycentrics).
+- `shadow_4m`: any hit will do: the query ends at its first.
+- `build_ms`, `blas_bytes`, `tlas_bytes`: the builds, once at startup.
 
 ## Running
 
