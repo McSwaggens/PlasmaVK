@@ -34030,19 +34030,23 @@ static void pvk_physical_device_init_ray_tracing(struct pvk_physical_device *pd)
 /* The MTLAttributeFormat of an acceleration structure's vertices in a
  * VkFormat (0: not one); formats with a fourth component leave it unread.
  * The six formats Vulkan requires of
- * VK_FORMAT_FEATURE_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR, and the
- * three-component 16-bit ones. */
+ * VK_FORMAT_FEATURE_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR, the
+ * three-component 16-bit ones, four floats and the 8-bit SNORM ones. */
 static pvk_MTLAttributeFormat pvk_accel_vertex_format(VkFormat format)
 {
     switch (format) {
     case VK_FORMAT_R32G32_SFLOAT: return PVK_MTLAttributeFormatFloat2;
     case VK_FORMAT_R32G32B32_SFLOAT: return PVK_MTLAttributeFormatFloat3;
+    case VK_FORMAT_R32G32B32A32_SFLOAT: return PVK_MTLAttributeFormatFloat4;
     case VK_FORMAT_R16G16_SFLOAT: return PVK_MTLAttributeFormatHalf2;
     case VK_FORMAT_R16G16B16_SFLOAT: return PVK_MTLAttributeFormatHalf3;
     case VK_FORMAT_R16G16B16A16_SFLOAT: return PVK_MTLAttributeFormatHalf4;
     case VK_FORMAT_R16G16_SNORM: return PVK_MTLAttributeFormatShort2Normalized;
     case VK_FORMAT_R16G16B16_SNORM: return PVK_MTLAttributeFormatShort3Normalized;
     case VK_FORMAT_R16G16B16A16_SNORM: return PVK_MTLAttributeFormatShort4Normalized;
+    case VK_FORMAT_R8G8_SNORM: return PVK_MTLAttributeFormatChar2Normalized;
+    case VK_FORMAT_R8G8B8_SNORM: return PVK_MTLAttributeFormatChar3Normalized;
+    case VK_FORMAT_R8G8B8A8_SNORM: return PVK_MTLAttributeFormatChar4Normalized;
     default: return PVK_MTLAttributeFormatInvalid;
     }
 }
@@ -38696,9 +38700,13 @@ static pvk_MTLAccelerationStructureUsage pvk_accel_usage(VkBuildAccelerationStru
 static uint32_t pvk_accel_vertex_size(pvk_MTLAttributeFormat format)
 {
     switch (format) {
+    case PVK_MTLAttributeFormatFloat4: return 16;
     case PVK_MTLAttributeFormatFloat3: return 12;
     case PVK_MTLAttributeFormatHalf3: case PVK_MTLAttributeFormatShort3Normalized: return 6;
-    case PVK_MTLAttributeFormatHalf2: case PVK_MTLAttributeFormatShort2Normalized: return 4;
+    case PVK_MTLAttributeFormatHalf2: case PVK_MTLAttributeFormatShort2Normalized:
+    case PVK_MTLAttributeFormatChar4Normalized: return 4;
+    case PVK_MTLAttributeFormatChar3Normalized: return 3;
+    case PVK_MTLAttributeFormatChar2Normalized: return 2;
     default: return 8; /* Float2, Half4, Short4Normalized */
     }
 }
@@ -38856,6 +38864,13 @@ static bool pvk_accel_sizes(const struct pvk_device *device, bool top, pvk_MTLAc
     if (sizes->accelerationStructureSize < own)
         sizes->accelerationStructureSize = own;
     sizes->accelerationStructureSize = (sizes->accelerationStructureSize + 15) & ~15ul;
+    /* (a build or update that needs no scratch memory still gets some:
+     * applications, the Khronos CTS among them, make a buffer of the size
+     * and take its address) */
+    if (!sizes->buildScratchBufferSize)
+        sizes->buildScratchBufferSize = PVK_ACCEL_HEADER;
+    if (!sizes->refitScratchBufferSize && (usage & PVK_MTLAccelerationStructureUsageRefit))
+        sizes->refitScratchBufferSize = PVK_ACCEL_HEADER;
     return true;
 }
 
@@ -45717,8 +45732,10 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         if (e->op == PVK_SPV_OpTypeVoid || e->op == PVK_SPV_OpTypeRuntimeArray || e->op == PVK_SPV_OpTypeFunction ||
             (e->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(e) && !pvk_spv_is_vptr(e))) /* (variable pointers) */
             pvk_spv_fail(ctx, "unsupported array element type");
-        if (e->op == PVK_SPV_OpTypeRayQueryKHR) /* (MSL: no struct or array holds an intersection query) */
-            pvk_spv_fail(ctx, "arrays of ray queries are not supported");
+        if (e->op == PVK_SPV_OpTypeArray && pvk_spv_type(ctx, e->elem)->op == PVK_SPV_OpTypeRayQueryKHR)
+            pvk_spv_fail(ctx, "arrays of arrays of ray queries are not supported");
+        if (e->op == PVK_SPV_OpTypeRayQueryKHR && in->op != PVK_SPV_OpTypeArray)
+            pvk_spv_fail(ctx, "unsupported array element type");
         t->opaque = e->opaque;
         if (in->op == PVK_SPV_OpTypeArray) {
             uint64_t len = pvk_spv_const_uint(ctx, pvk_spv_arg(ctx, in, 3));
@@ -45736,6 +45753,8 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
             t->members[i].type = in->w[2 + i];
             e = pvk_spv_type(ctx, in->w[2 + i]);
             if (e->op == PVK_SPV_OpTypeVoid || e->op == PVK_SPV_OpTypeFunction || e->opaque ||
+                e->op == PVK_SPV_OpTypeRayQueryKHR || /* (nor arrays of them: variables only) */
+                (e->op == PVK_SPV_OpTypeArray && pvk_spv_type(ctx, e->elem)->op == PVK_SPV_OpTypeRayQueryKHR) ||
                 (e->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(e)) ||
                 (e->op == PVK_SPV_OpTypeRuntimeArray && i + 1 != t->nmembers))
                 pvk_spv_fail(ctx, "unsupported struct member type");
@@ -47211,6 +47230,8 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
             if (t->opaque)
                 break; /* descriptor arrays: only variables */
             e = pvk_spv_type(ctx, t->elem);
+            if (e->op == PVK_SPV_OpTypeRayQueryKHR)
+                break; /* a C array where it is declared (pvk_spv_rq_declare): only variables */
             if (pvk_spv_is_psb(e))
                 pvk_spv_psb_layout(ctx, e);
             if (!e->msl || !e->size)
@@ -48814,37 +48835,65 @@ static const char *pvk_spv_helper(struct pvk_spv *ctx, uint32_t bit, const char 
 
 /* ---- Values, pointers, copies ---- */
 
-/* RAY QUERIES: MSL allows no struct of an intersection query, so what a ray
- * query keeps besides (the acceleration structure it runs over, for its
- * instances' record offsets) is a variable of its own beside it,
- * pvk_as_<name>: declared, passed and taken wherever the query is. */
-static bool pvk_spv_is_rq(struct pvk_spv *ctx, uint32_t tid)
+/* RAY QUERIES: MSL allows no struct of an intersection query. So an array
+ * of ray queries is a C array, which decays to a pointer where it is passed
+ * (not a pvk_array), and what a ray query keeps besides (the acceleration
+ * structure it runs over, for its instances' record offsets) is a variable
+ * of its own beside it, pvk_as_<name>, an array beside an array: declared,
+ * passed and taken wherever the query is. */
+
+/* Whether type tid is a ray query (1) or an array of them (2: *count long). */
+static int pvk_spv_rq_kind(struct pvk_spv *ctx, uint32_t tid, uint32_t *count)
 {
-    return pvk_spv_type(ctx, tid)->op == PVK_SPV_OpTypeRayQueryKHR;
+    const struct pvk_spv_type *t = pvk_spv_type(ctx, tid);
+    if (t->op == PVK_SPV_OpTypeRayQueryKHR)
+        return 1;
+    if (t->op != PVK_SPV_OpTypeArray || pvk_spv_type(ctx, t->elem)->op != PVK_SPV_OpTypeRayQueryKHR)
+        return 0;
+    if (count)
+        *count = t->count;
+    return 2;
 }
 
-/* The companion of the ray query variable named q. */
+/* The companion of the ray query q names: a variable, or an element of one. */
 static const char *pvk_spv_rq_accel(struct pvk_spv *ctx, const char *q)
 {
-    const char *c;
-    for (c = q; *c; c++)
-        if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '_'))
-            pvk_spv_fail(ctx, "ray queries in arrays are not supported");
+    if (!((q[0] >= 'a' && q[0] <= 'z') || (q[0] >= 'A' && q[0] <= 'Z') || q[0] == '_'))
+        pvk_spv_fail(ctx, "internal: a ray query that is no variable");
     return pvk_spv_fmt(ctx, "pvk_as_%s", q);
 }
 
-/* A ray query variable named q of type tid as an argument: with its
+/* A variable named q of type tid as an argument: ray queries with their
  * companion; anything else: itself. */
 static const char *pvk_spv_rq_arg(struct pvk_spv *ctx, uint32_t tid, const char *q)
 {
-    return pvk_spv_is_rq(ctx, tid) ? pvk_spv_fmt(ctx, "%s, %s", q, pvk_spv_rq_accel(ctx, q)) : q;
+    return pvk_spv_rq_kind(ctx, tid, NULL) ? pvk_spv_fmt(ctx, "%s, %s", q, pvk_spv_rq_accel(ctx, q)) : q;
 }
 
-/* ... declared: a local of type tid named q, and its companion. */
-static void pvk_spv_rq_declare(struct pvk_spv *ctx, uint32_t tid, const char *q)
+/* ... as a parameter (NULL: not ray queries) */
+static const char *pvk_spv_rq_param(struct pvk_spv *ctx, uint32_t tid, const char *q)
 {
-    if (pvk_spv_is_rq(ctx, tid))
+    int kind = pvk_spv_rq_kind(ctx, tid, NULL);
+    if (!kind)
+        return NULL;
+    return pvk_spv_fmt(ctx, kind == 1 ? "thread pvk_ray_query& %s, thread pvk_accel& %s"
+                                      : "thread pvk_ray_query* %s, thread pvk_accel* %s",
+                       q, pvk_spv_rq_accel(ctx, q));
+}
+
+/* ... declared, a local with its companion (false: not ray queries) */
+static bool pvk_spv_rq_declare(struct pvk_spv *ctx, uint32_t tid, const char *q)
+{
+    uint32_t n = 0;
+    int kind = pvk_spv_rq_kind(ctx, tid, &n);
+    if (kind == 1) {
+        pvk_spv_line(ctx, "pvk_ray_query %s;", q);
         pvk_spv_line(ctx, "pvk_accel %s = nullptr;", pvk_spv_rq_accel(ctx, q));
+    } else if (kind == 2) {
+        pvk_spv_line(ctx, "pvk_ray_query %s[%u];", q, n);
+        pvk_spv_line(ctx, "pvk_accel %s[%u] = {};", pvk_spv_rq_accel(ctx, q), n);
+    }
+    return kind != 0;
 }
 
 static uint32_t pvk_spv_fidx(struct pvk_spv *ctx)
@@ -52317,7 +52366,7 @@ static const char *pvk_spv_underaligned(struct pvk_spv *ctx, const struct pvk_sp
 static const char *pvk_spv_ray_query_of(struct pvk_spv *ctx, uint32_t v)
 {
     const struct pvk_spv_ptr *p = pvk_spv_ptr_of(ctx, v);
-    if (!pvk_spv_is_rq(ctx, p->type))
+    if (pvk_spv_rq_kind(ctx, p->type, NULL) != 1)
         pvk_spv_fail(ctx, "id %u is not a ray query", v);
     return p->expr;
 }
@@ -52360,7 +52409,7 @@ static void pvk_spv_ray_query(struct pvk_spv *ctx, const struct pvk_spv_insn *in
     q = pvk_spv_ray_query_of(ctx, pvk_spv_arg(ctx, in, 3));
     switch (op) { /* those of the query itself */
     case PVK_SPV_OpRayQueryProceedKHR:
-        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s.next()", q));
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "pvk_rq_proceed(%s)", q));
         return;
     case PVK_SPV_OpRayQueryGetRayTMinKHR:
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s.get_ray_min_distance()", q));
@@ -53446,9 +53495,8 @@ static const char *pvk_spv_global_param(struct pvk_spv *ctx, uint32_t var)
     case PVK_SPV_StorageInput:
         return pvk_spv_fmt(ctx, "%s %s", t->msl, x->msl);
     default:
-        if (pvk_spv_is_rq(ctx, x->p->type)) /* with its companion (pvk_spv_rq_accel) */
-            return pvk_spv_fmt(ctx, "thread pvk_ray_query& %s, thread pvk_accel& %s", x->msl,
-                               pvk_spv_rq_accel(ctx, x->msl));
+        if (pvk_spv_rq_kind(ctx, x->p->type, NULL)) /* with its companion (pvk_spv_rq_accel) */
+            return pvk_spv_rq_param(ctx, x->p->type, x->msl);
         return pvk_spv_fmt(ctx, "%s& %s", pvk_spv_qualified(ctx, pvk_spv_space(ctx, x->p), x->p->type), x->msl);
     }
 }
@@ -53568,9 +53616,8 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
         if (rt && rt->op == PVK_SPV_OpTypeRuntimeArray) /* a pointer to its first element (it decays to one) */
             decl = pvk_spv_fmt(ctx, "%s %s* %s", pvk_spv_space(ctx, x->p),
                                rt->slot ? rt->slot : pvk_spv_type(ctx, rt->elem)->msl, x->msl);
-        else if (x->p && pvk_spv_is_rq(ctx, x->p->type)) /* with its companion (pvk_spv_rq_accel) */
-            decl = pvk_spv_fmt(ctx, "thread pvk_ray_query& %s, thread pvk_accel& %s", x->msl,
-                               pvk_spv_rq_accel(ctx, x->msl));
+        else if (x->p && pvk_spv_rq_kind(ctx, x->p->type, NULL)) /* with its companion (pvk_spv_rq_accel) */
+            decl = pvk_spv_rq_param(ctx, x->p->type, x->msl);
         else if (x->p)
             decl = pvk_spv_fmt(ctx, "%s& %s", pvk_spv_qualified(ctx, pvk_spv_space(ctx, x->p), x->p->type), x->msl);
         else
@@ -53701,9 +53748,8 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
                     pvk_spv_line(ctx, "%s %s = %s;", t->msl, x->msl, pvk_spv_val(ctx, in.w[4]));
                 else if (in.wc > 4)
                     pvk_spv_line(ctx, "%s %s = %s;", t->msl, x->msl, pvk_spv_const_expr(ctx, in.w[4], 0));
-                else
+                else if (!pvk_spv_rq_declare(ctx, x->p->type, x->msl))
                     pvk_spv_line(ctx, "%s %s;", t->msl, x->msl);
-                pvk_spv_rq_declare(ctx, x->p->type, x->msl);
                 break;
             }
             default:
@@ -53722,9 +53768,8 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
         const char *t = pvk_spv_type(ctx, x->p->type)->msl;
         if (in.wc > 4)
             pvk_spv_line(ctx, "%s %s = %s;", t, x->msl, pvk_spv_const_expr(ctx, in.w[4], 0));
-        else
+        else if (!pvk_spv_rq_declare(ctx, x->p->type, x->msl))
             pvk_spv_line(ctx, "%s %s;", t, x->msl);
-        pvk_spv_rq_declare(ctx, x->p->type, x->msl);
     }
     if (ctx->merged) {
         pvk_spv_line(ctx, "bool pvk_ret = false;");
@@ -55394,11 +55439,8 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
                 continue;
             }
         }
-        if (pvk_spv_is_rq(ctx, x->p->type)) { /* (no initializer: an intersection query, and its companion) */
-            pvk_spv_line(ctx, "%s %s;", t->msl, x->msl);
-            pvk_spv_rq_declare(ctx, x->p->type, x->msl);
+        if (pvk_spv_rq_declare(ctx, x->p->type, x->msl)) /* (ray queries, with their companion) */
             continue;
-        }
         pvk_spv_line(ctx, "%s %s = {};", t->msl, x->msl);
     }
     for (g = 0; g < ctx->nglobals; g++) { /* input attachments: framebuffer fetch */
@@ -56017,7 +56059,12 @@ static const char pvk_spv_ycbcr_template[] =
  * address of its header (section 10, ACCELERATION STRUCTURES); a ray query
  * is an MSL intersection query, beside it the acceleration structure it
  * runs over (pvk_spv_rq_accel). Ray flags are SPIR-V's bits, which the
- * query's parameters give back. Metal finds nothing
+ * query's parameters give back. Vulkan's intersections are watertight: a
+ * ray through an edge or vertex that triangles share hits one of them.
+ * Metal's query offers each of them (their distances apart by rounding),
+ * and the committed triangle itself again: pvk_rq_proceed skips a candidate
+ * at the committed triangle's distance that is that triangle, or lies on an
+ * edge as the committed hit does. Metal finds nothing
  * for a ray whose maximum distance is not above its minimum, where Vulkan
  * has the intersections at that distance: the query's ray ends just beyond
  * it. */
@@ -56056,6 +56103,24 @@ static const char pvk_spv_rays_template[] =
     "    q_as = as;\n"
     "    q.reset(raytracing::ray(origin, direction, tmin, max(tmax, max(nextafter(tmin, INFINITY), FLT_MIN))),\n"
     "            as ? as->as : raytracing::instance_acceleration_structure(), mask & 0xffu, p);\n"
+    "}\n\n"
+    "static inline bool pvk_rq_proceed(thread pvk_ray_query& q)\n"
+    "{\n"
+    "    while (q.next())\n"
+    "    {\n"
+    "        if (q.get_candidate_intersection_type() != raytracing::intersection_type::triangle ||\n"
+    "            q.get_committed_intersection_type() != raytracing::intersection_type::triangle ||\n"
+    "            q.get_candidate_triangle_distance() < q.get_committed_distance() * (1.0f - 1e-3f))\n"
+    "            return true;\n"
+    "        if (q.get_candidate_primitive_id() == q.get_committed_primitive_id() &&\n"
+    "            q.get_candidate_geometry_id() == q.get_committed_geometry_id() &&\n"
+    "            q.get_candidate_instance_id() == q.get_committed_instance_id())\n"
+    "            continue;\n"
+    "        float2 b = q.get_candidate_triangle_barycentric_coord(), c = q.get_committed_triangle_barycentric_coord();\n"
+    "        if (min(min(b.x, b.y), 1.0f - b.x - b.y) > 1e-5f || min(min(c.x, c.y), 1.0f - c.x - c.y) > 1e-5f)\n"
+    "            return true;\n"
+    "    }\n"
+    "    return false;\n"
     "}\n\n"
     "static inline uint pvk_rq_flags(thread pvk_ray_query& q)\n"
     "{\n"
