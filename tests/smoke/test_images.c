@@ -346,9 +346,10 @@ static void test_format_properties(void)
     CHECK(features3(VK_FORMAT_ASTC_4x4_UNORM_BLOCK, 0) & VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
     CHECK(features3(VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK, 0) & VK_FORMAT_FEATURE_2_BLIT_SRC_BIT);
     CHECK(features3(VK_FORMAT_ASTC_4x4_UNORM_BLOCK, 1) == 0);
-    /* vertex-only */
-    CHECK(features3(VK_FORMAT_R32G32B32_SFLOAT, 0) == 0 && features3(VK_FORMAT_R32G32B32_SFLOAT, 2) ==
-                                                                  VK_FORMAT_FEATURE_2_VERTEX_BUFFER_BIT);
+    /* vertex-only (an acceleration structure's vertices too, where the GPU traces rays) */
+    CHECK(features3(VK_FORMAT_R32G32B32_SFLOAT, 0) == 0 &&
+          (features3(VK_FORMAT_R32G32B32_SFLOAT, 2) & ~VK_FORMAT_FEATURE_2_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR) ==
+              VK_FORMAT_FEATURE_2_VERTEX_BUFFER_BIT);
     CHECK(features3(VK_FORMAT_UNDEFINED, 0) == 0 && features3(VK_FORMAT_R64_UINT, 2) == 0);
     /* vkGetPhysicalDeviceFormatProperties: the 32-bit part */
     vkGetPhysicalDeviceFormatProperties(pd, VK_FORMAT_R8G8B8A8_UNORM, &p);

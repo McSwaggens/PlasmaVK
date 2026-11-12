@@ -107,6 +107,7 @@ void ct_suite_framebuffer(struct ct_registry *r);
 void ct_suite_dispatch(struct ct_registry *r);
 void ct_suite_sparsemem(struct ct_registry *r);
 void ct_suite_debugging(struct ct_registry *r);
+void ct_suite_accelstructs(struct ct_registry *r);
 
 static void ct_register_all(struct ct_registry *r)
 {
@@ -137,6 +138,7 @@ static void ct_register_all(struct ct_registry *r)
     ct_suite_dispatch(r);
     ct_suite_sparsemem(r);
     ct_suite_debugging(r);
+    ct_suite_accelstructs(r);
 }
 
 /* ==========================================================================

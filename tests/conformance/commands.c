@@ -370,6 +370,27 @@ const struct ct_command ct_commands[] = {
     { "vkUnmapMemory2KHR", "VK_KHR_map_memory2", CT_LEVEL_DEVICE },
     { "vkCmdPushDescriptorSetKHR", "VK_KHR_push_descriptor", CT_LEVEL_DEVICE },
     { "vkCmdPushDescriptorSetWithTemplateKHR", "VK_KHR_push_descriptor", CT_LEVEL_DEVICE },
+    { "vkCreateDeferredOperationKHR", "VK_KHR_deferred_host_operations", CT_LEVEL_DEVICE },
+    { "vkDestroyDeferredOperationKHR", "VK_KHR_deferred_host_operations", CT_LEVEL_DEVICE },
+    { "vkGetDeferredOperationMaxConcurrencyKHR", "VK_KHR_deferred_host_operations", CT_LEVEL_DEVICE },
+    { "vkGetDeferredOperationResultKHR", "VK_KHR_deferred_host_operations", CT_LEVEL_DEVICE },
+    { "vkDeferredOperationJoinKHR", "VK_KHR_deferred_host_operations", CT_LEVEL_DEVICE },
+    { "vkCreateAccelerationStructureKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkDestroyAccelerationStructureKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkCmdBuildAccelerationStructuresKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkCmdBuildAccelerationStructuresIndirectKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkBuildAccelerationStructuresKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkCopyAccelerationStructureKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkCopyAccelerationStructureToMemoryKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkCopyMemoryToAccelerationStructureKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkWriteAccelerationStructuresPropertiesKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkCmdCopyAccelerationStructureKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkCmdCopyAccelerationStructureToMemoryKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkCmdCopyMemoryToAccelerationStructureKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkGetAccelerationStructureDeviceAddressKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkCmdWriteAccelerationStructuresPropertiesKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkGetDeviceAccelerationStructureCompatibilityKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkGetAccelerationStructureBuildSizesKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
     /* VK_EXT_debug_utils: an instance extension with device-level commands
      * (vkGetDeviceProcAddr returns them when the instance enabled it) */
     { "vkCreateDebugUtilsMessengerEXT", "VK_EXT_debug_utils", CT_LEVEL_INSTANCE },
@@ -422,6 +443,8 @@ int ct_origin_is_device_extension(const char *origin)
         "VK_KHR_maintenance6",
         "VK_KHR_map_memory2",
         "VK_KHR_push_descriptor",
+        "VK_KHR_deferred_host_operations",
+        "VK_KHR_acceleration_structure",
     };
     size_t i;
     for (i = 0; i < CT_ARRAY_SIZE(device_extensions); i++)
