@@ -29,7 +29,14 @@ Everywhere else, include `plasmavk.h` and call `vk*` as usual.
   way to do.
 - Passes every must-pass test of the Khronos CTS 1.4.7.0 except
   `api.driver_properties.driver_id_match`, which needs a driver ID registered
-  with Khronos. Not submitted for Khronos conformance.
+  with Khronos, and, in its ray tracing lists, the 82 cases that serialize
+  acceleration structures (Metal gives no access to their contents),
+  `ray_tracing_pipeline.limits.accel_struct_props` (Metal builds 2^28
+  primitives where Vulkan asks for 2^29 - 1) and
+  `ray_tracing_pipeline.large_shader_set.gpu.1024` and `.4096` (Metal's
+  compiler loses cases of their kernel's switch). The ray tracing stages'
+  cases of the other lists were run in part only (none failed). Not submitted
+  for Khronos conformance.
 
 ## Requirements
 
