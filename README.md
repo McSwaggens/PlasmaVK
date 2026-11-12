@@ -19,12 +19,14 @@ Everywhere else, include `plasmavk.h` and call `vk*` as usual.
 - Surfaces and swapchains on `CAMetalLayer`, headless surfaces,
   `VK_EXT_debug_utils`, the extensions promoted to Vulkan 1.1-1.4, and sparse
   resources (macOS/iOS 26.4+).
-- Ray queries (`VK_KHR_ray_query`) in compute, vertex and fragment shaders
-  over acceleration structures (`VK_KHR_acceleration_structure`,
+- Ray tracing: acceleration structures (`VK_KHR_acceleration_structure`,
   `VK_KHR_deferred_host_operations`) built, updated, compacted and copied on
-  the device. Not the host builds, indirect builds, serialization or
-  capture/replay of that extension, which Metal has no way to do, and no ray
-  tracing pipelines.
+  the device, ray queries (`VK_KHR_ray_query`) in compute, vertex and
+  fragment shaders, and ray tracing pipelines (`VK_KHR_ray_tracing_pipeline`:
+  every stage, recursion, indirect launches, and pipeline libraries with
+  `VK_KHR_pipeline_library`). Not the host builds, indirect builds,
+  serialization or capture/replay of those extensions, which Metal has no
+  way to do.
 - Passes every must-pass test of the Khronos CTS 1.4.7.0 except
   `api.driver_properties.driver_id_match`, which needs a driver ID registered
   with Khronos. Not submitted for Khronos conformance.

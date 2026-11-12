@@ -683,3 +683,5 @@ accelstructs.ray_query_cull_mask
 accelstructs.ray_query_candidate_confirmation
 accelstructs.accel_update_instances
 accelstructs.accel_compacting_copy
+accelstructs.ray_tracing_pipeline_requirements
+accelstructs.ray_tracing_pipeline_hits

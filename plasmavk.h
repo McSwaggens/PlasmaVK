@@ -32229,8 +32229,10 @@ enum pvk_device_extension {
     PVK_DEVICE_EXT_KHR_acceleration_structure,
     PVK_DEVICE_EXT_KHR_ray_query,
     /* Ray tracing pipelines, each a Metal compute pipeline of all its
-     * shaders (section 13, RAY TRACING PIPELINES) */
+     * shaders (section 13, RAY TRACING PIPELINES), those of its libraries
+     * included (section 17) */
     PVK_DEVICE_EXT_KHR_ray_tracing_pipeline,
+    PVK_DEVICE_EXT_KHR_pipeline_library,
     /* Promoted to Vulkan 1.1 */
     PVK_DEVICE_EXT_KHR_16bit_storage,
     PVK_DEVICE_EXT_KHR_bind_memory2,
@@ -32328,6 +32330,7 @@ static const VkExtensionProperties pvk_device_extensions[PVK_DEVICE_EXTENSION_CO
     PVK_EXT(PVK_DEVICE_EXT_, KHR_acceleration_structure, KHR_ACCELERATION_STRUCTURE),
     PVK_EXT(PVK_DEVICE_EXT_, KHR_ray_query, KHR_RAY_QUERY),
     PVK_EXT(PVK_DEVICE_EXT_, KHR_ray_tracing_pipeline, KHR_RAY_TRACING_PIPELINE),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_pipeline_library, KHR_PIPELINE_LIBRARY),
     /* Vulkan 1.1 */
     PVK_EXT(PVK_DEVICE_EXT_, KHR_16bit_storage, KHR_16BIT_STORAGE),
     PVK_EXT(PVK_DEVICE_EXT_, KHR_bind_memory2, KHR_BIND_MEMORY_2),
@@ -34029,8 +34032,8 @@ static void pvk_physical_device_init_graphics_features(struct pvk_physical_devic
  *                           Metal's geometry cull modes (ray queries too)
  *   Not rayTracingPipelineShaderGroupHandleCaptureReplay (nor ...Mixed): a
  *   group's handle is its index in its pipeline, which no application can
- *   supply for another pipeline to take. VK_KHR_pipeline_library is not
- *   offered, so pipelines are made of their own stages only.
+ *   supply for another pipeline to take. VK_KHR_pipeline_library, which
+ *   the extension requires, is offered with it, for these pipelines alone.
  *   maxRayRecursionDepth is PVK_MAX_RAY_RECURSION: Metal bounds a compute
  *   pipeline's recursion with maxCallStackDepth, and ran 200 levels where
  *   that was asked (M4 Max, macOS 27.2); 31 is what Direct3D promises. A
@@ -35889,6 +35892,7 @@ static bool pvk_device_extension_features(const struct pvk_features *f, unsigned
     case PVK_DEVICE_EXT_KHR_acceleration_structure: return f->accel.accelerationStructure;
     case PVK_DEVICE_EXT_KHR_ray_query: return f->ray_query.rayQuery;
     case PVK_DEVICE_EXT_KHR_ray_tracing_pipeline: return f->rays.rayTracingPipeline;
+    case PVK_DEVICE_EXT_KHR_pipeline_library: return f->rays.rayTracingPipeline; /* (ray tracing pipelines' only) */
     default: return true;
     }
 }
@@ -42986,6 +42990,14 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSetWithTemplate(VkDevice device, Vk
  *   needs MTLCompileOptions.preserveInvariance.
  *
  * SUPPORTED (GLCompute, Vertex and Fragment, as glslang and spirv-opt produce them)
+ *   Ray queries in those (RAY QUERIES, at their template near the end of
+ *   this section), and the six ray tracing execution models when
+ *   options->stage asks for one: a stage of a ray tracing pipeline, a
+ *   function of the pipeline's one kernel (RAY TRACING PIPELINES, at the end
+ *   of this section), with its payloads, callable data, hit attributes and
+ *   shader record, the ray tracing built-ins, OpTraceRayKHR,
+ *   OpExecuteCallableKHR, OpReportIntersectionKHR, OpIgnoreIntersectionKHR
+ *   and OpTerminateRayKHR.
  *   Types: bool, 8/16/32/64-bit ints, half, float (no double: Metal has none),
  *   vectors, matrices, arrays, runtime arrays, structs. Explicit layouts
  *   (Offset/ArrayStride/MatrixStride, std140/std430, row- and column-major)
@@ -48065,10 +48077,10 @@ static void pvk_spv_analyze(struct pvk_spv *ctx, uint32_t fidx)
                     fn->implicit |= PVK_SPV_I_LANE;
                 if (in.op == PVK_SPV_OpKill || in.op == PVK_SPV_OpTerminateInvocation)
                     fn->implicit |= PVK_SPV_I_KILL;
-                if (in.op == PVK_SPV_OpIgnoreIntersectionKHR || in.op == PVK_SPV_OpTerminateRayKHR)
+                if (in.op == PVK_SPV_OpIgnoreIntersectionKHR || in.op == PVK_SPV_OpTerminateRayKHR ||
+                    in.op == PVK_SPV_OpReportIntersectionKHR) /* (a report whose hit ends the ray does not return) */
                     fn->implicit |= PVK_SPV_I_KILL | PVK_SPV_I_RAYS; /* (they end the shader as OpKill does) */
-                if (in.op == PVK_SPV_OpTraceRayKHR || in.op == PVK_SPV_OpExecuteCallableKHR ||
-                    in.op == PVK_SPV_OpReportIntersectionKHR)
+                if (in.op == PVK_SPV_OpTraceRayKHR || in.op == PVK_SPV_OpExecuteCallableKHR)
                     fn->implicit |= PVK_SPV_I_RAYS;
                 if (in.op == PVK_SPV_OpReportIntersectionKHR && ctx->hit_attr) /* (it reads the attributes) */
                     pvk_spv_use(ctx, fn, fidx, ctx->hit_attr, bi, at);
@@ -52571,6 +52583,17 @@ static void pvk_spv_rays_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
                     pvk_spv_fmt(ctx, "pvk_rt_report(pvk_rt, pvk_ray, %s, uint(%s)%s%s)", pvk_spv_val(ctx, in->w[3]),
                                 pvk_spv_val(ctx, in->w[4]), ctx->hit_attr ? ", " : "",
                                 ctx->hit_attr ? pvk_spv_get(ctx, ctx->hit_attr)->msl : ""));
+        /* A hit that ends the ray (an any-hit shader's OpTerminateRayKHR,
+         * the TerminateOnFirstHit flag) ends this shader where it reported
+         * it: as OpKill, this function returns and so do its callers. */
+        pvk_spv_line(ctx, "if (pvk_ray.action == 2u)");
+        pvk_spv_line(ctx, "{");
+        ctx->indent++;
+        pvk_spv_line(ctx, "pvk_killed = true;");
+        pvk_spv_return(ctx, pvk_spv_type(ctx, ctx->fn->ret)->op == PVK_SPV_OpTypeVoid ? NULL
+                                                                                      : pvk_spv_zero(ctx, ctx->fn->ret));
+        ctx->indent--;
+        pvk_spv_line(ctx, "}");
         return;
     }
 }
@@ -57280,7 +57303,7 @@ static const char pvk_msl_rays_prelude3[] =
     "    pvk_accel q_as;\n"
     "    float2 bary;\n"
     "    uint box_kind = 0u;\n"
-    "    flags |= a.flags;\n"
+    "    uint all = flags | a.flags; /* (the pipeline's: not for the shaders to see) */\n"
     "    ray.origin = origin;\n"
     "    ray.tmin = tmin;\n"
     "    ray.direction = direction;\n"
@@ -57288,7 +57311,7 @@ static const char pvk_msl_rays_prelude3[] =
     "    ray.flags = flags;\n"
     "    ray.payload = payload;\n"
     "    ray.action = 0u;\n"
-    "    pvk_rq_init(q, q_as, as, flags, mask, origin, tmin, direction, tmax);\n"
+    "    pvk_rq_init(q, q_as, as, all, mask, origin, tmin, direction, tmax);\n"
     "    while (pvk_rq_proceed(q))\n"
     "    {\n"
     "        ray.instance = q.get_candidate_instance_id();\n"
@@ -58127,6 +58150,7 @@ struct pvk_pipeline {
     uint32_t set_mask;             /* bit N: the shader reads descriptor set N */
     uint32_t ray_groups;           /* ray tracing: its shader groups, whose handles are 1 .. ray_groups */
     uint32_t ray_flags;            /* ray tracing: ray flags of every trace (SKIP_TRIANGLES, SKIP_AABBS) */
+    struct pvk_rays_library *rays_library; /* a ray tracing pipeline library: its stages and groups (section 17) */
     struct pvk_gfx_pipeline *gfx;  /* graphics pipelines: their state (Graphics, below) */
     id mtl_pipeline_snorm;         /* graphics with gfx->int_colors: the SNORM variant (section 17) */
     uint32_t scan;                 /* graphics: PVK_SCAN_* binding it gives a command buffer */
@@ -75061,12 +75085,76 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateComputePipelines(VkDevice device, VkPipel
  * four), so handles need no pipeline to be made and none can be replayed
  * into another pipeline. Stack sizes mean nothing here: every shader's is
  * reported as PVK_RAYS_STACK_SIZE and vkCmdSetRayTracingPipelineStackSizeKHR
- * changes nothing. Pipeline libraries, deferred operations that defer and
- * the pipeline cache are not used: the kernel is compiled when the pipeline
- * is created, each time. */
+ * changes nothing. Deferred operations that defer and the pipeline cache
+ * are not used: the kernel is compiled when the pipeline is created, each
+ * time.
+ *
+ * A pipeline library (VK_PIPELINE_CREATE_LIBRARY_BIT_KHR) is no Metal
+ * pipeline: it keeps its stages' translations and its groups (those of its
+ * own libraries included), which a pipeline made of it links after its own
+ * stages and groups, the libraries' in their order.
+ *
+ * Metal's compiler loses cases of a very large switch whose cases write
+ * constants to a texture (20 of 1024, the same ones whatever the form of
+ * the dispatch: macOS 27.2, M4 Max, in MSL written by hand as well), which
+ * is what the Khronos CTS's large_shader_set.gpu.1024 and .4096 make of a
+ * pipeline's kernel: they fail by it; .64 and .256 pass. */
 
 #define PVK_RAYS_CALLABLE_DEPTH 8u
 #define PVK_RAYS_STACK_SIZE 256u
+
+struct pvk_rays_library {
+    uint32_t stage_count, group_count;
+    struct pvk_msl_rays_stage *stages; /* (their MSL is the library's own copy) */
+    struct pvk_msl_rays_group *groups;
+    uint32_t set_mask, push_size;
+    bool callable;
+};
+
+static void pvk_rays_library_free(const VkAllocationCallbacks *alloc, struct pvk_rays_library *lib)
+{
+    uint32_t i;
+    if (!lib)
+        return;
+    for (i = 0; lib->stages && i < lib->stage_count; i++)
+        if (lib->stages[i].msl)
+            pvk_free(alloc, (void *)(uintptr_t)lib->stages[i].msl);
+    pvk_free(alloc, lib->stages);
+    pvk_free(alloc, lib->groups);
+    pvk_free(alloc, lib);
+}
+
+/* The library of a pipeline's n stages and its groups: copies. NULL without
+ * memory. */
+static struct pvk_rays_library *pvk_rays_library_create(const VkAllocationCallbacks *alloc,
+                                                        const struct pvk_msl_rays_stage *stages, uint32_t n,
+                                                        const struct pvk_msl_rays_group *groups, uint32_t group_count)
+{
+    struct pvk_rays_library *lib = pvk_alloc(alloc, sizeof(*lib), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    uint32_t i;
+    if (!lib)
+        return NULL;
+    lib->stages = pvk_alloc(alloc, sizeof(*stages) * (n + 1), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    lib->groups = pvk_alloc(alloc, sizeof(*groups) * (group_count + 1), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    lib->stage_count = lib->stages ? n : 0;
+    lib->group_count = group_count;
+    for (i = 0; lib->stages && lib->groups && i < n; i++) {
+        size_t size = strlen(stages[i].msl) + 1;
+        char *copy = pvk_alloc(alloc, size, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+        if (!copy)
+            break;
+        memcpy(copy, stages[i].msl, size);
+        lib->stages[i].msl = copy;
+        lib->stages[i].stage = stages[i].stage;
+    }
+    if (!lib->stages || !lib->groups || i < n) {
+        pvk_rays_library_free(alloc, lib);
+        return NULL;
+    }
+    if (group_count)
+        memcpy(lib->groups, groups, sizeof(*groups) * group_count);
+    return lib;
+}
 
 /* The compute pipeline state (retained) of kernel pvk_rt_main of a library,
  * its recursion bounded at depth; NULL with a message in error[]. */
@@ -75109,7 +75197,10 @@ static VkResult pvk_rays_pipeline_create(struct pvk_device *device, const VkRayT
     struct pvk_msl_rays_stage *stages = NULL;
     struct pvk_msl_rays_group *groups = NULL;
     struct pvk_pipeline *pipeline;
-    uint32_t i, n = 0, set_mask = 0, push_size = 0, depth;
+    const VkPipelineLibraryCreateInfoKHR *libs = info->pLibraryInfo;
+    struct pvk_rays_library *library_of = NULL;
+    uint32_t i, j, k, n = 0, set_mask = 0, push_size = 0, depth, stage_count = info->stageCount;
+    uint32_t group_count = info->groupCount;
     bool callable = false;
     char error[256], label[96];
     char *source = NULL;
@@ -75118,16 +75209,22 @@ static VkResult pvk_rays_pipeline_create(struct pvk_device *device, const VkRayT
     uint64_t start = pvk_clock_ns(CLOCK_UPTIME_RAW);
 
     *pPipeline = VK_NULL_HANDLE;
-    if (info->pLibraryInfo && info->pLibraryInfo->libraryCount) {
-        pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-ray-tracing-pipeline-library", VK_OBJECT_TYPE_DEVICE, 0,
-                 "vkCreateRayTracingPipelinesKHR: pipeline libraries are not supported (VK_KHR_pipeline_library)");
-        return VK_ERROR_UNKNOWN;
-    }
     if (flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)
         return VK_PIPELINE_COMPILE_REQUIRED; /* (always compiled) */
+    for (i = 0; libs && i < libs->libraryCount; i++) { /* its libraries' stages and groups, after its own */
+        const struct pvk_rays_library *lib = ((const struct pvk_pipeline *)libs->pLibraries[i])->rays_library;
+        if (!lib) {
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-ray-tracing-pipeline-library", VK_OBJECT_TYPE_PIPELINE,
+                     (uint64_t)(uintptr_t)libs->pLibraries[i],
+                     "vkCreateRayTracingPipelinesKHR: library %u is not a ray tracing pipeline library", i);
+            return VK_ERROR_UNKNOWN;
+        }
+        stage_count += lib->stage_count;
+        group_count += lib->group_count;
+    }
     translated = pvk_alloc(alloc, sizeof(*translated) * (info->stageCount + 1), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-    stages = pvk_alloc(alloc, sizeof(*stages) * (info->stageCount + 1), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-    groups = pvk_alloc(alloc, sizeof(*groups) * (info->groupCount + 1), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+    stages = pvk_alloc(alloc, sizeof(*stages) * (stage_count + 1), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+    groups = pvk_alloc(alloc, sizeof(*groups) * (group_count + 1), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
     if (!translated || !stages || !groups)
         result = VK_ERROR_OUT_OF_HOST_MEMORY;
     memset(&options, 0, sizeof(options));
@@ -75185,14 +75282,40 @@ static VkResult pvk_rays_pipeline_create(struct pvk_device *device, const VkRayT
                                      ? g->intersectionShader
                                      : VK_SHADER_UNUSED_KHR;
     }
-    if (result == VK_SUCCESS && !(source = pvk_msl_link_rays(stages, info->stageCount, groups, info->groupCount, set_mask)))
+    stage_count = info->stageCount;
+    group_count = info->groupCount;
+    for (i = 0; libs && i < libs->libraryCount && result == VK_SUCCESS; i++) {
+        const struct pvk_rays_library *lib = ((const struct pvk_pipeline *)libs->pLibraries[i])->rays_library;
+        for (j = 0; j < lib->group_count; j++) {
+            const uint32_t *from = &lib->groups[j].general;
+            uint32_t *to = &groups[group_count + j].general;
+            for (k = 0; k < 4; k++) /* (its stages' indices, in this pipeline) */
+                to[k] = from[k] == VK_SHADER_UNUSED_KHR ? VK_SHADER_UNUSED_KHR : from[k] + stage_count;
+        }
+        memcpy(stages + stage_count, lib->stages, sizeof(*stages) * lib->stage_count);
+        stage_count += lib->stage_count;
+        group_count += lib->group_count;
+        set_mask |= lib->set_mask;
+        push_size = lib->push_size > push_size ? lib->push_size : push_size;
+        callable |= lib->callable;
+    }
+    if (result == VK_SUCCESS && (flags & VK_PIPELINE_CREATE_2_LIBRARY_BIT_KHR)) {
+        library_of = pvk_rays_library_create(alloc, stages, stage_count, groups, group_count);
+        if (!library_of) {
+            result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        } else {
+            library_of->set_mask = set_mask;
+            library_of->push_size = push_size;
+            library_of->callable = callable;
+        }
+    } else if (result == VK_SUCCESS && !(source = pvk_msl_link_rays(stages, stage_count, groups, group_count, set_mask))) {
         result = VK_ERROR_OUT_OF_HOST_MEMORY;
-    if (result == VK_SUCCESS) {
+    }
+    if (result == VK_SUCCESS && !library_of) {
         depth = info->maxPipelineRayRecursionDepth > PVK_MAX_RAY_RECURSION ? PVK_MAX_RAY_RECURSION
                                                                            : info->maxPipelineRayRecursionDepth;
         depth += (callable ? PVK_RAYS_CALLABLE_DEPTH : 0) + 1;
-        snprintf(label, sizeof(label), "VkPipeline (ray tracing, %u stages, %u groups)", info->stageCount,
-                 info->groupCount);
+        snprintf(label, sizeof(label), "VkPipeline (ray tracing, %u stages, %u groups)", stage_count, group_count);
         library = pvk_library_get(device, source, false, error, sizeof(error));
         if (library)
             pso = pvk_library_rays(device, library, depth, label, error, sizeof(error));
@@ -75216,15 +75339,17 @@ static VkResult pvk_rays_pipeline_create(struct pvk_device *device, const VkRayT
     pipeline = pvk_alloc(alloc, sizeof(*pipeline), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
     if (!pipeline) {
         pvk_release(pso);
+        pvk_rays_library_free(alloc, library_of);
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
     pipeline->bind_point = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
-    pipeline->mtl_pipeline = pso;
+    pipeline->mtl_pipeline = pso; /* (none of a library) */
+    pipeline->rays_library = library_of;
     pipeline->threads.width = pipeline->threads.height = 8;
     pipeline->threads.depth = 1;
     pipeline->push_size = push_size;
     pipeline->set_mask = set_mask;
-    pipeline->ray_groups = info->groupCount;
+    pipeline->ray_groups = group_count;
     pipeline->ray_flags = ((flags & VK_PIPELINE_CREATE_2_RAY_TRACING_SKIP_TRIANGLES_BIT_KHR) ? 0x100u : 0) |
                           ((flags & VK_PIPELINE_CREATE_2_RAY_TRACING_SKIP_AABBS_BIT_KHR) ? 0x200u : 0);
     pvk_creation_feedback(info->pNext, start, false);
@@ -75233,7 +75358,8 @@ static VkResult pvk_rays_pipeline_create(struct pvk_device *device, const VkRayT
 }
 
 /* The operation is not deferred: the pipelines are made before this
- * returns (section 9, DEFERRED OPERATIONS). */
+ * returns, VK_OPERATION_NOT_DEFERRED_KHR with a deferred operation (section
+ * 9, DEFERRED OPERATIONS). */
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateRayTracingPipelinesKHR(VkDevice device, VkDeferredOperationKHR deferredOperation,
                                                               VkPipelineCache pipelineCache, uint32_t createInfoCount,
                                                               const VkRayTracingPipelineCreateInfoKHR *pCreateInfos,
@@ -75243,7 +75369,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateRayTracingPipelinesKHR(VkDevice device, V
     const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
     VkResult result = VK_SUCCESS;
     uint32_t i;
-    (void)deferredOperation;
     (void)pipelineCache;
     for (i = 0; i < createInfoCount; i++) {
         VkResult r = pvk_rays_pipeline_create((struct pvk_device *)device, &pCreateInfos[i], alloc, &pPipelines[i]);
@@ -75251,7 +75376,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateRayTracingPipelinesKHR(VkDevice device, V
                                     pCreateInfos[i].pNext, pAllocator != NULL, &result))
             break;
     }
-    return result;
+    return result == VK_SUCCESS && deferredOperation ? VK_OPERATION_NOT_DEFERRED_KHR : result;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkGetRayTracingShaderGroupHandlesKHR(VkDevice device, VkPipeline pipeline,
@@ -77535,6 +77660,7 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice device, VkPipeline _pipeli
         return;
     pvk_release(pipeline->mtl_pipeline);
     pvk_release(pipeline->mtl_pipeline_snorm);
+    pvk_rays_library_free(alloc, pipeline->rays_library);
     if (pipeline->gfx) {
         pvk_gfx_variants_free((struct pvk_device *)device, alloc, pipeline->gfx->variants);
         pvk_gfx_groups_free(alloc, pipeline->gfx->groups);

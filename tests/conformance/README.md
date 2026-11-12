@@ -44,7 +44,7 @@ One file per chapter of the Vulkan specification:
 | `sparsemem.c` | Sparse Resources: memory requirements of sparse buffers and images (none without sparse residency), sparse image format properties and standard block shapes, mip tail rules; `vkQueueBindSparse` on a sparse binding queue: buffer blocks (residency, rebinding, unbinding, aliasing), image blocks, mip tails, fully resident images bound opaquely, 3D images, the order of batches; unbound regions where `residencyNonResidentStrict` | 14 |
 | `wsi.c` | Window System Integration: Metal surfaces, surface queries (support, capabilities, formats, present modes, present rectangles, device group modes), swapchains (images, allocation callbacks, `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`, recreation with `oldSwapchain`, aliasing a swapchain image), acquire and present (semaphores, fences, timeouts, two swapchains in one present), swapchain images as transfer source and destination | 20 |
 | `debugging.c` | Debugging > Active Tooling Information: `vkGetPhysicalDeviceToolProperties` (count protocol, strings); Debug Utilities (VK_EXT_debug_utils): messenger filtering by severity and type, callback data passed through, destruction, allocation callbacks, messengers chained to `VkInstanceCreateInfo` (active only in `vkCreateInstance` and `vkDestroyInstance`), names of objects of every type (also instance-level ones and a messenger) and tags, queue labels, command buffer labels (nested, across render pass instances, command buffers of a batch and submissions, in secondaries), which `vkGet*ProcAddr` returns its commands | 11 |
-| `accelstructs.c` | Acceleration Structures and Ray Traversal (VK_KHR_acceleration_structure, VK_KHR_ray_query, VK_KHR_deferred_host_operations): required features and limits, build sizes, device builds of triangle, box and instance levels, updates in place, compacted-size queries, compacting and cloning copies, and what a compute shader's ray queries commit (closest hits through scaled and moved instances, cull masks, candidates confirmed or not, opaque triangles, hits generated in boxes), ray by ray against host arithmetic; a deferred operation with nothing deferred | 10 |
+| `accelstructs.c` | Acceleration Structures, Ray Traversal and Ray Tracing (VK_KHR_acceleration_structure, VK_KHR_ray_query, VK_KHR_deferred_host_operations): required features and limits, build sizes, device builds of triangle, box and instance levels, updates in place, compacted-size queries, compacting and cloning copies, and what a compute shader's ray queries commit (closest hits through scaled and moved instances, cull masks, candidates confirmed or not, opaque triangles, hits generated in boxes), ray by ray against host arithmetic; a deferred operation with nothing deferred; ray tracing pipelines (VK_KHR_ray_tracing_pipeline): required features and limits, and a launch whose ray generation, closest-hit, miss and intersection shaders report the same hits through a shader binding table | 12 |
 
 Framework: `ct.h` (test macros, helpers; for the graphics chapters
 offscreen render targets, a pipeline description with defaults, rectangle
@@ -162,8 +162,8 @@ VK_KHR_deferred_host_operations, VK_KHR_acceleration_structure,
 VK_KHR_ray_tracing_pipeline and the
 extensions promoted to Vulkan 1.1-1.4 (their commands are the core ones
 under KHR/EXT names, which the tests mostly reach through `vkGet*ProcAddr`
-rather than call), and lists the rest (VK_EXT_swapchain_colorspace and VK_KHR_ray_query
-have no commands). When PlasmaVK advertises another extension, add its commands to
+rather than call), and lists the rest (VK_EXT_swapchain_colorspace, VK_KHR_ray_query and
+VK_KHR_pipeline_library have no commands). When PlasmaVK advertises another extension, add its commands to
 `commands.c` (and, for a device extension, its name to
 `ct_origin_is_device_extension`; for a command vk.xml adds only with another
 extension or a core version, a row to `ct_command_condition`).

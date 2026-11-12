@@ -1,15 +1,18 @@
-/* Chapters "Acceleration Structures" and "Ray Traversal", with the features
- * and limits VK_KHR_acceleration_structure and VK_KHR_ray_query require and
- * the deferred operations of VK_KHR_deferred_host_operations: device builds
- * of triangle, box and instance acceleration structures, updates, compacting
- * and cloning copies, and what a ray query of a compute shader commits,
- * compared ray by ray with values worked out on the host.
+/* Chapters "Acceleration Structures", "Ray Traversal" and "Ray Tracing",
+ * with the features and limits VK_KHR_acceleration_structure,
+ * VK_KHR_ray_query and VK_KHR_ray_tracing_pipeline require and the deferred
+ * operations of VK_KHR_deferred_host_operations: device builds of triangle,
+ * box and instance acceleration structures, updates, compacting and cloning
+ * copies, and what a ray query of a compute shader commits and a ray tracing
+ * pipeline's shaders see, compared ray by ray with values worked out on the
+ * host.
  *
  * The scene is flat on purpose, so the expected values are exact arithmetic:
  * every instance is a unit square (two triangles) or a unit box, scaled and
  * moved, and every ray goes straight down.
  *
- * The tests skip on a device without the three extensions. Their commands
+ * The tests skip on a device without the three extensions (four, for those
+ * of ray tracing pipelines). Their commands
  * are resolved with vkGetDeviceProcAddr (a loader need not export them).
  *
  * Shaders: GLSL in the comments, compiled with
@@ -239,6 +242,292 @@ static const uint32_t spv_trace[] = {
     0x000000ad, 0x000000ae, 0x000100fd, 0x00010038,
 };
 
+/*
+ * #version 460
+ * #extension GL_EXT_ray_tracing : require
+ * // The rays of the compute shader above, one per invocation of a side x side
+ * // launch, through a ray tracing pipeline: the payload is what the
+ * // closest-hit or the miss shader made of it.
+ * struct Hit {
+ *     float t; uint primitive; uint instance; uint custom;
+ *     vec2 bary; uint type; uint candidates;
+ *     float height; uint pad;
+ * };
+ * layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
+ * layout(set = 0, binding = 1, std430) writeonly buffer Hits { Hit hits[]; };
+ * layout(push_constant) uniform Push { uint flags; uint mask; uint mode; uint side; } pc;
+ * layout(location = 0) rayPayloadEXT Hit h;
+ * void main()
+ * {
+ *     vec3 origin = vec3((vec2(gl_LaunchIDEXT.xy) + vec2(0.37, 0.29)) * 0.25, 100.0);
+ *     h.candidates = h.pad = 0u;
+ *     traceRayEXT(tlas, pc.flags, pc.mask, 0, 0, 0, origin, 0.0, vec3(0.0, 0.0, -1.0), 1000.0, 0);
+ *     hits[gl_LaunchIDEXT.y * gl_LaunchSizeEXT.x + gl_LaunchIDEXT.x] = h;
+ * }
+ */
+static const uint32_t spv_rgen[] = {
+    0x07230203, 0x00010500, 0x0008000b, 0x0000004e, 0x00000000, 0x00020011, 0x0000117f, 0x0006000a,
+    0x5f565053, 0x5f52484b, 0x5f796172, 0x63617274, 0x00676e69, 0x0006000b, 0x00000001, 0x4c534c47,
+    0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x000b000f, 0x000014c1,
+    0x00000004, 0x6e69616d, 0x00000000, 0x0000000d, 0x0000001f, 0x00000029, 0x0000002d, 0x0000003e,
+    0x00000043, 0x00030003, 0x00000002, 0x000001cc, 0x00060004, 0x455f4c47, 0x725f5458, 0x745f7961,
+    0x69636172, 0x0000676e, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00040005, 0x00000009,
+    0x6769726f, 0x00006e69, 0x00060005, 0x0000000d, 0x4c5f6c67, 0x636e7561, 0x45444968, 0x00005458,
+    0x00030005, 0x0000001d, 0x00746948, 0x00040006, 0x0000001d, 0x00000000, 0x00000074, 0x00060006,
+    0x0000001d, 0x00000001, 0x6d697270, 0x76697469, 0x00000065, 0x00060006, 0x0000001d, 0x00000002,
+    0x74736e69, 0x65636e61, 0x00000000, 0x00050006, 0x0000001d, 0x00000003, 0x74737563, 0x00006d6f,
+    0x00050006, 0x0000001d, 0x00000004, 0x79726162, 0x00000000, 0x00050006, 0x0000001d, 0x00000005,
+    0x65707974, 0x00000000, 0x00060006, 0x0000001d, 0x00000006, 0x646e6163, 0x74616469, 0x00007365,
+    0x00050006, 0x0000001d, 0x00000007, 0x67696568, 0x00007468, 0x00040006, 0x0000001d, 0x00000008,
+    0x00646170, 0x00030005, 0x0000001f, 0x00000068, 0x00040005, 0x00000029, 0x73616c74, 0x00000000,
+    0x00040005, 0x0000002b, 0x68737550, 0x00000000, 0x00050006, 0x0000002b, 0x00000000, 0x67616c66,
+    0x00000073, 0x00050006, 0x0000002b, 0x00000001, 0x6b73616d, 0x00000000, 0x00050006, 0x0000002b,
+    0x00000002, 0x65646f6d, 0x00000000, 0x00050006, 0x0000002b, 0x00000003, 0x65646973, 0x00000000,
+    0x00030005, 0x0000002d, 0x00006370, 0x00030005, 0x0000003a, 0x00746948, 0x00040006, 0x0000003a,
+    0x00000000, 0x00000074, 0x00060006, 0x0000003a, 0x00000001, 0x6d697270, 0x76697469, 0x00000065,
+    0x00060006, 0x0000003a, 0x00000002, 0x74736e69, 0x65636e61, 0x00000000, 0x00050006, 0x0000003a,
+    0x00000003, 0x74737563, 0x00006d6f, 0x00050006, 0x0000003a, 0x00000004, 0x79726162, 0x00000000,
+    0x00050006, 0x0000003a, 0x00000005, 0x65707974, 0x00000000, 0x00060006, 0x0000003a, 0x00000006,
+    0x646e6163, 0x74616469, 0x00007365, 0x00050006, 0x0000003a, 0x00000007, 0x67696568, 0x00007468,
+    0x00040006, 0x0000003a, 0x00000008, 0x00646170, 0x00040005, 0x0000003c, 0x73746948, 0x00000000,
+    0x00050006, 0x0000003c, 0x00000000, 0x73746968, 0x00000000, 0x00030005, 0x0000003e, 0x00000000,
+    0x00070005, 0x00000043, 0x4c5f6c67, 0x636e7561, 0x7a695368, 0x54584565, 0x00000000, 0x00040047,
+    0x0000000d, 0x0000000b, 0x000014c7, 0x00040047, 0x00000029, 0x00000021, 0x00000000, 0x00040047,
+    0x00000029, 0x00000022, 0x00000000, 0x00030047, 0x0000002b, 0x00000002, 0x00050048, 0x0000002b,
+    0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x0000002b, 0x00000001, 0x00000023, 0x00000004,
+    0x00050048, 0x0000002b, 0x00000002, 0x00000023, 0x00000008, 0x00050048, 0x0000002b, 0x00000003,
+    0x00000023, 0x0000000c, 0x00050048, 0x0000003a, 0x00000000, 0x00000023, 0x00000000, 0x00050048,
+    0x0000003a, 0x00000001, 0x00000023, 0x00000004, 0x00050048, 0x0000003a, 0x00000002, 0x00000023,
+    0x00000008, 0x00050048, 0x0000003a, 0x00000003, 0x00000023, 0x0000000c, 0x00050048, 0x0000003a,
+    0x00000004, 0x00000023, 0x00000010, 0x00050048, 0x0000003a, 0x00000005, 0x00000023, 0x00000018,
+    0x00050048, 0x0000003a, 0x00000006, 0x00000023, 0x0000001c, 0x00050048, 0x0000003a, 0x00000007,
+    0x00000023, 0x00000020, 0x00050048, 0x0000003a, 0x00000008, 0x00000023, 0x00000024, 0x00040047,
+    0x0000003b, 0x00000006, 0x00000028, 0x00030047, 0x0000003c, 0x00000002, 0x00040048, 0x0000003c,
+    0x00000000, 0x00000019, 0x00050048, 0x0000003c, 0x00000000, 0x00000023, 0x00000000, 0x00030047,
+    0x0000003e, 0x00000019, 0x00040047, 0x0000003e, 0x00000021, 0x00000001, 0x00040047, 0x0000003e,
+    0x00000022, 0x00000000, 0x00040047, 0x00000043, 0x0000000b, 0x000014c8, 0x00020013, 0x00000002,
+    0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007,
+    0x00000006, 0x00000003, 0x00040020, 0x00000008, 0x00000007, 0x00000007, 0x00040015, 0x0000000a,
+    0x00000020, 0x00000000, 0x00040017, 0x0000000b, 0x0000000a, 0x00000003, 0x00040020, 0x0000000c,
+    0x00000001, 0x0000000b, 0x0004003b, 0x0000000c, 0x0000000d, 0x00000001, 0x00040017, 0x0000000e,
+    0x0000000a, 0x00000002, 0x00040017, 0x00000011, 0x00000006, 0x00000002, 0x0004002b, 0x00000006,
+    0x00000013, 0x3ebd70a4, 0x0004002b, 0x00000006, 0x00000014, 0x3e947ae1, 0x0005002c, 0x00000011,
+    0x00000015, 0x00000013, 0x00000014, 0x0004002b, 0x00000006, 0x00000017, 0x3e800000, 0x0004002b,
+    0x00000006, 0x00000019, 0x42c80000, 0x000b001e, 0x0000001d, 0x00000006, 0x0000000a, 0x0000000a,
+    0x0000000a, 0x00000011, 0x0000000a, 0x0000000a, 0x00000006, 0x0000000a, 0x00040020, 0x0000001e,
+    0x000014da, 0x0000001d, 0x0004003b, 0x0000001e, 0x0000001f, 0x000014da, 0x00040015, 0x00000020,
+    0x00000020, 0x00000001, 0x0004002b, 0x00000020, 0x00000021, 0x00000006, 0x0004002b, 0x00000020,
+    0x00000022, 0x00000008, 0x0004002b, 0x0000000a, 0x00000023, 0x00000000, 0x00040020, 0x00000024,
+    0x000014da, 0x0000000a, 0x000214dd, 0x00000027, 0x00040020, 0x00000028, 0x00000000, 0x00000027,
+    0x0004003b, 0x00000028, 0x00000029, 0x00000000, 0x0006001e, 0x0000002b, 0x0000000a, 0x0000000a,
+    0x0000000a, 0x0000000a, 0x00040020, 0x0000002c, 0x00000009, 0x0000002b, 0x0004003b, 0x0000002c,
+    0x0000002d, 0x00000009, 0x0004002b, 0x00000020, 0x0000002e, 0x00000000, 0x00040020, 0x0000002f,
+    0x00000009, 0x0000000a, 0x0004002b, 0x00000020, 0x00000032, 0x00000001, 0x0004002b, 0x00000006,
+    0x00000036, 0x00000000, 0x0004002b, 0x00000006, 0x00000037, 0xbf800000, 0x0006002c, 0x00000007,
+    0x00000038, 0x00000036, 0x00000036, 0x00000037, 0x0004002b, 0x00000006, 0x00000039, 0x447a0000,
+    0x000b001e, 0x0000003a, 0x00000006, 0x0000000a, 0x0000000a, 0x0000000a, 0x00000011, 0x0000000a,
+    0x0000000a, 0x00000006, 0x0000000a, 0x0003001d, 0x0000003b, 0x0000003a, 0x0003001e, 0x0000003c,
+    0x0000003b, 0x00040020, 0x0000003d, 0x0000000c, 0x0000003c, 0x0004003b, 0x0000003d, 0x0000003e,
+    0x0000000c, 0x0004002b, 0x0000000a, 0x0000003f, 0x00000001, 0x00040020, 0x00000040, 0x00000001,
+    0x0000000a, 0x0004003b, 0x0000000c, 0x00000043, 0x00000001, 0x00040020, 0x0000004b, 0x0000000c,
+    0x0000003a, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005,
+    0x0004003b, 0x00000008, 0x00000009, 0x00000007, 0x0004003d, 0x0000000b, 0x0000000f, 0x0000000d,
+    0x0007004f, 0x0000000e, 0x00000010, 0x0000000f, 0x0000000f, 0x00000000, 0x00000001, 0x00040070,
+    0x00000011, 0x00000012, 0x00000010, 0x00050081, 0x00000011, 0x00000016, 0x00000012, 0x00000015,
+    0x0005008e, 0x00000011, 0x00000018, 0x00000016, 0x00000017, 0x00050051, 0x00000006, 0x0000001a,
+    0x00000018, 0x00000000, 0x00050051, 0x00000006, 0x0000001b, 0x00000018, 0x00000001, 0x00060050,
+    0x00000007, 0x0000001c, 0x0000001a, 0x0000001b, 0x00000019, 0x0003003e, 0x00000009, 0x0000001c,
+    0x00050041, 0x00000024, 0x00000025, 0x0000001f, 0x00000022, 0x0003003e, 0x00000025, 0x00000023,
+    0x00050041, 0x00000024, 0x00000026, 0x0000001f, 0x00000021, 0x0003003e, 0x00000026, 0x00000023,
+    0x0004003d, 0x00000027, 0x0000002a, 0x00000029, 0x00050041, 0x0000002f, 0x00000030, 0x0000002d,
+    0x0000002e, 0x0004003d, 0x0000000a, 0x00000031, 0x00000030, 0x00050041, 0x0000002f, 0x00000033,
+    0x0000002d, 0x00000032, 0x0004003d, 0x0000000a, 0x00000034, 0x00000033, 0x0004003d, 0x00000007,
+    0x00000035, 0x00000009, 0x000c115d, 0x0000002a, 0x00000031, 0x00000034, 0x00000023, 0x00000023,
+    0x00000023, 0x00000035, 0x00000036, 0x00000038, 0x00000039, 0x0000001f, 0x00050041, 0x00000040,
+    0x00000041, 0x0000000d, 0x0000003f, 0x0004003d, 0x0000000a, 0x00000042, 0x00000041, 0x00050041,
+    0x00000040, 0x00000044, 0x00000043, 0x00000023, 0x0004003d, 0x0000000a, 0x00000045, 0x00000044,
+    0x00050084, 0x0000000a, 0x00000046, 0x00000042, 0x00000045, 0x00050041, 0x00000040, 0x00000047,
+    0x0000000d, 0x00000023, 0x0004003d, 0x0000000a, 0x00000048, 0x00000047, 0x00050080, 0x0000000a,
+    0x00000049, 0x00000046, 0x00000048, 0x0004003d, 0x0000001d, 0x0000004a, 0x0000001f, 0x00060041,
+    0x0000004b, 0x0000004c, 0x0000003e, 0x0000002e, 0x00000049, 0x00040190, 0x0000003a, 0x0000004d,
+    0x0000004a, 0x0003003e, 0x0000004c, 0x0000004d, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 460
+ * #extension GL_EXT_ray_tracing : require
+ * struct Hit {
+ *     float t; uint primitive; uint instance; uint custom;
+ *     vec2 bary; uint type; uint candidates;
+ *     float height; uint pad;
+ * };
+ * layout(location = 0) rayPayloadInEXT Hit h;
+ * hitAttributeEXT vec2 attribs;
+ * void main()
+ * {
+ *     bool box = gl_HitKindEXT == 9u; // the intersection shader's hit kind
+ *     h.t = gl_HitTEXT;
+ *     h.primitive = uint(gl_PrimitiveID);
+ *     h.instance = uint(gl_InstanceID);
+ *     h.custom = uint(gl_InstanceCustomIndexEXT);
+ *     h.bary = box ? vec2(0.0) : attribs;
+ *     h.type = box ? 2u : 1u;
+ *     h.height = gl_ObjectToWorldEXT[3].z;
+ * }
+ */
+static const uint32_t spv_chit[] = {
+    0x07230203, 0x00010500, 0x0008000b, 0x00000044, 0x00000000, 0x00020011, 0x0000117f, 0x0006000a,
+    0x5f565053, 0x5f52484b, 0x5f796172, 0x63617274, 0x00676e69, 0x0006000b, 0x00000001, 0x4c534c47,
+    0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x000d000f, 0x000014c4,
+    0x00000004, 0x6e69616d, 0x00000000, 0x0000000b, 0x00000013, 0x00000017, 0x0000001d, 0x00000023,
+    0x00000028, 0x00000031, 0x00000040, 0x00030003, 0x00000002, 0x000001cc, 0x00060004, 0x455f4c47,
+    0x725f5458, 0x745f7961, 0x69636172, 0x0000676e, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000,
+    0x00030005, 0x00000008, 0x00786f62, 0x00060005, 0x0000000b, 0x485f6c67, 0x694b7469, 0x5845646e,
+    0x00000054, 0x00030005, 0x00000011, 0x00746948, 0x00040006, 0x00000011, 0x00000000, 0x00000074,
+    0x00060006, 0x00000011, 0x00000001, 0x6d697270, 0x76697469, 0x00000065, 0x00060006, 0x00000011,
+    0x00000002, 0x74736e69, 0x65636e61, 0x00000000, 0x00050006, 0x00000011, 0x00000003, 0x74737563,
+    0x00006d6f, 0x00050006, 0x00000011, 0x00000004, 0x79726162, 0x00000000, 0x00050006, 0x00000011,
+    0x00000005, 0x65707974, 0x00000000, 0x00060006, 0x00000011, 0x00000006, 0x646e6163, 0x74616469,
+    0x00007365, 0x00050006, 0x00000011, 0x00000007, 0x67696568, 0x00007468, 0x00040006, 0x00000011,
+    0x00000008, 0x00646170, 0x00030005, 0x00000013, 0x00000068, 0x00060005, 0x00000017, 0x525f6c67,
+    0x6d547961, 0x58457861, 0x00000054, 0x00060005, 0x0000001d, 0x505f6c67, 0x696d6972, 0x65766974,
+    0x00004449, 0x00060005, 0x00000023, 0x495f6c67, 0x6174736e, 0x4965636e, 0x00000044, 0x00090005,
+    0x00000028, 0x495f6c67, 0x6174736e, 0x4365636e, 0x6f747375, 0x646e496d, 0x58457865, 0x00000054,
+    0x00040005, 0x00000031, 0x72747461, 0x00736269, 0x00070005, 0x00000040, 0x4f5f6c67, 0x63656a62,
+    0x576f5474, 0x646c726f, 0x00545845, 0x00040047, 0x0000000b, 0x0000000b, 0x000014d5, 0x00040047,
+    0x00000017, 0x0000000b, 0x000014ce, 0x00040047, 0x0000001d, 0x0000000b, 0x00000007, 0x00040047,
+    0x00000023, 0x0000000b, 0x00000006, 0x00040047, 0x00000028, 0x0000000b, 0x000014cf, 0x00040047,
+    0x00000040, 0x0000000b, 0x000014d2, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002,
+    0x00020014, 0x00000006, 0x00040020, 0x00000007, 0x00000007, 0x00000006, 0x00040015, 0x00000009,
+    0x00000020, 0x00000000, 0x00040020, 0x0000000a, 0x00000001, 0x00000009, 0x0004003b, 0x0000000a,
+    0x0000000b, 0x00000001, 0x0004002b, 0x00000009, 0x0000000d, 0x00000009, 0x00030016, 0x0000000f,
+    0x00000020, 0x00040017, 0x00000010, 0x0000000f, 0x00000002, 0x000b001e, 0x00000011, 0x0000000f,
+    0x00000009, 0x00000009, 0x00000009, 0x00000010, 0x00000009, 0x00000009, 0x0000000f, 0x00000009,
+    0x00040020, 0x00000012, 0x000014de, 0x00000011, 0x0004003b, 0x00000012, 0x00000013, 0x000014de,
+    0x00040015, 0x00000014, 0x00000020, 0x00000001, 0x0004002b, 0x00000014, 0x00000015, 0x00000000,
+    0x00040020, 0x00000016, 0x00000001, 0x0000000f, 0x0004003b, 0x00000016, 0x00000017, 0x00000001,
+    0x00040020, 0x00000019, 0x000014de, 0x0000000f, 0x0004002b, 0x00000014, 0x0000001b, 0x00000001,
+    0x00040020, 0x0000001c, 0x00000001, 0x00000014, 0x0004003b, 0x0000001c, 0x0000001d, 0x00000001,
+    0x00040020, 0x00000020, 0x000014de, 0x00000009, 0x0004002b, 0x00000014, 0x00000022, 0x00000002,
+    0x0004003b, 0x0000001c, 0x00000023, 0x00000001, 0x0004002b, 0x00000014, 0x00000027, 0x00000003,
+    0x0004003b, 0x0000001c, 0x00000028, 0x00000001, 0x0004002b, 0x00000014, 0x0000002c, 0x00000004,
+    0x0004002b, 0x0000000f, 0x0000002e, 0x00000000, 0x0005002c, 0x00000010, 0x0000002f, 0x0000002e,
+    0x0000002e, 0x00040020, 0x00000030, 0x000014db, 0x00000010, 0x0004003b, 0x00000030, 0x00000031,
+    0x000014db, 0x00040020, 0x00000034, 0x000014de, 0x00000010, 0x0004002b, 0x00000014, 0x00000036,
+    0x00000005, 0x0004002b, 0x00000009, 0x00000038, 0x00000002, 0x0004002b, 0x00000009, 0x00000039,
+    0x00000001, 0x0004002b, 0x00000014, 0x0000003c, 0x00000007, 0x00040017, 0x0000003d, 0x0000000f,
+    0x00000003, 0x00040018, 0x0000003e, 0x0000003d, 0x00000004, 0x00040020, 0x0000003f, 0x00000001,
+    0x0000003e, 0x0004003b, 0x0000003f, 0x00000040, 0x00000001, 0x00050036, 0x00000002, 0x00000004,
+    0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003b, 0x00000007, 0x00000008, 0x00000007,
+    0x0004003d, 0x00000009, 0x0000000c, 0x0000000b, 0x000500aa, 0x00000006, 0x0000000e, 0x0000000c,
+    0x0000000d, 0x0003003e, 0x00000008, 0x0000000e, 0x0004003d, 0x0000000f, 0x00000018, 0x00000017,
+    0x00050041, 0x00000019, 0x0000001a, 0x00000013, 0x00000015, 0x0003003e, 0x0000001a, 0x00000018,
+    0x0004003d, 0x00000014, 0x0000001e, 0x0000001d, 0x0004007c, 0x00000009, 0x0000001f, 0x0000001e,
+    0x00050041, 0x00000020, 0x00000021, 0x00000013, 0x0000001b, 0x0003003e, 0x00000021, 0x0000001f,
+    0x0004003d, 0x00000014, 0x00000024, 0x00000023, 0x0004007c, 0x00000009, 0x00000025, 0x00000024,
+    0x00050041, 0x00000020, 0x00000026, 0x00000013, 0x00000022, 0x0003003e, 0x00000026, 0x00000025,
+    0x0004003d, 0x00000014, 0x00000029, 0x00000028, 0x0004007c, 0x00000009, 0x0000002a, 0x00000029,
+    0x00050041, 0x00000020, 0x0000002b, 0x00000013, 0x00000027, 0x0003003e, 0x0000002b, 0x0000002a,
+    0x0004003d, 0x00000006, 0x0000002d, 0x00000008, 0x0004003d, 0x00000010, 0x00000032, 0x00000031,
+    0x000600a9, 0x00000010, 0x00000033, 0x0000002d, 0x0000002f, 0x00000032, 0x00050041, 0x00000034,
+    0x00000035, 0x00000013, 0x0000002c, 0x0003003e, 0x00000035, 0x00000033, 0x0004003d, 0x00000006,
+    0x00000037, 0x00000008, 0x000600a9, 0x00000009, 0x0000003a, 0x00000037, 0x00000038, 0x00000039,
+    0x00050041, 0x00000020, 0x0000003b, 0x00000013, 0x00000036, 0x0003003e, 0x0000003b, 0x0000003a,
+    0x00060041, 0x00000016, 0x00000041, 0x00000040, 0x00000027, 0x00000038, 0x0004003d, 0x0000000f,
+    0x00000042, 0x00000041, 0x00050041, 0x00000019, 0x00000043, 0x00000013, 0x0000003c, 0x0003003e,
+    0x00000043, 0x00000042, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 460
+ * #extension GL_EXT_ray_tracing : require
+ * struct Hit {
+ *     float t; uint primitive; uint instance; uint custom;
+ *     vec2 bary; uint type; uint candidates;
+ *     float height; uint pad;
+ * };
+ * layout(location = 0) rayPayloadInEXT Hit h;
+ * void main()
+ * {
+ *     h.t = -1.0;
+ *     h.primitive = h.instance = h.custom = h.type = 0u;
+ *     h.bary = vec2(0.0);
+ *     h.height = 0.0;
+ * }
+ */
+static const uint32_t spv_miss[] = {
+    0x07230203, 0x00010500, 0x0008000b, 0x00000022, 0x00000000, 0x00020011, 0x0000117f, 0x0006000a,
+    0x5f565053, 0x5f52484b, 0x5f796172, 0x63617274, 0x00676e69, 0x0006000b, 0x00000001, 0x4c534c47,
+    0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x0006000f, 0x000014c5,
+    0x00000004, 0x6e69616d, 0x00000000, 0x0000000b, 0x00030003, 0x00000002, 0x000001cc, 0x00060004,
+    0x455f4c47, 0x725f5458, 0x745f7961, 0x69636172, 0x0000676e, 0x00040005, 0x00000004, 0x6e69616d,
+    0x00000000, 0x00030005, 0x00000009, 0x00746948, 0x00040006, 0x00000009, 0x00000000, 0x00000074,
+    0x00060006, 0x00000009, 0x00000001, 0x6d697270, 0x76697469, 0x00000065, 0x00060006, 0x00000009,
+    0x00000002, 0x74736e69, 0x65636e61, 0x00000000, 0x00050006, 0x00000009, 0x00000003, 0x74737563,
+    0x00006d6f, 0x00050006, 0x00000009, 0x00000004, 0x79726162, 0x00000000, 0x00050006, 0x00000009,
+    0x00000005, 0x65707974, 0x00000000, 0x00060006, 0x00000009, 0x00000006, 0x646e6163, 0x74616469,
+    0x00007365, 0x00050006, 0x00000009, 0x00000007, 0x67696568, 0x00007468, 0x00040006, 0x00000009,
+    0x00000008, 0x00646170, 0x00030005, 0x0000000b, 0x00000068, 0x00020013, 0x00000002, 0x00030021,
+    0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040015, 0x00000007, 0x00000020,
+    0x00000000, 0x00040017, 0x00000008, 0x00000006, 0x00000002, 0x000b001e, 0x00000009, 0x00000006,
+    0x00000007, 0x00000007, 0x00000007, 0x00000008, 0x00000007, 0x00000007, 0x00000006, 0x00000007,
+    0x00040020, 0x0000000a, 0x000014de, 0x00000009, 0x0004003b, 0x0000000a, 0x0000000b, 0x000014de,
+    0x00040015, 0x0000000c, 0x00000020, 0x00000001, 0x0004002b, 0x0000000c, 0x0000000d, 0x00000000,
+    0x0004002b, 0x00000006, 0x0000000e, 0xbf800000, 0x00040020, 0x0000000f, 0x000014de, 0x00000006,
+    0x0004002b, 0x0000000c, 0x00000011, 0x00000001, 0x0004002b, 0x0000000c, 0x00000012, 0x00000002,
+    0x0004002b, 0x0000000c, 0x00000013, 0x00000003, 0x0004002b, 0x0000000c, 0x00000014, 0x00000005,
+    0x0004002b, 0x00000007, 0x00000015, 0x00000000, 0x00040020, 0x00000016, 0x000014de, 0x00000007,
+    0x0004002b, 0x0000000c, 0x0000001b, 0x00000004, 0x0004002b, 0x00000006, 0x0000001c, 0x00000000,
+    0x0005002c, 0x00000008, 0x0000001d, 0x0000001c, 0x0000001c, 0x00040020, 0x0000001e, 0x000014de,
+    0x00000008, 0x0004002b, 0x0000000c, 0x00000020, 0x00000007, 0x00050036, 0x00000002, 0x00000004,
+    0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x00050041, 0x0000000f, 0x00000010, 0x0000000b,
+    0x0000000d, 0x0003003e, 0x00000010, 0x0000000e, 0x00050041, 0x00000016, 0x00000017, 0x0000000b,
+    0x00000014, 0x0003003e, 0x00000017, 0x00000015, 0x00050041, 0x00000016, 0x00000018, 0x0000000b,
+    0x00000013, 0x0003003e, 0x00000018, 0x00000015, 0x00050041, 0x00000016, 0x00000019, 0x0000000b,
+    0x00000012, 0x0003003e, 0x00000019, 0x00000015, 0x00050041, 0x00000016, 0x0000001a, 0x0000000b,
+    0x00000011, 0x0003003e, 0x0000001a, 0x00000015, 0x00050041, 0x0000001e, 0x0000001f, 0x0000000b,
+    0x0000001b, 0x0003003e, 0x0000001f, 0x0000001d, 0x00050041, 0x0000000f, 0x00000021, 0x0000000b,
+    0x00000020, 0x0003003e, 0x00000021, 0x0000001c, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 460
+ * #extension GL_EXT_ray_tracing : require
+ * hitAttributeEXT vec2 attribs;
+ * void main()
+ * {
+ *     // the plane z = 0.5 of the box's object space
+ *     attribs = vec2(0.0);
+ *     reportIntersectionEXT((gl_ObjectRayOriginEXT.z - 0.5) / -gl_ObjectRayDirectionEXT.z, 9u);
+ * }
+ */
+static const uint32_t spv_isec[] = {
+    0x07230203, 0x00010500, 0x0008000b, 0x0000001e, 0x00000000, 0x00020011, 0x0000117f, 0x0006000a,
+    0x5f565053, 0x5f52484b, 0x5f796172, 0x63617274, 0x00676e69, 0x0006000b, 0x00000001, 0x4c534c47,
+    0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x0008000f, 0x000014c2,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000e, 0x00000016, 0x00030003, 0x00000002,
+    0x000001cc, 0x00060004, 0x455f4c47, 0x725f5458, 0x745f7961, 0x69636172, 0x0000676e, 0x00040005,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00040005, 0x00000009, 0x72747461, 0x00736269, 0x00080005,
+    0x0000000e, 0x4f5f6c67, 0x63656a62, 0x79615274, 0x6769724f, 0x58456e69, 0x00000054, 0x00090005,
+    0x00000016, 0x4f5f6c67, 0x63656a62, 0x79615274, 0x65726944, 0x6f697463, 0x5458456e, 0x00000000,
+    0x00040047, 0x0000000e, 0x0000000b, 0x000014cb, 0x00040047, 0x00000016, 0x0000000b, 0x000014cc,
+    0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020,
+    0x00040017, 0x00000007, 0x00000006, 0x00000002, 0x00040020, 0x00000008, 0x000014db, 0x00000007,
+    0x0004003b, 0x00000008, 0x00000009, 0x000014db, 0x0004002b, 0x00000006, 0x0000000a, 0x00000000,
+    0x0005002c, 0x00000007, 0x0000000b, 0x0000000a, 0x0000000a, 0x00040017, 0x0000000c, 0x00000006,
+    0x00000003, 0x00040020, 0x0000000d, 0x00000001, 0x0000000c, 0x0004003b, 0x0000000d, 0x0000000e,
+    0x00000001, 0x00040015, 0x0000000f, 0x00000020, 0x00000000, 0x0004002b, 0x0000000f, 0x00000010,
+    0x00000002, 0x00040020, 0x00000011, 0x00000001, 0x00000006, 0x0004002b, 0x00000006, 0x00000014,
+    0x3f000000, 0x0004003b, 0x0000000d, 0x00000016, 0x00000001, 0x0004002b, 0x0000000f, 0x0000001b,
+    0x00000009, 0x00020014, 0x0000001c, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
+    0x000200f8, 0x00000005, 0x0003003e, 0x00000009, 0x0000000b, 0x00050041, 0x00000011, 0x00000012,
+    0x0000000e, 0x00000010, 0x0004003d, 0x00000006, 0x00000013, 0x00000012, 0x00050083, 0x00000006,
+    0x00000015, 0x00000013, 0x00000014, 0x00050041, 0x00000011, 0x00000017, 0x00000016, 0x00000010,
+    0x0004003d, 0x00000006, 0x00000018, 0x00000017, 0x0004007f, 0x00000006, 0x00000019, 0x00000018,
+    0x00050088, 0x00000006, 0x0000001a, 0x00000015, 0x00000019, 0x000514d6, 0x0000001c, 0x0000001d,
+    0x0000001a, 0x0000001b, 0x000100fd, 0x00010038,
+};
+
 #define RT_SIDE 16u /* rays a side: they cover x and y from 0 to 4 */
 #define RT_RAYS (RT_SIDE * RT_SIDE)
 #define RT_OPAQUE 1u /* gl_RayFlagsOpaqueEXT */
@@ -275,6 +564,9 @@ struct rt_fn {
     PFN_vkCmdBuildAccelerationStructuresKHR build;
     PFN_vkCmdCopyAccelerationStructureKHR copy;
     PFN_vkCmdWriteAccelerationStructuresPropertiesKHR write;
+    PFN_vkCreateRayTracingPipelinesKHR create_pipelines; /* (with VK_KHR_ray_tracing_pipeline) */
+    PFN_vkGetRayTracingShaderGroupHandlesKHR handles;
+    PFN_vkCmdTraceRaysKHR trace;
 };
 
 struct rt_buffer {
@@ -303,6 +595,7 @@ struct rt {
     struct rt_buffer input, scratch;
     struct ct_buffer hits;
     struct rt_accel square, box, top;
+    VkShaderStageFlags stages; /* of the layouts: compute, and with pipelines their stages */
 };
 
 /* Offsets into rt::input */
@@ -316,16 +609,18 @@ static const char *const rt_extensions[] = {
     VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
     VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
     VK_KHR_RAY_QUERY_EXTENSION_NAME,
+    VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, /* (the tests of pipelines only) */
 };
+#define RT_EXTENSIONS 3u /* without pipelines */
 
 /* Ends the test as skipped unless the device has the three extensions on
  * Vulkan 1.2 (which has what they depend on in core). */
-static void rt_require_extensions(struct ct *t, struct ct_env *e)
+static void rt_require_extensions(struct ct *t, struct ct_env *e, int pipelines)
 {
     size_t i;
     if (e->version < VK_API_VERSION_1_2)
         ct_skip(t, "needs Vulkan 1.2");
-    for (i = 0; i < CT_ARRAY_SIZE(rt_extensions); i++)
+    for (i = 0; i < RT_EXTENSIONS + (pipelines ? 1u : 0u); i++)
         if (!ct_device_extension_supported(e->pd, rt_extensions[i]))
             ct_skip(t, "%s is not supported", rt_extensions[i]);
 }
@@ -510,6 +805,7 @@ static void rt_write_instances(struct rt *r, const struct rt_instance *instances
         v.transform.matrix[2][3] = s->z;
         v.instanceCustomIndex = s->custom;
         v.mask = s->mask;
+        v.instanceShaderBindingTableRecordOffset = s->box ? 1 : 0; /* (a hit group for the boxes) */
         v.flags = s->flags;
         v.accelerationStructureReference = s->box ? box : square;
         memcpy(r->input.data + RT_IN_INSTANCES + i * sizeof(v), &v, sizeof(v));
@@ -548,8 +844,8 @@ static void rt_write_descriptor(struct rt *r, VkAccelerationStructureKHR top)
 /* A device with the three extensions and their features, the pipeline of
  * the shader above and the scene: the square, the box and a top level of
  * rt_scene (built with top_flags). */
-static void rt_init(struct ct *t, struct rt *r, VkBuildAccelerationStructureFlagsKHR bottom_flags,
-                    VkBuildAccelerationStructureFlagsKHR top_flags)
+static void rt_init_ex(struct ct *t, struct rt *r, VkBuildAccelerationStructureFlagsKHR bottom_flags,
+                       VkBuildAccelerationStructureFlagsKHR top_flags, int pipelines)
 {
     static const float vertices[6][3] = { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 1, 1, 0 }, { 0, 1, 0 }, { 1, 0, 0 } };
     static const VkAabbPositionsKHR box = { 0, 0, 0, 1, 1, 1 };
@@ -557,6 +853,7 @@ static void rt_init(struct ct *t, struct rt *r, VkBuildAccelerationStructureFlag
     VkPhysicalDeviceVulkan12Features v12, have12;
     VkPhysicalDeviceAccelerationStructureFeaturesKHR accel, have_accel;
     VkPhysicalDeviceRayQueryFeaturesKHR query, have_query;
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rays, have_rays;
     VkDescriptorSetLayoutBinding bindings[2];
     VkDescriptorSetLayoutCreateInfo set_info;
     VkPipelineLayoutCreateInfo layout_info;
@@ -569,10 +866,18 @@ static void rt_init(struct ct *t, struct rt *r, VkBuildAccelerationStructureFlag
 
     memset(r, 0, sizeof(*r));
     ct_env_init(t, &r->e);
-    rt_require_extensions(t, &r->e);
+    rt_require_extensions(t, &r->e, pipelines);
+    r->stages = VK_SHADER_STAGE_COMPUTE_BIT;
+    if (pipelines)
+        r->stages |= VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR |
+                     VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
 
+    memset(&have_rays, 0, sizeof(have_rays));
+    have_rays.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
     memset(&have12, 0, sizeof(have12));
     have12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    if (pipelines)
+        have12.pNext = &have_rays;
     memset(&have_accel, 0, sizeof(have_accel));
     have_accel.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
     have_accel.pNext = &have12;
@@ -586,10 +891,17 @@ static void rt_init(struct ct *t, struct rt *r, VkBuildAccelerationStructureFlag
     CT_REQUIREF(t, have12.bufferDeviceAddress && have_accel.accelerationStructure && have_query.rayQuery,
                 "bufferDeviceAddress %u, accelerationStructure %u, rayQuery %u: the extensions require all three",
                 have12.bufferDeviceAddress, have_accel.accelerationStructure, have_query.rayQuery);
+    CT_REQUIREF(t, !pipelines || have_rays.rayTracingPipeline, "rayTracingPipeline: VK_KHR_ray_tracing_pipeline "
+                                                               "requires it");
 
     memset(&v12, 0, sizeof(v12));
     v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     v12.bufferDeviceAddress = VK_TRUE;
+    memset(&rays, 0, sizeof(rays));
+    rays.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+    rays.rayTracingPipeline = VK_TRUE;
+    if (pipelines)
+        v12.pNext = &rays;
     memset(&accel, 0, sizeof(accel));
     accel.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
     accel.pNext = &v12;
@@ -598,7 +910,7 @@ static void rt_init(struct ct *t, struct rt *r, VkBuildAccelerationStructureFlag
     query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
     query.pNext = &accel;
     query.rayQuery = VK_TRUE;
-    ct_env_device_ex(t, &r->e, &query, rt_extensions, CT_ARRAY_SIZE(rt_extensions), NULL);
+    ct_env_device_ex(t, &r->e, &query, rt_extensions, RT_EXTENSIONS + (pipelines ? 1u : 0u), NULL);
 
 #define RT_RESOLVE(field, name)                                                                                   \
     do {                                                                                                           \
@@ -614,23 +926,28 @@ static void rt_init(struct ct *t, struct rt *r, VkBuildAccelerationStructureFlag
     RT_RESOLVE(build, vkCmdBuildAccelerationStructuresKHR);
     RT_RESOLVE(copy, vkCmdCopyAccelerationStructureKHR);
     RT_RESOLVE(write, vkCmdWriteAccelerationStructuresPropertiesKHR);
+    if (pipelines) {
+        RT_RESOLVE(create_pipelines, vkCreateRayTracingPipelinesKHR);
+        RT_RESOLVE(handles, vkGetRayTracingShaderGroupHandlesKHR);
+        RT_RESOLVE(trace, vkCmdTraceRaysKHR);
+    }
 #undef RT_RESOLVE
 
     memset(bindings, 0, sizeof(bindings));
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[0].stageFlags = r->stages;
     bindings[1].binding = 1;
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[1].stageFlags = r->stages;
     memset(&set_info, 0, sizeof(set_info));
     set_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     set_info.bindingCount = 2;
     set_info.pBindings = bindings;
     CT_REQUIRE_VK(t, vkCreateDescriptorSetLayout(r->e.device, &set_info, NULL, &r->set_layout));
-    push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    push.stageFlags = r->stages;
     push.offset = 0;
     push.size = 16;
     memset(&layout_info, 0, sizeof(layout_info));
@@ -680,6 +997,12 @@ static void rt_init(struct ct *t, struct rt *r, VkBuildAccelerationStructureFlag
     rt_geometry(r, 2, &g);
     rt_build(t, r, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, top_flags, &g, RT_INSTANCES, &r->top);
     rt_write_descriptor(r, r->top.handle);
+}
+
+static void rt_init(struct ct *t, struct rt *r, VkBuildAccelerationStructureFlagsKHR bottom_flags,
+                    VkBuildAccelerationStructureFlagsKHR top_flags)
+{
+    rt_init_ex(t, r, bottom_flags, top_flags, 0);
 }
 
 static void rt_fini(struct rt *r)
@@ -749,26 +1072,13 @@ static int rt_near(float a, float b)
     return d < 1e-4f && d > -1e-4f;
 }
 
-/* Traces the rays and compares every one with rt_expect; returns how many
- * committed an intersection. */
-static uint32_t rt_trace(struct ct *t, struct rt *r, const struct rt_instance *instances, uint32_t flags,
-                         uint32_t mask, uint32_t mode, const char *what)
+/* Compares what every ray wrote with rt_expect; returns how many committed
+ * an intersection. */
+static uint32_t rt_compare(struct ct *t, struct rt *r, const struct rt_instance *instances, uint32_t flags,
+                           uint32_t mask, uint32_t mode, const char *what)
 {
-    uint32_t push[4], i, hit = 0, bad = 0;
     const struct rt_hit *got = (const struct rt_hit *)(const void *)r->hits.data;
-    VkCommandBuffer cb = ct_begin_commands(t, &r->e);
-
-    push[0] = flags;
-    push[1] = mask;
-    push[2] = mode;
-    push[3] = RT_SIDE;
-    memset(r->hits.data, 0xee, RT_RAYS * sizeof(struct rt_hit));
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, r->pipeline);
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, r->layout, 0, 1, &r->set, 0, NULL);
-    vkCmdPushConstants(cb, r->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
-    vkCmdDispatch(cb, RT_RAYS / 16, 1, 1);
-    ct_host_read_barrier(cb);
-    ct_submit_and_wait(t, &r->e, cb);
+    uint32_t i, hit = 0, bad = 0;
     for (i = 0; i < RT_RAYS; i++) {
         struct rt_hit want;
         rt_expect(instances, i, flags, mask, mode, &want);
@@ -792,6 +1102,28 @@ static uint32_t rt_trace(struct ct *t, struct rt *r, const struct rt_instance *i
     return hit;
 }
 
+/* Traces the rays with ray queries (the compute shader) and compares every
+ * one with rt_expect; returns how many committed an intersection. */
+static uint32_t rt_trace(struct ct *t, struct rt *r, const struct rt_instance *instances, uint32_t flags,
+                         uint32_t mask, uint32_t mode, const char *what)
+{
+    uint32_t push[4];
+    VkCommandBuffer cb = ct_begin_commands(t, &r->e);
+
+    push[0] = flags;
+    push[1] = mask;
+    push[2] = mode;
+    push[3] = RT_SIDE;
+    memset(r->hits.data, 0xee, RT_RAYS * sizeof(struct rt_hit));
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, r->pipeline);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, r->layout, 0, 1, &r->set, 0, NULL);
+    vkCmdPushConstants(cb, r->layout, r->stages, 0, sizeof(push), push);
+    vkCmdDispatch(cb, RT_RAYS / 16, 1, 1);
+    ct_host_read_barrier(cb);
+    ct_submit_and_wait(t, &r->e, cb);
+    return rt_compare(t, r, instances, flags, mask, mode, what);
+}
+
 /* ---- Features and limits ---- */
 
 CT_TEST(accel_feature_requirements,
@@ -808,7 +1140,7 @@ CT_TEST(accel_feature_requirements,
     VkPhysicalDeviceRayQueryFeaturesKHR query;
 
     ct_env_init(t, &e);
-    rt_require_extensions(t, &e);
+    rt_require_extensions(t, &e, 0);
     memset(&v12, 0, sizeof(v12));
     v12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     memset(&accel, 0, sizeof(accel));
@@ -838,7 +1170,7 @@ static void rt_get_limits(struct ct *t, struct ct_env *e, VkPhysicalDeviceAccele
 {
     VkPhysicalDeviceProperties2 props;
     ct_env_init(t, e);
-    rt_require_extensions(t, e);
+    rt_require_extensions(t, e, 0);
     memset(p, 0, sizeof(*p));
     p->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
     memset(&props, 0, sizeof(props));
@@ -1171,6 +1503,180 @@ CT_TEST(accel_compacting_copy,
     rt_fini(&r);
 }
 
+/* ---- Ray tracing pipelines ---- */
+
+CT_TEST(ray_tracing_pipeline_requirements,
+        "Features > Feature Requirements: rayTracingPipeline and rayTracingPipelineTraceRaysIndirect if "
+        "VK_KHR_ray_tracing_pipeline is supported, rayTraversalPrimitiveCulling if VK_KHR_ray_query is too. "
+        "Limits > Limit Requirements (Required Limits table): shaderGroupHandleSize 32 exactly, "
+        "maxRayRecursionDepth at least 1, maxShaderGroupStride at least 4096, shaderGroupBaseAlignment at most "
+        "64, shaderGroupHandleCaptureReplaySize at most 64, maxRayDispatchInvocationCount at least 2^30, "
+        "shaderGroupHandleAlignment at most 32, maxRayHitAttributeSize at least 32",
+        "vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceProperties2")
+{
+    struct ct_env e;
+    VkPhysicalDeviceFeatures2 features;
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rays;
+    VkPhysicalDeviceProperties2 props;
+    VkPhysicalDeviceRayTracingPipelinePropertiesKHR p;
+
+    ct_env_init(t, &e);
+    rt_require_extensions(t, &e, 1);
+    memset(&rays, 0, sizeof(rays));
+    rays.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+    memset(&features, 0, sizeof(features));
+    features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features.pNext = &rays;
+    vkGetPhysicalDeviceFeatures2(e.pd, &features);
+    CT_CHECK(t, rays.rayTracingPipeline == VK_TRUE);
+    CT_CHECK(t, rays.rayTracingPipelineTraceRaysIndirect == VK_TRUE);
+    CT_CHECK(t, rays.rayTraversalPrimitiveCulling == VK_TRUE);
+    memset(&p, 0, sizeof(p));
+    p.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
+    memset(&props, 0, sizeof(props));
+    props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    props.pNext = &p;
+    vkGetPhysicalDeviceProperties2(e.pd, &props);
+    CT_CHECKF(t, p.shaderGroupHandleSize == 32, "shaderGroupHandleSize %u", p.shaderGroupHandleSize);
+    CT_CHECKF(t, p.maxRayRecursionDepth >= 1, "maxRayRecursionDepth %u", p.maxRayRecursionDepth);
+    CT_CHECKF(t, p.maxShaderGroupStride >= 4096, "maxShaderGroupStride %u", p.maxShaderGroupStride);
+    CT_CHECKF(t, p.shaderGroupBaseAlignment <= 64, "shaderGroupBaseAlignment %u", p.shaderGroupBaseAlignment);
+    CT_CHECKF(t, p.shaderGroupHandleCaptureReplaySize <= 64, "shaderGroupHandleCaptureReplaySize %u",
+              p.shaderGroupHandleCaptureReplaySize);
+    CT_CHECKF(t, p.maxRayDispatchInvocationCount >= (1u << 30), "maxRayDispatchInvocationCount %u",
+              p.maxRayDispatchInvocationCount);
+    CT_CHECKF(t, p.shaderGroupHandleAlignment <= 32, "shaderGroupHandleAlignment %u", p.shaderGroupHandleAlignment);
+    CT_CHECKF(t, p.maxRayHitAttributeSize >= 32, "maxRayHitAttributeSize %u", p.maxRayHitAttributeSize);
+    ct_env_fini(&e);
+}
+
+#define RT_RECORD 64u /* a record of the shader binding table: a handle, padded to shaderGroupBaseAlignment's maximum */
+
+CT_TEST(ray_tracing_pipeline_hits,
+        "Ray Tracing > Shader Binding Table, Ray Traversal: vkCmdTraceRaysKHR runs the ray generation shader of "
+        "its record once per launch id; a ray it traces runs the closest-hit shader of the hit group the hit "
+        "instance's instanceShaderBindingTableRecordOffset selects (for a box, after that group's intersection "
+        "shader reported the hit), which sees the hit's T, kind, primitive, instance and custom indices, "
+        "attributes and object-to-world transform, or the miss shader; the cull mask as for ray queries",
+        RT_COMMANDS "vkGetPhysicalDeviceProperties2 vkCreateRayTracingPipelinesKHR "
+                    "vkGetRayTracingShaderGroupHandlesKHR vkCmdTraceRaysKHR")
+{
+    static const struct {
+        const uint32_t *code;
+        size_t size;
+        VkShaderStageFlagBits stage;
+    } shaders[4] = {
+        { spv_rgen, sizeof(spv_rgen), VK_SHADER_STAGE_RAYGEN_BIT_KHR },
+        { spv_chit, sizeof(spv_chit), VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR },
+        { spv_miss, sizeof(spv_miss), VK_SHADER_STAGE_MISS_BIT_KHR },
+        { spv_isec, sizeof(spv_isec), VK_SHADER_STAGE_INTERSECTION_BIT_KHR },
+    };
+    static const uint32_t masks[] = { 0xff, 0x05, 0x08, 0x00 };
+    struct rt r;
+    VkPhysicalDeviceRayTracingPipelinePropertiesKHR p;
+    VkPhysicalDeviceProperties2 props;
+    VkPipelineShaderStageCreateInfo stages[4];
+    VkRayTracingShaderGroupCreateInfoKHR groups[4];
+    VkRayTracingPipelineCreateInfoKHR info;
+    VkStridedDeviceAddressRegionKHR raygen, miss, hit, callable;
+    VkShaderModule modules[4];
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    struct rt_buffer table;
+    uint8_t handles[4 * 64];
+    uint32_t i;
+
+    rt_init_ex(t, &r, 0, 0, 1);
+    memset(&p, 0, sizeof(p));
+    p.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
+    memset(&props, 0, sizeof(props));
+    props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    props.pNext = &p;
+    vkGetPhysicalDeviceProperties2(r.e.pd, &props);
+    CT_REQUIREF(t, p.shaderGroupHandleSize > 0 && p.shaderGroupHandleSize <= RT_RECORD &&
+                       p.shaderGroupBaseAlignment <= RT_RECORD && p.shaderGroupHandleAlignment <= RT_RECORD &&
+                       p.maxShaderGroupStride >= RT_RECORD,
+                "shader group handles of %u bytes, aligned to %u in tables aligned to %u, strides to %u",
+                p.shaderGroupHandleSize, p.shaderGroupHandleAlignment, p.shaderGroupBaseAlignment,
+                p.maxShaderGroupStride);
+
+    /* groups: 0 ray generation, 1 miss, 2 the squares (closest-hit), 3 the boxes (closest-hit, intersection) */
+    memset(stages, 0, sizeof(stages));
+    memset(groups, 0, sizeof(groups));
+    for (i = 0; i < 4; i++) {
+        modules[i] = ct_shader_module(t, &r.e, shaders[i].code, shaders[i].size);
+        stages[i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[i].stage = shaders[i].stage;
+        stages[i].module = modules[i];
+        stages[i].pName = "main";
+        groups[i].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+        groups[i].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        groups[i].generalShader = groups[i].closestHitShader = groups[i].anyHitShader = groups[i].intersectionShader =
+            VK_SHADER_UNUSED_KHR;
+    }
+    groups[0].generalShader = 0;
+    groups[1].generalShader = 2;
+    groups[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+    groups[2].closestHitShader = 1;
+    groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR;
+    groups[3].closestHitShader = 1;
+    groups[3].intersectionShader = 3;
+    memset(&info, 0, sizeof(info));
+    info.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
+    info.stageCount = 4;
+    info.pStages = stages;
+    info.groupCount = 4;
+    info.pGroups = groups;
+    info.maxPipelineRayRecursionDepth = 1;
+    info.layout = r.layout;
+    CT_REQUIRE_VK(t, r.fn.create_pipelines(r.e.device, VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &info, NULL, &pipeline));
+    CT_REQUIRE_VK(t, r.fn.handles(r.e.device, pipeline, 0, 4, 4 * (size_t)p.shaderGroupHandleSize, handles));
+
+    /* the table: a record each for ray generation, the miss shader and the two hit groups */
+    rt_buffer_init(t, &r, 4 * RT_RECORD, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR, &table);
+    for (i = 0; i < 4; i++)
+        memcpy(table.data + i * RT_RECORD, handles + i * p.shaderGroupHandleSize, p.shaderGroupHandleSize);
+    memset(&callable, 0, sizeof(callable));
+    raygen.deviceAddress = table.address;
+    raygen.stride = raygen.size = RT_RECORD;
+    miss.deviceAddress = table.address + RT_RECORD;
+    miss.stride = miss.size = RT_RECORD;
+    hit.deviceAddress = table.address + 2 * RT_RECORD;
+    hit.stride = RT_RECORD;
+    hit.size = 2 * RT_RECORD;
+
+    for (i = 0; i < CT_ARRAY_SIZE(masks); i++) {
+        VkCommandBuffer cb = ct_begin_commands(t, &r.e);
+        VkMemoryBarrier barrier;
+        uint32_t push[4], hits;
+        char what[48];
+        push[0] = 0;
+        push[1] = masks[i];
+        push[2] = 0;
+        push[3] = RT_SIDE;
+        memset(r.hits.data, 0xee, RT_RAYS * sizeof(struct rt_hit));
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, r.layout, 0, 1, &r.set, 0, NULL);
+        vkCmdPushConstants(cb, r.layout, r.stages, 0, sizeof(push), push);
+        r.fn.trace(cb, &raygen, &miss, &hit, &callable, RT_SIDE, RT_SIDE, 1);
+        memset(&barrier, 0, sizeof(barrier));
+        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &barrier,
+                             0, NULL, 0, NULL);
+        ct_submit_and_wait(t, &r.e, cb);
+        snprintf(what, sizeof(what), "the pipeline, cull mask 0x%02x", masks[i]);
+        hits = rt_compare(t, &r, rt_scene, 0, masks[i], 0, what);
+        if (masks[i] == 0xff)
+            CT_CHECKF(t, hits == RT_RAYS, "%s: the floor is under every ray, but %u of %u hit", what, hits, RT_RAYS);
+    }
+    rt_buffer_fini(&r, &table);
+    vkDestroyPipeline(r.e.device, pipeline, NULL);
+    for (i = 0; i < 4; i++)
+        vkDestroyShaderModule(r.e.device, modules[i], NULL);
+    rt_fini(&r);
+}
+
 static const struct ct_test *const tests[] = {
     CT_REF(accel_feature_requirements),
     CT_REF(accel_limit_requirements),
@@ -1182,6 +1688,8 @@ static const struct ct_test *const tests[] = {
     CT_REF(ray_query_candidate_confirmation),
     CT_REF(accel_update_instances),
     CT_REF(accel_compacting_copy),
+    CT_REF(ray_tracing_pipeline_requirements),
+    CT_REF(ray_tracing_pipeline_hits),
 };
 
 CT_SUITE(accelstructs, tests)

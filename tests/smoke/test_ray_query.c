@@ -859,7 +859,8 @@ static void setup(void)
     static const char *const extensions[] = { VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
                                               VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
                                               VK_KHR_RAY_QUERY_EXTENSION_NAME,
-                                              VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME };
+                                              VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+                                              VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME };
     VkPhysicalDeviceMemoryProperties mem;
     VkPhysicalDeviceVulkan12Features v12;
     VkPhysicalDeviceAccelerationStructureFeaturesKHR accel;
@@ -936,7 +937,7 @@ static void setup(void)
     device_info.pNext = rays_supported ? (void *)&rays : (void *)&ray_query;
     device_info.queueCreateInfoCount = 1;
     device_info.pQueueCreateInfos = &queue_info;
-    device_info.enabledExtensionCount = rays_supported ? 4 : 3;
+    device_info.enabledExtensionCount = rays_supported ? 5 : 3;
     device_info.ppEnabledExtensionNames = extensions;
     REQUIRE_VK(vkCreateDevice(physical_device, &device_info, NULL, &device));
     vkGetDeviceQueue(device, 0, 0, &queue);
@@ -1967,8 +1968,11 @@ static void test_compact_and_copy(void)
  * ray's miss shader, 3 triangles (closest-hit and any-hit), 4 the sphere
  * (closest-hit and intersection), 5 the callable shader. Its table: a hit
  * record per instance offset and geometry, of group 4 for the two balls'
- * (offsets 9 and 11), each with its index after the handle. */
-static void rays_create(void)
+ * (offsets 9 and 11), each with its index after the handle.
+ * library: the hit groups and the callable shader come from a pipeline
+ * library (VK_KHR_pipeline_library), whose groups follow the pipeline's own
+ * three: the same groups at the same indices. */
+static void rays_create(bool library)
 {
     static const struct {
         const uint32_t *code;
@@ -1988,6 +1992,8 @@ static void rays_create(void)
     VkPipelineShaderStageCreateInfo stage_infos[7];
     VkRayTracingShaderGroupCreateInfoKHR groups[6];
     VkRayTracingPipelineCreateInfoKHR info;
+    VkPipelineLibraryCreateInfoKHR libraries;
+    VkPipeline library_pipeline = VK_NULL_HANDLE;
     VkShaderModule modules[7];
     unsigned char handles[6 * 32];
     uint32_t i;
@@ -2043,8 +2049,33 @@ static void rays_create(void)
     info.pGroups = groups;
     info.maxPipelineRayRecursionDepth = 2;
     info.layout = layout;
+    if (library) { /* stages 3 to 6 and groups 3 to 5 in a library, the library's stages counted from 0 */
+        info.flags = VK_PIPELINE_CREATE_LIBRARY_BIT_KHR;
+        info.stageCount = 4;
+        info.pStages = stage_infos + 3;
+        info.groupCount = 3;
+        info.pGroups = groups + 3;
+        groups[3].closestHitShader = 0;
+        groups[3].anyHitShader = 1;
+        groups[4].closestHitShader = 0;
+        groups[4].intersectionShader = 2;
+        groups[5].generalShader = 3;
+        CHECK_VK(vkCreateRayTracingPipelinesKHR(device, VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &info, NULL, &library_pipeline),
+                 VK_SUCCESS);
+        memset(&libraries, 0, sizeof(libraries));
+        libraries.sType = VK_STRUCTURE_TYPE_PIPELINE_LIBRARY_CREATE_INFO_KHR;
+        libraries.libraryCount = 1;
+        libraries.pLibraries = &library_pipeline;
+        info.flags = 0;
+        info.stageCount = 3;
+        info.pStages = stage_infos;
+        info.groupCount = 3;
+        info.pGroups = groups;
+        info.pLibraryInfo = &libraries;
+    }
     CHECK_VK(vkCreateRayTracingPipelinesKHR(device, VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &info, NULL, &rays_pipeline),
              VK_SUCCESS);
+    vkDestroyPipeline(device, library_pipeline, NULL); /* (the pipeline made of it stays whole) */
     for (i = 0; i < 7; i++)
         vkDestroyShaderModule(device, modules[i], NULL);
     if (!rays_pipeline)
@@ -2105,23 +2136,26 @@ static void test_pipeline(void)
         { 0, 0x05, 2 },
         { 0, 0x00, 0 },
     };
-    uint32_t i, kinds = 0;
+    uint32_t i, kinds = 0, library;
     if (!rays_supported) {
         printf("    (no ray tracing pipelines: skipped)\n");
         return;
     }
-    rays_create();
-    if (!rays_pipeline || pvk_test_failures)
-        return;
-    trace_with_rays = true;
-    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-        uint32_t compared = trace_and_compare(scene_instances, cases[i].flags, cases[i].mask, cases[i].mode, &kinds);
-        CHECK(compared > RAYS * 5 / 8);
+    for (library = 0; library < 2; library++) { /* the pipeline of its own stages, then of a library's */
+        rays_pipeline = VK_NULL_HANDLE;
+        rays_create(library != 0);
+        if (!rays_pipeline || pvk_test_failures)
+            return;
+        trace_with_rays = true;
+        for (i = library ? 9 : 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            uint32_t compared = trace_and_compare(scene_instances, cases[i].flags, cases[i].mask, cases[i].mode, &kinds);
+            CHECK(compared > RAYS * 5 / 8);
+        }
+        trace_with_rays = false;
+        CHECK(kinds == 7); /* misses, triangles and the sphere */
+        vkDestroyPipeline(device, rays_pipeline, NULL);
+        free_buf(&table.buf);
     }
-    trace_with_rays = false;
-    CHECK(kinds == 7); /* misses, triangles and the sphere */
-    vkDestroyPipeline(device, rays_pipeline, NULL);
-    free_buf(&table.buf);
 }
 
 int main(void)
