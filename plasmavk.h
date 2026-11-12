@@ -31565,6 +31565,7 @@ static inline void pvk_MTLFunctionConstantValues_setConstantValue_type_atIndex(i
 static inline id pvk_MTLComputePipelineDescriptor_new(void) { PVK_CLASS_CACHE("MTLComputePipelineDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
 static inline void pvk_MTLComputePipelineDescriptor_setComputeFunction(id self, id computeFunction) { PVK_SEL_CACHE("setComputeFunction:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, computeFunction); }
 static inline void pvk_MTLComputePipelineDescriptor_setMaxTotalThreadsPerThreadgroup(id self, unsigned long maxTotalThreadsPerThreadgroup) { PVK_SEL_CACHE("setMaxTotalThreadsPerThreadgroup:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, maxTotalThreadsPerThreadgroup); }
+static inline void pvk_MTLComputePipelineDescriptor_setMaxCallStackDepth(id self, unsigned long maxCallStackDepth) { PVK_SEL_CACHE("setMaxCallStackDepth:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, maxCallStackDepth); }
 static inline unsigned long pvk_MTLComputePipelineState_maxTotalThreadsPerThreadgroup(id self) { PVK_SEL_CACHE("maxTotalThreadsPerThreadgroup"); return PVK_MSG(unsigned long, (id, SEL))(self, pvk_sel_); }
 static inline pvk_MTLResourceID pvk_MTLTexture_gpuResourceID(id self) { PVK_SEL_CACHE("gpuResourceID"); return PVK_MSG(pvk_MTLResourceID, (id, SEL))(self, pvk_sel_); }
 static inline pvk_MTLResourceID pvk_MTLSamplerState_gpuResourceID(id self) { PVK_SEL_CACHE("gpuResourceID"); return PVK_MSG(pvk_MTLResourceID, (id, SEL))(self, pvk_sel_); }
@@ -32227,6 +32228,9 @@ enum pvk_device_extension {
      * (section 13, RAY QUERIES); offered where MTLDevice.supportsRaytracing */
     PVK_DEVICE_EXT_KHR_acceleration_structure,
     PVK_DEVICE_EXT_KHR_ray_query,
+    /* Ray tracing pipelines, each a Metal compute pipeline of all its
+     * shaders (section 13, RAY TRACING PIPELINES) */
+    PVK_DEVICE_EXT_KHR_ray_tracing_pipeline,
     /* Promoted to Vulkan 1.1 */
     PVK_DEVICE_EXT_KHR_16bit_storage,
     PVK_DEVICE_EXT_KHR_bind_memory2,
@@ -32323,6 +32327,7 @@ static const VkExtensionProperties pvk_device_extensions[PVK_DEVICE_EXTENSION_CO
     PVK_EXT(PVK_DEVICE_EXT_, KHR_deferred_host_operations, KHR_DEFERRED_HOST_OPERATIONS),
     PVK_EXT(PVK_DEVICE_EXT_, KHR_acceleration_structure, KHR_ACCELERATION_STRUCTURE),
     PVK_EXT(PVK_DEVICE_EXT_, KHR_ray_query, KHR_RAY_QUERY),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_ray_tracing_pipeline, KHR_RAY_TRACING_PIPELINE),
     /* Vulkan 1.1 */
     PVK_EXT(PVK_DEVICE_EXT_, KHR_16bit_storage, KHR_16BIT_STORAGE),
     PVK_EXT(PVK_DEVICE_EXT_, KHR_bind_memory2, KHR_BIND_MEMORY_2),
@@ -32490,6 +32495,7 @@ struct pvk_features {
     /* Ray tracing (section 7, RAY TRACING) */
     VkPhysicalDeviceAccelerationStructureFeaturesKHR accel;
     VkPhysicalDeviceRayQueryFeaturesKHR ray_query;
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rays;
 };
 
 /* The same for properties beyond VkPhysicalDeviceProperties. v14's copy
@@ -32526,6 +32532,7 @@ struct pvk_physical_device {
     bool filter_minmax;   /* sampler min/max reduction (FST: Apple10) */
     bool sparse;          /* placement sparse resources: the sparse features (section 7, SPARSE RESOURCES) */
     VkPhysicalDeviceAccelerationStructurePropertiesKHR accel_properties; /* (section 7, RAY TRACING) */
+    VkPhysicalDeviceRayTracingPipelinePropertiesKHR rays_properties;
 };
 
 struct pvk_submission;
@@ -32715,6 +32722,7 @@ struct pvk_device {
     struct pvk_job *par_head, *par_tail;
     id fill_pipeline;      /* internal kernel of vkCmdFillBuffer, made on first use */
     id accel_kernels[5];   /* internal kernels of the acceleration structure commands (enum pvk_accel_kernel), on first use */
+    id rays_kernel;        /* the internal kernel of vkCmdTraceRaysIndirectKHR (pvk_rays_indirect_msl), on first use */
     /* Images (sections 11, 15 and 16) */
     struct pvk_sampler_state *sampler_states; /* MTLSamplerStates shared by equal VkSamplers */
     id blit_libraries[5];                     /* internal shaders (enum pvk_blit_lib), made on first use */
@@ -34008,10 +34016,34 @@ static void pvk_physical_device_init_graphics_features(struct pvk_physical_devic
  *   Descriptors are bound by the tables alone (Design limits); scratch
  *   memory is taken at any address (Metal's validation asks no alignment
  *   of it, and builds with scratch memory at an odd address trace as the
- *   others, M4 Max, macOS 27.2); 16 is reported, as of buffer offsets. */
+ *   others, M4 Max, macOS 27.2); 16 is reported, as of buffer offsets.
+ *
+ *   VK_KHR_ray_tracing_pipeline with them (section 13, RAY TRACING
+ *   PIPELINES; section 17):
+ *   rayTracingPipeline      a pipeline is one Metal compute pipeline of all
+ *                           its shaders, which call each other
+ *   rayTracingPipelineTraceRaysIndirect
+ *                           an indirect dispatch, its size read on the GPU
+ *   rayTraversalPrimitiveCulling
+ *                           the SkipTriangles and SkipAABBs ray flags are
+ *                           Metal's geometry cull modes (ray queries too)
+ *   Not rayTracingPipelineShaderGroupHandleCaptureReplay (nor ...Mixed): a
+ *   group's handle is its index in its pipeline, which no application can
+ *   supply for another pipeline to take. VK_KHR_pipeline_library is not
+ *   offered, so pipelines are made of their own stages only.
+ *   maxRayRecursionDepth is PVK_MAX_RAY_RECURSION: Metal bounds a compute
+ *   pipeline's recursion with maxCallStackDepth, and ran 200 levels where
+ *   that was asked (M4 Max, macOS 27.2); 31 is what Direct3D promises. A
+ *   record's handle is read as a 32-bit word (shaderGroupHandleAlignment 8,
+ *   shaderGroupBaseAlignment 16); hit attributes of up to 32 bytes are
+ *   kept from an intersection shader's report to the closest-hit shader. */
+#define PVK_MAX_RAY_RECURSION 31u
+#define PVK_MSL_RAYS_HANDLE_SIZE 32u /* a shader group handle: its index + 1, then zeros */
+
 static void pvk_physical_device_init_ray_tracing(struct pvk_physical_device *pd)
 {
     VkPhysicalDeviceAccelerationStructurePropertiesKHR *p = &pd->accel_properties;
+    VkPhysicalDeviceRayTracingPipelinePropertiesKHR *r = &pd->rays_properties;
     if (!pvk_MTLDevice_supportsRaytracing(pd->mtl_device))
         return;
     pd->features.accel.accelerationStructure = VK_TRUE;
@@ -34025,6 +34057,17 @@ static void pvk_physical_device_init_ray_tracing(struct pvk_physical_device *pd)
     p->maxDescriptorSetAccelerationStructures = PVK_MAX_DESCRIPTORS;
     p->maxDescriptorSetUpdateAfterBindAccelerationStructures = PVK_MAX_DESCRIPTORS;
     p->minAccelerationStructureScratchOffsetAlignment = 16;
+    pd->features.rays.rayTracingPipeline = VK_TRUE;
+    pd->features.rays.rayTracingPipelineTraceRaysIndirect = VK_TRUE;
+    pd->features.rays.rayTraversalPrimitiveCulling = VK_TRUE;
+    r->shaderGroupHandleSize = PVK_MSL_RAYS_HANDLE_SIZE;
+    r->maxRayRecursionDepth = PVK_MAX_RAY_RECURSION;
+    r->maxShaderGroupStride = 4096;
+    r->shaderGroupBaseAlignment = 16;
+    r->shaderGroupHandleCaptureReplaySize = PVK_MSL_RAYS_HANDLE_SIZE;
+    r->maxRayDispatchInvocationCount = 1u << 30;
+    r->shaderGroupHandleAlignment = 8;
+    r->maxRayHitAttributeSize = 32;
 }
 
 /* The MTLAttributeFormat of an acceleration structure's vertices in a
@@ -34344,6 +34387,8 @@ static const struct pvk_run pvk_feature_runs[] = {
              descriptorBindingAccelerationStructureUpdateAfterBind),
     PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR, VkPhysicalDeviceRayQueryFeaturesKHR, ray_query,
              rayQuery, rayQuery),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR,
+             VkPhysicalDeviceRayTracingPipelineFeaturesKHR, rays, rayTracingPipeline, rayTraversalPrimitiveCulling),
 };
 
 static const struct pvk_run pvk_property_runs[] = {
@@ -34503,6 +34548,13 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceProperties2(VkPhysicalDevice physi
             VkBaseOutStructure *next = s->pNext;
             *p = pd->accel_properties; /* (zeros without ray tracing: RAY TRACING) */
             p->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+            p->pNext = next;
+        } else if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR) {
+            VkPhysicalDeviceRayTracingPipelinePropertiesKHR *p =
+                (VkPhysicalDeviceRayTracingPipelinePropertiesKHR *)(void *)s;
+            VkBaseOutStructure *next = s->pNext;
+            *p = pd->rays_properties;
+            p->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
             p->pNext = next;
         }
     }
@@ -35836,6 +35888,7 @@ static bool pvk_device_extension_features(const struct pvk_features *f, unsigned
     /* Ray tracing */
     case PVK_DEVICE_EXT_KHR_acceleration_structure: return f->accel.accelerationStructure;
     case PVK_DEVICE_EXT_KHR_ray_query: return f->ray_query.rayQuery;
+    case PVK_DEVICE_EXT_KHR_ray_tracing_pipeline: return f->rays.rayTracingPipeline;
     default: return true;
     }
 }
@@ -43789,7 +43842,11 @@ enum {
     PVK_SPV_OpPtrDiff = 403,
     PVK_SPV_OpTerminateInvocation = 4416,
     PVK_SPV_OpGroupNonUniformRotateKHR = 4431,
+    PVK_SPV_OpTraceRayKHR = 4445,
+    PVK_SPV_OpExecuteCallableKHR = 4446,
     PVK_SPV_OpConvertUToAccelerationStructureKHR = 4447,
+    PVK_SPV_OpIgnoreIntersectionKHR = 4448,
+    PVK_SPV_OpTerminateRayKHR = 4449,
     PVK_SPV_OpSDot = 4450,
     PVK_SPV_OpUDot = 4451,
     PVK_SPV_OpSUDot = 4452,
@@ -43803,6 +43860,7 @@ enum {
     PVK_SPV_OpRayQueryConfirmIntersectionKHR = 4476,
     PVK_SPV_OpRayQueryProceedKHR = 4477,
     PVK_SPV_OpRayQueryGetIntersectionTypeKHR = 4479,
+    PVK_SPV_OpReportIntersectionKHR = 5334,
     PVK_SPV_OpTypeAccelerationStructureKHR = 5341,
     PVK_SPV_OpDemoteToHelperInvocation = 5380,
     PVK_SPV_OpIsHelperInvocationEXT = 5381,
@@ -43841,6 +43899,12 @@ enum {
     PVK_SPV_StoragePushConstant = 9,
     PVK_SPV_StorageImage = 11,
     PVK_SPV_StorageStorageBuffer = 12,
+    PVK_SPV_StorageCallableDataKHR = 5328, /* (the ray tracing classes: pvk_spv_rays_storage) */
+    PVK_SPV_StorageIncomingCallableDataKHR = 5329,
+    PVK_SPV_StorageRayPayloadKHR = 5338,
+    PVK_SPV_StorageHitAttributeKHR = 5339,
+    PVK_SPV_StorageIncomingRayPayloadKHR = 5342,
+    PVK_SPV_StorageShaderRecordBufferKHR = 5343,
     PVK_SPV_StoragePhysicalStorageBuffer = 5349
 };
 
@@ -43913,6 +43977,7 @@ enum {
     PVK_SPV_BuiltInPointSize = 1,
     PVK_SPV_BuiltInClipDistance = 3,
     PVK_SPV_BuiltInCullDistance = 4,
+    PVK_SPV_BuiltInInstanceId = 6,
     PVK_SPV_BuiltInPrimitiveId = 7,
     PVK_SPV_BuiltInLayer = 9,
     PVK_SPV_BuiltInViewportIndex = 10,
@@ -43945,12 +44010,33 @@ enum {
     PVK_SPV_BuiltInBaseInstance = 4425,
     PVK_SPV_BuiltInDrawIndex = 4426,
     PVK_SPV_BuiltInDeviceIndex = 4438,
-    PVK_SPV_BuiltInViewIndex = 4440
+    PVK_SPV_BuiltInViewIndex = 4440,
+    PVK_SPV_BuiltInLaunchIdKHR = 5319,
+    PVK_SPV_BuiltInLaunchSizeKHR = 5320,
+    PVK_SPV_BuiltInWorldRayOriginKHR = 5321,
+    PVK_SPV_BuiltInWorldRayDirectionKHR = 5322,
+    PVK_SPV_BuiltInObjectRayOriginKHR = 5323,
+    PVK_SPV_BuiltInObjectRayDirectionKHR = 5324,
+    PVK_SPV_BuiltInRayTminKHR = 5325,
+    PVK_SPV_BuiltInRayTmaxKHR = 5326,
+    PVK_SPV_BuiltInInstanceCustomIndexKHR = 5327,
+    PVK_SPV_BuiltInObjectToWorldKHR = 5330,
+    PVK_SPV_BuiltInWorldToObjectKHR = 5331,
+    PVK_SPV_BuiltInHitTNV = 5332,
+    PVK_SPV_BuiltInHitKindKHR = 5333,
+    PVK_SPV_BuiltInIncomingRayFlagsKHR = 5351,
+    PVK_SPV_BuiltInRayGeometryIndexKHR = 5352
 };
 
 #define PVK_SPV_ExecutionModelVertex 0u
 #define PVK_SPV_ExecutionModelFragment 4u
 #define PVK_SPV_ExecutionModelGLCompute 5u
+#define PVK_SPV_ExecutionModelRayGenerationKHR 5313u
+#define PVK_SPV_ExecutionModelIntersectionKHR 5314u
+#define PVK_SPV_ExecutionModelAnyHitKHR 5315u
+#define PVK_SPV_ExecutionModelClosestHitKHR 5316u
+#define PVK_SPV_ExecutionModelMissKHR 5317u
+#define PVK_SPV_ExecutionModelCallableKHR 5318u
 #define PVK_SPV_ExecutionModeOriginUpperLeft 7u
 #define PVK_SPV_ExecutionModeEarlyFragmentTests 9u
 #define PVK_SPV_ExecutionModeDepthReplacing 12u
@@ -44214,6 +44300,7 @@ struct pvk_spv_id {
     uint32_t func;  /* owning function index + 1, 0 at module scope */
     uint32_t block; /* labels: block index; values: defining block index */
     uint32_t global; /* global variables: index in ctx->globals */
+    uint32_t rays;   /* global variables: their ray tracing storage class (pvk_spv_rays_storage), else 0 */
     const char *name; /* OpName */
     const char *msl;  /* MSL name or expression */
     struct pvk_spv_type *t;
@@ -44243,6 +44330,7 @@ struct pvk_spv_block {
 #define PVK_SPV_I_LANE 0x1u /* uint pvk_lane: [[thread_index_in_simdgroup]] (subgroup operations) */
 #define PVK_SPV_I_KILL 0x2u /* thread bool& pvk_killed: set by OpKill / OpTerminateInvocation */
 #define PVK_SPV_I_LOCAL_INDEX 0x4u /* kernels: uint pvk_local_index [[thread_index_in_threadgroup]] */
+#define PVK_SPV_I_RAYS 0x8u /* ray tracing stages: pvk_rt and pvk_ray (RAY TRACING PIPELINES) */
 
 struct pvk_spv_func {
     uint32_t fid;
@@ -44326,6 +44414,8 @@ struct pvk_spv {
     uint32_t model;      /* the entry point's execution model */
     uint32_t entry_insn; /* word offset of its OpEntryPoint (interface list) */
     bool graphics;       /* vertex or fragment: the entry function is a helper behind a wrapper */
+    bool rays;           /* a ray tracing stage: the entry function is pvk_stage (RAY TRACING PIPELINES) */
+    uint32_t hit_attr;   /* an intersection shader's HitAttributeKHR variable, else 0 */
     uint32_t *modes; /* word offsets of OpExecutionMode(Id) */
     uint32_t nmodes, cap_modes;
     uint32_t *member_insns; /* OpMemberName / OpMemberDecorate */
@@ -45593,6 +45683,65 @@ static void pvk_spv_parse_constant(struct pvk_spv *ctx, const struct pvk_spv_ins
 
 /* ---- Parsing ---- */
 
+/* ---- Ray tracing stages (RAY TRACING PIPELINES) ---- */
+
+/* The storage class a ray tracing storage class is translated as: payloads,
+ * callable data and hit attributes are the invocation's own variables
+ * (Private; the incoming ones alias the caller's, pvk_spv_rays_entry), the
+ * shader record is read as push constants are. Others are themselves. */
+static uint32_t pvk_spv_rays_storage(uint32_t storage)
+{
+    switch (storage) {
+    case PVK_SPV_StorageCallableDataKHR: case PVK_SPV_StorageIncomingCallableDataKHR:
+    case PVK_SPV_StorageRayPayloadKHR: case PVK_SPV_StorageIncomingRayPayloadKHR:
+    case PVK_SPV_StorageHitAttributeKHR:
+        return PVK_SPV_StoragePrivate;
+    case PVK_SPV_StorageShaderRecordBufferKHR:
+        return PVK_SPV_StoragePushConstant;
+    default:
+        return storage;
+    }
+}
+
+/* The stage of a ray tracing execution model, else 0. */
+static VkShaderStageFlagBits pvk_spv_rays_stage(uint32_t model)
+{
+    switch (model) {
+    case PVK_SPV_ExecutionModelRayGenerationKHR: return VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+    case PVK_SPV_ExecutionModelIntersectionKHR: return VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+    case PVK_SPV_ExecutionModelAnyHitKHR: return VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+    case PVK_SPV_ExecutionModelClosestHitKHR: return VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+    case PVK_SPV_ExecutionModelMissKHR: return VK_SHADER_STAGE_MISS_BIT_KHR;
+    case PVK_SPV_ExecutionModelCallableKHR: return VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+    default: return (VkShaderStageFlagBits)0;
+    }
+}
+
+/* A ray tracing stage's built-in input: where its value is (the launch in
+ * pvk_rt, the ray and its intersection in pvk_ray); NULL for others. */
+static const char *pvk_spv_rays_builtin(uint32_t builtin)
+{
+    switch (builtin) {
+    case PVK_SPV_BuiltInLaunchIdKHR: return "pvk_rt.launch";
+    case PVK_SPV_BuiltInLaunchSizeKHR: return "pvk_rt.size";
+    case PVK_SPV_BuiltInWorldRayOriginKHR: return "pvk_ray.origin";
+    case PVK_SPV_BuiltInWorldRayDirectionKHR: return "pvk_ray.direction";
+    case PVK_SPV_BuiltInObjectRayOriginKHR: return "pvk_ray.object_origin";
+    case PVK_SPV_BuiltInObjectRayDirectionKHR: return "pvk_ray.object_direction";
+    case PVK_SPV_BuiltInRayTminKHR: return "pvk_ray.tmin";
+    case PVK_SPV_BuiltInRayTmaxKHR: case PVK_SPV_BuiltInHitTNV: return "pvk_ray.tmax";
+    case PVK_SPV_BuiltInInstanceCustomIndexKHR: return "pvk_ray.custom";
+    case PVK_SPV_BuiltInInstanceId: return "pvk_ray.instance";
+    case PVK_SPV_BuiltInPrimitiveId: return "pvk_ray.primitive";
+    case PVK_SPV_BuiltInRayGeometryIndexKHR: return "pvk_ray.geometry";
+    case PVK_SPV_BuiltInHitKindKHR: return "pvk_ray.kind";
+    case PVK_SPV_BuiltInIncomingRayFlagsKHR: return "pvk_ray.flags";
+    case PVK_SPV_BuiltInObjectToWorldKHR: return "pvk_ray.o2w";
+    case PVK_SPV_BuiltInWorldToObjectKHR: return "pvk_ray.w2o";
+    default: return NULL;
+    }
+}
+
 /* 0: no result, 1: result id only, 2: result type and id, -1: unsupported. */
 static int pvk_spv_shape_of(uint32_t op)
 {
@@ -45612,6 +45761,8 @@ static int pvk_spv_shape_of(uint32_t op)
     case PVK_SPV_OpDemoteToHelperInvocation: case PVK_SPV_OpAssumeTrueKHR:
     case PVK_SPV_OpRayQueryInitializeKHR: case PVK_SPV_OpRayQueryTerminateKHR:
     case PVK_SPV_OpRayQueryGenerateIntersectionKHR: case PVK_SPV_OpRayQueryConfirmIntersectionKHR:
+    case PVK_SPV_OpTraceRayKHR: case PVK_SPV_OpExecuteCallableKHR: case PVK_SPV_OpIgnoreIntersectionKHR:
+    case PVK_SPV_OpTerminateRayKHR:
         return 0;
     case PVK_SPV_OpString: case PVK_SPV_OpExtInstImport: case PVK_SPV_OpLabel: case PVK_SPV_OpDecorationGroup:
     case PVK_SPV_OpTypeRayQueryKHR: case PVK_SPV_OpTypeAccelerationStructureKHR:
@@ -45630,7 +45781,7 @@ static int pvk_spv_shape_of(uint32_t op)
     case PVK_SPV_OpImageSparseFetch: case PVK_SPV_OpImageSparseGather: case PVK_SPV_OpImageSparseDrefGather:
     case PVK_SPV_OpImageSparseTexelsResident: case PVK_SPV_OpImageSparseRead:
     case PVK_SPV_OpConvertUToAccelerationStructureKHR: case PVK_SPV_OpRayQueryProceedKHR:
-    case PVK_SPV_OpRayQueryGetIntersectionTypeKHR:
+    case PVK_SPV_OpRayQueryGetIntersectionTypeKHR: case PVK_SPV_OpReportIntersectionKHR:
         return 2;
     default:
         break;
@@ -45761,7 +45912,7 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         }
         break;
     case PVK_SPV_OpTypePointer:
-        t->storage = pvk_spv_arg(ctx, in, 2);
+        t->storage = pvk_spv_rays_storage(pvk_spv_arg(ctx, in, 2));
         t->elem = pvk_spv_arg(ctx, in, 3);
         if (x->kind == PVK_SPV_K_TYPE && (x->t->op != PVK_SPV_OpTypePointer || x->t->storage != t->storage))
             pvk_spv_fail(ctx, "pointer type %u does not match its OpTypeForwardPointer", rid);
@@ -46173,7 +46324,8 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         VkShaderStageFlagBits stage = model == PVK_SPV_ExecutionModelVertex     ? VK_SHADER_STAGE_VERTEX_BIT
                                       : model == PVK_SPV_ExecutionModelFragment ? VK_SHADER_STAGE_FRAGMENT_BIT
                                       : model == PVK_SPV_ExecutionModelGLCompute ? VK_SHADER_STAGE_COMPUTE_BIT
-                                                                                 : (VkShaderStageFlagBits)0;
+                                      : want ? pvk_spv_rays_stage(model) /* (only when asked for) */
+                                             : (VkShaderStageFlagBits)0;
         s = pvk_spv_string(ctx, in, 3, NULL);
         if (ctx->entry_found || (ctx->want_entry && strcmp(ctx->want_entry, s) != 0) || (want && stage && want != stage))
             break;
@@ -46186,7 +46338,8 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         ctx->entry_name = s;
         ctx->model = model;
         ctx->entry_insn = in->off;
-        ctx->graphics = model != PVK_SPV_ExecutionModelGLCompute;
+        ctx->rays = pvk_spv_rays_stage(model) != 0;
+        ctx->graphics = model != PVK_SPV_ExecutionModelGLCompute && !ctx->rays;
         ctx->result->stage = stage;
         break;
     }
@@ -46262,9 +46415,12 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         pvk_spv_parse_constant(ctx, in);
         break;
     case PVK_SPV_OpVariable: {
-        uint32_t storage = pvk_spv_arg(ctx, in, 3);
+        uint32_t storage = pvk_spv_rays_storage(pvk_spv_arg(ctx, in, 3));
         rid = in->w[2];
         x = &ctx->ids[rid];
+        x->rays = storage != in->w[3] ? in->w[3] : 0;
+        if (x->rays == PVK_SPV_StorageHitAttributeKHR)
+            ctx->hit_attr = rid;
         switch (storage) {
         case PVK_SPV_StorageInput: case PVK_SPV_StorageUniform: case PVK_SPV_StorageWorkgroup:
         case PVK_SPV_StoragePrivate: case PVK_SPV_StoragePushConstant: case PVK_SPV_StorageStorageBuffer:
@@ -46344,7 +46500,8 @@ static bool pvk_spv_is_terminator(uint32_t op)
 {
     return op == PVK_SPV_OpBranch || op == PVK_SPV_OpBranchConditional || op == PVK_SPV_OpSwitch ||
            op == PVK_SPV_OpReturn || op == PVK_SPV_OpReturnValue || op == PVK_SPV_OpKill ||
-           op == PVK_SPV_OpUnreachable || op == PVK_SPV_OpTerminateInvocation;
+           op == PVK_SPV_OpUnreachable || op == PVK_SPV_OpTerminateInvocation ||
+           op == PVK_SPV_OpIgnoreIntersectionKHR || op == PVK_SPV_OpTerminateRayKHR;
 }
 
 static void pvk_spv_parse_body(struct pvk_spv *ctx, const struct pvk_spv_insn *in, int shape)
@@ -46481,7 +46638,8 @@ static void pvk_spv_parse_body(struct pvk_spv *ctx, const struct pvk_spv_insn *i
                in->op != PVK_SPV_OpImageWrite && in->op != PVK_SPV_OpDemoteToHelperInvocation &&
                in->op != PVK_SPV_OpAssumeTrueKHR && in->op != PVK_SPV_OpRayQueryInitializeKHR &&
                in->op != PVK_SPV_OpRayQueryTerminateKHR && in->op != PVK_SPV_OpRayQueryGenerateIntersectionKHR &&
-               in->op != PVK_SPV_OpRayQueryConfirmIntersectionKHR) {
+               in->op != PVK_SPV_OpRayQueryConfirmIntersectionKHR && in->op != PVK_SPV_OpTraceRayKHR &&
+               in->op != PVK_SPV_OpExecuteCallableKHR) {
         pvk_spv_fail(ctx, "unexpected instruction (opcode %u) in a function", in->op);
     }
 }
@@ -47853,6 +48011,8 @@ static bool pvk_spv_writes(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     case PVK_SPV_OpRayQueryInitializeKHR: case PVK_SPV_OpRayQueryTerminateKHR: /* (a ray query variable's state) */
     case PVK_SPV_OpRayQueryGenerateIntersectionKHR: case PVK_SPV_OpRayQueryConfirmIntersectionKHR:
     case PVK_SPV_OpRayQueryProceedKHR:
+    case PVK_SPV_OpTraceRayKHR: case PVK_SPV_OpExecuteCallableKHR: case PVK_SPV_OpReportIntersectionKHR:
+    case PVK_SPV_OpIgnoreIntersectionKHR: case PVK_SPV_OpTerminateRayKHR: /* (payloads, the ray's state) */
         return true;
     case PVK_SPV_OpExtInst: /* Modf and Frexp store through a pointer */
         return in->wc > 4 && in->w[3] == ctx->glsl && (in->w[4] == PVK_SPV_GLSL_Modf || in->w[4] == PVK_SPV_GLSL_Frexp);
@@ -47905,8 +48065,16 @@ static void pvk_spv_analyze(struct pvk_spv *ctx, uint32_t fidx)
                     fn->implicit |= PVK_SPV_I_LANE;
                 if (in.op == PVK_SPV_OpKill || in.op == PVK_SPV_OpTerminateInvocation)
                     fn->implicit |= PVK_SPV_I_KILL;
+                if (in.op == PVK_SPV_OpIgnoreIntersectionKHR || in.op == PVK_SPV_OpTerminateRayKHR)
+                    fn->implicit |= PVK_SPV_I_KILL | PVK_SPV_I_RAYS; /* (they end the shader as OpKill does) */
+                if (in.op == PVK_SPV_OpTraceRayKHR || in.op == PVK_SPV_OpExecuteCallableKHR ||
+                    in.op == PVK_SPV_OpReportIntersectionKHR)
+                    fn->implicit |= PVK_SPV_I_RAYS;
+                if (in.op == PVK_SPV_OpReportIntersectionKHR && ctx->hit_attr) /* (it reads the attributes) */
+                    pvk_spv_use(ctx, fn, fidx, ctx->hit_attr, bi, at);
                 fn->discards |= in.op == PVK_SPV_OpKill || in.op == PVK_SPV_OpTerminateInvocation ||
-                                in.op == PVK_SPV_OpDemoteToHelperInvocation;
+                                in.op == PVK_SPV_OpDemoteToHelperInvocation ||
+                                in.op == PVK_SPV_OpIgnoreIntersectionKHR || in.op == PVK_SPV_OpTerminateRayKHR;
                 pvk_spv_id_range(&in, shape, &b, &e);
                 for (i = b; i < e; i++) {
                     uint32_t j = b;
@@ -48581,6 +48749,11 @@ static void pvk_spv_assign_resources(struct pvk_spv *ctx)
         }
         case PVK_SPV_StoragePushConstant:
             t = pvk_spv_type(ctx, x->p->type);
+            if (x->rays) { /* the shader record, read as push constants are */
+                if (t->op != PVK_SPV_OpTypeStruct || !t->explicit_layout)
+                    pvk_spv_fail(ctx, "a shader record must be a block with explicit layout");
+                break;
+            }
             if (res->has_push_constants)
                 pvk_spv_fail(ctx, "more than one push-constant block");
             if (t->op != PVK_SPV_OpTypeStruct || !t->explicit_layout)
@@ -48602,6 +48775,11 @@ static void pvk_spv_assign_resources(struct pvk_spv *ctx)
                 break; /* the stage interface (pvk_spv_emit_stage) */
             if (!(x->flags & PVK_SPV_F_BUILTIN))
                 pvk_spv_fail(ctx, "input variable %u is not a built-in", var);
+            if (ctx->rays) {
+                if (!pvk_spv_rays_builtin(x->builtin))
+                    pvk_spv_fail(ctx, "built-in %u is not supported in a ray tracing shader", x->builtin);
+                break;
+            }
             switch (x->builtin) {
             case PVK_SPV_BuiltInNumWorkgroups: case PVK_SPV_BuiltInWorkgroupId: case PVK_SPV_BuiltInLocalInvocationId:
             case PVK_SPV_BuiltInGlobalInvocationId:
@@ -50696,6 +50874,8 @@ static uint32_t pvk_spv_hidden(struct pvk_spv *ctx, const struct pvk_spv_func *f
         list[n++] = decl ? "uint pvk_lane" : "pvk_lane";
     if (fn->implicit & PVK_SPV_I_KILL)
         list[n++] = decl ? "thread bool& pvk_killed" : "pvk_killed";
+    if (fn->implicit & PVK_SPV_I_RAYS)
+        list[n++] = decl ? "thread pvk_rt_context& pvk_rt, thread pvk_rt_ray& pvk_ray" : "pvk_rt, pvk_ray";
     for (loc = 0; loc < PVK_MSL_MAX_LOCATIONS; loc++) {
         if (!(fn->interp_locs & (1u << loc)))
             continue;
@@ -50767,7 +50947,7 @@ static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 
     if (in->wc - 4 != ft->count)
         pvk_spv_fail(ctx, "OpFunctionCall: wrong number of arguments");
-    list = pvk_spv_alloc(ctx, sizeof(*list) * (ft->count + ctx->nglobals + PVK_MSL_MAX_SETS + PVK_MSL_MAX_LOCATIONS + 2));
+    list = pvk_spv_alloc(ctx, sizeof(*list) * (ft->count + ctx->nglobals + PVK_MSL_MAX_SETS + PVK_MSL_MAX_LOCATIONS + 3));
     for (i = 0; i < ft->count; i++) {
         struct pvk_spv_type *pt = pvk_spv_type(ctx, ft->params[i]);
         const char *arg;
@@ -52361,6 +52541,40 @@ static const char *pvk_spv_underaligned(struct pvk_spv *ctx, const struct pvk_sp
     return pvk_spv_fmt(ctx, "(*(%s packed_%s*)&%s)", ctx->dev, t->msl, p->expr);
 }
 
+/* OpTraceRayKHR, OpExecuteCallableKHR, OpReportIntersectionKHR: the calls
+ * of the pipeline's kernel (pvk_msl_rays_prelude). */
+static void pvk_spv_rays_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    if (!ctx->rays)
+        pvk_spv_fail(ctx, "a ray tracing instruction (opcode %u) outside a ray tracing shader", in->op);
+    switch (in->op) {
+    case PVK_SPV_OpTraceRayKHR:
+        if (pvk_spv_vtype(ctx, pvk_spv_arg(ctx, in, 1))->op != PVK_SPV_OpTypeAccelerationStructureKHR)
+            pvk_spv_fail(ctx, "OpTraceRayKHR: id %u is not an acceleration structure", in->w[1]);
+        pvk_spv_arg(ctx, in, 11);
+        pvk_spv_line(ctx, "pvk_rt_trace(pvk_rt, %s, uint(%s), uint(%s), uint(%s), uint(%s), uint(%s), %s, %s, %s, %s, "
+                          "(thread void*)&%s);",
+                     pvk_spv_val(ctx, in->w[1]), pvk_spv_val(ctx, in->w[2]), pvk_spv_val(ctx, in->w[3]),
+                     pvk_spv_val(ctx, in->w[4]), pvk_spv_val(ctx, in->w[5]), pvk_spv_val(ctx, in->w[6]),
+                     pvk_spv_val(ctx, in->w[7]), pvk_spv_val(ctx, in->w[8]), pvk_spv_val(ctx, in->w[9]),
+                     pvk_spv_val(ctx, in->w[10]), pvk_spv_ptr_of(ctx, in->w[11])->expr);
+        return;
+    case PVK_SPV_OpExecuteCallableKHR:
+        pvk_spv_line(ctx, "pvk_rt_callable(pvk_rt, uint(%s), (thread void*)&%s);",
+                     pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 1)), pvk_spv_ptr_of(ctx, pvk_spv_arg(ctx, in, 2))->expr);
+        return;
+    default: /* OpReportIntersectionKHR */
+        if (ctx->model != PVK_SPV_ExecutionModelIntersectionKHR)
+            pvk_spv_fail(ctx, "OpReportIntersectionKHR is only valid in intersection shaders");
+        pvk_spv_arg(ctx, in, 4);
+        pvk_spv_set(ctx, in->w[2],
+                    pvk_spv_fmt(ctx, "pvk_rt_report(pvk_rt, pvk_ray, %s, uint(%s)%s%s)", pvk_spv_val(ctx, in->w[3]),
+                                pvk_spv_val(ctx, in->w[4]), ctx->hit_attr ? ", " : "",
+                                ctx->hit_attr ? pvk_spv_get(ctx, ctx->hit_attr)->msl : ""));
+        return;
+    }
+}
+
 /* ---- Ray queries (RAY QUERIES) ---- */
 
 /* The MSL of a ray query instruction's query operand: the variable. */
@@ -52570,6 +52784,9 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
     case PVK_SPV_OpRayQueryGenerateIntersectionKHR: case PVK_SPV_OpRayQueryConfirmIntersectionKHR:
     case PVK_SPV_OpRayQueryProceedKHR: case PVK_SPV_OpRayQueryGetIntersectionTypeKHR:
         pvk_spv_ray_query(ctx, in);
+        return;
+    case PVK_SPV_OpTraceRayKHR: case PVK_SPV_OpExecuteCallableKHR: case PVK_SPV_OpReportIntersectionKHR:
+        pvk_spv_rays_op(ctx, in);
         return;
     case PVK_SPV_OpArrayLength:
         pvk_spv_array_length(ctx, in);
@@ -53385,6 +53602,18 @@ static void pvk_spv_emit_chain(struct pvk_spv *ctx, uint32_t label, bool in_loop
             break;
         case PVK_SPV_OpUnreachable:
             break;
+        case PVK_SPV_OpIgnoreIntersectionKHR:
+        case PVK_SPV_OpTerminateRayKHR:
+            /* The any-hit shader ends with its verdict (pvk_rt_trace): as
+             * OpKill, this function returns and so do its callers. */
+            if (ctx->model != PVK_SPV_ExecutionModelAnyHitKHR)
+                pvk_spv_fail(ctx, "opcode %u is only valid in any-hit shaders", term.op);
+            pvk_spv_line(ctx, "pvk_ray.action = %uu;", term.op == PVK_SPV_OpIgnoreIntersectionKHR ? 1u : 2u);
+            pvk_spv_line(ctx, "pvk_killed = true;");
+            pvk_spv_return(ctx, pvk_spv_type(ctx, ctx->fn->ret)->op == PVK_SPV_OpTypeVoid
+                                    ? NULL
+                                    : pvk_spv_zero(ctx, ctx->fn->ret));
+            break;
         case PVK_SPV_OpKill:
         case PVK_SPV_OpTerminateInvocation:
             /* Discarded fragments write nothing (not even device memory: a
@@ -53549,6 +53778,49 @@ static bool pvk_spv_signed_builtin(struct pvk_spv *ctx, const struct pvk_spv_id 
     return t && strncmp(t, "int", 3) == 0;
 }
 
+/* Whether global x of a ray tracing stage is another invocation's variable:
+ * the incoming payload or callable data, and outside intersection shaders
+ * (which make them) the hit attributes. */
+static bool pvk_spv_rays_alias(struct pvk_spv *ctx, const struct pvk_spv_id *x)
+{
+    return x->rays == PVK_SPV_StorageIncomingRayPayloadKHR || x->rays == PVK_SPV_StorageIncomingCallableDataKHR ||
+           (x->rays == PVK_SPV_StorageHitAttributeKHR && ctx->model != PVK_SPV_ExecutionModelIntersectionKHR);
+}
+
+/* What the stage function of a ray tracing stage declares for its kernel
+ * parameters' sake: the sets and push constants (in pvk_rt), the built-in
+ * inputs, the variables that alias the caller's and the shader record (in
+ * pvk_ray, or pvk_data: the incoming payload or callable data). */
+static void pvk_spv_rays_entry(struct pvk_spv *ctx, const struct pvk_spv_func *fn)
+{
+    const struct pvk_msl_result *res = ctx->result;
+    uint32_t set, g;
+    for (set = 0; set < PVK_MSL_MAX_SETS; set++) {
+        if (!(res->set_mask & (1u << set)))
+            continue;
+        if (set >= PVK_MAX_BOUND_SETS)
+            pvk_spv_fail(ctx, "descriptor set %u in a ray tracing shader (the limit is %u)", set, PVK_MAX_BOUND_SETS);
+        pvk_spv_line(ctx, "constant pvk_set%u& set%u = *(constant pvk_set%u*)pvk_rt.sets[%u];", set, set, set, set);
+    }
+    if (fn->implicit & PVK_SPV_I_KILL)
+        pvk_spv_line(ctx, "bool pvk_killed = false;");
+    for (g = 0; g < ctx->nglobals; g++) {
+        const struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
+        const char *t;
+        if (!pvk_spv_bit(fn->globals, g))
+            continue;
+        t = pvk_spv_type(ctx, x->p->type)->msl;
+        if (x->p->storage == PVK_SPV_StorageInput)
+            pvk_spv_line(ctx, "%s %s = %s(%s);", t, x->msl, t, pvk_spv_rays_builtin(x->builtin));
+        else if (x->p->storage == PVK_SPV_StoragePushConstant)
+            pvk_spv_line(ctx, "constant %s& %s = *(constant %s*)%s;", t, x->msl, t,
+                         x->rays ? "pvk_ray.record" : "pvk_rt.push");
+        else if (pvk_spv_rays_alias(ctx, x))
+            pvk_spv_line(ctx, "thread %s& %s = *(thread %s*)%s;", t, x->msl, t,
+                         x->rays == PVK_SPV_StorageHitAttributeKHR ? "pvk_ray.attr" : "pvk_data");
+    }
+}
+
 static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
 {
     bool entry = fn->fid == ctx->entry_fid && !ctx->graphics; /* graphics: a helper behind the stage function */
@@ -53625,7 +53897,12 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             decl = pvk_spv_fmt(ctx, "%s %s", pvk_spv_type(ctx, x->type)->msl, x->msl);
         PVK_SPV_PUSH(ctx, params, nparams, cap, decl);
     }
-    if (entry) {
+    if (entry && ctx->rays) { /* a stage of a ray tracing pipeline's kernel (RAY TRACING PIPELINES) */
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "thread pvk_rt_context& pvk_rt");
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "thread pvk_rt_ray& pvk_ray");
+        PVK_SPV_PUSH(ctx, params, nparams, cap, "thread void* pvk_data");
+        pvk_sb_printf(ctx, out, "static void %s(", fn->msl);
+    } else if (entry) {
         uint64_t threads;
         for (set = 0; set < PVK_MSL_MAX_SETS; set++)
             if (res->set_mask & (1u << set))
@@ -53669,7 +53946,7 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             if (sets & (1u << set))
                 PVK_SPV_PUSH(ctx, params, nparams, cap, pvk_spv_fmt(ctx, "constant pvk_set%u& set%u", set, set));
         {
-            const char *hidden[PVK_MSL_MAX_LOCATIONS + 2];
+            const char *hidden[PVK_MSL_MAX_LOCATIONS + 3];
             uint32_t nh = pvk_spv_hidden(ctx, fn, hidden, true, false), h;
             for (h = 0; h < nh; h++)
                 PVK_SPV_PUSH(ctx, params, nparams, cap, hidden[h]);
@@ -53687,20 +53964,22 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
                       pvk_spv_type(ctx, fn->ret)->msl, fn->msl);
     }
     for (i = 0; i < nparams; i++)
-        pvk_sb_printf(ctx, out, "%s%s", i ? (entry ? ",\n                 " : ", ") : "", params[i]);
+        pvk_sb_printf(ctx, out, "%s%s", i ? (entry && !ctx->rays ? ",\n                 " : ", ") : "", params[i]);
     pvk_sb_append(ctx, out, ")\n{\n", 4);
 
     /* Declarations: resources, variables, values that cross blocks. */
     ctx->out = out;
     ctx->indent = 1;
     if (entry) {
+        if (ctx->rays)
+            pvk_spv_rays_entry(ctx, fn);
         if (res->dispatch_base)
             pvk_spv_line(ctx, "uint3 pvk_dispatch_base = uint3(*(constant packed_uint3*)(pvk_push_data + %u));",
                          res->dispatch_base_offset);
         for (g = 0; g < ctx->nglobals; g++) {
             struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
             const char *t;
-            if (!pvk_spv_bit(fn->globals, g))
+            if (!pvk_spv_bit(fn->globals, g) || ctx->rays)
                 continue;
             t = pvk_spv_type(ctx, x->p->type)->msl;
             if (x->p->storage == PVK_SPV_StoragePushConstant && res->dispatch_base)
@@ -53745,6 +54024,8 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             }
             case PVK_SPV_StoragePrivate: {
                 struct pvk_spv_insn in = pvk_spv_insn_at(ctx, x->insn);
+                if (pvk_spv_rays_alias(ctx, x)) /* the caller's (pvk_spv_rays_entry) */
+                    break;
                 if (in.wc > 4 && pvk_spv_get(ctx, in.w[4])->kind == PVK_SPV_K_VAR) /* its address */
                     pvk_spv_line(ctx, "%s %s = %s;", t->msl, x->msl, pvk_spv_val(ctx, in.w[4]));
                 else if (in.wc > 4)
@@ -55011,6 +55292,9 @@ static bool pvk_spv_fetch_deps(struct pvk_spv *ctx, struct pvk_spv_func *fn, uin
                 const struct pvk_spv_id *x;
                 off += ins.wc;
                 if (op == PVK_SPV_OpFunctionCall || op == PVK_SPV_OpImageWrite || op == 64 /* OpCopyMemorySized */ ||
+                    op == PVK_SPV_OpTraceRayKHR || op == PVK_SPV_OpExecuteCallableKHR ||
+                    op == PVK_SPV_OpReportIntersectionKHR || op == PVK_SPV_OpIgnoreIntersectionKHR ||
+                    op == PVK_SPV_OpTerminateRayKHR ||
                     (op >= PVK_SPV_OpAtomicLoad && op <= PVK_SPV_OpAtomicXor) || op == 318 || op == 319 ||
                     op == 5614 || op == 5615 || op == PVK_SPV_OpAtomicFAddEXT)
                     return false;
@@ -55662,7 +55946,7 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
         if (pvk_spv_func_sets(ctx, entry) & (1u << set))
             PVK_SPV_PUSH(ctx, args, nargs, cap_args, pvk_spv_fmt(ctx, "set%u", set));
     {
-        const char *hidden[PVK_MSL_MAX_LOCATIONS + 2];
+        const char *hidden[PVK_MSL_MAX_LOCATIONS + 3];
         uint32_t nh = pvk_spv_hidden(ctx, entry, hidden, false, true), h;
         for (h = 0; h < nh; h++)
             PVK_SPV_PUSH(ctx, args, nargs, cap_args, hidden[h]);
@@ -56565,7 +56849,7 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         pvk_spv_fail(ctx, "entry point function must be void(void)");
     pvk_spv_apply_member_insns(ctx);
     pvk_spv_coherence(ctx);
-    if (!ctx->graphics)
+    if (!ctx->graphics && !ctx->rays)
         pvk_spv_workgroup_size(ctx);
     pvk_spv_layout_types(ctx);
 
@@ -56589,20 +56873,21 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
                 entry->implicit |= PVK_SPV_I_LOCAL_INDEX;
         }
     }
-    kernel = pvk_spv_kernel_name(ctx);
+    kernel = ctx->rays ? "pvk_stage" : pvk_spv_kernel_name(ctx);
     for (i = 0; i < ctx->norder; i++) {
         struct pvk_spv_func *fn = ctx->funcs[ctx->order[i] - 1];
         fn->msl = fn->fid == ctx->entry_fid && !ctx->graphics ? kernel : pvk_spv_name(ctx, fn->fid);
     }
     pvk_spv_assign_resources(ctx);
-    res->fast_math = pvk_spv_fast_math(ctx);
-    contract = !res->fast_math && pvk_spv_contracts(ctx);
+    /* (a ray tracing pipeline's stages share a kernel: all safe math) */
+    res->fast_math = !ctx->rays && pvk_spv_fast_math(ctx);
+    contract = !res->fast_math && !ctx->rays && pvk_spv_contracts(ctx);
     if (res->fast_math || contract)
         for (i = 0; i < ctx->norder; i++)
             pvk_spv_recurrences(ctx, ctx->order[i]);
     ctx->storage_reads = pvk_spv_storage_reads(ctx);
     ctx->rb_clamp = pvk_spv_loops(ctx);
-    if (ctx->options && ctx->options->dispatch_base) {
+    if (ctx->options && ctx->options->dispatch_base && !ctx->rays) {
         uint32_t end = res->has_push_constants ? pvk_spv_round(res->push_constant_offset + res->push_constant_size, 16) : 0;
         if (ctx->options->dispatch_base_offset > 65536)
             pvk_spv_fail(ctx, "dispatch base offset %u is too large", ctx->options->dispatch_base_offset);
@@ -56640,12 +56925,16 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         pvk_spv_fail(ctx, "push-constant buffer %u is also descriptor set %u", res->push_constant_buffer,
                      res->push_constant_buffer);
 
-    pvk_sb_printf(ctx, out, "/* Generated by PlasmaVK from SPIR-V. %s: %s */\n\n#include <metal_stdlib>\n%s\n"
-                            "using namespace metal;\n\n",
-                  ctx->model == PVK_SPV_ExecutionModelVertex     ? "Vertex function"
-                  : ctx->model == PVK_SPV_ExecutionModelFragment ? "Fragment function"
-                                                                 : "Kernel",
-                  kernel, ctx->use_rays ? "#include <metal_raytracing>\n" : "");
+    if (ctx->rays) /* a part of the pipeline's kernel, in a namespace of its own (pvk_msl_link_rays) */
+        pvk_sb_printf(ctx, out, "/* Generated by PlasmaVK from SPIR-V. Ray tracing stage 0x%x: %s */\n\n",
+                      (unsigned)res->stage, kernel);
+    else
+        pvk_sb_printf(ctx, out, "/* Generated by PlasmaVK from SPIR-V. %s: %s */\n\n#include <metal_stdlib>\n%s\n"
+                                "using namespace metal;\n\n",
+                      ctx->model == PVK_SPV_ExecutionModelVertex     ? "Vertex function"
+                      : ctx->model == PVK_SPV_ExecutionModelFragment ? "Fragment function"
+                                                                     : "Kernel",
+                      kernel, ctx->use_rays ? "#include <metal_raytracing>\n" : "");
     if (res->fast_math)
         pvk_sb_printf(ctx, out, "#define PVK_FAST_MATH 1 /* Vulkan's default floating-point environment */\n\n");
     if (contract)
@@ -56672,7 +56961,7 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
     }
     if (ctx->use_ia)
         pvk_sb_append(ctx, out, pvk_spv_ia_template, sizeof(pvk_spv_ia_template) - 1);
-    if (ctx->use_rays)
+    if (ctx->use_rays && !ctx->rays) /* (the pipeline's kernel has it once) */
         pvk_sb_append(ctx, out, pvk_spv_rays_template, sizeof(pvk_spv_rays_template) - 1);
     if (ctx->types.len)
         pvk_sb_append(ctx, out, ctx->types.data, ctx->types.len);
@@ -56837,6 +57126,338 @@ static inline VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_
     if (r != VK_SUCCESS)
         pvk_msl_result_free(vs);
     return r;
+}
+
+/* ---- Ray tracing pipelines (RAY TRACING PIPELINES) ----
+ *
+ * A ray tracing pipeline is one kernel. Each stage's module is translated
+ * to a function, pvk_stage, with its types and helpers (options->stage a
+ * ray tracing stage); pvk_msl_link_rays puts each in a namespace of its own
+ * (pvk_s<stage index>) between what they share:
+ *
+ *   pvk_rt_context   the launch: its id and size, the descriptor sets' and
+ *                    the push constants' addresses, the shader binding table
+ *                    (pvk_rt_args, which vkCmdTraceRaysKHR binds where
+ *                    kernels have their push constants, the push constants
+ *                    after it)
+ *   pvk_rt_ray       a ray being traced: what the built-in variables of the
+ *                    shaders it runs read, the running shader's record and
+ *                    hit attributes, an any-hit shader's verdict
+ *   pvk_rt_trace     OpTraceRayKHR: an intersection query (as ray queries
+ *                    use), whose candidates go to the any-hit and
+ *                    intersection shaders of their hit groups, and whose
+ *                    result to a closest-hit or the miss shader
+ *   pvk_rt_callable  OpExecuteCallableKHR
+ *   pvk_rt_report    OpReportIntersectionKHR
+ *   pvk_rt_raygen, pvk_rt_miss, pvk_rt_closest, pvk_rt_any,
+ *   pvk_rt_intersect, pvk_rt_call
+ *                    a switch each, from a shader group's handle to the
+ *                    stage function of the group's shader of that kind
+ *   pvk_rt_main      the kernel: a thread per ray generation shader
+ *                    invocation
+ *
+ * A shader group's handle is its index in the pipeline plus one, in the
+ * first four of its 32 bytes: a record whose handle is zero, or names a
+ * group without a shader of the kind wanted, runs nothing (an any-hit
+ * shader that does not run accepts the hit). Shaders call each other
+ * directly, recursion included: Metal bounds the depth of a compute
+ * pipeline's recursion with maxCallStackDepth, which vkCreateRayTracingPipelinesKHR
+ * sets from maxPipelineRayRecursionDepth (section 17). */
+
+struct pvk_msl_rays_stage {
+    const char *msl; /* its translation */
+    VkShaderStageFlagBits stage;
+};
+
+struct pvk_msl_rays_group {
+    uint32_t general, closest_hit, any_hit, intersection; /* stage indices, or VK_SHADER_UNUSED_KHR */
+};
+
+#define PVK_MSL_RAYS_ARGS_SIZE 64u /* sizeof(pvk_rt_args): the push constants follow it */
+
+/* pvk_rt_args */
+struct pvk_rays_args {
+    uint64_t raygen, miss, hit, callable; /* the record of the ray generation shader; the tables (0: none) */
+    uint32_t miss_stride, hit_stride, callable_stride;
+    uint32_t flags; /* ray flags of every trace (the pipeline's SKIP_TRIANGLES and SKIP_AABBS) */
+    uint32_t width, height, depth, pad;
+};
+
+static const char pvk_msl_rays_prelude[] =
+    "struct pvk_rt_raw\n{\n    ulong word;\n};\n\n"
+    "struct pvk_rt_args\n"
+    "{\n"
+    "    ulong raygen, miss, hit, callable;\n"
+    "    uint miss_stride, hit_stride, callable_stride, flags;\n"
+    "    uint width, height, depth, pad;\n"
+    "};\n\n"
+    "struct pvk_rt_context\n"
+    "{\n"
+    "    constant uchar* sets[8];\n"
+    "    constant uchar* push;\n"
+    "    constant pvk_rt_args* args;\n"
+    "    uint3 launch;\n"
+    "    uint3 size;\n"
+    "};\n\n"
+    "struct pvk_rt_ray\n"
+    "{\n"
+    "    float3 origin;\n"
+    "    float tmin;\n"
+    "    float3 direction;\n"
+    "    float tmax; /* the hit's T in hit shaders; in intersection shaders the closest hit's so far */\n"
+    "    float3 object_origin;\n"
+    "    float3 object_direction;\n"
+    "    float4x3 o2w;\n"
+    "    float4x3 w2o;\n"
+    "    uint flags, instance, custom, primitive, geometry, kind;\n"
+    "    uint action;   /* an any-hit shader's verdict: 0 accept, 1 ignore, 2 accept and end the ray */\n"
+    "    uint handle;   /* the candidate's hit group */\n"
+    "    uint opaque;   /* the candidate box is opaque: no any-hit shader runs */\n"
+    "    uint reported; /* an intersection shader's hit was accepted: tmax, kind and store are its */\n"
+    "    ulong record;  /* the running shader's record, past its handle */\n"
+    "    thread void* attr;    /* the hit's attributes */\n"
+    "    thread void* payload; /* the trace's payload */\n"
+    "    float4 store[2];      /* the attributes of the box hit last accepted */\n"
+    "};\n\n"
+    "static void pvk_rt_raygen(thread pvk_rt_context& rt, thread pvk_rt_ray& ray, uint handle, thread void* data);\n"
+    "static void pvk_rt_miss(thread pvk_rt_context& rt, thread pvk_rt_ray& ray, uint handle, thread void* data);\n"
+    "static void pvk_rt_closest(thread pvk_rt_context& rt, thread pvk_rt_ray& ray, uint handle, thread void* data);\n"
+    "static void pvk_rt_any(thread pvk_rt_context& rt, thread pvk_rt_ray& ray, uint handle, thread void* data);\n"
+    "static void pvk_rt_intersect(thread pvk_rt_context& rt, thread pvk_rt_ray& ray, uint handle, thread void* data);\n"
+    "static void pvk_rt_call(thread pvk_rt_context& rt, thread pvk_rt_ray& ray, uint handle, thread void* data);\n\n"
+    "static inline uint pvk_rt_handle(ulong record)\n"
+    "{\n"
+    "    return record ? *reinterpret_cast<const device uint*>(record) : 0u;\n"
+    "}\n\n"
+    ;
+static const char pvk_msl_rays_prelude2[] =
+    "static bool pvk_rt_report_hit(thread pvk_rt_context& rt, thread pvk_rt_ray& ray, float t, uint kind, thread void* attr)\n"
+    "{\n"
+    "    if (!(t >= ray.tmin && t <= ray.tmax) || ray.action == 2u)\n"
+    "        return false;\n"
+    "    float tmax = ray.tmax;\n"
+    "    uint old = ray.kind;\n"
+    "    ray.tmax = t;\n"
+    "    ray.kind = kind;\n"
+    "    if (!ray.opaque)\n"
+    "    {\n"
+    "        ray.attr = attr;\n"
+    "        ray.action = 0u;\n"
+    "        pvk_rt_any(rt, ray, ray.handle, ray.payload);\n"
+    "        if (ray.action == 1u)\n"
+    "        {\n"
+    "            ray.tmax = tmax;\n"
+    "            ray.kind = old;\n"
+    "            ray.action = 0u;\n"
+    "            return false;\n"
+    "        }\n"
+    "    }\n"
+    "    if (ray.flags & 4u)\n"
+    "        ray.action = 2u;\n"
+    "    ray.reported = 1u;\n"
+    "    return true;\n"
+    "}\n\n"
+    "template <typename T>\n"
+    "static inline bool pvk_rt_report(thread pvk_rt_context& rt, thread pvk_rt_ray& ray, float t, uint kind, thread T& attr)\n"
+    "{\n"
+    "    if (!pvk_rt_report_hit(rt, ray, t, kind, (thread void*)&attr))\n"
+    "        return false;\n"
+    "    *(thread T*)(thread void*)ray.store = attr;\n"
+    "    return true;\n"
+    "}\n\n"
+    "static inline bool pvk_rt_report(thread pvk_rt_context& rt, thread pvk_rt_ray& ray, float t, uint kind)\n"
+    "{\n"
+    "    return pvk_rt_report_hit(rt, ray, t, kind, (thread void*)ray.store);\n"
+    "}\n\n"
+    ;
+static const char pvk_msl_rays_prelude3[] =
+    "static void pvk_rt_trace(thread pvk_rt_context& rt, pvk_accel as, uint flags, uint mask, uint sbt_offset, uint sbt_stride,\n"
+    "                         uint miss, float3 origin, float tmin, float3 direction, float tmax, thread void* payload)\n"
+    "{\n"
+    "    constant pvk_rt_args& a = *rt.args;\n"
+    "    pvk_rt_ray ray;\n"
+    "    pvk_ray_query q;\n"
+    "    pvk_accel q_as;\n"
+    "    float2 bary;\n"
+    "    uint box_kind = 0u;\n"
+    "    flags |= a.flags;\n"
+    "    ray.origin = origin;\n"
+    "    ray.tmin = tmin;\n"
+    "    ray.direction = direction;\n"
+    "    ray.tmax = tmax;\n"
+    "    ray.flags = flags;\n"
+    "    ray.payload = payload;\n"
+    "    ray.action = 0u;\n"
+    "    pvk_rq_init(q, q_as, as, flags, mask, origin, tmin, direction, tmax);\n"
+    "    while (pvk_rq_proceed(q))\n"
+    "    {\n"
+    "        ray.instance = q.get_candidate_instance_id();\n"
+    "        ray.custom = q.get_candidate_user_instance_id();\n"
+    "        ray.primitive = q.get_candidate_primitive_id();\n"
+    "        ray.geometry = q.get_candidate_geometry_id();\n"
+    "        ray.object_origin = q.get_candidate_ray_origin();\n"
+    "        ray.object_direction = q.get_candidate_ray_direction();\n"
+    "        ray.o2w = q.get_candidate_object_to_world_transform();\n"
+    "        ray.w2o = q.get_candidate_world_to_object_transform();\n"
+    "        ulong record = a.hit ? a.hit + ulong(a.hit_stride) * ulong(pvk_rq_record_offset(q_as, ray.instance) +\n"
+    "                                                                   (sbt_offset & 15u) + ray.geometry * (sbt_stride & 15u))\n"
+    "                             : 0ul;\n"
+    "        ray.handle = pvk_rt_handle(record);\n"
+    "        ray.record = record + 32ul;\n"
+    "        ray.action = 0u;\n"
+    "        if (q.get_candidate_intersection_type() == raytracing::intersection_type::triangle)\n"
+    "        {\n"
+    "            float closest = ray.tmax;\n"
+    "            bary = q.get_candidate_triangle_barycentric_coord();\n"
+    "            ray.tmax = q.get_candidate_triangle_distance();\n"
+    "            ray.kind = q.is_candidate_triangle_front_facing() ? 0xfeu : 0xffu;\n"
+    "            ray.attr = (thread void*)&bary;\n"
+    "            pvk_rt_any(rt, ray, ray.handle, payload);\n"
+    "            if (ray.action == 1u)\n"
+    "                ray.tmax = closest;\n"
+    "            else\n"
+    "                q.commit_triangle_intersection();\n"
+    "            if (ray.action != 1u && (flags & 4u))\n"
+    "                ray.action = 2u;\n"
+    "        }\n"
+    "        else\n"
+    "        {\n"
+    "            ray.opaque = q.is_candidate_non_opaque_bounding_box() ? 0u : 1u;\n"
+    "            ray.reported = 0u;\n"
+    "            pvk_rt_intersect(rt, ray, ray.handle, payload);\n"
+    "            if (ray.reported)\n"
+    "            {\n"
+    "                q.commit_bounding_box_intersection(ray.tmax);\n"
+    "                box_kind = ray.kind;\n"
+    "            }\n"
+    "        }\n"
+    "        if (ray.action == 2u)\n"
+    "        {\n"
+    "            q.abort();\n"
+    "            break;\n"
+    "        }\n"
+    "    }\n"
+    ;
+static const char pvk_msl_rays_prelude4[] =
+    "    raytracing::intersection_type type = q.get_committed_intersection_type();\n"
+    "    if (type == raytracing::intersection_type::none)\n"
+    "    {\n"
+    "        ulong record = a.miss ? a.miss + ulong(a.miss_stride) * ulong(miss & 0xffffu) : 0ul;\n"
+    "        ray.tmax = tmax;\n"
+    "        ray.record = record + 32ul;\n"
+    "        pvk_rt_miss(rt, ray, pvk_rt_handle(record), payload);\n"
+    "        return;\n"
+    "    }\n"
+    "    ray.instance = q.get_committed_instance_id();\n"
+    "    ray.custom = q.get_committed_user_instance_id();\n"
+    "    ray.primitive = q.get_committed_primitive_id();\n"
+    "    ray.geometry = q.get_committed_geometry_id();\n"
+    "    ray.object_origin = q.get_committed_ray_origin();\n"
+    "    ray.object_direction = q.get_committed_ray_direction();\n"
+    "    ray.o2w = q.get_committed_object_to_world_transform();\n"
+    "    ray.w2o = q.get_committed_world_to_object_transform();\n"
+    "    ray.tmax = q.get_committed_distance();\n"
+    "    if (type == raytracing::intersection_type::triangle)\n"
+    "    {\n"
+    "        bary = q.get_committed_triangle_barycentric_coord();\n"
+    "        ray.kind = q.is_committed_triangle_front_facing() ? 0xfeu : 0xffu;\n"
+    "        ray.attr = (thread void*)&bary;\n"
+    "    }\n"
+    "    else\n"
+    "    {\n"
+    "        ray.kind = box_kind;\n"
+    "        ray.attr = (thread void*)ray.store;\n"
+    "    }\n"
+    "    if (flags & 8u)\n"
+    "        return;\n"
+    "    ulong record = a.hit ? a.hit + ulong(a.hit_stride) * ulong(pvk_rq_record_offset(q_as, ray.instance) +\n"
+    "                                                               (sbt_offset & 15u) + ray.geometry * (sbt_stride & 15u))\n"
+    "                         : 0ul;\n"
+    "    ray.record = record + 32ul;\n"
+    "    pvk_rt_closest(rt, ray, pvk_rt_handle(record), payload);\n"
+    "}\n\n"
+    "static void pvk_rt_callable(thread pvk_rt_context& rt, uint index, thread void* data)\n"
+    "{\n"
+    "    constant pvk_rt_args& a = *rt.args;\n"
+    "    ulong record = a.callable ? a.callable + ulong(a.callable_stride) * ulong(index) : 0ul;\n"
+    "    pvk_rt_ray ray;\n"
+    "    ray.record = record + 32ul;\n"
+    "    pvk_rt_call(rt, ray, pvk_rt_handle(record), data);\n"
+    "}\n\n";
+
+/* The kernel of a ray tracing pipeline from its stages' translations and
+ * its shader groups (above); set_mask: the descriptor sets any stage uses.
+ * The MSL (free() it), or NULL without memory. */
+static char *pvk_msl_link_rays(const struct pvk_msl_rays_stage *stages, uint32_t stage_count,
+                               const struct pvk_msl_rays_group *groups, uint32_t group_count, uint32_t set_mask)
+{
+    static const struct {
+        const char *name;
+        VkShaderStageFlagBits stage;
+    } kinds[] = {
+        { "pvk_rt_raygen", VK_SHADER_STAGE_RAYGEN_BIT_KHR },   { "pvk_rt_miss", VK_SHADER_STAGE_MISS_BIT_KHR },
+        { "pvk_rt_closest", VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR }, { "pvk_rt_any", VK_SHADER_STAGE_ANY_HIT_BIT_KHR },
+        { "pvk_rt_intersect", VK_SHADER_STAGE_INTERSECTION_BIT_KHR }, { "pvk_rt_call", VK_SHADER_STAGE_CALLABLE_BIT_KHR },
+    };
+    size_t cap = sizeof(pvk_spv_rays_template) + sizeof(pvk_msl_rays_prelude) + sizeof(pvk_msl_rays_prelude2) +
+                 sizeof(pvk_msl_rays_prelude3) + sizeof(pvk_msl_rays_prelude4) + 4096, len = 0;
+    uint32_t i, k, g, set;
+    char *out;
+
+    for (i = 0; i < stage_count; i++)
+        cap += strlen(stages[i].msl) + 64;
+    cap += (size_t)group_count * 4 * 96 + (size_t)PVK_MAX_BOUND_SETS * 160;
+    if (!(out = malloc(cap)))
+        return NULL;
+#define PVK_RAYS_PRINT(...) (len < cap ? (len += (size_t)snprintf(out + len, cap - len, __VA_ARGS__)) : 0)
+    PVK_RAYS_PRINT("/* Generated by PlasmaVK: the kernel of a ray tracing pipeline (RAY TRACING PIPELINES) */\n\n"
+                   "#include <metal_stdlib>\n#include <metal_raytracing>\n\nusing namespace metal;\n\n%s%s%s%s%s",
+                   pvk_spv_rays_template, pvk_msl_rays_prelude, pvk_msl_rays_prelude2, pvk_msl_rays_prelude3,
+                   pvk_msl_rays_prelude4);
+    for (i = 0; i < stage_count; i++)
+        PVK_RAYS_PRINT("namespace pvk_s%u\n{\n\n%s\n}\n\n", i, stages[i].msl);
+    for (k = 0; k < PVK_ARRAY_SIZE(kinds); k++) {
+        PVK_RAYS_PRINT("static void %s(thread pvk_rt_context& rt, thread pvk_rt_ray& ray, uint handle, thread void* data)\n"
+                       "{\n    switch (handle)\n    {\n",
+                       kinds[k].name);
+        for (g = 0; g < group_count; g++) {
+            const uint32_t shaders[4] = { groups[g].general, groups[g].closest_hit, groups[g].any_hit,
+                                          groups[g].intersection };
+            for (i = 0; i < 4; i++)
+                if (shaders[i] < stage_count && stages[shaders[i]].stage == kinds[k].stage)
+                    PVK_RAYS_PRINT("    case %uu:\n        pvk_s%u::pvk_stage(rt, ray, data);\n        break;\n", g + 1,
+                                   shaders[i]);
+        }
+        PVK_RAYS_PRINT("    default:\n        break;\n    }\n}\n\n");
+    }
+    PVK_RAYS_PRINT("kernel void pvk_rt_main(");
+    for (set = 0; set < PVK_MAX_BOUND_SETS; set++)
+        if (set_mask & (1u << set))
+            PVK_RAYS_PRINT("constant pvk_rt_raw& pvk_set%u [[buffer(%u)]],\n                        ", set, set);
+    PVK_RAYS_PRINT("constant pvk_rt_args& pvk_args [[buffer(%u)]],\n                        "
+                   "uint3 pvk_id [[thread_position_in_grid]])\n{\n"
+                   "    if (pvk_id.x >= pvk_args.width || pvk_id.y >= pvk_args.height || pvk_id.z >= pvk_args.depth)\n"
+                   "        return;\n"
+                   "    pvk_rt_context rt;\n",
+                   PVK_MSL_PUSH_CONSTANT_BUFFER);
+    for (set = 0; set < PVK_MAX_BOUND_SETS; set++)
+        if (set_mask & (1u << set))
+            PVK_RAYS_PRINT("    rt.sets[%u] = (constant uchar*)&pvk_set%u;\n", set, set);
+    PVK_RAYS_PRINT("    rt.push = (constant uchar*)&pvk_args + %u;\n"
+                   "    rt.args = &pvk_args;\n"
+                   "    rt.launch = pvk_id;\n"
+                   "    rt.size = uint3(pvk_args.width, pvk_args.height, pvk_args.depth);\n"
+                   "    pvk_rt_ray ray;\n"
+                   "    ray.record = pvk_args.raygen + %uul;\n"
+                   "    pvk_rt_raygen(rt, ray, pvk_rt_handle(pvk_args.raygen), nullptr);\n"
+                   "}\n",
+                   PVK_MSL_RAYS_ARGS_SIZE, PVK_MSL_RAYS_HANDLE_SIZE);
+#undef PVK_RAYS_PRINT
+    if (len >= cap) { /* (the estimate above covers it) */
+        free(out);
+        return NULL;
+    }
+    return out;
 }
 
 /* ==========================================================================
@@ -57504,6 +58125,8 @@ struct pvk_pipeline {
     bool dispatch_base;            /* reads the base workgroup at dispatch_base_offset */
     uint32_t dispatch_base_offset; /* in the push-constant buffer */
     uint32_t set_mask;             /* bit N: the shader reads descriptor set N */
+    uint32_t ray_groups;           /* ray tracing: its shader groups, whose handles are 1 .. ray_groups */
+    uint32_t ray_flags;            /* ray tracing: ray flags of every trace (SKIP_TRIANGLES, SKIP_AABBS) */
     struct pvk_gfx_pipeline *gfx;  /* graphics pipelines: their state (Graphics, below) */
     id mtl_pipeline_snorm;         /* graphics with gfx->int_colors: the SNORM variant (section 17) */
     uint32_t scan;                 /* graphics: PVK_SCAN_* binding it gives a command buffer */
@@ -57639,9 +58262,9 @@ enum pvk_command_buffer_state { PVK_CB_INITIAL, PVK_CB_RECORDING, PVK_CB_EXECUTA
 /* The push descriptor set of each bind point (0: graphics, 1: compute),
  * as the pushes so far left it (see "Descriptor sets" below). */
 struct pvk_push_descriptors {
-    const struct pvk_descriptor_set_layout *layout[2]; /* NULL: undefined */
-    uint32_t set[2];
-    unsigned char table[2][PVK_PUSH_SET_SIZE];
+    const struct pvk_descriptor_set_layout *layout[3]; /* NULL: undefined */
+    uint32_t set[3];
+    unsigned char table[3][PVK_PUSH_SET_SIZE];
 };
 
 struct pvk_cb_render;
@@ -57771,7 +58394,7 @@ static void pvk_command_buffer_reset(struct pvk_command_buffer *cb, bool release
         pvk_free(pvk_pool_alloc(pool), cb->push);
         cb->push = NULL;
     } else if (cb->push) { /* a new recording starts with undefined push descriptors */
-        cb->push->layout[0] = cb->push->layout[1] = NULL;
+        cb->push->layout[0] = cb->push->layout[1] = cb->push->layout[2] = NULL;
     }
 }
 
@@ -58035,6 +58658,7 @@ enum pvk_cmd_op {
     PVK_CMD_ACCEL_BUILD,       /* struct pvk_cmd_accel_build, then its builds and their geometries */
     PVK_CMD_ACCEL_COPY,        /* struct pvk_cmd_accel_copy */
     PVK_CMD_ACCEL_QUERY,       /* struct pvk_cmd_accel_query, then its acceleration structures */
+    PVK_CMD_TRACE_RAYS,        /* struct pvk_cmd_trace_rays */
     /* Debug labels (Labels, below) */
     PVK_CMD_LABEL              /* struct pvk_cmd_label, then the text */
 };
@@ -58103,6 +58727,8 @@ struct pvk_cmd_execute {
 /* Bind points of a descriptor set packet: bit 0 graphics, bit 1 compute. */
 #define PVK_BIND_GRAPHICS 1u
 #define PVK_BIND_COMPUTE 2u
+#define PVK_BIND_RAYS 4u
+#define PVK_BIND_POINTS 3u
 
 struct pvk_cmd_bind_set {
     struct pvk_cmd hdr;
@@ -58445,13 +59071,15 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBindPipeline(VkCommandBuffer commandBuffer, VkPi
 {
     struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
     struct pvk_cmd_bind_pipeline *c;
-    if (pipelineBindPoint != VK_PIPELINE_BIND_POINT_COMPUTE && pipelineBindPoint != VK_PIPELINE_BIND_POINT_GRAPHICS)
-        return; /* no ray tracing or other bind points */
+    if (pipelineBindPoint != VK_PIPELINE_BIND_POINT_COMPUTE && pipelineBindPoint != VK_PIPELINE_BIND_POINT_GRAPHICS &&
+        pipelineBindPoint != VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
+        return; /* no other bind points */
     if (pvk_cb_debug(cb)) {
         if (!pvk_live_check(cb->pool->device, VK_OBJECT_TYPE_PIPELINE, (uint64_t)(uintptr_t)pipeline,
                             "VUID-vkCmdBindPipeline-pipeline-parameter", "vkCmdBindPipeline"))
             return;
-        cb->debug_pipeline[pipelineBindPoint == VK_PIPELINE_BIND_POINT_COMPUTE] = pipeline;
+        if (pipelineBindPoint != VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
+            cb->debug_pipeline[pipelineBindPoint == VK_PIPELINE_BIND_POINT_COMPUTE] = pipeline;
     }
     c = pvk_cmd_append(cb, PVK_CMD_BIND_PIPELINE, sizeof(*c));
     if (c)
@@ -58598,16 +59226,21 @@ VKAPI_ATTR void VKAPI_CALL vkCmdExecuteCommands(VkCommandBuffer commandBuffer, u
 
 static uint32_t pvk_bind_point_bits(VkPipelineBindPoint bind_point)
 {
-    return bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS ? PVK_BIND_GRAPHICS
-         : bind_point == VK_PIPELINE_BIND_POINT_COMPUTE  ? PVK_BIND_COMPUTE
-                                                         : 0;
+    return bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS          ? PVK_BIND_GRAPHICS
+         : bind_point == VK_PIPELINE_BIND_POINT_COMPUTE         ? PVK_BIND_COMPUTE
+         : bind_point == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR ? PVK_BIND_RAYS
+                                                                : 0;
 }
 
 /* The bind points the stages of the *2 commands name. */
 static uint32_t pvk_stage_bind_points(VkShaderStageFlags stages)
 {
     VkShaderStageFlags graphics = VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
-    return ((stages & VK_SHADER_STAGE_COMPUTE_BIT) ? PVK_BIND_COMPUTE : 0) | ((stages & graphics) ? PVK_BIND_GRAPHICS : 0);
+    VkShaderStageFlags rays = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
+                              VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR |
+                              VK_SHADER_STAGE_INTERSECTION_BIT_KHR | VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+    return ((stages & VK_SHADER_STAGE_COMPUTE_BIT) ? PVK_BIND_COMPUTE : 0) | ((stages & graphics) ? PVK_BIND_GRAPHICS : 0) |
+           ((stages & rays) ? PVK_BIND_RAYS : 0);
 }
 
 static void pvk_cmd_bind_sets(struct pvk_command_buffer *cb, uint32_t bind_points, uint32_t first, uint32_t count,
@@ -58717,7 +59350,7 @@ static void pvk_cmd_push(struct pvk_command_buffer *cb, uint32_t bind_points, co
 {
     const struct pvk_descriptor_set_layout *layout = pl && set < pl->set_count ? pl->sets[set] : NULL;
     uint32_t bp, i;
-    for (bp = 0; bp < 2; bp++) {
+    for (bp = 0; bp < PVK_BIND_POINTS; bp++) {
         char *table;
         if (!(bind_points & (1u << bp)) || !(table = pvk_push_table(cb, bp, set, layout)))
             continue;
@@ -61652,6 +62285,78 @@ VKAPI_ATTR void VKAPI_CALL vkCmdWriteAccelerationStructuresPropertiesKHR(
     }
 }
 
+/* ---- Ray tracing pipelines ----
+ *
+ * vkCmdTraceRaysKHR is a dispatch of the pipeline's kernel (section 13, RAY
+ * TRACING PIPELINES), a thread per ray generation shader invocation; the
+ * shader binding table goes with it as addresses (struct pvk_rays_args).
+ * vkCmdTraceRaysIndirectKHR is an indirect dispatch, its threadgroups
+ * counted from the command's width, height and depth on the GPU
+ * (pvk_encode_trace_rays). The stack size is not state: Metal sizes the
+ * stack from the recursion depth the pipeline was made for (section 17). */
+
+struct pvk_cmd_trace_rays {
+    struct pvk_cmd hdr;
+    struct pvk_rays_args args; /* (width, height and depth 0 with indirect) */
+    uint64_t indirect;         /* the address of a VkTraceRaysIndirectCommandKHR, or 0 */
+};
+
+static void pvk_cmd_trace_rays(VkCommandBuffer commandBuffer, const VkStridedDeviceAddressRegionKHR *raygen,
+                               const VkStridedDeviceAddressRegionKHR *miss, const VkStridedDeviceAddressRegionKHR *hit,
+                               const VkStridedDeviceAddressRegionKHR *callable, uint32_t width, uint32_t height,
+                               uint32_t depth, VkDeviceAddress indirect)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    struct pvk_cmd_trace_rays *c = pvk_cmd_append(cb, PVK_CMD_TRACE_RAYS, sizeof(*c));
+    if (!c)
+        return;
+    memset(&c->args, 0, sizeof(c->args));
+    c->args.raygen = raygen ? raygen->deviceAddress : 0;
+    c->args.miss = miss && miss->size ? miss->deviceAddress : 0;
+    c->args.hit = hit && hit->size ? hit->deviceAddress : 0;
+    c->args.callable = callable && callable->size ? callable->deviceAddress : 0;
+    c->args.miss_stride = miss ? (uint32_t)miss->stride : 0;
+    c->args.hit_stride = hit ? (uint32_t)hit->stride : 0;
+    c->args.callable_stride = callable ? (uint32_t)callable->stride : 0;
+    c->args.width = width;
+    c->args.height = height;
+    c->args.depth = depth;
+    c->indirect = indirect;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdTraceRaysKHR(VkCommandBuffer commandBuffer,
+                                             const VkStridedDeviceAddressRegionKHR *pRaygenShaderBindingTable,
+                                             const VkStridedDeviceAddressRegionKHR *pMissShaderBindingTable,
+                                             const VkStridedDeviceAddressRegionKHR *pHitShaderBindingTable,
+                                             const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable,
+                                             uint32_t width, uint32_t height, uint32_t depth)
+{
+    if (!width || !height || !depth)
+        return;
+    pvk_cmd_trace_rays(commandBuffer, pRaygenShaderBindingTable, pMissShaderBindingTable, pHitShaderBindingTable,
+                       pCallableShaderBindingTable, width, height, depth, 0);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdTraceRaysIndirectKHR(VkCommandBuffer commandBuffer,
+                                                     const VkStridedDeviceAddressRegionKHR *pRaygenShaderBindingTable,
+                                                     const VkStridedDeviceAddressRegionKHR *pMissShaderBindingTable,
+                                                     const VkStridedDeviceAddressRegionKHR *pHitShaderBindingTable,
+                                                     const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable,
+                                                     VkDeviceAddress indirectDeviceAddress)
+{
+    if (!indirectDeviceAddress)
+        return;
+    pvk_cmd_trace_rays(commandBuffer, pRaygenShaderBindingTable, pMissShaderBindingTable, pHitShaderBindingTable,
+                       pCallableShaderBindingTable, 0, 0, 0, indirectDeviceAddress);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdSetRayTracingPipelineStackSizeKHR(VkCommandBuffer commandBuffer,
+                                                                  uint32_t pipelineStackSize)
+{
+    (void)commandBuffer;
+    (void)pipelineStackSize;
+}
+
 /* ==========================================================================
  * 16. Queue submission and synchronization
  *
@@ -62662,10 +63367,11 @@ struct pvk_encoder {
     pvk_MTLGPUAddress push_address; /* ... their address (struct pvk_icb_table) */
     /* push constants, then (dispatch base pipelines) the base workgroup */
     unsigned char push[PVK_MAX_PUSH_CONSTANTS_SIZE + 16];
-    /* Descriptor set tables per bind point (0: graphics, 1: compute), and
+    /* Descriptor set tables per bind point (0: graphics, 1: compute, 2: ray tracing), and
      * those the argument table holds at indices 0.. (0: unknown). */
-    pvk_MTLGPUAddress sets[2][PVK_MAX_BOUND_SETS];
+    pvk_MTLGPUAddress sets[PVK_BIND_POINTS][PVK_MAX_BOUND_SETS];
     pvk_MTLGPUAddress sets_bound[PVK_MAX_BOUND_SETS];
+    struct pvk_pipeline *ray_pipeline; /* the ray tracing bind point's */
     pvk_MTLGPUAddress draw_indices; /* pvk_draw_indices, once a draw needed it (0: not yet) */
     /* Occlusion queries made available since the last pvk_encode_query_flush */
     struct pvk_query_range queries[16];
@@ -63187,6 +63893,7 @@ static pvk_MTLStages pvk_barrier_stages(VkPipelineStageFlags2 stages, bool src)
     const VkPipelineStageFlags2 accel = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
                                         VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR;
     const VkPipelineStageFlags2 known = input | vertex | fragment | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
                                         VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT | PVK_TRANSFER_STAGES | accel;
     pvk_MTLStages m = 0;
     stages &= ~(VkPipelineStageFlags2)VK_PIPELINE_STAGE_2_HOST_BIT;
@@ -63199,8 +63906,8 @@ static pvk_MTLStages pvk_barrier_stages(VkPipelineStageFlags2 stages, bool src)
         m |= PVK_MTLStageVertex;
     if (stages & fragment)
         m |= PVK_MTLStageFragment | PVK_MTLStageTile;
-    if (stages & VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
-        m |= PVK_MTLStageDispatch;
+    if (stages & (VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR))
+        m |= PVK_MTLStageDispatch; /* (a ray tracing pipeline is a kernel) */
     if (stages & VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT) /* (no geometry, tessellation or mesh shaders) */
         m |= PVK_STAGES_RENDER | PVK_MTLStageDispatch;
     if (stages & PVK_TRANSFER_STAGES)
@@ -63516,7 +64223,7 @@ static void pvk_encoder_set_table(struct pvk_encoder *e, uint32_t bind_points, u
                                   pvk_MTLGPUAddress address)
 {
     uint32_t bp;
-    for (bp = 0; bp < 2; bp++)
+    for (bp = 0; bp < PVK_BIND_POINTS; bp++)
         if (bind_points & (1u << bp))
             e->sets[bp][index] = address;
 }
@@ -69483,6 +70190,112 @@ static void pvk_encode_accel_query(struct pvk_encoder *e, const struct pvk_cmd_a
     pvk_encoder_query_available(e, c->pool, c->first, c->count);
 }
 
+/* ---- Ray tracing commands ----
+ *
+ * vkCmdTraceRaysKHR: a dispatch of the bound ray tracing pipeline's kernel
+ * (section 13, RAY TRACING PIPELINES) over the launch, with the ray tracing
+ * bind point's descriptor sets and, where kernels have their push
+ * constants, the shader binding table (struct pvk_rays_args) and the push
+ * constants after it. Threadgroups are 8 x 8 threads, or 64 x 1 for a
+ * launch one invocation high: the kernel ends the threads past the launch.
+ * vkCmdTraceRaysIndirectKHR: a kernel first reads the launch's size from
+ * the application's buffer into the arguments, and the threadgroups it
+ * takes into words after them, which the dispatch then reads. */
+
+struct pvk_rays_indirect_args {
+    uint64_t command; /* VkTraceRaysIndirectCommandKHR */
+    uint64_t size;    /* pvk_rays_args.width, height, depth */
+    uint64_t groups;  /* 3 words: threadgroups of 8 x 8 x 1 */
+    uint64_t pad;
+};
+
+static const char pvk_rays_indirect_msl[] =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n\n"
+    "struct pvk_rays_indirect_args\n{\n    const device uint* command;\n    device uint* size;\n    device uint* groups;\n"
+    "    ulong pad;\n};\n\n"
+    "kernel void pvk_rays_indirect(constant pvk_rays_indirect_args &a [[buffer(30)]], uint i [[thread_position_in_grid]])\n"
+    "{\n"
+    "    if (i != 0u)\n"
+    "        return;\n"
+    "    uint3 size = uint3(a.command[0], a.command[1], a.command[2]);\n"
+    "    a.size[0] = size.x;\n"
+    "    a.size[1] = size.y;\n"
+    "    a.size[2] = size.z;\n"
+    "    a.groups[0] = (size.x + 7u) / 8u;\n"
+    "    a.groups[1] = (size.y + 7u) / 8u;\n"
+    "    a.groups[2] = size.z;\n"
+    "}\n";
+
+static void pvk_encode_trace_rays(struct pvk_encoder *e, const struct pvk_cmd_trace_rays *c)
+{
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    struct pvk_pipeline *p = e->ray_pipeline;
+    struct pvk_rays_args *a;
+    pvk_MTLGPUAddress address;
+    pvk_MTLSize groups, threads;
+    uint32_t n, left, push = p ? (p->push_size + 15u) & ~15u : 0;
+    id enc;
+
+    if (!p || !p->mtl_pipeline || !(enc = pvk_encoder_get(e)))
+        return;
+    if (!(a = pvk_upload(e, PVK_MSL_RAYS_ARGS_SIZE + push + 16, 16, NULL, NULL, &address)))
+        return;
+    *a = c->args;
+    a->flags = p->ray_flags;
+    memcpy((char *)a + PVK_MSL_RAYS_ARGS_SIZE, e->push, push);
+    memset((char *)a + PVK_MSL_RAYS_ARGS_SIZE + push, 0, 16);
+    threads.width = threads.height = 8;
+    threads.depth = 1;
+    if (c->indirect) {
+        struct pvk_rays_indirect_args ia, *up;
+        pvk_MTLGPUAddress at;
+        pvk_MTLSize one;
+        id pso = pvk_internal_kernel(e->device, &lock, &e->device->rays_kernel, pvk_rays_indirect_msl,
+                                     "pvk_rays_indirect", 1, "ray tracing");
+        if (!pso) {
+            e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+            return;
+        }
+        if (!(up = pvk_upload(e, sizeof(ia), 16, NULL, NULL, &at)))
+            return;
+        ia.command = c->indirect;
+        ia.size = address + offsetof(struct pvk_rays_args, width);
+        ia.groups = address + PVK_MSL_RAYS_ARGS_SIZE + push;
+        ia.pad = 0;
+        *up = ia;
+        pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, pso);
+        pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, at, PVK_MSL_PUSH_CONSTANT_BUFFER);
+        one.width = one.height = one.depth = 1;
+        pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(enc, one, one);
+        pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
+            enc, PVK_MTLStageDispatch, PVK_MTLStageDispatch, e->queue->device->visibility);
+    } else if (c->args.height == 1 && c->args.depth == 1) {
+        threads.width = 64;
+        threads.height = 1;
+    }
+    pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, p->mtl_pipeline);
+    e->pipeline_dirty = true; /* (the compute bind point's is no longer set) */
+    for (left = p->set_mask & ((1u << PVK_MAX_BOUND_SETS) - 1); left; left &= left - 1) {
+        n = (uint32_t)__builtin_ctz(left);
+        if (e->sets_bound[n] != e->sets[2][n]) {
+            pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, e->sets[2][n], n);
+            e->sets_bound[n] = e->sets[2][n];
+        }
+    }
+    pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+    e->push_bound = 0;
+    if (c->indirect) {
+        pvk_MTL4ComputeCommandEncoder_dispatchThreadgroupsWithIndirectBuffer_threadsPerThreadgroup(
+            enc, address + PVK_MSL_RAYS_ARGS_SIZE + push, threads);
+        return;
+    }
+    groups.width = (c->args.width + threads.width - 1) / threads.width;
+    groups.height = (c->args.height + threads.height - 1) / threads.height;
+    groups.depth = c->args.depth;
+    pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(enc, groups, threads);
+}
+
 /* Room for n more event notes; false when out of memory. */
 static bool pvk_notes_event_room(const VkAllocationCallbacks *alloc, struct pvk_notes *q, uint32_t n)
 {
@@ -69593,6 +70406,8 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
                 struct pvk_pipeline *p = ((const struct pvk_cmd_bind_pipeline *)c)->pipeline;
                 if (p && p->bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS) {
                     pvk_encode_bind_graphics(e, p);
+                } else if (p && p->bind_point == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR) {
+                    e->ray_pipeline = p;
                 } else if (e->pipeline != p) {
                     e->pipeline = p;
                     e->pipeline_dirty = true;
@@ -69718,6 +70533,9 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
                 break;
             case PVK_CMD_ACCEL_QUERY:
                 pvk_encode_accel_query(e, (const struct pvk_cmd_accel_query *)c);
+                break;
+            case PVK_CMD_TRACE_RAYS:
+                pvk_encode_trace_rays(e, (const struct pvk_cmd_trace_rays *)c);
                 break;
             case PVK_CMD_LABEL:
                 pvk_encode_label(e, (const struct pvk_cmd_label *)c);
@@ -72034,6 +72852,8 @@ static void pvk_device_finish(struct pvk_device *device)
     }
     pvk_release(device->fill_pipeline);
     device->fill_pipeline = NULL;
+    pvk_release(device->rays_kernel);
+    device->rays_kernel = NULL;
     for (i = 0; i < PVK_ARRAY_SIZE(device->accel_kernels); i++) {
         pvk_release(device->accel_kernels[i]);
         device->accel_kernels[i] = NULL;
@@ -74223,6 +75043,263 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateComputePipelines(VkDevice device, VkPipel
             break;
     }
     return result;
+}
+
+/* ---- Ray tracing pipelines ----
+ *
+ * A ray tracing pipeline is a Metal compute pipeline whose kernel holds
+ * every stage (section 13, RAY TRACING PIPELINES): the stages are
+ * translated one by one, specialization constants baked in (two stages may
+ * give one SpecId two values), and linked with the shader groups into one
+ * MSL source. Its shaders call each other, and recurse as deep as
+ * maxPipelineRayRecursionDepth lets rays (and, with callable shaders,
+ * PVK_RAYS_CALLABLE_DEPTH calls deeper): maxCallStackDepth, Metal's bound
+ * on a compute pipeline's recursion. Calls past it do not happen, as
+ * Vulkan leaves them undefined.
+ *
+ * A shader group's handle is its index plus one in 32 bytes (the first
+ * four), so handles need no pipeline to be made and none can be replayed
+ * into another pipeline. Stack sizes mean nothing here: every shader's is
+ * reported as PVK_RAYS_STACK_SIZE and vkCmdSetRayTracingPipelineStackSizeKHR
+ * changes nothing. Pipeline libraries, deferred operations that defer and
+ * the pipeline cache are not used: the kernel is compiled when the pipeline
+ * is created, each time. */
+
+#define PVK_RAYS_CALLABLE_DEPTH 8u
+#define PVK_RAYS_STACK_SIZE 256u
+
+/* The compute pipeline state (retained) of kernel pvk_rt_main of a library,
+ * its recursion bounded at depth; NULL with a message in error[]. */
+static id pvk_library_rays(struct pvk_device *device, id library, unsigned long depth, const char *label, char *error,
+                           size_t error_size)
+{
+    id mtl = device->physical_device->mtl_device, function, desc = NULL, pso = NULL, err = NULL;
+    void *pool = objc_autoreleasePoolPush(); /* strings, NSErrors */
+    function = pvk_MTLLibrary_newFunctionWithName(library, pvk_NSString_stringWithUTF8String("pvk_rt_main"));
+    if (function)
+        desc = pvk_MTLComputePipelineDescriptor_new();
+    if (desc) {
+        pvk_MTLComputePipelineDescriptor_setComputeFunction(desc, function);
+        pvk_MTLComputePipelineDescriptor_setMaxTotalThreadsPerThreadgroup(desc, 64);
+        pvk_MTLComputePipelineDescriptor_setMaxCallStackDepth(desc, depth);
+        if (label)
+            pvk_MTLComputePipelineDescriptor_setLabel(desc, pvk_NSString_stringWithUTF8String(label));
+        pso = pvk_MTLDevice_newComputePipelineStateWithDescriptor_options_reflection_error(
+            mtl, desc, PVK_MTLPipelineOptionNone, NULL, &err);
+    }
+    if (!pso)
+        snprintf(error, error_size, "%s", err ? pvk_ns_utf8(pvk_NSError_localizedDescription(err))
+                                             : "Metal could not compile the kernel");
+    pvk_release(desc);
+    pvk_release(function);
+    objc_autoreleasePoolPop(pool);
+    return pso;
+}
+
+static VkResult pvk_rays_pipeline_create(struct pvk_device *device, const VkRayTracingPipelineCreateInfoKHR *info,
+                                         const VkAllocationCallbacks *alloc, VkPipeline *pPipeline)
+{
+    const struct pvk_pipeline_layout *layout = (const struct pvk_pipeline_layout *)info->layout;
+    VkPipelineCreateFlags2 flags = pvk_pipeline_flags(info->flags, info->pNext);
+    struct pvk_msl_set_layout sets[PVK_MAX_BOUND_SETS];
+    struct pvk_msl_binding *bindings = NULL;
+    struct pvk_msl_ycbcr_binding *ycbcr = NULL;
+    struct pvk_msl_options options;
+    struct pvk_shader_entry **translated = NULL;
+    struct pvk_msl_rays_stage *stages = NULL;
+    struct pvk_msl_rays_group *groups = NULL;
+    struct pvk_pipeline *pipeline;
+    uint32_t i, n = 0, set_mask = 0, push_size = 0, depth;
+    bool callable = false;
+    char error[256], label[96];
+    char *source = NULL;
+    id library = NULL, pso = NULL;
+    VkResult result = VK_SUCCESS;
+    uint64_t start = pvk_clock_ns(CLOCK_UPTIME_RAW);
+
+    *pPipeline = VK_NULL_HANDLE;
+    if (info->pLibraryInfo && info->pLibraryInfo->libraryCount) {
+        pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-ray-tracing-pipeline-library", VK_OBJECT_TYPE_DEVICE, 0,
+                 "vkCreateRayTracingPipelinesKHR: pipeline libraries are not supported (VK_KHR_pipeline_library)");
+        return VK_ERROR_UNKNOWN;
+    }
+    if (flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)
+        return VK_PIPELINE_COMPILE_REQUIRED; /* (always compiled) */
+    translated = pvk_alloc(alloc, sizeof(*translated) * (info->stageCount + 1), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+    stages = pvk_alloc(alloc, sizeof(*stages) * (info->stageCount + 1), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+    groups = pvk_alloc(alloc, sizeof(*groups) * (info->groupCount + 1), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+    if (!translated || !stages || !groups)
+        result = VK_ERROR_OUT_OF_HOST_MEMORY;
+    memset(&options, 0, sizeof(options));
+    options.image_1d_as_2d = true; /* 1D image views are 2D textures of height 1 (section 11) */
+    if (result == VK_SUCCESS && layout) { /* the shaders' sets must be the layout's */
+        result = pvk_msl_set_layouts(layout, alloc, sets, &bindings);
+        if (result == VK_SUCCESS)
+            result = pvk_msl_ycbcr_bindings(layout, alloc, &options, &ycbcr);
+        options.set_layouts = sets;
+        options.set_layout_count = layout->set_count;
+    }
+    for (i = 0; i < info->stageCount && result == VK_SUCCESS; i++) {
+        const VkPipelineShaderStageCreateInfo *stage = &info->pStages[i];
+        const struct pvk_msl_result *res;
+        const uint32_t *code;
+        size_t words;
+        uint64_t hash[2];
+        pvk_stage_code(stage, &code, &words, hash);
+        options.specialization = stage->pSpecializationInfo;
+        options.stage = stage->stage;
+        pvk_pipeline_robustness(device, info->pNext, stage->pNext, &options);
+        result = pvk_stage_translate(device, code, words, hash, stage->pName, &options, &translated[n], error,
+                                     sizeof(error));
+        if (result != VK_SUCCESS) {
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-translation", VK_OBJECT_TYPE_SHADER_MODULE,
+                     (uint64_t)(uintptr_t)stage->module,
+                     "vkCreateRayTracingPipelinesKHR: cannot translate the shader of stage %u: %s", i, error);
+            result = result == VK_ERROR_OUT_OF_HOST_MEMORY ? result : VK_ERROR_UNKNOWN;
+            break;
+        }
+        res = &translated[n++]->res;
+        if (res->has_push_constants && res->push_constant_offset + res->push_constant_size > PVK_MAX_PUSH_CONSTANTS_SIZE) {
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-translation", VK_OBJECT_TYPE_SHADER_MODULE,
+                     (uint64_t)(uintptr_t)stage->module,
+                     "vkCreateRayTracingPipelinesKHR: push constants beyond maxPushConstantsSize");
+            result = VK_ERROR_UNKNOWN;
+            break;
+        }
+        stages[i].msl = res->msl;
+        stages[i].stage = stage->stage;
+        set_mask |= res->set_mask;
+        if (pvk_push_size(res) > push_size)
+            push_size = pvk_push_size(res);
+        callable |= stage->stage == VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+    }
+    pvk_free(alloc, bindings);
+    pvk_free(alloc, ycbcr);
+    for (i = 0; i < info->groupCount && result == VK_SUCCESS; i++) {
+        const VkRayTracingShaderGroupCreateInfoKHR *g = &info->pGroups[i];
+        bool general = g->type == VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        groups[i].general = general ? g->generalShader : VK_SHADER_UNUSED_KHR;
+        groups[i].closest_hit = general ? VK_SHADER_UNUSED_KHR : g->closestHitShader;
+        groups[i].any_hit = general ? VK_SHADER_UNUSED_KHR : g->anyHitShader;
+        groups[i].intersection = g->type == VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR
+                                     ? g->intersectionShader
+                                     : VK_SHADER_UNUSED_KHR;
+    }
+    if (result == VK_SUCCESS && !(source = pvk_msl_link_rays(stages, info->stageCount, groups, info->groupCount, set_mask)))
+        result = VK_ERROR_OUT_OF_HOST_MEMORY;
+    if (result == VK_SUCCESS) {
+        depth = info->maxPipelineRayRecursionDepth > PVK_MAX_RAY_RECURSION ? PVK_MAX_RAY_RECURSION
+                                                                           : info->maxPipelineRayRecursionDepth;
+        depth += (callable ? PVK_RAYS_CALLABLE_DEPTH : 0) + 1;
+        snprintf(label, sizeof(label), "VkPipeline (ray tracing, %u stages, %u groups)", info->stageCount,
+                 info->groupCount);
+        library = pvk_library_get(device, source, false, error, sizeof(error));
+        if (library)
+            pso = pvk_library_rays(device, library, depth, label, error, sizeof(error));
+        if (!pso) {
+            pvk_logd(device, PVK_LOG_ERROR, "PlasmaVK-shader-compilation", VK_OBJECT_TYPE_DEVICE, 0,
+                     "vkCreateRayTracingPipelinesKHR: %s", error);
+            pvk_logd(device, PVK_LOG_DEBUG, "PlasmaVK-shader-msl", VK_OBJECT_TYPE_DEVICE, 0, "MSL:\n%s", source);
+            result = VK_ERROR_UNKNOWN;
+        }
+        pvk_release(library);
+    }
+    for (i = 0; i < n; i++)
+        pvk_stage_put(device, translated[i]);
+    free(source);
+    pvk_free(alloc, translated);
+    pvk_free(alloc, stages);
+    pvk_free(alloc, groups);
+    if (result != VK_SUCCESS)
+        return result;
+
+    pipeline = pvk_alloc(alloc, sizeof(*pipeline), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+    if (!pipeline) {
+        pvk_release(pso);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    pipeline->bind_point = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
+    pipeline->mtl_pipeline = pso;
+    pipeline->threads.width = pipeline->threads.height = 8;
+    pipeline->threads.depth = 1;
+    pipeline->push_size = push_size;
+    pipeline->set_mask = set_mask;
+    pipeline->ray_groups = info->groupCount;
+    pipeline->ray_flags = ((flags & VK_PIPELINE_CREATE_2_RAY_TRACING_SKIP_TRIANGLES_BIT_KHR) ? 0x100u : 0) |
+                          ((flags & VK_PIPELINE_CREATE_2_RAY_TRACING_SKIP_AABBS_BIT_KHR) ? 0x200u : 0);
+    pvk_creation_feedback(info->pNext, start, false);
+    *pPipeline = (VkPipeline)pipeline;
+    return VK_SUCCESS;
+}
+
+/* The operation is not deferred: the pipelines are made before this
+ * returns (section 9, DEFERRED OPERATIONS). */
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateRayTracingPipelinesKHR(VkDevice device, VkDeferredOperationKHR deferredOperation,
+                                                              VkPipelineCache pipelineCache, uint32_t createInfoCount,
+                                                              const VkRayTracingPipelineCreateInfoKHR *pCreateInfos,
+                                                              const VkAllocationCallbacks *pAllocator,
+                                                              VkPipeline *pPipelines)
+{
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
+    VkResult result = VK_SUCCESS;
+    uint32_t i;
+    (void)deferredOperation;
+    (void)pipelineCache;
+    for (i = 0; i < createInfoCount; i++) {
+        VkResult r = pvk_rays_pipeline_create((struct pvk_device *)device, &pCreateInfos[i], alloc, &pPipelines[i]);
+        if (pvk_pipeline_batch_step((struct pvk_device *)device, r, pPipelines, i, createInfoCount, pCreateInfos[i].flags,
+                                    pCreateInfos[i].pNext, pAllocator != NULL, &result))
+            break;
+    }
+    return result;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetRayTracingShaderGroupHandlesKHR(VkDevice device, VkPipeline pipeline,
+                                                                    uint32_t firstGroup, uint32_t groupCount,
+                                                                    size_t dataSize, void *pData)
+{
+    const struct pvk_pipeline *p = (const struct pvk_pipeline *)pipeline;
+    uint32_t i;
+    (void)device;
+    if (!p || firstGroup > p->ray_groups || groupCount > p->ray_groups - firstGroup ||
+        dataSize < (size_t)groupCount * PVK_MSL_RAYS_HANDLE_SIZE)
+        return VK_ERROR_UNKNOWN;
+    memset(pData, 0, (size_t)groupCount * PVK_MSL_RAYS_HANDLE_SIZE);
+    for (i = 0; i < groupCount; i++) {
+        uint32_t handle = firstGroup + i + 1;
+        memcpy((char *)pData + (size_t)i * PVK_MSL_RAYS_HANDLE_SIZE, &handle, sizeof(handle));
+    }
+    return VK_SUCCESS;
+}
+
+/* rayTracingPipelineShaderGroupHandleCaptureReplay is not reported (section
+ * 7, RAY TRACING), so no valid call reaches this. */
+VKAPI_ATTR VkResult VKAPI_CALL vkGetRayTracingCaptureReplayShaderGroupHandlesKHR(VkDevice device, VkPipeline pipeline,
+                                                                                 uint32_t firstGroup,
+                                                                                 uint32_t groupCount, size_t dataSize,
+                                                                                 void *pData)
+{
+    (void)pipeline;
+    (void)firstGroup;
+    (void)groupCount;
+    (void)dataSize;
+    (void)pData;
+    pvk_logd((const struct pvk_device *)device, PVK_LOG_ERROR,
+             "PlasmaVK-rayTracingPipelineShaderGroupHandleCaptureReplay", VK_OBJECT_TYPE_DEVICE, 0,
+             "vkGetRayTracingCaptureReplayShaderGroupHandlesKHR: the "
+             "rayTracingPipelineShaderGroupHandleCaptureReplay feature is not supported");
+    return VK_ERROR_FEATURE_NOT_PRESENT;
+}
+
+VKAPI_ATTR VkDeviceSize VKAPI_CALL vkGetRayTracingShaderGroupStackSizeKHR(VkDevice device, VkPipeline pipeline,
+                                                                          uint32_t group,
+                                                                          VkShaderGroupShaderKHR groupShader)
+{
+    (void)device;
+    (void)pipeline;
+    (void)group;
+    (void)groupShader;
+    return PVK_RAYS_STACK_SIZE;
 }
 
 /* ---- Render passes ----
@@ -77964,6 +79041,7 @@ static const struct pvk_entrypoint {
     { "vkCmdSetPrimitiveTopologyEXT", (PFN_vkVoidFunction)vkCmdSetPrimitiveTopology, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state) },
     { "vkCmdSetRasterizerDiscardEnable", (PFN_vkVoidFunction)vkCmdSetRasterizerDiscardEnable, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdSetRasterizerDiscardEnableEXT", (PFN_vkVoidFunction)vkCmdSetRasterizerDiscardEnable, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state2) },
+    { "vkCmdSetRayTracingPipelineStackSizeKHR", (PFN_vkVoidFunction)vkCmdSetRayTracingPipelineStackSizeKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_ray_tracing_pipeline) },
     { "vkCmdSetRenderingAttachmentLocations", (PFN_vkVoidFunction)vkCmdSetRenderingAttachmentLocations, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkCmdSetRenderingAttachmentLocationsKHR", (PFN_vkVoidFunction)vkCmdSetRenderingAttachmentLocations, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_dynamic_rendering_local_read) },
     { "vkCmdSetRenderingInputAttachmentIndices", (PFN_vkVoidFunction)vkCmdSetRenderingInputAttachmentIndices, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
@@ -77981,6 +79059,8 @@ static const struct pvk_entrypoint {
     { "vkCmdSetViewport", (PFN_vkVoidFunction)vkCmdSetViewport, PVK_SCOPE_DEVICE },
     { "vkCmdSetViewportWithCount", (PFN_vkVoidFunction)vkCmdSetViewportWithCount, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdSetViewportWithCountEXT", (PFN_vkVoidFunction)vkCmdSetViewportWithCount, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_extended_dynamic_state) },
+    { "vkCmdTraceRaysIndirectKHR", (PFN_vkVoidFunction)vkCmdTraceRaysIndirectKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_ray_tracing_pipeline) },
+    { "vkCmdTraceRaysKHR", (PFN_vkVoidFunction)vkCmdTraceRaysKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_ray_tracing_pipeline) },
     { "vkCmdUpdateBuffer", (PFN_vkVoidFunction)vkCmdUpdateBuffer, PVK_SCOPE_DEVICE },
     { "vkCmdWaitEvents", (PFN_vkVoidFunction)vkCmdWaitEvents, PVK_SCOPE_DEVICE },
     { "vkCmdWaitEvents2", (PFN_vkVoidFunction)vkCmdWaitEvents2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
@@ -78024,6 +79104,7 @@ static const struct pvk_entrypoint {
     { "vkCreatePrivateDataSlot", (PFN_vkVoidFunction)vkCreatePrivateDataSlot, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCreatePrivateDataSlotEXT", (PFN_vkVoidFunction)vkCreatePrivateDataSlot, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_private_data) },
     { "vkCreateQueryPool", (PFN_vkVoidFunction)vkCreateQueryPool, PVK_SCOPE_DEVICE },
+    { "vkCreateRayTracingPipelinesKHR", (PFN_vkVoidFunction)vkCreateRayTracingPipelinesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_ray_tracing_pipeline) },
     { "vkCreateRenderPass", (PFN_vkVoidFunction)vkCreateRenderPass, PVK_SCOPE_DEVICE },
     { "vkCreateRenderPass2", (PFN_vkVoidFunction)vkCreateRenderPass2, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkCreateRenderPass2KHR", (PFN_vkVoidFunction)vkCreateRenderPass2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_create_renderpass2) },
@@ -78167,6 +79248,9 @@ static const struct pvk_entrypoint {
     { "vkGetPrivateData", (PFN_vkVoidFunction)vkGetPrivateData, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkGetPrivateDataEXT", (PFN_vkVoidFunction)vkGetPrivateData, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_private_data) },
     { "vkGetQueryPoolResults", (PFN_vkVoidFunction)vkGetQueryPoolResults, PVK_SCOPE_DEVICE },
+    { "vkGetRayTracingCaptureReplayShaderGroupHandlesKHR", (PFN_vkVoidFunction)vkGetRayTracingCaptureReplayShaderGroupHandlesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_ray_tracing_pipeline) },
+    { "vkGetRayTracingShaderGroupHandlesKHR", (PFN_vkVoidFunction)vkGetRayTracingShaderGroupHandlesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_ray_tracing_pipeline) },
+    { "vkGetRayTracingShaderGroupStackSizeKHR", (PFN_vkVoidFunction)vkGetRayTracingShaderGroupStackSizeKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_ray_tracing_pipeline) },
     { "vkGetRenderAreaGranularity", (PFN_vkVoidFunction)vkGetRenderAreaGranularity, PVK_SCOPE_DEVICE },
     { "vkGetRenderingAreaGranularity", (PFN_vkVoidFunction)vkGetRenderingAreaGranularity, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkGetRenderingAreaGranularityKHR", (PFN_vkVoidFunction)vkGetRenderingAreaGranularity, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance5) },

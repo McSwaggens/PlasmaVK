@@ -158,7 +158,8 @@ of the file (an unlisted test is an unused static and breaks the build).
 `ct -c` reports which commands the selected tests call, against every Vulkan
 1.4 core command plus those of VK_KHR_surface, VK_EXT_metal_surface,
 VK_KHR_portability_enumeration, VK_KHR_swapchain, VK_EXT_debug_utils,
-VK_KHR_deferred_host_operations, VK_KHR_acceleration_structure and the
+VK_KHR_deferred_host_operations, VK_KHR_acceleration_structure,
+VK_KHR_ray_tracing_pipeline and the
 extensions promoted to Vulkan 1.1-1.4 (their commands are the core ones
 under KHR/EXT names, which the tests mostly reach through `vkGet*ProcAddr`
 rather than call), and lists the rest (VK_EXT_swapchain_colorspace and VK_KHR_ray_query

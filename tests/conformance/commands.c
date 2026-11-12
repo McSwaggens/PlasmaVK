@@ -391,6 +391,13 @@ const struct ct_command ct_commands[] = {
     { "vkCmdWriteAccelerationStructuresPropertiesKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
     { "vkGetDeviceAccelerationStructureCompatibilityKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
     { "vkGetAccelerationStructureBuildSizesKHR", "VK_KHR_acceleration_structure", CT_LEVEL_DEVICE },
+    { "vkCreateRayTracingPipelinesKHR", "VK_KHR_ray_tracing_pipeline", CT_LEVEL_DEVICE },
+    { "vkGetRayTracingShaderGroupHandlesKHR", "VK_KHR_ray_tracing_pipeline", CT_LEVEL_DEVICE },
+    { "vkGetRayTracingCaptureReplayShaderGroupHandlesKHR", "VK_KHR_ray_tracing_pipeline", CT_LEVEL_DEVICE },
+    { "vkGetRayTracingShaderGroupStackSizeKHR", "VK_KHR_ray_tracing_pipeline", CT_LEVEL_DEVICE },
+    { "vkCmdSetRayTracingPipelineStackSizeKHR", "VK_KHR_ray_tracing_pipeline", CT_LEVEL_DEVICE },
+    { "vkCmdTraceRaysKHR", "VK_KHR_ray_tracing_pipeline", CT_LEVEL_DEVICE },
+    { "vkCmdTraceRaysIndirectKHR", "VK_KHR_ray_tracing_pipeline", CT_LEVEL_DEVICE },
     /* VK_EXT_debug_utils: an instance extension with device-level commands
      * (vkGetDeviceProcAddr returns them when the instance enabled it) */
     { "vkCreateDebugUtilsMessengerEXT", "VK_EXT_debug_utils", CT_LEVEL_INSTANCE },
@@ -445,6 +452,7 @@ int ct_origin_is_device_extension(const char *origin)
         "VK_KHR_push_descriptor",
         "VK_KHR_deferred_host_operations",
         "VK_KHR_acceleration_structure",
+        "VK_KHR_ray_tracing_pipeline",
     };
     size_t i;
     for (i = 0; i < CT_ARRAY_SIZE(device_extensions); i++)

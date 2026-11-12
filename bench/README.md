@@ -284,7 +284,8 @@ shader is Slang source compiled by slangc. 96 of the rays are compared with
 a host trace of every triangle.
 - `closest_4m`: each ray's closest hit (distance, primitive, barycentrics).
 - `shadow_4m`: any hit will do: the query ends at its first.
-- `build_ms`, `blas_bytes`, `tlas_bytes`: the builds, once at startup.
+- `build_ms`, `bottom_level_bytes`, `top_level_bytes`: the builds, once at
+  startup.
 
 ## Running
 
