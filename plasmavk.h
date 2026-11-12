@@ -31820,6 +31820,42 @@ static inline void pvk_MTLComputePipelineDescriptor_setLabel(id self, id label) 
 static inline id pvk_MTLComputePipelineState_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
 static inline void pvk_MTL4PipelineDescriptor_setLabel(id self, id label) { PVK_SEL_CACHE("setLabel:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, label); }
 static inline id pvk_MTLRenderPipelineState_label(id self) { PVK_SEL_CACHE("label"); return PVK_MSG(id, (id, SEL))(self, pvk_sel_); }
+static inline bool pvk_MTLDevice_supportsRaytracing(id self) { PVK_SEL_CACHE("supportsRaytracing"); return PVK_MSG(bool, (id, SEL))(self, pvk_sel_); }
+static inline bool pvk_MTLDevice_supportsFunctionPointers(id self) { PVK_SEL_CACHE("supportsFunctionPointers"); return PVK_MSG(bool, (id, SEL))(self, pvk_sel_); }
+static inline pvk_MTLAccelerationStructureSizes pvk_MTLDevice_accelerationStructureSizesWithDescriptor(id self, id descriptor) { PVK_SEL_CACHE("accelerationStructureSizesWithDescriptor:"); return PVK_MSG(pvk_MTLAccelerationStructureSizes, (id, SEL, id))(self, pvk_sel_, descriptor); }
+static inline id pvk_MTLDevice_newAccelerationStructureWithSize(id self, unsigned long size) { PVK_SEL_CACHE("newAccelerationStructureWithSize:"); return PVK_MSG(id, (id, SEL, unsigned long))(self, pvk_sel_, size); }
+static inline pvk_MTLResourceID pvk_MTLAccelerationStructure_gpuResourceID(id self) { PVK_SEL_CACHE("gpuResourceID"); return PVK_MSG(pvk_MTLResourceID, (id, SEL))(self, pvk_sel_); }
+static inline id pvk_NSArray_arrayWithObjects_count(const id * objects, unsigned long cnt) { PVK_CLASS_CACHE("NSArray"); PVK_SEL_CACHE("arrayWithObjects:count:"); return PVK_MSG(id, (id, SEL, const id *, unsigned long))((id)pvk_cls_, pvk_sel_, objects, cnt); }
+static inline void pvk_MTLAccelerationStructureDescriptor_setUsage(id self, pvk_MTLAccelerationStructureUsage usage) { PVK_SEL_CACHE("setUsage:"); PVK_MSG(void, (id, SEL, pvk_MTLAccelerationStructureUsage))(self, pvk_sel_, usage); }
+static inline id pvk_MTL4PrimitiveAccelerationStructureDescriptor_new(void) { PVK_CLASS_CACHE("MTL4PrimitiveAccelerationStructureDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTL4PrimitiveAccelerationStructureDescriptor_setGeometryDescriptors(id self, id geometryDescriptors) { PVK_SEL_CACHE("setGeometryDescriptors:"); PVK_MSG(void, (id, SEL, id))(self, pvk_sel_, geometryDescriptors); }
+static inline void pvk_MTL4AccelerationStructureGeometryDescriptor_setIntersectionFunctionTableOffset(id self, unsigned long intersectionFunctionTableOffset) { PVK_SEL_CACHE("setIntersectionFunctionTableOffset:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, intersectionFunctionTableOffset); }
+static inline void pvk_MTL4AccelerationStructureGeometryDescriptor_setOpaque(id self, bool opaque) { PVK_SEL_CACHE("setOpaque:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, opaque); }
+static inline void pvk_MTL4AccelerationStructureGeometryDescriptor_setAllowDuplicateIntersectionFunctionInvocation(id self, bool allowDuplicateIntersectionFunctionInvocation) { PVK_SEL_CACHE("setAllowDuplicateIntersectionFunctionInvocation:"); PVK_MSG(void, (id, SEL, bool))(self, pvk_sel_, allowDuplicateIntersectionFunctionInvocation); }
+static inline id pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_new(void) { PVK_CLASS_CACHE("MTL4AccelerationStructureTriangleGeometryDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setVertexBuffer(id self, pvk_MTL4BufferRange vertexBuffer) { PVK_SEL_CACHE("setVertexBuffer:"); PVK_MSG(void, (id, SEL, pvk_MTL4BufferRange))(self, pvk_sel_, vertexBuffer); }
+static inline void pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setVertexFormat(id self, pvk_MTLAttributeFormat vertexFormat) { PVK_SEL_CACHE("setVertexFormat:"); PVK_MSG(void, (id, SEL, pvk_MTLAttributeFormat))(self, pvk_sel_, vertexFormat); }
+static inline void pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setVertexStride(id self, unsigned long vertexStride) { PVK_SEL_CACHE("setVertexStride:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, vertexStride); }
+static inline void pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setIndexBuffer(id self, pvk_MTL4BufferRange indexBuffer) { PVK_SEL_CACHE("setIndexBuffer:"); PVK_MSG(void, (id, SEL, pvk_MTL4BufferRange))(self, pvk_sel_, indexBuffer); }
+static inline void pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setIndexType(id self, pvk_MTLIndexType indexType) { PVK_SEL_CACHE("setIndexType:"); PVK_MSG(void, (id, SEL, pvk_MTLIndexType))(self, pvk_sel_, indexType); }
+static inline void pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setTriangleCount(id self, unsigned long triangleCount) { PVK_SEL_CACHE("setTriangleCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, triangleCount); }
+static inline void pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setTransformationMatrixBuffer(id self, pvk_MTL4BufferRange transformationMatrixBuffer) { PVK_SEL_CACHE("setTransformationMatrixBuffer:"); PVK_MSG(void, (id, SEL, pvk_MTL4BufferRange))(self, pvk_sel_, transformationMatrixBuffer); }
+static inline void pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setTransformationMatrixLayout(id self, pvk_MTLMatrixLayout transformationMatrixLayout) { PVK_SEL_CACHE("setTransformationMatrixLayout:"); PVK_MSG(void, (id, SEL, pvk_MTLMatrixLayout))(self, pvk_sel_, transformationMatrixLayout); }
+static inline id pvk_MTL4AccelerationStructureBoundingBoxGeometryDescriptor_new(void) { PVK_CLASS_CACHE("MTL4AccelerationStructureBoundingBoxGeometryDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTL4AccelerationStructureBoundingBoxGeometryDescriptor_setBoundingBoxBuffer(id self, pvk_MTL4BufferRange boundingBoxBuffer) { PVK_SEL_CACHE("setBoundingBoxBuffer:"); PVK_MSG(void, (id, SEL, pvk_MTL4BufferRange))(self, pvk_sel_, boundingBoxBuffer); }
+static inline void pvk_MTL4AccelerationStructureBoundingBoxGeometryDescriptor_setBoundingBoxStride(id self, unsigned long boundingBoxStride) { PVK_SEL_CACHE("setBoundingBoxStride:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, boundingBoxStride); }
+static inline void pvk_MTL4AccelerationStructureBoundingBoxGeometryDescriptor_setBoundingBoxCount(id self, unsigned long boundingBoxCount) { PVK_SEL_CACHE("setBoundingBoxCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, boundingBoxCount); }
+static inline id pvk_MTL4InstanceAccelerationStructureDescriptor_new(void) { PVK_CLASS_CACHE("MTL4InstanceAccelerationStructureDescriptor"); PVK_SEL_CACHE("new"); return PVK_MSG(id, (id, SEL))((id)pvk_cls_, pvk_sel_); }
+static inline void pvk_MTL4InstanceAccelerationStructureDescriptor_setInstanceDescriptorBuffer(id self, pvk_MTL4BufferRange instanceDescriptorBuffer) { PVK_SEL_CACHE("setInstanceDescriptorBuffer:"); PVK_MSG(void, (id, SEL, pvk_MTL4BufferRange))(self, pvk_sel_, instanceDescriptorBuffer); }
+static inline void pvk_MTL4InstanceAccelerationStructureDescriptor_setInstanceDescriptorStride(id self, unsigned long instanceDescriptorStride) { PVK_SEL_CACHE("setInstanceDescriptorStride:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, instanceDescriptorStride); }
+static inline void pvk_MTL4InstanceAccelerationStructureDescriptor_setInstanceCount(id self, unsigned long instanceCount) { PVK_SEL_CACHE("setInstanceCount:"); PVK_MSG(void, (id, SEL, unsigned long))(self, pvk_sel_, instanceCount); }
+static inline void pvk_MTL4InstanceAccelerationStructureDescriptor_setInstanceDescriptorType(id self, pvk_MTLAccelerationStructureInstanceDescriptorType instanceDescriptorType) { PVK_SEL_CACHE("setInstanceDescriptorType:"); PVK_MSG(void, (id, SEL, pvk_MTLAccelerationStructureInstanceDescriptorType))(self, pvk_sel_, instanceDescriptorType); }
+static inline void pvk_MTL4InstanceAccelerationStructureDescriptor_setInstanceTransformationMatrixLayout(id self, pvk_MTLMatrixLayout instanceTransformationMatrixLayout) { PVK_SEL_CACHE("setInstanceTransformationMatrixLayout:"); PVK_MSG(void, (id, SEL, pvk_MTLMatrixLayout))(self, pvk_sel_, instanceTransformationMatrixLayout); }
+static inline void pvk_MTL4ComputeCommandEncoder_buildAccelerationStructure_descriptor_scratchBuffer(id self, id accelerationStructure, id descriptor, pvk_MTL4BufferRange scratchBuffer) { PVK_SEL_CACHE("buildAccelerationStructure:descriptor:scratchBuffer:"); PVK_MSG(void, (id, SEL, id, id, pvk_MTL4BufferRange))(self, pvk_sel_, accelerationStructure, descriptor, scratchBuffer); }
+static inline void pvk_MTL4ComputeCommandEncoder_refitAccelerationStructure_descriptor_destination_scratchBuffer_options(id self, id sourceAccelerationStructure, id descriptor, id destinationAccelerationStructure, pvk_MTL4BufferRange scratchBuffer, pvk_MTLAccelerationStructureRefitOptions options) { PVK_SEL_CACHE("refitAccelerationStructure:descriptor:destination:scratchBuffer:options:"); PVK_MSG(void, (id, SEL, id, id, id, pvk_MTL4BufferRange, pvk_MTLAccelerationStructureRefitOptions))(self, pvk_sel_, sourceAccelerationStructure, descriptor, destinationAccelerationStructure, scratchBuffer, options); }
+static inline void pvk_MTL4ComputeCommandEncoder_copyAccelerationStructure_toAccelerationStructure(id self, id sourceAccelerationStructure, id destinationAccelerationStructure) { PVK_SEL_CACHE("copyAccelerationStructure:toAccelerationStructure:"); PVK_MSG(void, (id, SEL, id, id))(self, pvk_sel_, sourceAccelerationStructure, destinationAccelerationStructure); }
+static inline void pvk_MTL4ComputeCommandEncoder_writeCompactedAccelerationStructureSize_toBuffer(id self, id accelerationStructure, pvk_MTL4BufferRange buffer) { PVK_SEL_CACHE("writeCompactedAccelerationStructureSize:toBuffer:"); PVK_MSG(void, (id, SEL, id, pvk_MTL4BufferRange))(self, pvk_sel_, accelerationStructure, buffer); }
+static inline void pvk_MTL4ComputeCommandEncoder_copyAndCompactAccelerationStructure_toAccelerationStructure(id self, id sourceAccelerationStructure, id destinationAccelerationStructure) { PVK_SEL_CACHE("copyAndCompactAccelerationStructure:toAccelerationStructure:"); PVK_MSG(void, (id, SEL, id, id))(self, pvk_sel_, sourceAccelerationStructure, destinationAccelerationStructure); }
 
 /* ==========================================================================
  * 5. Internals
@@ -32114,7 +32150,9 @@ static VkResult pvk_enumerate(const void *items, size_t item_size, uint32_t coun
  * 6. Extensions
  *
  * Advertised extensions: PlasmaVK's own (surfaces, swapchains, debug utils,
- * calibrated timestamps, memory budget) and, as Vulkan 1.4 drivers do, every
+ * calibrated timestamps, memory budget, deferred host operations, and where
+ * the GPU traces rays acceleration structures and ray queries) and, as
+ * Vulkan 1.4 drivers do, every
  * extension promoted to Vulkan 1.1-1.4 whose functionality PlasmaVK has
  * (Core Revisions). Applications written for an older apiVersion enable
  * those and call the core commands by their KHR/EXT names (section 19). A
@@ -32181,6 +32219,14 @@ enum pvk_device_extension {
     PVK_DEVICE_EXT_KHR_swapchain,
     PVK_DEVICE_EXT_KHR_calibrated_timestamps, /* the device's clock is the host's mach_absolute_time (section 14) */
     PVK_DEVICE_EXT_EXT_memory_budget,         /* no commands: Metal's allocations and the room left (section 7) */
+    /* Operations that never defer: the commands that take one run to
+     * completion (section 9, DEFERRED OPERATIONS) */
+    PVK_DEVICE_EXT_KHR_deferred_host_operations,
+    /* Metal acceleration structures, built on the device (section 10,
+     * ACCELERATION STRUCTURES), and ray queries in every shader stage
+     * (section 13, RAY QUERIES); offered where MTLDevice.supportsRaytracing */
+    PVK_DEVICE_EXT_KHR_acceleration_structure,
+    PVK_DEVICE_EXT_KHR_ray_query,
     /* Promoted to Vulkan 1.1 */
     PVK_DEVICE_EXT_KHR_16bit_storage,
     PVK_DEVICE_EXT_KHR_bind_memory2,
@@ -32274,6 +32320,9 @@ static const VkExtensionProperties pvk_device_extensions[PVK_DEVICE_EXTENSION_CO
     PVK_EXT(PVK_DEVICE_EXT_, KHR_swapchain, KHR_SWAPCHAIN),
     PVK_EXT(PVK_DEVICE_EXT_, KHR_calibrated_timestamps, KHR_CALIBRATED_TIMESTAMPS),
     PVK_EXT(PVK_DEVICE_EXT_, EXT_memory_budget, EXT_MEMORY_BUDGET),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_deferred_host_operations, KHR_DEFERRED_HOST_OPERATIONS),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_acceleration_structure, KHR_ACCELERATION_STRUCTURE),
+    PVK_EXT(PVK_DEVICE_EXT_, KHR_ray_query, KHR_RAY_QUERY),
     /* Vulkan 1.1 */
     PVK_EXT(PVK_DEVICE_EXT_, KHR_16bit_storage, KHR_16BIT_STORAGE),
     PVK_EXT(PVK_DEVICE_EXT_, KHR_bind_memory2, KHR_BIND_MEMORY_2),
@@ -32438,6 +32487,9 @@ struct pvk_features {
     VkPhysicalDeviceExtendedDynamicStateFeaturesEXT dynamic_state;
     VkPhysicalDeviceExtendedDynamicState2FeaturesEXT dynamic_state2;
     VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT texel_buffer_alignment;
+    /* Ray tracing (section 7, RAY TRACING) */
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR accel;
+    VkPhysicalDeviceRayQueryFeaturesKHR ray_query;
 };
 
 /* The same for properties beyond VkPhysicalDeviceProperties. v14's copy
@@ -32473,6 +32525,7 @@ struct pvk_physical_device {
     bool filter_32bit;    /* supports32BitFloatFiltering: filter and resolve 32-bit floats */
     bool filter_minmax;   /* sampler min/max reduction (FST: Apple10) */
     bool sparse;          /* placement sparse resources: the sparse features (section 7, SPARSE RESOURCES) */
+    VkPhysicalDeviceAccelerationStructurePropertiesKHR accel_properties; /* (section 7, RAY TRACING) */
 };
 
 struct pvk_submission;
@@ -32661,6 +32714,7 @@ struct pvk_device {
     uint32_t informed; /* PVK_INFORM_* causes reported (pvk_inform; atomic) */
     struct pvk_job *par_head, *par_tail;
     id fill_pipeline;      /* internal kernel of vkCmdFillBuffer, made on first use */
+    id accel_kernels[5];   /* internal kernels of the acceleration structure commands (enum pvk_accel_kernel), on first use */
     /* Images (sections 11, 15 and 16) */
     struct pvk_sampler_state *sampler_states; /* MTLSamplerStates shared by equal VkSamplers */
     id blit_libraries[5];                     /* internal shaders (enum pvk_blit_lib), made on first use */
@@ -33929,6 +33983,70 @@ static void pvk_physical_device_init_graphics_features(struct pvk_physical_devic
     pd->features.v12.shaderOutputLayer = VK_TRUE;
 }
 
+/* RAY TRACING
+ *   VK_KHR_acceleration_structure and VK_KHR_ray_query, where the GPU traces
+ *   rays (MTLDevice.supportsRaytracing: every Metal 4 GPU so far). What is
+ *   reported, and why the rest is not:
+ *   accelerationStructure   device builds, updates, copies and compaction of
+ *                           Metal acceleration structures (section 10,
+ *                           ACCELERATION STRUCTURES)
+ *   descriptorBindingAccelerationStructureUpdateAfterBind
+ *                           a descriptor is a word of its set's table, as
+ *                           every other (section 12)
+ *   rayQuery                MSL intersection queries, in every stage
+ *                           (section 13, RAY QUERIES)
+ *   Not accelerationStructureCaptureReplay (an acceleration structure's
+ *   address is its buffer's, which Metal assigns), not
+ *   accelerationStructureIndirectBuild (Metal takes a build's primitive
+ *   counts on the host, when the build is encoded) and not
+ *   accelerationStructureHostCommands (Metal builds on the GPU only, and
+ *   gives no access to an acceleration structure's memory).
+ *   The limits are Metal's for acceleration structures without
+ *   MTLAccelerationStructureUsageExtendedLimits, which MSL's intersection
+ *   queries have no tag for: 2^24 geometries and instances, and 2^28
+ *   primitives, half of what Vulkan asks of maxPrimitiveCount (2^29 - 1).
+ *   Descriptors are bound by the tables alone (Design limits); scratch
+ *   memory is taken at any address (Metal's validation asks no alignment
+ *   of it, and builds with scratch memory at an odd address trace as the
+ *   others, M4 Max, macOS 27.2); 16 is reported, as of buffer offsets. */
+static void pvk_physical_device_init_ray_tracing(struct pvk_physical_device *pd)
+{
+    VkPhysicalDeviceAccelerationStructurePropertiesKHR *p = &pd->accel_properties;
+    if (!pvk_MTLDevice_supportsRaytracing(pd->mtl_device))
+        return;
+    pd->features.accel.accelerationStructure = VK_TRUE;
+    pd->features.accel.descriptorBindingAccelerationStructureUpdateAfterBind = VK_TRUE;
+    pd->features.ray_query.rayQuery = VK_TRUE;
+    p->maxGeometryCount = (1u << 24) - 1;
+    p->maxInstanceCount = (1u << 24) - 1;
+    p->maxPrimitiveCount = (1u << 28) - 1;
+    p->maxPerStageDescriptorAccelerationStructures = PVK_MAX_DESCRIPTORS;
+    p->maxPerStageDescriptorUpdateAfterBindAccelerationStructures = PVK_MAX_DESCRIPTORS;
+    p->maxDescriptorSetAccelerationStructures = PVK_MAX_DESCRIPTORS;
+    p->maxDescriptorSetUpdateAfterBindAccelerationStructures = PVK_MAX_DESCRIPTORS;
+    p->minAccelerationStructureScratchOffsetAlignment = 16;
+}
+
+/* The MTLAttributeFormat of an acceleration structure's vertices in a
+ * VkFormat (0: not one); formats with a fourth component leave it unread.
+ * The six formats Vulkan requires of
+ * VK_FORMAT_FEATURE_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR, and the
+ * three-component 16-bit ones. */
+static pvk_MTLAttributeFormat pvk_accel_vertex_format(VkFormat format)
+{
+    switch (format) {
+    case VK_FORMAT_R32G32_SFLOAT: return PVK_MTLAttributeFormatFloat2;
+    case VK_FORMAT_R32G32B32_SFLOAT: return PVK_MTLAttributeFormatFloat3;
+    case VK_FORMAT_R16G16_SFLOAT: return PVK_MTLAttributeFormatHalf2;
+    case VK_FORMAT_R16G16B16_SFLOAT: return PVK_MTLAttributeFormatHalf3;
+    case VK_FORMAT_R16G16B16A16_SFLOAT: return PVK_MTLAttributeFormatHalf4;
+    case VK_FORMAT_R16G16_SNORM: return PVK_MTLAttributeFormatShort2Normalized;
+    case VK_FORMAT_R16G16B16_SNORM: return PVK_MTLAttributeFormatShort3Normalized;
+    case VK_FORMAT_R16G16B16A16_SNORM: return PVK_MTLAttributeFormatShort4Normalized;
+    default: return PVK_MTLAttributeFormatInvalid;
+    }
+}
+
 /* Sparse resources: features, sparseProperties and sparseAddressSpaceSize
  * (SPARSE RESOURCES, after the formats). */
 static void pvk_physical_device_init_sparse(struct pvk_physical_device *pd);
@@ -33966,6 +34084,7 @@ static void pvk_physical_device_init_properties(struct pvk_physical_device *pd)
     pvk_physical_device_init_texture_features(pd);
     pvk_physical_device_init_descriptor_features(pd);
     pvk_physical_device_init_graphics_features(pd);
+    pvk_physical_device_init_ray_tracing(pd);
     pvk_physical_device_init_sparse(pd);
 
     /* Apple GPUs have unified memory: one heap (Memory heap and budget,
@@ -34215,6 +34334,12 @@ static const struct pvk_run pvk_feature_runs[] = {
              VkPhysicalDevicePipelineRobustnessFeatures, v14, pipelineRobustness, pipelineRobustness),
     PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES, VkPhysicalDeviceHostImageCopyFeatures, v14,
              hostImageCopy, hostImageCopy),
+    /* Ray tracing (RAY TRACING) */
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR,
+             VkPhysicalDeviceAccelerationStructureFeaturesKHR, accel, accelerationStructure,
+             descriptorBindingAccelerationStructureUpdateAfterBind),
+    PVK_FRUN(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR, VkPhysicalDeviceRayQueryFeaturesKHR, ray_query,
+             rayQuery, rayQuery),
 };
 
 static const struct pvk_run pvk_property_runs[] = {
@@ -34368,6 +34493,13 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceProperties2(VkPhysicalDevice physi
             VkPhysicalDeviceHostImageCopyProperties *p = (VkPhysicalDeviceHostImageCopyProperties *)(void *)s;
             pvk_host_copy_layouts(&p->copySrcLayoutCount, p->pCopySrcLayouts);
             pvk_host_copy_layouts(&p->copyDstLayoutCount, p->pCopyDstLayouts);
+        } else if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR) {
+            VkPhysicalDeviceAccelerationStructurePropertiesKHR *p =
+                (VkPhysicalDeviceAccelerationStructurePropertiesKHR *)(void *)s;
+            VkBaseOutStructure *next = s->pNext;
+            *p = pd->accel_properties; /* (zeros without ray tracing: RAY TRACING) */
+            p->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+            p->pNext = next;
         }
     }
 }
@@ -34939,6 +35071,8 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceFormatProperties2(VkPhysicalDevice
     VkFormatFeatureFlags2 buffer = pvk_format_buffer_features(f);
     VkBaseOutStructure *s;
 
+    if (pd->features.accel.accelerationStructure && pvk_accel_vertex_format(format))
+        buffer |= VK_FORMAT_FEATURE_2_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR;
     pFormatProperties->formatProperties.optimalTilingFeatures = (VkFormatFeatureFlags)(optimal & PVK_FORMAT_FEATURES_1);
     pFormatProperties->formatProperties.linearTilingFeatures = (VkFormatFeatureFlags)(linear & PVK_FORMAT_FEATURES_1);
     pFormatProperties->formatProperties.bufferFeatures = (VkFormatFeatureFlags)(buffer & PVK_FORMAT_FEATURES_1);
@@ -35695,6 +35829,9 @@ static bool pvk_device_extension_features(const struct pvk_features *f, unsigned
     case PVK_DEVICE_EXT_KHR_shader_float_controls2: return f->v14.shaderFloatControls2;
     case PVK_DEVICE_EXT_KHR_shader_subgroup_rotate: return f->v14.shaderSubgroupRotate;
     case PVK_DEVICE_EXT_KHR_vertex_attribute_divisor: return f->v14.vertexAttributeInstanceRateDivisor;
+    /* Ray tracing */
+    case PVK_DEVICE_EXT_KHR_acceleration_structure: return f->accel.accelerationStructure;
+    case PVK_DEVICE_EXT_KHR_ray_query: return f->ray_query.rayQuery;
     default: return true;
     }
 }
@@ -36459,6 +36596,56 @@ VKAPI_ATTR void VKAPI_CALL vkGetPrivateData(VkDevice device, VkObjectType object
     pthread_mutex_unlock(&pvk_private_data_lock);
 }
 
+/* ---- Deferred operations (VK_KHR_deferred_host_operations) ----
+ *
+ * DEFERRED OPERATIONS
+ *   A VkDeferredOperationKHR lets a command hand its work to threads the
+ *   application joins it with. No command here defers: one given an
+ *   operation does all its work before it returns, with
+ *   VK_OPERATION_NOT_DEFERRED_KHR where it succeeded (Deferred Host
+ *   Operations > Requesting Deferral: the implementation may always do so).
+ *   So an operation never has work: joining it finds it complete, its
+ *   result is VK_SUCCESS (that of an operation no command was deferred on)
+ *   and its concurrency 0. */
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateDeferredOperationKHR(VkDevice device, const VkAllocationCallbacks *pAllocator,
+                                                            VkDeferredOperationKHR *pDeferredOperation)
+{
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device);
+    uint64_t *operation = pvk_alloc(alloc, sizeof(*operation), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT); /* (a handle) */
+    if (!operation)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    *pDeferredOperation = (VkDeferredOperationKHR)operation;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyDeferredOperationKHR(VkDevice device, VkDeferredOperationKHR operation,
+                                                         const VkAllocationCallbacks *pAllocator)
+{
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc((struct pvk_device *)device), (void *)operation);
+}
+
+VKAPI_ATTR uint32_t VKAPI_CALL vkGetDeferredOperationMaxConcurrencyKHR(VkDevice device, VkDeferredOperationKHR operation)
+{
+    (void)device;
+    (void)operation;
+    return 0; /* complete: no thread can usefully join */
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkGetDeferredOperationResultKHR(VkDevice device, VkDeferredOperationKHR operation)
+{
+    (void)device;
+    (void)operation;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkDeferredOperationJoinKHR(VkDevice device, VkDeferredOperationKHR operation)
+{
+    (void)device;
+    (void)operation;
+    return VK_SUCCESS;
+}
+
 /* ---- Object names and tags (VK_EXT_debug_utils) ----
  *
  * A device has a table from object handle to name and tags (open addressing,
@@ -36631,6 +36818,8 @@ static const char *pvk_object_type_name(VkObjectType type)
     case VK_OBJECT_TYPE_SURFACE_KHR: return "VkSurfaceKHR";
     case VK_OBJECT_TYPE_SWAPCHAIN_KHR: return "VkSwapchainKHR";
     case VK_OBJECT_TYPE_DEBUG_UTILS_MESSENGER_EXT: return "VkDebugUtilsMessengerEXT";
+    case VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR: return "VkAccelerationStructureKHR";
+    case VK_OBJECT_TYPE_DEFERRED_OPERATION_KHR: return "VkDeferredOperationKHR";
     default: return "object";
     }
 }
@@ -38417,6 +38606,403 @@ VKAPI_ATTR uint64_t VKAPI_CALL vkGetBufferOpaqueCaptureAddress(VkDevice device, 
     (void)device;
     (void)pInfo;
     return 0;
+}
+
+/* ---- Acceleration structures (VK_KHR_acceleration_structure) ----
+ *
+ * ACCELERATION STRUCTURES
+ *   A VkAccelerationStructureKHR is an MTLAccelerationStructure of the size
+ *   it was created with, of the device's own memory and in its residency
+ *   set: Metal places one in a heap at 16 KB alignments only (-[MTLDevice
+ *   heapAccelerationStructureSizeAndAlignWithSize:], M4 Max), where Vulkan
+ *   places them at any multiple of 256 bytes of a buffer. So the range of
+ *   its VkBuffer holds no acceleration structure, but what stands for one
+ *   in GPU memory:
+ *       header       { MTLResourceID of the MTLAccelerationStructure (0:
+ *                      nothing built), uint32_t instances, uint32_t 0 },
+ *                    PVK_ACCEL_HEADER bytes
+ *       offsets      uint32_t[instances]: a top level's instances'
+ *                    instanceShaderBindingTableRecordOffset, which Metal
+ *                    has no place for
+ *   Its device address is the buffer's at its offset, the header's: what
+ *   an instance's accelerationStructureReference and an acceleration
+ *   structure descriptor hold (section 12), and what shaders convert to
+ *   one (section 13, RAY QUERIES). The GPU writes the header when it
+ *   builds or copies the acceleration structure (section 16, ACCELERATION
+ *   STRUCTURE COMMANDS), in submission order, so the range needs no host
+ *   access and may be bound after the acceleration structure is made.
+ *   vkGetAccelerationStructureBuildSizesKHR reports what Metal asks for
+ *   the acceleration structure and its scratch memory (-[MTLDevice
+ *   accelerationStructureSizesWithDescriptor:] of the descriptor a build
+ *   would use, without its buffers), and at least the header and offsets.
+ *   Geometry: triangles of the vertex formats of pvk_accel_vertex_format
+ *   (section 7), with 16- or 32-bit indices or none, and a transform
+ *   (Metal reads Vulkan's row-major 3x4 matrices); axis-aligned bounding
+ *   boxes; instances, whose VkAccelerationStructureInstanceKHR the GPU
+ *   turns into Metal's instance descriptors before a build. Flags: the
+ *   geometries' OPAQUE and NO_DUPLICATE_ANY_HIT_INVOCATION, the builds'
+ *   ALLOW_UPDATE, PREFER_FAST_TRACE, PREFER_FAST_BUILD and LOW_MEMORY as
+ *   Metal's usages (ALLOW_COMPACTION needs none).
+ *   Not supported, for want of anything in Metal to do them with: the host
+ *   commands (accelerationStructureHostCommands is not reported), indirect
+ *   builds (accelerationStructureIndirectBuild neither), and serializing:
+ *   vkCmdCopyAccelerationStructureToMemoryKHR and
+ *   vkCmdCopyMemoryToAccelerationStructureKHR report an error and do
+ *   nothing, VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_SIZE_KHR
+ *   queries give 0, and vkGetDeviceAccelerationStructureCompatibilityKHR
+ *   finds any data incompatible. */
+
+#define PVK_ACCEL_HEADER 16u
+
+struct pvk_accel {
+    struct pvk_buffer *buffer; /* its storage: the header at `offset` */
+    VkDeviceSize offset, size;
+    VkAccelerationStructureTypeKHR type;
+    id mtl_accel;                  /* MTLAccelerationStructure of `size` bytes, resident */
+    pvk_MTLResourceID resource_id; /* its gpuResourceID */
+};
+
+/* A geometry of a build: what its Metal descriptor is made from (a build's
+ * packet holds them, section 15). */
+struct pvk_accel_geometry {
+    uint32_t type;        /* VkGeometryTypeKHR */
+    uint32_t flags;       /* VkGeometryFlagsKHR */
+    uint32_t count;       /* triangles, boxes or instances */
+    uint32_t format;      /* triangles: the vertices' MTLAttributeFormat; instances: nonzero for an array of pointers */
+    uint32_t stride;      /* of vertices or boxes, bytes */
+    uint32_t index_type;  /* triangles: VkIndexType */
+    uint32_t vertices;    /* triangles: the vertices a build may read from `data` on */
+    uint32_t vertex_size; /* ... and the bytes of one */
+    pvk_MTLGPUAddress data;      /* the first vertex, box or instance (or pointer to one); 0: a size query */
+    pvk_MTLGPUAddress indices;   /* triangles: the first index; 0: none */
+    pvk_MTLGPUAddress transform; /* triangles: the VkTransformMatrixKHR; 0: none */
+};
+
+static pvk_MTLAccelerationStructureUsage pvk_accel_usage(VkBuildAccelerationStructureFlagsKHR flags)
+{
+    pvk_MTLAccelerationStructureUsage usage = PVK_MTLAccelerationStructureUsageNone;
+    if (flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR)
+        usage |= PVK_MTLAccelerationStructureUsageRefit;
+    if (flags & VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR)
+        usage |= PVK_MTLAccelerationStructureUsagePreferFastBuild;
+    else if (flags & VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR)
+        usage |= PVK_MTLAccelerationStructureUsagePreferFastIntersection;
+    if (flags & VK_BUILD_ACCELERATION_STRUCTURE_LOW_MEMORY_BIT_KHR)
+        usage |= PVK_MTLAccelerationStructureUsageMinimizeMemory;
+    return usage;
+}
+
+/* Bytes of a vertex of an MTLAttributeFormat of pvk_accel_vertex_format. */
+static uint32_t pvk_accel_vertex_size(pvk_MTLAttributeFormat format)
+{
+    switch (format) {
+    case PVK_MTLAttributeFormatFloat3: return 12;
+    case PVK_MTLAttributeFormatHalf3: case PVK_MTLAttributeFormatShort3Normalized: return 6;
+    case PVK_MTLAttributeFormatHalf2: case PVK_MTLAttributeFormatShort2Normalized: return 4;
+    default: return 8; /* Float2, Half4, Short4Normalized */
+    }
+}
+
+/* Geometry `in` of a build as *g: with range `range`, or (NULL) for a size
+ * query of `count` primitives, with no data. Acceleration Structures >
+ * VkAccelerationStructureBuildRangeInfoKHR says where a range's data is. */
+static void pvk_accel_geometry_init(struct pvk_accel_geometry *g, const VkAccelerationStructureGeometryKHR *in,
+                                    const VkAccelerationStructureBuildRangeInfoKHR *range, uint32_t count)
+{
+    memset(g, 0, sizeof(*g));
+    g->type = (uint32_t)in->geometryType;
+    g->flags = in->flags;
+    g->count = range ? range->primitiveCount : count;
+    switch (in->geometryType) {
+    case VK_GEOMETRY_TYPE_TRIANGLES_KHR: {
+        const VkAccelerationStructureGeometryTrianglesDataKHR *t = &in->geometry.triangles;
+        bool indexed = t->indexType != VK_INDEX_TYPE_NONE_KHR;
+        g->format = (uint32_t)pvk_accel_vertex_format(t->vertexFormat);
+        g->vertex_size = pvk_accel_vertex_size(g->format);
+        g->stride = (uint32_t)t->vertexStride;
+        g->index_type = (uint32_t)t->indexType;
+        if (!range)
+            break;
+        /* indices from primitiveOffset, each plus firstVertex; without them
+         * the vertices from primitiveOffset, after firstVertex of them */
+        g->data = t->vertexData.deviceAddress + (VkDeviceSize)range->firstVertex * t->vertexStride +
+                  (indexed ? 0 : range->primitiveOffset);
+        g->indices = indexed ? t->indexData.deviceAddress + range->primitiveOffset : 0;
+        g->transform = t->transformData.deviceAddress ? t->transformData.deviceAddress + range->transformOffset : 0;
+        g->vertices = !indexed                            ? 3 * range->primitiveCount
+                      : t->maxVertex >= range->firstVertex ? t->maxVertex - range->firstVertex + 1
+                                                           : 0;
+        break;
+    }
+    case VK_GEOMETRY_TYPE_AABBS_KHR:
+        g->stride = (uint32_t)in->geometry.aabbs.stride;
+        if (range)
+            g->data = in->geometry.aabbs.data.deviceAddress + range->primitiveOffset;
+        break;
+    default: /* VK_GEOMETRY_TYPE_INSTANCES_KHR */
+        g->format = in->geometry.instances.arrayOfPointers != VK_FALSE;
+        if (range)
+            g->data = in->geometry.instances.data.deviceAddress + range->primitiveOffset;
+        break;
+    }
+}
+
+static pvk_MTL4BufferRange pvk_accel_range(pvk_MTLGPUAddress address)
+{
+    pvk_MTL4BufferRange r;
+    r.bufferAddress = address;
+    r.length = address ? ~(uint64_t)0 : 0; /* (to the end of its buffer) */
+    return r;
+}
+
+/* The Metal descriptor of an acceleration structure of geometries g with
+ * `usage`, for a build or a size query: a top level's of g[0]'s instances
+ * (MTLIndirectAccelerationStructureInstanceDescriptors at its `data`), a
+ * bottom level's of the n geometries (at least one). NULL: out of memory.
+ * To release, the geometry descriptors with the caller's autorelease pool.
+ * System memory for the list: the threads that encode call it too (section
+ * 16), and only the thread of a command may call the application's
+ * allocator. */
+static id pvk_accel_descriptor(bool top, pvk_MTLAccelerationStructureUsage usage, const struct pvk_accel_geometry *g,
+                               uint32_t n)
+{
+    id desc, array = NULL, *list;
+    uint32_t i;
+
+    if (top) {
+        if (!(desc = pvk_MTL4InstanceAccelerationStructureDescriptor_new()))
+            return NULL;
+        pvk_MTLAccelerationStructureDescriptor_setUsage(desc, usage);
+        pvk_MTL4InstanceAccelerationStructureDescriptor_setInstanceDescriptorType(
+            desc, PVK_MTLAccelerationStructureInstanceDescriptorTypeIndirect);
+        pvk_MTL4InstanceAccelerationStructureDescriptor_setInstanceDescriptorStride(
+            desc, sizeof(pvk_MTLIndirectAccelerationStructureInstanceDescriptor));
+        pvk_MTL4InstanceAccelerationStructureDescriptor_setInstanceTransformationMatrixLayout(
+            desc, PVK_MTLMatrixLayoutRowMajor);
+        pvk_MTL4InstanceAccelerationStructureDescriptor_setInstanceCount(desc, n ? g[0].count : 0);
+        pvk_MTL4InstanceAccelerationStructureDescriptor_setInstanceDescriptorBuffer(desc,
+                                                                                   pvk_accel_range(n ? g[0].data : 0));
+        return desc;
+    }
+    if (!(list = calloc(n, sizeof(*list))))
+        return NULL;
+    for (i = 0; i < n; i++) {
+        id geo;
+        if (g[i].type == VK_GEOMETRY_TYPE_TRIANGLES_KHR) {
+            if (!(geo = pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_new()))
+                break;
+            pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setVertexFormat(geo, g[i].format);
+            pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setVertexStride(geo, g[i].stride);
+            pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setTriangleCount(geo, g[i].count);
+            pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setVertexBuffer(geo, pvk_accel_range(g[i].data));
+            if (g[i].index_type != VK_INDEX_TYPE_NONE_KHR) {
+                pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setIndexType(
+                    geo, g[i].index_type == VK_INDEX_TYPE_UINT16 ? PVK_MTLIndexTypeUInt16 : PVK_MTLIndexTypeUInt32);
+                pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setIndexBuffer(geo,
+                                                                                      pvk_accel_range(g[i].indices));
+            }
+            if (g[i].transform) {
+                pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setTransformationMatrixLayout(
+                    geo, PVK_MTLMatrixLayoutRowMajor);
+                pvk_MTL4AccelerationStructureTriangleGeometryDescriptor_setTransformationMatrixBuffer(
+                    geo, pvk_accel_range(g[i].transform));
+            }
+        } else {
+            if (!(geo = pvk_MTL4AccelerationStructureBoundingBoxGeometryDescriptor_new()))
+                break;
+            pvk_MTL4AccelerationStructureBoundingBoxGeometryDescriptor_setBoundingBoxStride(geo, g[i].stride);
+            pvk_MTL4AccelerationStructureBoundingBoxGeometryDescriptor_setBoundingBoxCount(geo, g[i].count);
+            pvk_MTL4AccelerationStructureBoundingBoxGeometryDescriptor_setBoundingBoxBuffer(geo,
+                                                                                           pvk_accel_range(g[i].data));
+        }
+        pvk_MTL4AccelerationStructureGeometryDescriptor_setOpaque(geo, (g[i].flags & VK_GEOMETRY_OPAQUE_BIT_KHR) != 0);
+        pvk_MTL4AccelerationStructureGeometryDescriptor_setAllowDuplicateIntersectionFunctionInvocation(
+            geo, !(g[i].flags & VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR));
+        list[i] = geo;
+    }
+    desc = i == n ? pvk_MTL4PrimitiveAccelerationStructureDescriptor_new() : NULL;
+    if (desc && (array = pvk_NSArray_arrayWithObjects_count(list, n))) {
+        pvk_MTLAccelerationStructureDescriptor_setUsage(desc, usage);
+        pvk_MTL4PrimitiveAccelerationStructureDescriptor_setGeometryDescriptors(desc, array);
+    }
+    while (i-- > 0) /* (the array keeps them) */
+        pvk_release(list[i]);
+    free(list);
+    if (desc && !array) {
+        pvk_release(desc);
+        desc = NULL;
+    }
+    return desc;
+}
+
+/* What Metal asks for a build of geometries g, and at least the header and
+ * a top level's record offsets (ACCELERATION STRUCTURES). A bottom level of
+ * no geometries is its header: nothing is built. False: out of memory. */
+static bool pvk_accel_sizes(const struct pvk_device *device, bool top, pvk_MTLAccelerationStructureUsage usage,
+                            const struct pvk_accel_geometry *g, uint32_t n, pvk_MTLAccelerationStructureSizes *sizes)
+{
+    unsigned long own = PVK_ACCEL_HEADER + (top && n ? 4ul * g[0].count : 0);
+    memset(sizes, 0, sizeof(*sizes));
+    if (top || n) {
+        void *pool = objc_autoreleasePoolPush();
+        id desc = pvk_accel_descriptor(top, usage, g, n);
+        if (desc)
+            *sizes = pvk_MTLDevice_accelerationStructureSizesWithDescriptor(device->physical_device->mtl_device, desc);
+        pvk_release(desc);
+        objc_autoreleasePoolPop(pool);
+        if (!desc)
+            return false;
+    }
+    if (sizes->accelerationStructureSize < own)
+        sizes->accelerationStructureSize = own;
+    sizes->accelerationStructureSize = (sizes->accelerationStructureSize + 15) & ~15ul;
+    return true;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkGetAccelerationStructureBuildSizesKHR(
+    VkDevice _device, VkAccelerationStructureBuildTypeKHR buildType,
+    const VkAccelerationStructureBuildGeometryInfoKHR *pBuildInfo, const uint32_t *pMaxPrimitiveCounts,
+    VkAccelerationStructureBuildSizesInfoKHR *pSizeInfo)
+{
+    const struct pvk_device *device = (const struct pvk_device *)_device;
+    uint32_t n = pBuildInfo->geometryCount, i;
+    struct pvk_accel_geometry *g = n ? calloc(n, sizeof(*g)) : NULL;
+    pvk_MTLAccelerationStructureSizes sizes;
+
+    (void)buildType; /* (builds run on the device alone) */
+    pSizeInfo->accelerationStructureSize = pSizeInfo->updateScratchSize = pSizeInfo->buildScratchSize = 0;
+    if (n && !g)
+        return;
+    for (i = 0; i < n; i++)
+        pvk_accel_geometry_init(&g[i], pBuildInfo->pGeometries ? &pBuildInfo->pGeometries[i] : pBuildInfo->ppGeometries[i],
+                                NULL, pMaxPrimitiveCounts ? pMaxPrimitiveCounts[i] : 0);
+    if (pvk_accel_sizes(device, pBuildInfo->type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+                        pvk_accel_usage(pBuildInfo->flags), g, n, &sizes)) {
+        pSizeInfo->accelerationStructureSize = sizes.accelerationStructureSize;
+        pSizeInfo->buildScratchSize = sizes.buildScratchBufferSize;
+        pSizeInfo->updateScratchSize = sizes.refitScratchBufferSize;
+    }
+    free(g);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateAccelerationStructureKHR(VkDevice _device,
+                                                                const VkAccelerationStructureCreateInfoKHR *pCreateInfo,
+                                                                const VkAllocationCallbacks *pAllocator,
+                                                                VkAccelerationStructureKHR *pAccelerationStructure)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : pvk_device_alloc(device);
+    struct pvk_accel *accel = pvk_alloc(alloc, sizeof(*accel), VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+
+    if (!accel)
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    accel->buffer = (struct pvk_buffer *)pCreateInfo->buffer;
+    accel->offset = pCreateInfo->offset;
+    accel->size = pCreateInfo->size;
+    accel->type = pCreateInfo->type;
+    accel->mtl_accel = pvk_MTLDevice_newAccelerationStructureWithSize(
+        device->physical_device->mtl_device, pCreateInfo->size > PVK_ACCEL_HEADER ? pCreateInfo->size : PVK_ACCEL_HEADER);
+    if (!accel->mtl_accel) {
+        pvk_free(alloc, accel);
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    accel->resource_id = pvk_MTLAccelerationStructure_gpuResourceID(accel->mtl_accel);
+    pvk_device_make_resident(device, accel->mtl_accel);
+    *pAccelerationStructure = (VkAccelerationStructureKHR)accel;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyAccelerationStructureKHR(VkDevice _device, VkAccelerationStructureKHR accelerationStructure,
+                                                             const VkAllocationCallbacks *pAllocator)
+{
+    struct pvk_device *device = (struct pvk_device *)_device;
+    struct pvk_accel *accel = (struct pvk_accel *)accelerationStructure;
+    if (!accel)
+        return;
+    pvk_device_evict_commit(device, accel->mtl_accel); /* (its memory goes now, as a heap's) */
+    pvk_release(accel->mtl_accel);
+    pvk_free(pAllocator ? pAllocator : pvk_device_alloc(device), accel);
+}
+
+/* The header's address (ACCELERATION STRUCTURES); 0 for VK_NULL_HANDLE. */
+static pvk_MTLGPUAddress pvk_accel_address(const struct pvk_accel *accel)
+{
+    return accel ? accel->buffer->gpu_address + accel->offset : 0;
+}
+
+VKAPI_ATTR VkDeviceAddress VKAPI_CALL vkGetAccelerationStructureDeviceAddressKHR(
+    VkDevice device, const VkAccelerationStructureDeviceAddressInfoKHR *pInfo)
+{
+    (void)device;
+    return pvk_accel_address((const struct pvk_accel *)pInfo->accelerationStructure);
+}
+
+/* Nothing is serialized (ACCELERATION STRUCTURES): no data is compatible. */
+VKAPI_ATTR void VKAPI_CALL vkGetDeviceAccelerationStructureCompatibilityKHR(
+    VkDevice device, const VkAccelerationStructureVersionInfoKHR *pVersionInfo,
+    VkAccelerationStructureCompatibilityKHR *pCompatibility)
+{
+    (void)device;
+    (void)pVersionInfo;
+    *pCompatibility = VK_ACCELERATION_STRUCTURE_COMPATIBILITY_INCOMPATIBLE_KHR;
+}
+
+/* The host commands: accelerationStructureHostCommands is not reported
+ * (section 7, RAY TRACING), so no valid call reaches them. */
+static VkResult pvk_accel_no_host(VkDevice device, const char *command)
+{
+    pvk_logd((const struct pvk_device *)device, PVK_LOG_ERROR, "PlasmaVK-accelerationStructureHostCommands",
+             VK_OBJECT_TYPE_DEVICE, 0, "%s: the accelerationStructureHostCommands feature is not supported", command);
+    return VK_ERROR_FEATURE_NOT_PRESENT;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkBuildAccelerationStructuresKHR(
+    VkDevice device, VkDeferredOperationKHR deferredOperation, uint32_t infoCount,
+    const VkAccelerationStructureBuildGeometryInfoKHR *pInfos,
+    const VkAccelerationStructureBuildRangeInfoKHR *const *ppBuildRangeInfos)
+{
+    (void)deferredOperation;
+    (void)infoCount;
+    (void)pInfos;
+    (void)ppBuildRangeInfos;
+    return pvk_accel_no_host(device, "vkBuildAccelerationStructuresKHR");
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCopyAccelerationStructureKHR(VkDevice device, VkDeferredOperationKHR deferredOperation,
+                                                              const VkCopyAccelerationStructureInfoKHR *pInfo)
+{
+    (void)deferredOperation;
+    (void)pInfo;
+    return pvk_accel_no_host(device, "vkCopyAccelerationStructureKHR");
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCopyAccelerationStructureToMemoryKHR(
+    VkDevice device, VkDeferredOperationKHR deferredOperation, const VkCopyAccelerationStructureToMemoryInfoKHR *pInfo)
+{
+    (void)deferredOperation;
+    (void)pInfo;
+    return pvk_accel_no_host(device, "vkCopyAccelerationStructureToMemoryKHR");
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkCopyMemoryToAccelerationStructureKHR(
+    VkDevice device, VkDeferredOperationKHR deferredOperation, const VkCopyMemoryToAccelerationStructureInfoKHR *pInfo)
+{
+    (void)deferredOperation;
+    (void)pInfo;
+    return pvk_accel_no_host(device, "vkCopyMemoryToAccelerationStructureKHR");
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL vkWriteAccelerationStructuresPropertiesKHR(
+    VkDevice device, uint32_t accelerationStructureCount, const VkAccelerationStructureKHR *pAccelerationStructures,
+    VkQueryType queryType, size_t dataSize, void *pData, size_t stride)
+{
+    (void)accelerationStructureCount;
+    (void)pAccelerationStructures;
+    (void)queryType;
+    (void)dataSize;
+    (void)pData;
+    (void)stride;
+    return pvk_accel_no_host(device, "vkWriteAccelerationStructuresPropertiesKHR");
 }
 
 /* ==========================================================================
@@ -40810,7 +41396,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkTransitionImageLayout(VkDevice device, uint32_t
  * its bytes into the table from the CPU: a buffer is { GPU address of the
  * range, its size }, an image, texel buffer or sampler the MTLResourceID of
  * its Metal object (a storage image: and of its residency texture, section
- * 11, SPARSE IMAGES, or 0 without one), an inline uniform block its data.
+ * 11, SPARSE IMAGES, or 0 without one), an inline uniform block its data, an
+ * acceleration structure its device address (section 10, ACCELERATION
+ * STRUCTURES).
  *
  * LAYOUTS
  *   A layout orders its bindings by binding number and gives each a
@@ -40899,6 +41487,7 @@ static uint32_t pvk_descriptor_stride(VkDescriptorType type)
     case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
     case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
     case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+    case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
         return 8;
     case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK:
         return 1;
@@ -41635,8 +42224,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkFreeDescriptorSets(VkDevice device, VkDescripto
 
 /* Writes n consecutive descriptors of one binding: at dst, `stride` apart
  * (the binding's; 32: room for the planes of a Y'CbCr view), from infos at
- * info, info_stride apart: VkDescriptorBufferInfos, VkDescriptorImageInfos
- * or VkBufferViews, as the type says (an inline uniform block: n bytes). A
+ * info, info_stride apart: VkDescriptorBufferInfos, VkDescriptorImageInfos,
+ * VkBufferViews or VkAccelerationStructureKHRs, as the type says (an inline
+ * uniform block: n bytes). A
  * binding with immutable samplers keeps them (immutable: the first
  * descriptor's pair of sampler IDs, else NULL). One loop per type. */
 static void pvk_descriptor_write(char *dst, uint32_t stride, VkDescriptorType type, const char *info,
@@ -41704,6 +42294,12 @@ static void pvk_descriptor_write(char *dst, uint32_t stride, VkDescriptorType ty
     case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK:
         memcpy(dst, info, n);
         break;
+    case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+        for (j = 0; j < n; j++, dst += stride, info += info_stride) {
+            uint64_t address = pvk_accel_address((const struct pvk_accel *)*(const VkAccelerationStructureKHR *)info);
+            memcpy(dst, &address, 8);
+        }
+        break;
     default:
         break;
     }
@@ -41760,6 +42356,13 @@ static void pvk_table_write_set(char *table, const struct pvk_descriptor_set_lay
         for (ext = w->pNext; ext; ext = ext->pNext)
             if (ext->sType == VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_INLINE_UNIFORM_BLOCK)
                 data = (const char *)((const VkWriteDescriptorSetInlineUniformBlock *)ext)->pData;
+        break;
+    case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+        data = NULL;
+        stride = sizeof(VkAccelerationStructureKHR);
+        for (ext = w->pNext; ext; ext = ext->pNext)
+            if (ext->sType == VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR)
+                data = (const char *)((const VkWriteDescriptorSetAccelerationStructureKHR *)ext)->pAccelerationStructures;
         break;
     default:
         break;
@@ -43171,18 +43774,44 @@ enum {
     PVK_SPV_OpPtrDiff = 403,
     PVK_SPV_OpTerminateInvocation = 4416,
     PVK_SPV_OpGroupNonUniformRotateKHR = 4431,
+    PVK_SPV_OpConvertUToAccelerationStructureKHR = 4447,
     PVK_SPV_OpSDot = 4450,
     PVK_SPV_OpUDot = 4451,
     PVK_SPV_OpSUDot = 4452,
     PVK_SPV_OpSDotAccSat = 4453,
     PVK_SPV_OpUDotAccSat = 4454,
     PVK_SPV_OpSUDotAccSat = 4455,
+    PVK_SPV_OpTypeRayQueryKHR = 4472,
+    PVK_SPV_OpRayQueryInitializeKHR = 4473,
+    PVK_SPV_OpRayQueryTerminateKHR = 4474,
+    PVK_SPV_OpRayQueryGenerateIntersectionKHR = 4475,
+    PVK_SPV_OpRayQueryConfirmIntersectionKHR = 4476,
+    PVK_SPV_OpRayQueryProceedKHR = 4477,
+    PVK_SPV_OpRayQueryGetIntersectionTypeKHR = 4479,
+    PVK_SPV_OpTypeAccelerationStructureKHR = 5341,
     PVK_SPV_OpDemoteToHelperInvocation = 5380,
     PVK_SPV_OpIsHelperInvocationEXT = 5381,
     PVK_SPV_OpAssumeTrueKHR = 5630,
     PVK_SPV_OpExpectKHR = 5631,
     PVK_SPV_OpDecorateString = 5632,
     PVK_SPV_OpMemberDecorateString = 5633,
+    PVK_SPV_OpRayQueryGetRayTMinKHR = 6016,
+    PVK_SPV_OpRayQueryGetRayFlagsKHR = 6017,
+    PVK_SPV_OpRayQueryGetIntersectionTKHR = 6018,
+    PVK_SPV_OpRayQueryGetIntersectionInstanceCustomIndexKHR = 6019,
+    PVK_SPV_OpRayQueryGetIntersectionInstanceIdKHR = 6020,
+    PVK_SPV_OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR = 6021,
+    PVK_SPV_OpRayQueryGetIntersectionGeometryIndexKHR = 6022,
+    PVK_SPV_OpRayQueryGetIntersectionPrimitiveIndexKHR = 6023,
+    PVK_SPV_OpRayQueryGetIntersectionBarycentricsKHR = 6024,
+    PVK_SPV_OpRayQueryGetIntersectionFrontFaceKHR = 6025,
+    PVK_SPV_OpRayQueryGetIntersectionCandidateAABBOpaqueKHR = 6026,
+    PVK_SPV_OpRayQueryGetIntersectionObjectRayDirectionKHR = 6027,
+    PVK_SPV_OpRayQueryGetIntersectionObjectRayOriginKHR = 6028,
+    PVK_SPV_OpRayQueryGetWorldRayDirectionKHR = 6029,
+    PVK_SPV_OpRayQueryGetWorldRayOriginKHR = 6030,
+    PVK_SPV_OpRayQueryGetIntersectionObjectToWorldKHR = 6031,
+    PVK_SPV_OpRayQueryGetIntersectionWorldToObjectKHR = 6032,
     PVK_SPV_OpAtomicFAddEXT = 6035
 };
 
@@ -43716,6 +44345,7 @@ struct pvk_spv {
     bool use_storage;           /* emit pvk_storage */
     bool use_math;              /* emit pvk_atan2, pvk_tanh */
     bool use_ia;                /* emit pvk_ia_tex, pvk_ia_tex_ms */
+    bool use_rays;              /* emit pvk_accel, pvk_ray_query and their functions (RAY QUERIES) */
     bool derivatives;           /* a fragment shader uses derivatives or quad operations (pvk_spv_emit_stage) */
     bool storage_reads;         /* the module reads storage images (pvk_spv_storage_reads) */
     bool rb_clamp;              /* robust scalar and vector accesses clamp (pvk_spv_rb_lvalue): it has loops */
@@ -44965,8 +45595,11 @@ static int pvk_spv_shape_of(uint32_t op)
     case PVK_SPV_OpTerminateInvocation: case PVK_SPV_OpDecorateString: case PVK_SPV_OpMemberDecorateString:
     case PVK_SPV_OpFunctionEnd: case PVK_SPV_OpTypeForwardPointer: case PVK_SPV_OpImageWrite:
     case PVK_SPV_OpDemoteToHelperInvocation: case PVK_SPV_OpAssumeTrueKHR:
+    case PVK_SPV_OpRayQueryInitializeKHR: case PVK_SPV_OpRayQueryTerminateKHR:
+    case PVK_SPV_OpRayQueryGenerateIntersectionKHR: case PVK_SPV_OpRayQueryConfirmIntersectionKHR:
         return 0;
     case PVK_SPV_OpString: case PVK_SPV_OpExtInstImport: case PVK_SPV_OpLabel: case PVK_SPV_OpDecorationGroup:
+    case PVK_SPV_OpTypeRayQueryKHR: case PVK_SPV_OpTypeAccelerationStructureKHR:
         return 1;
     case PVK_SPV_OpUndef: case PVK_SPV_OpExtInst: case PVK_SPV_OpFunction: case PVK_SPV_OpFunctionParameter:
     case PVK_SPV_OpFunctionCall: case PVK_SPV_OpVariable: case PVK_SPV_OpLoad: case PVK_SPV_OpAccessChain:
@@ -44981,10 +45614,14 @@ static int pvk_spv_shape_of(uint32_t op)
     case PVK_SPV_OpImageSparseSampleDrefImplicitLod: case PVK_SPV_OpImageSparseSampleDrefExplicitLod:
     case PVK_SPV_OpImageSparseFetch: case PVK_SPV_OpImageSparseGather: case PVK_SPV_OpImageSparseDrefGather:
     case PVK_SPV_OpImageSparseTexelsResident: case PVK_SPV_OpImageSparseRead:
+    case PVK_SPV_OpConvertUToAccelerationStructureKHR: case PVK_SPV_OpRayQueryProceedKHR:
+    case PVK_SPV_OpRayQueryGetIntersectionTypeKHR:
         return 2;
     default:
         break;
     }
+    if (op >= PVK_SPV_OpRayQueryGetRayTMinKHR && op <= PVK_SPV_OpRayQueryGetIntersectionWorldToObjectKHR)
+        return 2;
     if (op >= PVK_SPV_OpDPdx && op <= PVK_SPV_OpFwidthCoarse)
         return 2;
     if (op >= PVK_SPV_OpSampledImage && op <= PVK_SPV_OpImageRead)
@@ -45080,6 +45717,8 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         if (e->op == PVK_SPV_OpTypeVoid || e->op == PVK_SPV_OpTypeRuntimeArray || e->op == PVK_SPV_OpTypeFunction ||
             (e->op == PVK_SPV_OpTypePointer && !pvk_spv_is_psb(e) && !pvk_spv_is_vptr(e))) /* (variable pointers) */
             pvk_spv_fail(ctx, "unsupported array element type");
+        if (e->op == PVK_SPV_OpTypeRayQueryKHR) /* (MSL: no struct or array holds an intersection query) */
+            pvk_spv_fail(ctx, "arrays of ray queries are not supported");
         t->opaque = e->opaque;
         if (in->op == PVK_SPV_OpTypeArray) {
             uint64_t len = pvk_spv_const_uint(ctx, pvk_spv_arg(ctx, in, 3));
@@ -45169,6 +45808,13 @@ static void pvk_spv_parse_type(struct pvk_spv *ctx, const struct pvk_spv_insn *i
         if (e->op != PVK_SPV_OpTypeImage || e->img.sampled != 1)
             pvk_spv_fail(ctx, "OpTypeSampledImage of an image that cannot be sampled");
         t->opaque = true;
+        break;
+    case PVK_SPV_OpTypeAccelerationStructureKHR: /* a descriptor (RAY QUERIES) */
+        t->opaque = true;
+        ctx->use_rays = true;
+        break;
+    case PVK_SPV_OpTypeRayQueryKHR: /* a Function or Private variable's type: an intersection query */
+        ctx->use_rays = true;
         break;
     default:
         pvk_spv_fail(ctx, "unsupported type (opcode %u)", in->op);
@@ -45425,6 +46071,7 @@ static void pvk_spv_capability(struct pvk_spv *ctx, uint32_t cap)
     case 5629: /* ExpectAssumeKHR */
     case 6016: case 6017: case 6018: case 6019: /* integer dot product */
     case 6029: /* FloatControls2 (FPFastMath* short of fast: MTLMathModeSafe, stricter than any) */
+    case 4472: case 4478: /* RayQueryKHR, RayTraversalPrimitiveCullingKHR (RAY QUERIES) */
         return;
     case 3: case 6: case 23: case 24:
         pvk_spv_fail(ctx, "only vertex, fragment and compute shaders are supported (no tessellation or geometry)");
@@ -45664,7 +46311,8 @@ static void pvk_spv_parse_global(struct pvk_spv *ctx, const struct pvk_spv_insn 
         break;
     }
     default:
-        if (in->op >= PVK_SPV_OpTypeVoid && in->op <= 38) {
+        if ((in->op >= PVK_SPV_OpTypeVoid && in->op <= 38) || in->op == PVK_SPV_OpTypeRayQueryKHR ||
+            in->op == PVK_SPV_OpTypeAccelerationStructureKHR) {
             pvk_spv_parse_type(ctx, in);
             break;
         }
@@ -45811,7 +46459,9 @@ static void pvk_spv_parse_body(struct pvk_spv *ctx, const struct pvk_spv_insn *i
     } else if (in->op != PVK_SPV_OpStore && in->op != PVK_SPV_OpCopyMemory && in->op != PVK_SPV_OpControlBarrier &&
                in->op != PVK_SPV_OpMemoryBarrier && in->op != PVK_SPV_OpAtomicStore && in->op != PVK_SPV_OpNop &&
                in->op != PVK_SPV_OpImageWrite && in->op != PVK_SPV_OpDemoteToHelperInvocation &&
-               in->op != PVK_SPV_OpAssumeTrueKHR) {
+               in->op != PVK_SPV_OpAssumeTrueKHR && in->op != PVK_SPV_OpRayQueryInitializeKHR &&
+               in->op != PVK_SPV_OpRayQueryTerminateKHR && in->op != PVK_SPV_OpRayQueryGenerateIntersectionKHR &&
+               in->op != PVK_SPV_OpRayQueryConfirmIntersectionKHR) {
         pvk_spv_fail(ctx, "unexpected instruction (opcode %u) in a function", in->op);
     }
 }
@@ -46538,6 +47188,13 @@ static void pvk_spv_layout_types(struct pvk_spv *ctx)
             t->msl = "sampler";
             t->size = t->align = 8;
             break;
+        case PVK_SPV_OpTypeAccelerationStructureKHR: /* its device address in a set (RAY QUERIES) */
+            t->msl = "pvk_accel";
+            t->size = t->align = 8;
+            break;
+        case PVK_SPV_OpTypeRayQueryKHR:
+            t->msl = "pvk_ray_query";
+            break;
         case PVK_SPV_OpTypeSampledImage:
             if (pvk_spv_type(ctx, t->elem)->img.dim == PVK_SPV_DimBuffer) { /* a uniform texel buffer itself */
                 t->msl = pvk_spv_type(ctx, t->elem)->msl;
@@ -47171,6 +47828,9 @@ static bool pvk_spv_writes(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     case PVK_SPV_OpStore: case PVK_SPV_OpCopyMemory: case PVK_SPV_OpFunctionCall: case PVK_SPV_OpImageWrite:
     case PVK_SPV_OpControlBarrier: case PVK_SPV_OpMemoryBarrier: case PVK_SPV_OpKill:
     case PVK_SPV_OpTerminateInvocation: case PVK_SPV_OpDemoteToHelperInvocation:
+    case PVK_SPV_OpRayQueryInitializeKHR: case PVK_SPV_OpRayQueryTerminateKHR: /* (a ray query variable's state) */
+    case PVK_SPV_OpRayQueryGenerateIntersectionKHR: case PVK_SPV_OpRayQueryConfirmIntersectionKHR:
+    case PVK_SPV_OpRayQueryProceedKHR:
         return true;
     case PVK_SPV_OpExtInst: /* Modf and Frexp store through a pointer */
         return in->wc > 4 && in->w[3] == ctx->glsl && (in->w[4] == PVK_SPV_GLSL_Modf || in->w[4] == PVK_SPV_GLSL_Frexp);
@@ -47594,6 +48254,8 @@ static VkDescriptorType pvk_spv_resource_kind(struct pvk_spv *ctx, uint32_t var,
     switch (t->op) {
     case PVK_SPV_OpTypeSampler:
         return VK_DESCRIPTOR_TYPE_SAMPLER;
+    case PVK_SPV_OpTypeAccelerationStructureKHR:
+        return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     case PVK_SPV_OpTypeSampledImage:
         if (pvk_spv_type(ctx, t->elem)->img.dim == PVK_SPV_DimBuffer) /* samplerBuffer */
             return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
@@ -48152,6 +48814,39 @@ static const char *pvk_spv_helper(struct pvk_spv *ctx, uint32_t bit, const char 
 
 /* ---- Values, pointers, copies ---- */
 
+/* RAY QUERIES: MSL allows no struct of an intersection query, so what a ray
+ * query keeps besides (the acceleration structure it runs over, for its
+ * instances' record offsets) is a variable of its own beside it,
+ * pvk_as_<name>: declared, passed and taken wherever the query is. */
+static bool pvk_spv_is_rq(struct pvk_spv *ctx, uint32_t tid)
+{
+    return pvk_spv_type(ctx, tid)->op == PVK_SPV_OpTypeRayQueryKHR;
+}
+
+/* The companion of the ray query variable named q. */
+static const char *pvk_spv_rq_accel(struct pvk_spv *ctx, const char *q)
+{
+    const char *c;
+    for (c = q; *c; c++)
+        if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '_'))
+            pvk_spv_fail(ctx, "ray queries in arrays are not supported");
+    return pvk_spv_fmt(ctx, "pvk_as_%s", q);
+}
+
+/* A ray query variable named q of type tid as an argument: with its
+ * companion; anything else: itself. */
+static const char *pvk_spv_rq_arg(struct pvk_spv *ctx, uint32_t tid, const char *q)
+{
+    return pvk_spv_is_rq(ctx, tid) ? pvk_spv_fmt(ctx, "%s, %s", q, pvk_spv_rq_accel(ctx, q)) : q;
+}
+
+/* ... declared: a local of type tid named q, and its companion. */
+static void pvk_spv_rq_declare(struct pvk_spv *ctx, uint32_t tid, const char *q)
+{
+    if (pvk_spv_is_rq(ctx, tid))
+        pvk_spv_line(ctx, "pvk_accel %s = nullptr;", pvk_spv_rq_accel(ctx, q));
+}
+
 static uint32_t pvk_spv_fidx(struct pvk_spv *ctx)
 {
     return pvk_spv_get(ctx, ctx->fn->fid)->func;
@@ -48164,7 +48859,7 @@ static struct pvk_spv_type *pvk_spv_data_type(struct pvk_spv *ctx, uint32_t tid)
     switch (t->op) {
     case PVK_SPV_OpTypeBool: case PVK_SPV_OpTypeInt: case PVK_SPV_OpTypeFloat: case PVK_SPV_OpTypeVector:
     case PVK_SPV_OpTypeMatrix: case PVK_SPV_OpTypeArray: case PVK_SPV_OpTypeStruct: case PVK_SPV_OpTypeImage:
-    case PVK_SPV_OpTypeSampler: case PVK_SPV_OpTypeSampledImage:
+    case PVK_SPV_OpTypeSampler: case PVK_SPV_OpTypeSampledImage: case PVK_SPV_OpTypeAccelerationStructureKHR:
         if (t->msl)
             return t;
         break;
@@ -50035,6 +50730,7 @@ static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
                 pvk_spv_fail(ctx, "OpFunctionCall: combined image samplers with Y'CbCr conversions cannot be passed "
                                   "to functions");
             arg = p->vec ? pvk_spv_fmt(ctx, "(*%s)", pvk_spv_comp_addr(ctx, p)) : p->expr; /* (a reference) */
+            arg = pvk_spv_rq_arg(ctx, p->type, arg);
         } else {
             if (pvk_spv_get(ctx, in->w[4 + i])->type != ft->params[i])
                 pvk_spv_fail(ctx, "OpFunctionCall: argument %u has the wrong type", i);
@@ -50048,7 +50744,7 @@ static void pvk_spv_call(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     /* Globals the callee uses: descriptors through their sets. */
     for (g = 0; g < ctx->nglobals; g++)
         if (pvk_spv_bit(callee->globals, g) && pvk_spv_passed(&ctx->ids[ctx->globals[g]]))
-            list[n++] = ctx->ids[ctx->globals[g]].msl;
+            list[n++] = pvk_spv_rq_arg(ctx, ctx->ids[ctx->globals[g]].p->type, ctx->ids[ctx->globals[g]].msl);
     sets = pvk_spv_func_sets(ctx, callee);
     for (g = 0; g < PVK_MSL_MAX_SETS; g++)
         if (sets & (1u << g))
@@ -51615,6 +52311,113 @@ static const char *pvk_spv_underaligned(struct pvk_spv *ctx, const struct pvk_sp
     return pvk_spv_fmt(ctx, "(*(%s packed_%s*)&%s)", ctx->dev, t->msl, p->expr);
 }
 
+/* ---- Ray queries (RAY QUERIES) ---- */
+
+/* The MSL of a ray query instruction's query operand: the variable. */
+static const char *pvk_spv_ray_query_of(struct pvk_spv *ctx, uint32_t v)
+{
+    const struct pvk_spv_ptr *p = pvk_spv_ptr_of(ctx, v);
+    if (!pvk_spv_is_rq(ctx, p->type))
+        pvk_spv_fail(ctx, "id %u is not a ray query", v);
+    return p->expr;
+}
+
+/* OpRayQuery*: the intersection query's members. An Intersection operand
+ * is a constant: 0 the candidate, 1 the committed one. */
+static void pvk_spv_ray_query(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
+{
+    uint32_t op = in->op, rid = 0;
+    struct pvk_spv_type *r = NULL;
+    const char *q, *which = "candidate", *get = NULL;
+    bool integer = false;
+
+    switch (op) {
+    case PVK_SPV_OpRayQueryInitializeKHR:
+        q = pvk_spv_ray_query_of(ctx, pvk_spv_arg(ctx, in, 1));
+        if (pvk_spv_vtype(ctx, pvk_spv_arg(ctx, in, 2))->op != PVK_SPV_OpTypeAccelerationStructureKHR)
+            pvk_spv_fail(ctx, "OpRayQueryInitializeKHR: id %u is not an acceleration structure", in->w[2]);
+        pvk_spv_line(ctx, "pvk_rq_init(%s, %s, %s, uint(%s), uint(%s), %s, %s, %s, %s);", q, pvk_spv_rq_accel(ctx, q),
+                     pvk_spv_val(ctx, in->w[2]),
+                     pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 3)), pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 4)),
+                     pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 5)), pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 6)),
+                     pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 7)), pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 8)));
+        return;
+    case PVK_SPV_OpRayQueryTerminateKHR:
+        pvk_spv_line(ctx, "%s.abort();", pvk_spv_ray_query_of(ctx, pvk_spv_arg(ctx, in, 1)));
+        return;
+    case PVK_SPV_OpRayQueryGenerateIntersectionKHR:
+        q = pvk_spv_ray_query_of(ctx, pvk_spv_arg(ctx, in, 1));
+        pvk_spv_line(ctx, "%s.commit_bounding_box_intersection(%s);", q, pvk_spv_val(ctx, pvk_spv_arg(ctx, in, 2)));
+        return;
+    case PVK_SPV_OpRayQueryConfirmIntersectionKHR:
+        pvk_spv_line(ctx, "%s.commit_triangle_intersection();", pvk_spv_ray_query_of(ctx, pvk_spv_arg(ctx, in, 1)));
+        return;
+    default:
+        break;
+    }
+    rid = in->w[2];
+    r = pvk_spv_type(ctx, in->w[1]);
+    q = pvk_spv_ray_query_of(ctx, pvk_spv_arg(ctx, in, 3));
+    switch (op) { /* those of the query itself */
+    case PVK_SPV_OpRayQueryProceedKHR:
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s.next()", q));
+        return;
+    case PVK_SPV_OpRayQueryGetRayTMinKHR:
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s.get_ray_min_distance()", q));
+        return;
+    case PVK_SPV_OpRayQueryGetRayFlagsKHR:
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(pvk_rq_flags(%s))", r->msl, q));
+        return;
+    case PVK_SPV_OpRayQueryGetWorldRayDirectionKHR:
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s.get_world_space_ray_direction()", q));
+        return;
+    case PVK_SPV_OpRayQueryGetWorldRayOriginKHR:
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s.get_world_space_ray_origin()", q));
+        return;
+    case PVK_SPV_OpRayQueryGetIntersectionCandidateAABBOpaqueKHR:
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "(!%s.is_candidate_non_opaque_bounding_box())", q));
+        return;
+    default:
+        break;
+    }
+    if (pvk_spv_const_uint(ctx, pvk_spv_arg(ctx, in, 4)))
+        which = "committed";
+    switch (op) {
+    case PVK_SPV_OpRayQueryGetIntersectionTypeKHR:
+        /* Metal's none, triangle, bounding box are 0, 1, 2: Vulkan's committed
+         * types, and its candidate types plus one */
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(uint(%s.get_%s_intersection_type())%s)", r->msl, q, which,
+                                          which[1] == 'a' ? " - 1u" : ""));
+        return;
+    case PVK_SPV_OpRayQueryGetIntersectionTKHR:
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s.get_%s", q,
+                                          which[1] == 'a' ? "candidate_triangle_distance()" : "committed_distance()"));
+        return;
+    case PVK_SPV_OpRayQueryGetIntersectionFrontFaceKHR:
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s.is_%s_triangle_front_facing()", q, which));
+        return;
+    case PVK_SPV_OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR:
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(pvk_rq_record_offset(%s, %s.get_%s_instance_id()))", r->msl,
+                                          pvk_spv_rq_accel(ctx, q), q, which));
+        return;
+    case PVK_SPV_OpRayQueryGetIntersectionInstanceCustomIndexKHR: get = "user_instance_id"; integer = true; break;
+    case PVK_SPV_OpRayQueryGetIntersectionInstanceIdKHR: get = "instance_id"; integer = true; break;
+    case PVK_SPV_OpRayQueryGetIntersectionGeometryIndexKHR: get = "geometry_id"; integer = true; break;
+    case PVK_SPV_OpRayQueryGetIntersectionPrimitiveIndexKHR: get = "primitive_id"; integer = true; break;
+    case PVK_SPV_OpRayQueryGetIntersectionBarycentricsKHR: get = "triangle_barycentric_coord"; break;
+    case PVK_SPV_OpRayQueryGetIntersectionObjectRayDirectionKHR: get = "ray_direction"; break;
+    case PVK_SPV_OpRayQueryGetIntersectionObjectRayOriginKHR: get = "ray_origin"; break;
+    case PVK_SPV_OpRayQueryGetIntersectionObjectToWorldKHR: get = "object_to_world_transform"; break;
+    case PVK_SPV_OpRayQueryGetIntersectionWorldToObjectKHR: get = "world_to_object_transform"; break;
+    default:
+        pvk_spv_fail(ctx, "unsupported ray query instruction (opcode %u)", op);
+    }
+    if (integer) /* (GLSL's are int, Metal's uint) */
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(%s.get_%s_%s())", r->msl, q, which, get));
+    else
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s.get_%s_%s()", q, which, get));
+}
+
 static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
 {
     uint32_t op = in->op, rid = 0, rtype = 0;
@@ -51703,6 +52506,20 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
             r->op != PVK_SPV_OpTypeInt)
             pvk_spv_fail(ctx, "unsupported OpConvertPtrToU");
         pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, "%s(reinterpret_cast<ulong>(%s))", r->msl, pvk_spv_val(ctx, in->w[3])));
+        return;
+    case PVK_SPV_OpConvertUToAccelerationStructureKHR: { /* its device address: a 64-bit integer, or two 32-bit ones */
+        struct pvk_spv_type *at = pvk_spv_vtype(ctx, pvk_spv_arg(ctx, in, 3));
+        if (r->op != PVK_SPV_OpTypeAccelerationStructureKHR)
+            pvk_spv_fail(ctx, "OpConvertUToAccelerationStructureKHR to another type");
+        pvk_spv_set(ctx, rid, pvk_spv_fmt(ctx, at->op == PVK_SPV_OpTypeVector ? "reinterpret_cast<%s>(as_type<ulong>(%s))"
+                                                                             : "reinterpret_cast<%s>(ulong(%s))",
+                                          r->msl, pvk_spv_val(ctx, in->w[3])));
+        return;
+    }
+    case PVK_SPV_OpRayQueryInitializeKHR: case PVK_SPV_OpRayQueryTerminateKHR:
+    case PVK_SPV_OpRayQueryGenerateIntersectionKHR: case PVK_SPV_OpRayQueryConfirmIntersectionKHR:
+    case PVK_SPV_OpRayQueryProceedKHR: case PVK_SPV_OpRayQueryGetIntersectionTypeKHR:
+        pvk_spv_ray_query(ctx, in);
         return;
     case PVK_SPV_OpArrayLength:
         pvk_spv_array_length(ctx, in);
@@ -52087,6 +52904,10 @@ static void pvk_spv_emit_insn(struct pvk_spv *ctx, const struct pvk_spv_insn *in
     default:
         if (op >= PVK_SPV_OpGroupNonUniformElect && op <= PVK_SPV_OpGroupNonUniformQuadSwap) {
             pvk_spv_subgroup(ctx, in);
+            return;
+        }
+        if (op >= PVK_SPV_OpRayQueryGetRayTMinKHR && op <= PVK_SPV_OpRayQueryGetIntersectionWorldToObjectKHR) {
+            pvk_spv_ray_query(ctx, in);
             return;
         }
         if ((op >= PVK_SPV_OpSampledImage && op <= PVK_SPV_OpImage) ||
@@ -52625,6 +53446,9 @@ static const char *pvk_spv_global_param(struct pvk_spv *ctx, uint32_t var)
     case PVK_SPV_StorageInput:
         return pvk_spv_fmt(ctx, "%s %s", t->msl, x->msl);
     default:
+        if (pvk_spv_is_rq(ctx, x->p->type)) /* with its companion (pvk_spv_rq_accel) */
+            return pvk_spv_fmt(ctx, "thread pvk_ray_query& %s, thread pvk_accel& %s", x->msl,
+                               pvk_spv_rq_accel(ctx, x->msl));
         return pvk_spv_fmt(ctx, "%s& %s", pvk_spv_qualified(ctx, pvk_spv_space(ctx, x->p), x->p->type), x->msl);
     }
 }
@@ -52744,6 +53568,9 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
         if (rt && rt->op == PVK_SPV_OpTypeRuntimeArray) /* a pointer to its first element (it decays to one) */
             decl = pvk_spv_fmt(ctx, "%s %s* %s", pvk_spv_space(ctx, x->p),
                                rt->slot ? rt->slot : pvk_spv_type(ctx, rt->elem)->msl, x->msl);
+        else if (x->p && pvk_spv_is_rq(ctx, x->p->type)) /* with its companion (pvk_spv_rq_accel) */
+            decl = pvk_spv_fmt(ctx, "thread pvk_ray_query& %s, thread pvk_accel& %s", x->msl,
+                               pvk_spv_rq_accel(ctx, x->msl));
         else if (x->p)
             decl = pvk_spv_fmt(ctx, "%s& %s", pvk_spv_qualified(ctx, pvk_spv_space(ctx, x->p), x->p->type), x->msl);
         else
@@ -52876,6 +53703,7 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
                     pvk_spv_line(ctx, "%s %s = %s;", t->msl, x->msl, pvk_spv_const_expr(ctx, in.w[4], 0));
                 else
                     pvk_spv_line(ctx, "%s %s;", t->msl, x->msl);
+                pvk_spv_rq_declare(ctx, x->p->type, x->msl);
                 break;
             }
             default:
@@ -52896,6 +53724,7 @@ static void pvk_spv_emit_function(struct pvk_spv *ctx, struct pvk_spv_func *fn)
             pvk_spv_line(ctx, "%s %s = %s;", t, x->msl, pvk_spv_const_expr(ctx, in.w[4], 0));
         else
             pvk_spv_line(ctx, "%s %s;", t, x->msl);
+        pvk_spv_rq_declare(ctx, x->p->type, x->msl);
     }
     if (ctx->merged) {
         pvk_spv_line(ctx, "bool pvk_ret = false;");
@@ -54565,6 +55394,11 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
                 continue;
             }
         }
+        if (pvk_spv_is_rq(ctx, x->p->type)) { /* (no initializer: an intersection query, and its companion) */
+            pvk_spv_line(ctx, "%s %s;", t->msl, x->msl);
+            pvk_spv_rq_declare(ctx, x->p->type, x->msl);
+            continue;
+        }
         pvk_spv_line(ctx, "%s %s = {};", t->msl, x->msl);
     }
     for (g = 0; g < ctx->nglobals; g++) { /* input attachments: framebuffer fetch */
@@ -54779,7 +55613,8 @@ static void pvk_spv_emit_stage(struct pvk_spv *ctx, const char *name)
     /* The call */
     for (g = 0; g < ctx->nglobals; g++)
         if (pvk_spv_bit(entry->globals, g) && pvk_spv_passed(&ctx->ids[ctx->globals[g]]))
-            PVK_SPV_PUSH(ctx, args, nargs, cap_args, ctx->ids[ctx->globals[g]].msl);
+            PVK_SPV_PUSH(ctx, args, nargs, cap_args,
+                         pvk_spv_rq_arg(ctx, ctx->ids[ctx->globals[g]].p->type, ctx->ids[ctx->globals[g]].msl));
     for (set = 0; set < PVK_MSL_MAX_SETS; set++)
         if (pvk_spv_func_sets(ctx, entry) & (1u << set))
             PVK_SPV_PUSH(ctx, args, nargs, cap_args, pvk_spv_fmt(ctx, "set%u", set));
@@ -55177,6 +56012,79 @@ static const char pvk_spv_ycbcr_template[] =
     "    sampler s;\n"
     "    texture2d<float> t1, t2;\n"
     "};\n\n";
+
+/* RAY QUERIES: an acceleration structure value is its device address, the
+ * address of its header (section 10, ACCELERATION STRUCTURES); a ray query
+ * is an MSL intersection query, beside it the acceleration structure it
+ * runs over (pvk_spv_rq_accel). Ray flags are SPIR-V's bits, which the
+ * query's parameters give back. Metal finds nothing
+ * for a ray whose maximum distance is not above its minimum, where Vulkan
+ * has the intersections at that distance: the query's ray ends just beyond
+ * it. */
+static const char pvk_spv_rays_template[] =
+    "/* An acceleration structure's header, at its device address. */\n"
+    "struct pvk_accel_header\n"
+    "{\n"
+    "    raytracing::instance_acceleration_structure as;\n"
+    "    uint count; /* instances, whose shader binding table record offsets follow */\n"
+    "    uint pad;\n"
+    "};\n\n"
+    "typedef const device pvk_accel_header* pvk_accel;\n"
+    "typedef raytracing::intersection_query<raytracing::instancing, raytracing::triangle_data> pvk_ray_query;\n\n"
+    "static inline void pvk_rq_init(thread pvk_ray_query& q, thread pvk_accel& q_as, pvk_accel as, uint flags, uint mask,\n"
+    "                               float3 origin, float tmin, float3 direction, float tmax)\n"
+    "{\n"
+    "    raytracing::intersection_params p;\n"
+    "    if (flags & 1u)\n"
+    "        p.force_opacity(raytracing::forced_opacity::opaque);\n"
+    "    else if (flags & 2u)\n"
+    "        p.force_opacity(raytracing::forced_opacity::non_opaque);\n"
+    "    if (flags & 4u)\n"
+    "        p.accept_any_intersection(true);\n"
+    "    if (flags & 0x10u)\n"
+    "        p.set_triangle_cull_mode(raytracing::triangle_cull_mode::back);\n"
+    "    else if (flags & 0x20u)\n"
+    "        p.set_triangle_cull_mode(raytracing::triangle_cull_mode::front);\n"
+    "    if (flags & 0x40u)\n"
+    "        p.set_opacity_cull_mode(raytracing::opacity_cull_mode::opaque);\n"
+    "    else if (flags & 0x80u)\n"
+    "        p.set_opacity_cull_mode(raytracing::opacity_cull_mode::non_opaque);\n"
+    "    if (flags & 0x100u)\n"
+    "        p.set_geometry_cull_mode(raytracing::geometry_cull_mode::triangle);\n"
+    "    else if (flags & 0x200u)\n"
+    "        p.set_geometry_cull_mode(raytracing::geometry_cull_mode::bounding_box);\n"
+    "    q_as = as;\n"
+    "    q.reset(raytracing::ray(origin, direction, tmin, max(tmax, max(nextafter(tmin, INFINITY), FLT_MIN))),\n"
+    "            as ? as->as : raytracing::instance_acceleration_structure(), mask & 0xffu, p);\n"
+    "}\n\n"
+    "static inline uint pvk_rq_flags(thread pvk_ray_query& q)\n"
+    "{\n"
+    "    raytracing::intersection_params p = q.get_intersection_params();\n"
+    "    uint flags = 0u;\n"
+    "    if (p.get_forced_opacity() == raytracing::forced_opacity::opaque)\n"
+    "        flags |= 1u;\n"
+    "    else if (p.get_forced_opacity() == raytracing::forced_opacity::non_opaque)\n"
+    "        flags |= 2u;\n"
+    "    if (p.should_accept_any_intersection())\n"
+    "        flags |= 4u;\n"
+    "    if (p.get_triangle_cull_mode() == raytracing::triangle_cull_mode::back)\n"
+    "        flags |= 0x10u;\n"
+    "    else if (p.get_triangle_cull_mode() == raytracing::triangle_cull_mode::front)\n"
+    "        flags |= 0x20u;\n"
+    "    if (p.get_opacity_cull_mode() == raytracing::opacity_cull_mode::opaque)\n"
+    "        flags |= 0x40u;\n"
+    "    else if (p.get_opacity_cull_mode() == raytracing::opacity_cull_mode::non_opaque)\n"
+    "        flags |= 0x80u;\n"
+    "    if (p.get_geometry_cull_mode() == raytracing::geometry_cull_mode::triangle)\n"
+    "        flags |= 0x100u;\n"
+    "    else if (p.get_geometry_cull_mode() == raytracing::geometry_cull_mode::bounding_box)\n"
+    "        flags |= 0x200u;\n"
+    "    return flags;\n"
+    "}\n\n"
+    "static inline uint pvk_rq_record_offset(pvk_accel as, uint instance)\n"
+    "{\n"
+    "    return as && instance < as->count ? ((const device uint*)(as + 1))[instance] : 0u;\n"
+    "}\n\n";
 
 static const char pvk_spv_ia_template[] =
     "/* An input attachment read from a texture at the fragment's pixel (PVK_MSL_IA_TEXTURE). */\n"
@@ -55666,12 +56574,12 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         pvk_spv_fail(ctx, "push-constant buffer %u is also descriptor set %u", res->push_constant_buffer,
                      res->push_constant_buffer);
 
-    pvk_sb_printf(ctx, out, "/* Generated by PlasmaVK from SPIR-V. %s: %s */\n\n#include <metal_stdlib>\n\n"
+    pvk_sb_printf(ctx, out, "/* Generated by PlasmaVK from SPIR-V. %s: %s */\n\n#include <metal_stdlib>\n%s\n"
                             "using namespace metal;\n\n",
                   ctx->model == PVK_SPV_ExecutionModelVertex     ? "Vertex function"
                   : ctx->model == PVK_SPV_ExecutionModelFragment ? "Fragment function"
                                                                  : "Kernel",
-                  kernel);
+                  kernel, ctx->use_rays ? "#include <metal_raytracing>\n" : "");
     if (res->fast_math)
         pvk_sb_printf(ctx, out, "#define PVK_FAST_MATH 1 /* Vulkan's default floating-point environment */\n\n");
     if (contract)
@@ -55698,6 +56606,8 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
     }
     if (ctx->use_ia)
         pvk_sb_append(ctx, out, pvk_spv_ia_template, sizeof(pvk_spv_ia_template) - 1);
+    if (ctx->use_rays)
+        pvk_sb_append(ctx, out, pvk_spv_rays_template, sizeof(pvk_spv_rays_template) - 1);
     if (ctx->types.len)
         pvk_sb_append(ctx, out, ctx->types.data, ctx->types.len);
     if (ctx->consts.len)
@@ -56148,7 +57058,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateQueryPool(VkDevice _device, const VkQuery
         *pQueryPool = (VkQueryPool)pool;
         return VK_SUCCESS;
     }
-    shared = pvk_vis_take(device, pool->count, &pool->vis_word);
+    /* (other pools than occlusion ones, the acceleration structure sizes',
+     * keep their results themselves: section 16 writes them) */
+    shared = pool->type == VK_QUERY_TYPE_OCCLUSION && pvk_vis_take(device, pool->count, &pool->vis_word);
     size = (shared ? 8ul : 16ul) * pool->count;
     if (size <= pvk_MTLDevice_maxBufferLength(mtl))
         pool->buffer = pvk_MTLDevice_newBufferWithLength_options(
@@ -57053,6 +57965,10 @@ enum pvk_cmd_op {
     /* Queries and events (end of this section) */
     PVK_CMD_QUERY,             /* struct pvk_cmd_query */
     PVK_CMD_EVENT,             /* struct pvk_cmd_event */
+    /* Acceleration structures (end of this section) */
+    PVK_CMD_ACCEL_BUILD,       /* struct pvk_cmd_accel_build, then its builds and their geometries */
+    PVK_CMD_ACCEL_COPY,        /* struct pvk_cmd_accel_copy */
+    PVK_CMD_ACCEL_QUERY,       /* struct pvk_cmd_accel_query, then its acceleration structures */
     /* Debug labels (Labels, below) */
     PVK_CMD_LABEL              /* struct pvk_cmd_label, then the text */
 };
@@ -60439,6 +61355,237 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetDeviceMask(VkCommandBuffer commandBuffer, uin
     (void)deviceMask;
 }
 
+/* ---- Acceleration structure commands (VK_KHR_acceleration_structure) ----
+ *
+ * Builds, copies and size queries are packets that hold all they need:
+ * the MTLAccelerationStructures, where their headers are (section 10,
+ * ACCELERATION STRUCTURES) and each build's geometries with their data's
+ * addresses, as the ranges place them. Section 16 (ACCELERATION STRUCTURE
+ * COMMANDS) encodes them. They encode in order (PVK_PAR_SERIAL). */
+
+/* One acceleration structure of a build command, then its geometry_count
+ * struct pvk_accel_geometry. */
+struct pvk_accel_build {
+    id dst, src;                /* MTLAccelerationStructures; src: an update's source (NULL: a build) */
+    pvk_MTLResourceID dst_id;   /* dst's */
+    id header_buffer;           /* dst's header: its memory's MTLBuffer, */
+    VkDeviceSize header_offset; /* the offset in it, */
+    pvk_MTLGPUAddress header;   /* and its address */
+    pvk_MTLGPUAddress scratch;
+    uint32_t top;               /* a top level: the geometry is its instances */
+    uint32_t usage;             /* MTLAccelerationStructureUsage */
+    uint32_t geometry_count;
+    uint32_t capacity;          /* the record offsets dst's storage has room for (a top level's instances) */
+};
+
+struct pvk_cmd_accel_build {
+    struct pvk_cmd hdr;
+    uint32_t count; /* struct pvk_accel_build, each with its geometries, after the packet */
+    uint32_t pad;
+};
+
+struct pvk_cmd_accel_copy {
+    struct pvk_cmd hdr;
+    id src, dst;
+    pvk_MTLResourceID dst_id;
+    id header_buffer; /* dst's header, as struct pvk_accel_build's */
+    VkDeviceSize header_offset;
+    pvk_MTLGPUAddress src_header, dst_header;
+    uint32_t compact;  /* VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR */
+    uint32_t offsets;  /* the record offsets to copy at most (0: of bottom levels, which have none) */
+};
+
+/* Then count struct pvk_accel_sized. */
+struct pvk_cmd_accel_query {
+    struct pvk_cmd hdr;
+    struct pvk_query_pool *pool;
+    uint32_t first, count;
+    uint32_t compacted; /* compacted sizes (else nothing Metal has: the queries read 0) */
+    uint32_t pad;
+};
+
+struct pvk_accel_sized {
+    id accel;
+    pvk_MTLGPUAddress header; /* 0: a bottom level, whose header is all it has */
+};
+
+/* The record offsets an acceleration structure's storage has room for. */
+static uint32_t pvk_accel_capacity(const struct pvk_accel *accel)
+{
+    VkDeviceSize n = accel->size > PVK_ACCEL_HEADER ? (accel->size - PVK_ACCEL_HEADER) / 4 : 0;
+    return n > UINT32_MAX ? UINT32_MAX : (uint32_t)n;
+}
+
+static const VkAccelerationStructureGeometryKHR *pvk_accel_info_geometry(const VkAccelerationStructureBuildGeometryInfoKHR *info,
+                                                                        uint32_t i)
+{
+    return info->pGeometries ? &info->pGeometries[i] : info->ppGeometries[i];
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdBuildAccelerationStructuresKHR(
+    VkCommandBuffer commandBuffer, uint32_t infoCount, const VkAccelerationStructureBuildGeometryInfoKHR *pInfos,
+    const VkAccelerationStructureBuildRangeInfoKHR *const *ppBuildRangeInfos)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    struct pvk_cmd_accel_build *c;
+    struct pvk_accel_build *b;
+    size_t size = sizeof(*c);
+    uint32_t i, k;
+    bool group;
+
+    for (i = 0; i < infoCount; i++) {
+        const struct pvk_accel *dst = (const struct pvk_accel *)pInfos[i].dstAccelerationStructure;
+        if (!dst->buffer->memory) /* (VUID-vkCmdBuildAccelerationStructuresKHR-pInfos-03707) */
+            return;
+        size += sizeof(*b) + sizeof(struct pvk_accel_geometry) * (size_t)pInfos[i].geometryCount;
+    }
+    if (!infoCount)
+        return;
+    group = pvk_cmd_group_begin(cb, "vkCmdBuildAccelerationStructuresKHR", VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                pInfos[0].dstAccelerationStructure, VK_OBJECT_TYPE_UNKNOWN, NULL);
+    c = pvk_cmd_append(cb, PVK_CMD_ACCEL_BUILD, size);
+    if (c) {
+        cb->par |= PVK_PAR_SERIAL;
+        c->count = infoCount;
+        c->pad = 0;
+        b = (struct pvk_accel_build *)(c + 1);
+        for (i = 0; i < infoCount; i++) {
+            const VkAccelerationStructureBuildGeometryInfoKHR *info = &pInfos[i];
+            const struct pvk_accel *dst = (const struct pvk_accel *)info->dstAccelerationStructure;
+            const struct pvk_accel *src = (const struct pvk_accel *)info->srcAccelerationStructure;
+            struct pvk_accel_geometry *g = (struct pvk_accel_geometry *)(b + 1);
+            bool update = info->mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR && src;
+            memset(b, 0, sizeof(*b));
+            b->dst = dst->mtl_accel;
+            b->src = update ? src->mtl_accel : NULL;
+            b->dst_id = dst->resource_id;
+            b->header_buffer = dst->buffer->memory->mtl_buffer;
+            b->header_offset = dst->buffer->offset + dst->offset;
+            b->header = pvk_accel_address(dst);
+            b->scratch = info->scratchData.deviceAddress;
+            b->top = info->type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+            b->usage = (uint32_t)pvk_accel_usage(info->flags);
+            b->geometry_count = info->geometryCount;
+            b->capacity = pvk_accel_capacity(dst);
+            for (k = 0; k < info->geometryCount; k++)
+                pvk_accel_geometry_init(&g[k], pvk_accel_info_geometry(info, k), &ppBuildRangeInfos[i][k], 0);
+            b = (struct pvk_accel_build *)(g + info->geometryCount);
+        }
+    }
+    pvk_cmd_group_end(cb, group);
+}
+
+/* accelerationStructureIndirectBuild is not reported (section 7, RAY
+ * TRACING): no valid call reaches it. */
+VKAPI_ATTR void VKAPI_CALL vkCmdBuildAccelerationStructuresIndirectKHR(
+    VkCommandBuffer commandBuffer, uint32_t infoCount, const VkAccelerationStructureBuildGeometryInfoKHR *pInfos,
+    const VkDeviceAddress *pIndirectDeviceAddresses, const uint32_t *pIndirectStrides,
+    const uint32_t *const *ppMaxPrimitiveCounts)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    (void)infoCount;
+    (void)pInfos;
+    (void)pIndirectDeviceAddresses;
+    (void)pIndirectStrides;
+    (void)ppMaxPrimitiveCounts;
+    pvk_logd(cb->pool->device, PVK_LOG_ERROR, "PlasmaVK-accelerationStructureIndirectBuild", VK_OBJECT_TYPE_COMMAND_BUFFER,
+             (uint64_t)(uintptr_t)cb,
+             "vkCmdBuildAccelerationStructuresIndirectKHR: the accelerationStructureIndirectBuild feature is not "
+             "supported");
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdCopyAccelerationStructureKHR(VkCommandBuffer commandBuffer,
+                                                             const VkCopyAccelerationStructureInfoKHR *pInfo)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    const struct pvk_accel *src = (const struct pvk_accel *)pInfo->src, *dst = (const struct pvk_accel *)pInfo->dst;
+    struct pvk_cmd_accel_copy *c;
+    uint32_t capacity = pvk_accel_capacity(dst) < pvk_accel_capacity(src) ? pvk_accel_capacity(dst)
+                                                                         : pvk_accel_capacity(src);
+    bool group;
+
+    if (!src->buffer->memory || !dst->buffer->memory)
+        return;
+    group = pvk_cmd_group_begin(cb, "vkCmdCopyAccelerationStructureKHR", VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR, src,
+                                VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR, dst);
+    c = pvk_cmd_append(cb, PVK_CMD_ACCEL_COPY, sizeof(*c));
+    if (c) {
+        cb->par |= PVK_PAR_SERIAL;
+        pvk_cmd_zero(c, sizeof(*c));
+        c->src = src->mtl_accel;
+        c->dst = dst->mtl_accel;
+        c->dst_id = dst->resource_id;
+        c->header_buffer = dst->buffer->memory->mtl_buffer;
+        c->header_offset = dst->buffer->offset + dst->offset;
+        c->src_header = pvk_accel_address(src);
+        c->dst_header = pvk_accel_address(dst);
+        c->compact = pInfo->mode == VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+        c->offsets = src->type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR ? 0 : capacity ? capacity : 1;
+    }
+    pvk_cmd_group_end(cb, group);
+}
+
+/* Nothing serializes an MTLAccelerationStructure (section 10, ACCELERATION
+ * STRUCTURES): reported, and nothing is recorded. */
+static void pvk_cmd_accel_no_serialize(VkCommandBuffer commandBuffer, const char *command)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    pvk_logd(cb->pool->device, PVK_LOG_ERROR, "PlasmaVK-acceleration-structure-serialization",
+             VK_OBJECT_TYPE_COMMAND_BUFFER, (uint64_t)(uintptr_t)cb,
+             "%s: acceleration structures cannot be serialized (Metal gives no access to their contents); "
+             "the command does nothing", command);
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdCopyAccelerationStructureToMemoryKHR(
+    VkCommandBuffer commandBuffer, const VkCopyAccelerationStructureToMemoryInfoKHR *pInfo)
+{
+    (void)pInfo;
+    pvk_cmd_accel_no_serialize(commandBuffer, "vkCmdCopyAccelerationStructureToMemoryKHR");
+}
+
+VKAPI_ATTR void VKAPI_CALL vkCmdCopyMemoryToAccelerationStructureKHR(
+    VkCommandBuffer commandBuffer, const VkCopyMemoryToAccelerationStructureInfoKHR *pInfo)
+{
+    (void)pInfo;
+    pvk_cmd_accel_no_serialize(commandBuffer, "vkCmdCopyMemoryToAccelerationStructureKHR");
+}
+
+/* VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR: what Metal says
+ * the acceleration structure compacts to, and at least what its storage
+ * holds besides (section 16). The serialization size reads 0. */
+VKAPI_ATTR void VKAPI_CALL vkCmdWriteAccelerationStructuresPropertiesKHR(
+    VkCommandBuffer commandBuffer, uint32_t accelerationStructureCount,
+    const VkAccelerationStructureKHR *pAccelerationStructures, VkQueryType queryType, VkQueryPool queryPool,
+    uint32_t firstQuery)
+{
+    struct pvk_command_buffer *cb = (struct pvk_command_buffer *)commandBuffer;
+    struct pvk_cmd_accel_query *c;
+    struct pvk_accel_sized *s;
+    uint32_t i;
+
+    if (!accelerationStructureCount)
+        return;
+    if (queryType != VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR)
+        pvk_cmd_accel_no_serialize(commandBuffer, "vkCmdWriteAccelerationStructuresPropertiesKHR");
+    c = pvk_cmd_append(cb, PVK_CMD_ACCEL_QUERY, sizeof(*c) + sizeof(*s) * (size_t)accelerationStructureCount);
+    if (!c)
+        return;
+    cb->par |= PVK_PAR_SERIAL;
+    c->pool = (struct pvk_query_pool *)queryPool;
+    c->first = firstQuery;
+    c->count = accelerationStructureCount;
+    c->compacted = queryType == VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
+    c->pad = 0;
+    s = (struct pvk_accel_sized *)(c + 1);
+    for (i = 0; i < accelerationStructureCount; i++) {
+        const struct pvk_accel *accel = (const struct pvk_accel *)pAccelerationStructures[i];
+        s[i].accel = accel->mtl_accel;
+        s[i].header = accel->type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR || !accel->buffer->memory
+                          ? 0
+                          : pvk_accel_address(accel);
+    }
+}
+
 /* ==========================================================================
  * 16. Queue submission and synchronization
  *
@@ -61969,8 +63116,12 @@ static pvk_MTLStages pvk_barrier_stages(VkPipelineStageFlags2 stages, bool src)
                                            VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
                                            VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
                                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    /* (acceleration structure commands end with blits that wait for them:
+     * ACCELERATION STRUCTURE COMMANDS) */
+    const VkPipelineStageFlags2 accel = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                        VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR;
     const VkPipelineStageFlags2 known = input | vertex | fragment | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                        VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT | PVK_TRANSFER_STAGES;
+                                        VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT | PVK_TRANSFER_STAGES | accel;
     pvk_MTLStages m = 0;
     stages &= ~(VkPipelineStageFlags2)VK_PIPELINE_STAGE_2_HOST_BIT;
     /* TOP_OF_PIPE: no work as a source, all work as a destination;
@@ -61988,6 +63139,8 @@ static pvk_MTLStages pvk_barrier_stages(VkPipelineStageFlags2 stages, bool src)
         m |= PVK_STAGES_RENDER | PVK_MTLStageDispatch;
     if (stages & PVK_TRANSFER_STAGES)
         m |= PVK_STAGES_COMPUTE | (src ? PVK_MTLStageFragment | PVK_MTLStageTile : 0);
+    if (stages & accel)
+        m |= PVK_STAGES_COMPUTE;
     if (stages & ~known)
         m = PVK_STAGES_ALL;
     return m;
@@ -67859,6 +69012,411 @@ static void pvk_encode_query(struct pvk_encoder *e, const struct pvk_cmd_query *
     }
 }
 
+/* ---- Acceleration structure commands ----
+ *
+ * ACCELERATION STRUCTURE COMMANDS
+ *   The packets of section 15's acceleration structure commands, in the
+ *   compute encoder: Metal 4 builds, refits, copies and sizes acceleration
+ *   structures there, at a stage of their own
+ *   (MTLStageAccelerationStructure) that BARRIERS knows nothing of. So a
+ *   command keeps that stage to itself: it begins behind a barrier against
+ *   all earlier work, the queue's and the encoder's (what it reads, the
+ *   acceleration structures of its instances too, is written by then), and
+ *   it ends with a blit that waits for its work at that stage. Whatever
+ *   waits for the blit stage then waits for the command, and a Vulkan
+ *   barrier after acceleration structure builds names the transfer stages'
+ *   Metal stages (pvk_barrier_stages).
+ *   A build: internal kernels first turn what Metal cannot read as it is
+ *   into upload memory the build reads instead (pvk_accel_msl): a top
+ *   level's VkAccelerationStructureInstanceKHRs into
+ *   MTLIndirectAccelerationStructureInstanceDescriptors, each naming the
+ *   MTLAccelerationStructure its reference's header has (0: none, the
+ *   instance inactive), with their record offsets into the acceleration
+ *   structure's storage; bounding boxes, a few ULP larger (Metal misses a
+ *   ray that runs along a box's face, which Vulkan's conservative boxes
+ *   take); vertices at an address that is no multiple of 4, which Metal
+ *   refuses (Vulkan asks for their components' alignment). Then the builds
+ *   or refits, then a blit of each header: an acceleration structure is
+ *   there for the GPU once its build is done. A bottom level without
+ *   geometries builds nothing: its header names no acceleration structure.
+ *   A copy copies a top level's record offsets with a kernel, then the
+ *   acceleration structure, then blits the header's resource ID. A compacted
+ *   size query has Metal write the size into the pool's result, which a
+ *   kernel raises to what the header and record offsets take; the queries
+ *   become available like occlusion queries (pvk_encoder_query_available). */
+
+enum pvk_accel_kernel {
+    PVK_ACCEL_INSTANCES,
+    PVK_ACCEL_BOXES,
+    PVK_ACCEL_VERTICES,
+    PVK_ACCEL_OFFSETS,
+    PVK_ACCEL_SIZE,
+    PVK_ACCEL_KERNEL_COUNT
+};
+
+/* Arguments of the kernels of pvk_accel_msl, at the push-constant index. */
+struct pvk_accel_instances_args {
+    pvk_MTLGPUAddress src, dst, offsets; /* the instances (or pointers to them), Metal's, their record offsets */
+    uint32_t count, capacity, pointers, pad;
+};
+
+struct pvk_accel_boxes_args {
+    pvk_MTLGPUAddress src, dst;
+    uint32_t count, stride;
+};
+
+struct pvk_accel_vertices_args {
+    pvk_MTLGPUAddress src, dst;
+    uint32_t count, stride, size, pad;
+};
+
+struct pvk_accel_offsets_args {
+    pvk_MTLGPUAddress src, dst; /* headers */
+    uint32_t capacity, pad;
+};
+
+struct pvk_accel_size_args {
+    pvk_MTLGPUAddress header, size;
+};
+
+static const char pvk_accel_msl[] =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    /* section 10's header, VkAccelerationStructureInstanceKHR and
+     * MTLIndirectAccelerationStructureInstanceDescriptor (whose transform
+     * the build reads row-major, as Vulkan's) */
+    "struct pvk_accel_header { ulong id; uint count, pad; };\n"
+    "struct pvk_vk_instance { float transform[12]; uint index_mask, offset_flags; ulong reference; };\n"
+    "struct pvk_mtl_instance { float transform[12]; uint options, mask, table_offset, user_id; ulong id; };\n"
+    "struct pvk_accel_instances_args { const device uchar *src; device pvk_mtl_instance *dst; device uint *offsets;\n"
+    "                                  uint count, capacity, pointers, pad; };\n"
+    /* The four VkGeometryInstanceFlagBitsKHR are Metal's instance options,
+     * bit for bit; the custom index is the user ID. */
+    "kernel void pvk_accel_instances(constant pvk_accel_instances_args &a [[buffer(30)]],\n"
+    "                                uint i [[thread_position_in_grid]])\n"
+    "{\n"
+    "    if (i >= a.count)\n"
+    "        return;\n"
+    "    const device pvk_vk_instance *in = (const device pvk_vk_instance *)a.src + i;\n"
+    "    if (a.pointers)\n"
+    "        in = reinterpret_cast<const device pvk_vk_instance *>(((const device ulong *)a.src)[i]);\n"
+    "    pvk_vk_instance v = *in;\n"
+    "    pvk_mtl_instance m;\n"
+    "    m.id = v.reference ? reinterpret_cast<const device pvk_accel_header *>(v.reference)->id : 0ul;\n"
+    "    for (uint k = 0; k < 12; k++)\n"
+    "        m.transform[k] = v.transform[k];\n"
+    "    m.options = (v.offset_flags >> 24) & 15u;\n"
+    "    m.mask = m.id ? v.index_mask >> 24 : 0u;\n"
+    "    m.table_offset = 0u;\n"
+    "    m.user_id = v.index_mask & 0xffffffu;\n"
+    "    a.dst[i] = m;\n"
+    "    if (i < a.capacity)\n"
+    "        a.offsets[i] = v.offset_flags & 0xffffffu;\n"
+    "}\n"
+    "struct pvk_accel_boxes_args { const device uchar *src; device packed_float3 *dst; uint count, stride; };\n"
+    /* (a box whose minimum x is NaN is inactive, and stays so) */
+    "kernel void pvk_accel_boxes(constant pvk_accel_boxes_args &a [[buffer(30)]], uint i [[thread_position_in_grid]])\n"
+    "{\n"
+    "    if (i >= a.count)\n"
+    "        return;\n"
+    "    const device packed_float3 *b = (const device packed_float3 *)(a.src + ulong(i) * a.stride);\n"
+    "    float3 lo = b[0], hi = b[1];\n"
+    "    a.dst[2 * i] = lo - (fabs(lo) * 1.2e-7f + 1.0e-30f);\n"
+    "    a.dst[2 * i + 1] = hi + (fabs(hi) * 1.2e-7f + 1.0e-30f);\n"
+    "}\n"
+    "struct pvk_accel_vertices_args { const device uchar *src; device uchar *dst; uint count, stride, size, pad; };\n"
+    "kernel void pvk_accel_vertices(constant pvk_accel_vertices_args &a [[buffer(30)]],\n"
+    "                               uint i [[thread_position_in_grid]])\n"
+    "{\n"
+    "    if (i >= a.count)\n"
+    "        return;\n"
+    "    const device uchar *s = a.src + ulong(i) * a.stride;\n"
+    "    device uchar *d = a.dst + ulong(i) * a.stride;\n"
+    "    for (uint k = 0; k < a.size; k++)\n"
+    "        d[k] = s[k];\n"
+    "}\n"
+    "struct pvk_accel_offsets_args { const device pvk_accel_header *src; device pvk_accel_header *dst;\n"
+    "                                uint capacity, pad; };\n"
+    "kernel void pvk_accel_offsets(constant pvk_accel_offsets_args &a [[buffer(30)]],\n"
+    "                              uint i [[thread_position_in_grid]])\n"
+    "{\n"
+    "    uint n = min(a.src->count, a.capacity);\n"
+    "    if (i < n)\n"
+    "        ((device uint *)(a.dst + 1))[i] = ((const device uint *)(a.src + 1))[i];\n"
+    "    if (i == 0u)\n"
+    "        a.dst->count = n;\n"
+    "}\n"
+    "struct pvk_accel_size_args { const device pvk_accel_header *header; device ulong *size; };\n"
+    "kernel void pvk_accel_size(constant pvk_accel_size_args &a [[buffer(30)]], uint i [[thread_position_in_grid]])\n"
+    "{\n"
+    "    if (i == 0u)\n"
+    "        *a.size = (max(*a.size, 16ul + 4ul * a.header->count) + 15ul) & ~15ul;\n"
+    "}\n";
+
+static id pvk_accel_pipeline(struct pvk_device *device, enum pvk_accel_kernel kernel)
+{
+    static const char *const names[PVK_ACCEL_KERNEL_COUNT] = { "pvk_accel_instances", "pvk_accel_boxes",
+                                                               "pvk_accel_vertices", "pvk_accel_offsets",
+                                                               "pvk_accel_size" };
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    return pvk_internal_kernel(device, &lock, &device->accel_kernels[kernel], pvk_accel_msl, names[kernel], 64,
+                               "acceleration structure");
+}
+
+#define PVK_STAGES_ACCEL (PVK_STAGES_COMPUTE | PVK_MTLStageAccelerationStructure)
+
+/* The compute encoder for an acceleration structure command, behind a
+ * barrier against all earlier work (ACCELERATION STRUCTURE COMMANDS). */
+static id pvk_accel_begin(struct pvk_encoder *e)
+{
+    id enc = pvk_encoder_get(e);
+    if (!enc)
+        return NULL;
+    pvk_MTL4CommandEncoder_barrierAfterQueueStages_beforeStages_visibilityOptions(enc, PVK_STAGES_ALL, PVK_STAGES_ACCEL,
+                                                                                 e->queue->device->visibility);
+    pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
+        enc, PVK_STAGES_ACCEL, PVK_STAGES_ACCEL, e->queue->device->visibility);
+    return enc;
+}
+
+/* What the command did at the acceleration structure stage is done before
+ * the blits (and, `dispatch`, the dispatches) the encoder does next. */
+static void pvk_accel_end(struct pvk_encoder *e, id enc, bool dispatch)
+{
+    pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
+        enc, PVK_MTLStageAccelerationStructure, PVK_MTLStageBlit | (dispatch ? PVK_MTLStageDispatch : 0),
+        e->queue->device->visibility);
+}
+
+/* A kernel of pvk_accel_msl over `count` elements, its arguments (`size`
+ * bytes) at *args. False, with e->result set, when it cannot run. */
+static bool pvk_accel_dispatch(struct pvk_encoder *e, id enc, enum pvk_accel_kernel kernel, const void *args,
+                               size_t size, uint64_t count)
+{
+    pvk_MTLGPUAddress address;
+    pvk_MTLSize groups, threads;
+    id pso = pvk_accel_pipeline(e->device, kernel);
+    void *a;
+    if (!pso) {
+        e->result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return false;
+    }
+    if (!(a = pvk_upload(e, size, 16, NULL, NULL, &address)))
+        return false;
+    memcpy(a, args, size);
+    pvk_MTL4ComputeCommandEncoder_setComputePipelineState(enc, pso);
+    e->pipeline_dirty = true;
+    pvk_MTL4ArgumentTable_setAddress_atIndex(e->table, address, PVK_MSL_PUSH_CONSTANT_BUFFER);
+    e->push_bound = 0;
+    groups.width = (unsigned long)((count + 63) / 64);
+    groups.height = groups.depth = 1;
+    threads.width = 64;
+    threads.height = threads.depth = 1;
+    pvk_MTL4ComputeCommandEncoder_dispatchThreadgroups_threadsPerThreadgroup(enc, groups, threads);
+    return true;
+}
+
+/* Blits `size` bytes of a header (resource ID, instances) to an
+ * acceleration structure's storage. */
+static void pvk_accel_header(struct pvk_encoder *e, id enc, id buffer, VkDeviceSize offset, pvk_MTLResourceID resource,
+                             uint32_t instances, VkDeviceSize size)
+{
+    pvk_MTLGPUAddress address;
+    VkDeviceSize from;
+    id upload;
+    uint64_t *h = pvk_upload(e, PVK_ACCEL_HEADER, 16, &upload, &from, &address);
+    if (!h)
+        return;
+    memcpy(&h[0], &resource, 8);
+    h[1] = instances;
+    pvk_MTL4ComputeCommandEncoder_copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(enc, upload, from, buffer,
+                                                                                             offset, size);
+}
+
+/* What a build's geometries need before Metal reads them (ACCELERATION
+ * STRUCTURE COMMANDS), g becoming what it reads. False: nothing to build
+ * (e->result set). *dispatched: a kernel ran. */
+static bool pvk_accel_convert(struct pvk_encoder *e, id enc, const struct pvk_accel_build *b,
+                              struct pvk_accel_geometry *g, bool *dispatched)
+{
+    pvk_MTLGPUAddress address;
+    uint32_t k;
+
+    if (b->top) {
+        struct pvk_accel_instances_args a;
+        if (!b->geometry_count || !g[0].count)
+            return true;
+        if (!pvk_upload(e, sizeof(pvk_MTLIndirectAccelerationStructureInstanceDescriptor) * (size_t)g[0].count, 16,
+                        NULL, NULL, &address))
+            return false;
+        memset(&a, 0, sizeof(a));
+        a.src = g[0].data;
+        a.dst = address;
+        a.offsets = b->header + PVK_ACCEL_HEADER;
+        a.count = g[0].count;
+        a.capacity = b->capacity;
+        a.pointers = g[0].format;
+        if (!pvk_accel_dispatch(e, enc, PVK_ACCEL_INSTANCES, &a, sizeof(a), a.count))
+            return false;
+        g[0].data = address;
+        *dispatched = true;
+        return true;
+    }
+    for (k = 0; k < b->geometry_count; k++) {
+        if (g[k].type == VK_GEOMETRY_TYPE_AABBS_KHR && g[k].count) {
+            struct pvk_accel_boxes_args a;
+            if (!pvk_upload(e, sizeof(pvk_MTLAxisAlignedBoundingBox) * (size_t)g[k].count, 16, NULL, NULL, &address))
+                return false;
+            memset(&a, 0, sizeof(a));
+            a.src = g[k].data;
+            a.dst = address;
+            a.count = g[k].count;
+            a.stride = g[k].stride;
+            if (!pvk_accel_dispatch(e, enc, PVK_ACCEL_BOXES, &a, sizeof(a), a.count))
+                return false;
+            g[k].data = address;
+            g[k].stride = sizeof(pvk_MTLAxisAlignedBoundingBox);
+            *dispatched = true;
+        } else if (g[k].type == VK_GEOMETRY_TYPE_TRIANGLES_KHR && (g[k].data & 3) && g[k].vertices) {
+            struct pvk_accel_vertices_args a;
+            if (!pvk_upload(e, (size_t)g[k].stride * (g[k].vertices - 1) + g[k].vertex_size, 16, NULL, NULL, &address))
+                return false;
+            memset(&a, 0, sizeof(a));
+            a.src = g[k].data;
+            a.dst = address;
+            a.count = g[k].vertices;
+            a.stride = g[k].stride;
+            a.size = g[k].vertex_size;
+            if (!pvk_accel_dispatch(e, enc, PVK_ACCEL_VERTICES, &a, sizeof(a), a.count))
+                return false;
+            g[k].data = address;
+            *dispatched = true;
+        }
+    }
+    return true;
+}
+
+static void pvk_encode_accel_build(struct pvk_encoder *e, const struct pvk_cmd_accel_build *c)
+{
+    const struct pvk_accel_build *b;
+    pvk_MTL4VisibilityOptions visibility = e->queue->device->visibility;
+    bool dispatched = false;
+    void *pool;
+    id enc, *descs;
+    uint32_t i;
+
+    if (!(enc = pvk_accel_begin(e)))
+        return;
+    if (!(descs = calloc(c->count, sizeof(*descs)))) { /* (system memory: pvk_accel_descriptor) */
+        e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        return;
+    }
+    pool = objc_autoreleasePoolPush();
+    for (i = 0, b = (const struct pvk_accel_build *)(c + 1); i < c->count && e->result == VK_SUCCESS; i++) {
+        const struct pvk_accel_geometry *recorded = (const struct pvk_accel_geometry *)(b + 1);
+        struct pvk_accel_geometry *g = NULL;
+        if (b->geometry_count) {
+            if (!(g = malloc(sizeof(*g) * (size_t)b->geometry_count))) {
+                e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+                break;
+            }
+            memcpy(g, recorded, sizeof(*g) * (size_t)b->geometry_count);
+        }
+        if (pvk_accel_convert(e, enc, b, g, &dispatched) && (b->top || b->geometry_count) &&
+            !(descs[i] = pvk_accel_descriptor(b->top != 0, b->usage, g, b->geometry_count)))
+            e->result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        free(g);
+        b = (const struct pvk_accel_build *)(recorded + b->geometry_count);
+    }
+    if (dispatched)
+        pvk_MTL4CommandEncoder_barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
+            enc, PVK_MTLStageDispatch, PVK_MTLStageAccelerationStructure, visibility);
+    for (i = 0, b = (const struct pvk_accel_build *)(c + 1); i < c->count && e->result == VK_SUCCESS; i++) {
+        const struct pvk_accel_geometry *g = (const struct pvk_accel_geometry *)(b + 1);
+        if (descs[i] && b->src)
+            pvk_MTL4ComputeCommandEncoder_refitAccelerationStructure_descriptor_destination_scratchBuffer_options(
+                enc, b->src, descs[i], b->dst == b->src ? NULL : b->dst, pvk_accel_range(b->scratch),
+                PVK_MTLAccelerationStructureRefitOptionVertexData | PVK_MTLAccelerationStructureRefitOptionPerPrimitiveData);
+        else if (descs[i])
+            pvk_MTL4ComputeCommandEncoder_buildAccelerationStructure_descriptor_scratchBuffer(
+                enc, b->dst, descs[i], pvk_accel_range(b->scratch));
+        b = (const struct pvk_accel_build *)(g + b->geometry_count);
+    }
+    pvk_accel_end(e, enc, false);
+    for (i = 0, b = (const struct pvk_accel_build *)(c + 1); i < c->count; i++) {
+        const struct pvk_accel_geometry *g = (const struct pvk_accel_geometry *)(b + 1);
+        pvk_MTLResourceID none = { 0 };
+        if (e->result == VK_SUCCESS)
+            pvk_accel_header(e, enc, b->header_buffer, b->header_offset, descs[i] ? b->dst_id : none,
+                             b->top && b->geometry_count ? (g[0].count < b->capacity ? g[0].count : b->capacity) : 0,
+                             PVK_ACCEL_HEADER);
+        pvk_release(descs[i]);
+        b = (const struct pvk_accel_build *)(g + b->geometry_count);
+    }
+    objc_autoreleasePoolPop(pool);
+    free(descs);
+}
+
+static void pvk_encode_accel_copy(struct pvk_encoder *e, const struct pvk_cmd_accel_copy *c)
+{
+    id enc = pvk_accel_begin(e);
+    if (!enc)
+        return;
+    if (c->offsets) { /* the record offsets and their number; the blit below leaves them */
+        struct pvk_accel_offsets_args a;
+        memset(&a, 0, sizeof(a));
+        a.src = c->src_header;
+        a.dst = c->dst_header;
+        a.capacity = c->offsets;
+        if (!pvk_accel_dispatch(e, enc, PVK_ACCEL_OFFSETS, &a, sizeof(a), c->offsets))
+            return;
+    }
+    if (c->compact)
+        pvk_MTL4ComputeCommandEncoder_copyAndCompactAccelerationStructure_toAccelerationStructure(enc, c->src, c->dst);
+    else
+        pvk_MTL4ComputeCommandEncoder_copyAccelerationStructure_toAccelerationStructure(enc, c->src, c->dst);
+    pvk_accel_end(e, enc, false);
+    pvk_accel_header(e, enc, c->header_buffer, c->header_offset, c->dst_id, 0, c->offsets ? 8 : PVK_ACCEL_HEADER);
+}
+
+static void pvk_encode_accel_query(struct pvk_encoder *e, const struct pvk_cmd_accel_query *c)
+{
+    const struct pvk_accel_sized *s = (const struct pvk_accel_sized *)(c + 1);
+    pvk_MTLGPUAddress address;
+    pvk_NSRange range;
+    VkDeviceSize offset;
+    id enc, buffer;
+    uint32_t i;
+
+    if (c->compacted) {
+        if (!(enc = pvk_accel_begin(e)))
+            return;
+        for (i = 0; i < c->count; i++) {
+            pvk_MTL4BufferRange result;
+            result.bufferAddress = c->pool->address + 8ull * (c->first + i);
+            result.length = 8;
+            pvk_MTL4ComputeCommandEncoder_writeCompactedAccelerationStructureSize_toBuffer(enc, s[i].accel, result);
+        }
+        pvk_accel_end(e, enc, true);
+        for (i = 0; i < c->count; i++) {
+            struct pvk_accel_size_args a;
+            if (!s[i].header)
+                continue;
+            a.header = s[i].header;
+            a.size = c->pool->address + 8ull * (c->first + i);
+            if (!pvk_accel_dispatch(e, enc, PVK_ACCEL_SIZE, &a, sizeof(a), 1))
+                return;
+        }
+        /* (a blit that waits for the sizes, for what waits for the command) */
+        if (!pvk_upload(e, 4, 4, &buffer, &offset, &address))
+            return;
+        range.location = (unsigned long)offset;
+        range.length = 4;
+        pvk_MTL4ComputeCommandEncoder_fillBuffer_range_value(enc, buffer, range, 0);
+    }
+    pvk_encoder_query_available(e, c->pool, c->first, c->count);
+}
+
 /* Room for n more event notes; false when out of memory. */
 static bool pvk_notes_event_room(const VkAllocationCallbacks *alloc, struct pvk_notes *q, uint32_t n)
 {
@@ -68085,6 +69643,15 @@ static void pvk_encode_commands(struct pvk_encoder *e, const struct pvk_command_
                 break;
             case PVK_CMD_EVENT:
                 pvk_encode_event(e, (const struct pvk_cmd_event *)c);
+                break;
+            case PVK_CMD_ACCEL_BUILD:
+                pvk_encode_accel_build(e, (const struct pvk_cmd_accel_build *)c);
+                break;
+            case PVK_CMD_ACCEL_COPY:
+                pvk_encode_accel_copy(e, (const struct pvk_cmd_accel_copy *)c);
+                break;
+            case PVK_CMD_ACCEL_QUERY:
+                pvk_encode_accel_query(e, (const struct pvk_cmd_accel_query *)c);
                 break;
             case PVK_CMD_LABEL:
                 pvk_encode_label(e, (const struct pvk_cmd_label *)c);
@@ -70401,6 +71968,10 @@ static void pvk_device_finish(struct pvk_device *device)
     }
     pvk_release(device->fill_pipeline);
     device->fill_pipeline = NULL;
+    for (i = 0; i < PVK_ARRAY_SIZE(device->accel_kernels); i++) {
+        pvk_release(device->accel_kernels[i]);
+        device->accel_kernels[i] = NULL;
+    }
     pvk_release(device->query_copy_pipeline);
     device->query_copy_pipeline = NULL;
     if (device->vis_buffer) {
@@ -76205,6 +77776,7 @@ static const struct pvk_entrypoint {
     { "vkBindImageMemory", (PFN_vkVoidFunction)vkBindImageMemory, PVK_SCOPE_DEVICE },
     { "vkBindImageMemory2", (PFN_vkVoidFunction)vkBindImageMemory2, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkBindImageMemory2KHR", (PFN_vkVoidFunction)vkBindImageMemory2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_bind_memory2) },
+    { "vkBuildAccelerationStructuresKHR", (PFN_vkVoidFunction)vkBuildAccelerationStructuresKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
     { "vkCmdBeginDebugUtilsLabelEXT", (PFN_vkVoidFunction)vkCmdBeginDebugUtilsLabelEXT, PVK_SCOPE_DEVICE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
     { "vkCmdBeginQuery", (PFN_vkVoidFunction)vkCmdBeginQuery, PVK_SCOPE_DEVICE },
     { "vkCmdBeginRenderPass", (PFN_vkVoidFunction)vkCmdBeginRenderPass, PVK_SCOPE_DEVICE },
@@ -76225,9 +77797,13 @@ static const struct pvk_entrypoint {
     { "vkCmdBlitImage", (PFN_vkVoidFunction)vkCmdBlitImage, PVK_SCOPE_DEVICE },
     { "vkCmdBlitImage2", (PFN_vkVoidFunction)vkCmdBlitImage2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdBlitImage2KHR", (PFN_vkVoidFunction)vkCmdBlitImage2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_copy_commands2) },
+    { "vkCmdBuildAccelerationStructuresIndirectKHR", (PFN_vkVoidFunction)vkCmdBuildAccelerationStructuresIndirectKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
+    { "vkCmdBuildAccelerationStructuresKHR", (PFN_vkVoidFunction)vkCmdBuildAccelerationStructuresKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
     { "vkCmdClearAttachments", (PFN_vkVoidFunction)vkCmdClearAttachments, PVK_SCOPE_DEVICE },
     { "vkCmdClearColorImage", (PFN_vkVoidFunction)vkCmdClearColorImage, PVK_SCOPE_DEVICE },
     { "vkCmdClearDepthStencilImage", (PFN_vkVoidFunction)vkCmdClearDepthStencilImage, PVK_SCOPE_DEVICE },
+    { "vkCmdCopyAccelerationStructureKHR", (PFN_vkVoidFunction)vkCmdCopyAccelerationStructureKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
+    { "vkCmdCopyAccelerationStructureToMemoryKHR", (PFN_vkVoidFunction)vkCmdCopyAccelerationStructureToMemoryKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
     { "vkCmdCopyBuffer", (PFN_vkVoidFunction)vkCmdCopyBuffer, PVK_SCOPE_DEVICE },
     { "vkCmdCopyBuffer2", (PFN_vkVoidFunction)vkCmdCopyBuffer2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdCopyBuffer2KHR", (PFN_vkVoidFunction)vkCmdCopyBuffer2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_copy_commands2) },
@@ -76240,6 +77816,7 @@ static const struct pvk_entrypoint {
     { "vkCmdCopyImageToBuffer", (PFN_vkVoidFunction)vkCmdCopyImageToBuffer, PVK_SCOPE_DEVICE },
     { "vkCmdCopyImageToBuffer2", (PFN_vkVoidFunction)vkCmdCopyImageToBuffer2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdCopyImageToBuffer2KHR", (PFN_vkVoidFunction)vkCmdCopyImageToBuffer2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_copy_commands2) },
+    { "vkCmdCopyMemoryToAccelerationStructureKHR", (PFN_vkVoidFunction)vkCmdCopyMemoryToAccelerationStructureKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
     { "vkCmdCopyQueryPoolResults", (PFN_vkVoidFunction)vkCmdCopyQueryPoolResults, PVK_SCOPE_DEVICE },
     { "vkCmdDispatch", (PFN_vkVoidFunction)vkCmdDispatch, PVK_SCOPE_DEVICE },
     { "vkCmdDispatchBase", (PFN_vkVoidFunction)vkCmdDispatchBase, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
@@ -76342,20 +77919,26 @@ static const struct pvk_entrypoint {
     { "vkCmdWaitEvents", (PFN_vkVoidFunction)vkCmdWaitEvents, PVK_SCOPE_DEVICE },
     { "vkCmdWaitEvents2", (PFN_vkVoidFunction)vkCmdWaitEvents2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdWaitEvents2KHR", (PFN_vkVoidFunction)vkCmdWaitEvents2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_synchronization2) },
+    { "vkCmdWriteAccelerationStructuresPropertiesKHR", (PFN_vkVoidFunction)vkCmdWriteAccelerationStructuresPropertiesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
     { "vkCmdWriteTimestamp", (PFN_vkVoidFunction)vkCmdWriteTimestamp, PVK_SCOPE_DEVICE },
     { "vkCmdWriteTimestamp2", (PFN_vkVoidFunction)vkCmdWriteTimestamp2, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkCmdWriteTimestamp2KHR", (PFN_vkVoidFunction)vkCmdWriteTimestamp2, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_synchronization2) },
+    { "vkCopyAccelerationStructureKHR", (PFN_vkVoidFunction)vkCopyAccelerationStructureKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
+    { "vkCopyAccelerationStructureToMemoryKHR", (PFN_vkVoidFunction)vkCopyAccelerationStructureToMemoryKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
     { "vkCopyImageToImage", (PFN_vkVoidFunction)vkCopyImageToImage, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkCopyImageToImageEXT", (PFN_vkVoidFunction)vkCopyImageToImage, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_host_image_copy) },
     { "vkCopyImageToMemory", (PFN_vkVoidFunction)vkCopyImageToMemory, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkCopyImageToMemoryEXT", (PFN_vkVoidFunction)vkCopyImageToMemory, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_host_image_copy) },
+    { "vkCopyMemoryToAccelerationStructureKHR", (PFN_vkVoidFunction)vkCopyMemoryToAccelerationStructureKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
     { "vkCopyMemoryToImage", (PFN_vkVoidFunction)vkCopyMemoryToImage, PVK_SCOPE_DEVICE | PVK_CORE_1_4 },
     { "vkCopyMemoryToImageEXT", (PFN_vkVoidFunction)vkCopyMemoryToImage, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_EXT_host_image_copy) },
+    { "vkCreateAccelerationStructureKHR", (PFN_vkVoidFunction)vkCreateAccelerationStructureKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
     { "vkCreateBuffer", (PFN_vkVoidFunction)vkCreateBuffer, PVK_SCOPE_DEVICE },
     { "vkCreateBufferView", (PFN_vkVoidFunction)vkCreateBufferView, PVK_SCOPE_DEVICE },
     { "vkCreateCommandPool", (PFN_vkVoidFunction)vkCreateCommandPool, PVK_SCOPE_DEVICE },
     { "vkCreateComputePipelines", (PFN_vkVoidFunction)vkCreateComputePipelines, PVK_SCOPE_DEVICE },
     { "vkCreateDebugUtilsMessengerEXT", (PFN_vkVoidFunction)vkCreateDebugUtilsMessengerEXT, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
+    { "vkCreateDeferredOperationKHR", (PFN_vkVoidFunction)vkCreateDeferredOperationKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_deferred_host_operations) },
     { "vkCreateDescriptorPool", (PFN_vkVoidFunction)vkCreateDescriptorPool, PVK_SCOPE_DEVICE },
     { "vkCreateDescriptorSetLayout", (PFN_vkVoidFunction)vkCreateDescriptorSetLayout, PVK_SCOPE_DEVICE },
     { "vkCreateDescriptorUpdateTemplate", (PFN_vkVoidFunction)vkCreateDescriptorUpdateTemplate, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
@@ -76384,10 +77967,13 @@ static const struct pvk_entrypoint {
     { "vkCreateSemaphore", (PFN_vkVoidFunction)vkCreateSemaphore, PVK_SCOPE_DEVICE },
     { "vkCreateShaderModule", (PFN_vkVoidFunction)vkCreateShaderModule, PVK_SCOPE_DEVICE },
     { "vkCreateSwapchainKHR", (PFN_vkVoidFunction)vkCreateSwapchainKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_swapchain) },
+    { "vkDeferredOperationJoinKHR", (PFN_vkVoidFunction)vkDeferredOperationJoinKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_deferred_host_operations) },
+    { "vkDestroyAccelerationStructureKHR", (PFN_vkVoidFunction)vkDestroyAccelerationStructureKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
     { "vkDestroyBuffer", (PFN_vkVoidFunction)vkDestroyBuffer, PVK_SCOPE_DEVICE },
     { "vkDestroyBufferView", (PFN_vkVoidFunction)vkDestroyBufferView, PVK_SCOPE_DEVICE },
     { "vkDestroyCommandPool", (PFN_vkVoidFunction)vkDestroyCommandPool, PVK_SCOPE_DEVICE },
     { "vkDestroyDebugUtilsMessengerEXT", (PFN_vkVoidFunction)vkDestroyDebugUtilsMessengerEXT, PVK_SCOPE_INSTANCE | PVK_IEXT(PVK_INSTANCE_EXT_EXT_debug_utils) },
+    { "vkDestroyDeferredOperationKHR", (PFN_vkVoidFunction)vkDestroyDeferredOperationKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_deferred_host_operations) },
     { "vkDestroyDescriptorPool", (PFN_vkVoidFunction)vkDestroyDescriptorPool, PVK_SCOPE_DEVICE },
     { "vkDestroyDescriptorSetLayout", (PFN_vkVoidFunction)vkDestroyDescriptorSetLayout, PVK_SCOPE_DEVICE },
     { "vkDestroyDescriptorUpdateTemplate", (PFN_vkVoidFunction)vkDestroyDescriptorUpdateTemplate, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
@@ -76427,6 +78013,8 @@ static const struct pvk_entrypoint {
     { "vkFreeCommandBuffers", (PFN_vkVoidFunction)vkFreeCommandBuffers, PVK_SCOPE_DEVICE },
     { "vkFreeDescriptorSets", (PFN_vkVoidFunction)vkFreeDescriptorSets, PVK_SCOPE_DEVICE },
     { "vkFreeMemory", (PFN_vkVoidFunction)vkFreeMemory, PVK_SCOPE_DEVICE },
+    { "vkGetAccelerationStructureBuildSizesKHR", (PFN_vkVoidFunction)vkGetAccelerationStructureBuildSizesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
+    { "vkGetAccelerationStructureDeviceAddressKHR", (PFN_vkVoidFunction)vkGetAccelerationStructureDeviceAddressKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
     { "vkGetBufferDeviceAddress", (PFN_vkVoidFunction)vkGetBufferDeviceAddress, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkGetBufferDeviceAddressKHR", (PFN_vkVoidFunction)vkGetBufferDeviceAddress, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_buffer_device_address) },
     { "vkGetBufferMemoryRequirements", (PFN_vkVoidFunction)vkGetBufferMemoryRequirements, PVK_SCOPE_DEVICE },
@@ -76435,8 +78023,11 @@ static const struct pvk_entrypoint {
     { "vkGetBufferOpaqueCaptureAddress", (PFN_vkVoidFunction)vkGetBufferOpaqueCaptureAddress, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkGetBufferOpaqueCaptureAddressKHR", (PFN_vkVoidFunction)vkGetBufferOpaqueCaptureAddress, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_buffer_device_address) },
     { "vkGetCalibratedTimestampsKHR", (PFN_vkVoidFunction)vkGetCalibratedTimestampsKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_calibrated_timestamps) },
+    { "vkGetDeferredOperationMaxConcurrencyKHR", (PFN_vkVoidFunction)vkGetDeferredOperationMaxConcurrencyKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_deferred_host_operations) },
+    { "vkGetDeferredOperationResultKHR", (PFN_vkVoidFunction)vkGetDeferredOperationResultKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_deferred_host_operations) },
     { "vkGetDescriptorSetLayoutSupport", (PFN_vkVoidFunction)vkGetDescriptorSetLayoutSupport, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
     { "vkGetDescriptorSetLayoutSupportKHR", (PFN_vkVoidFunction)vkGetDescriptorSetLayoutSupport, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance3) },
+    { "vkGetDeviceAccelerationStructureCompatibilityKHR", (PFN_vkVoidFunction)vkGetDeviceAccelerationStructureCompatibilityKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
     { "vkGetDeviceBufferMemoryRequirements", (PFN_vkVoidFunction)vkGetDeviceBufferMemoryRequirements, PVK_SCOPE_DEVICE | PVK_CORE_1_3 },
     { "vkGetDeviceBufferMemoryRequirementsKHR", (PFN_vkVoidFunction)vkGetDeviceBufferMemoryRequirements, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_maintenance4) },
     { "vkGetDeviceGroupPeerMemoryFeatures", (PFN_vkVoidFunction)vkGetDeviceGroupPeerMemoryFeatures, PVK_SCOPE_DEVICE | PVK_CORE_1_1 },
@@ -76558,6 +78149,7 @@ static const struct pvk_entrypoint {
     { "vkWaitForFences", (PFN_vkVoidFunction)vkWaitForFences, PVK_SCOPE_DEVICE },
     { "vkWaitSemaphores", (PFN_vkVoidFunction)vkWaitSemaphores, PVK_SCOPE_DEVICE | PVK_CORE_1_2 },
     { "vkWaitSemaphoresKHR", (PFN_vkVoidFunction)vkWaitSemaphores, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_timeline_semaphore) },
+    { "vkWriteAccelerationStructuresPropertiesKHR", (PFN_vkVoidFunction)vkWriteAccelerationStructuresPropertiesKHR, PVK_SCOPE_DEVICE | PVK_DEXT(PVK_DEVICE_EXT_KHR_acceleration_structure) },
 };
 
 /* The first entry of a command, or NULL. */
