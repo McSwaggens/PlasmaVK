@@ -370,17 +370,17 @@ static const uint32_t spv_rgen[] = {
  *     h.primitive = uint(gl_PrimitiveID);
  *     h.instance = uint(gl_InstanceID);
  *     h.custom = uint(gl_InstanceCustomIndexEXT);
- *     h.bary = box ? vec2(0.0) : attribs;
+ *     h.bary = attribs; // (a box's: what its intersection shader reported the hit with)
  *     h.type = box ? 2u : 1u;
  *     h.height = gl_ObjectToWorldEXT[3].z;
  * }
  */
 static const uint32_t spv_chit[] = {
-    0x07230203, 0x00010500, 0x0008000b, 0x00000044, 0x00000000, 0x00020011, 0x0000117f, 0x0006000a,
+    0x07230203, 0x00010500, 0x0008000b, 0x00000040, 0x00000000, 0x00020011, 0x0000117f, 0x0006000a,
     0x5f565053, 0x5f52484b, 0x5f796172, 0x63617274, 0x00676e69, 0x0006000b, 0x00000001, 0x4c534c47,
     0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x000d000f, 0x000014c4,
     0x00000004, 0x6e69616d, 0x00000000, 0x0000000b, 0x00000013, 0x00000017, 0x0000001d, 0x00000023,
-    0x00000028, 0x00000031, 0x00000040, 0x00030003, 0x00000002, 0x000001cc, 0x00060004, 0x455f4c47,
+    0x00000028, 0x0000002e, 0x0000003c, 0x00030003, 0x00000002, 0x000001cc, 0x00060004, 0x455f4c47,
     0x725f5458, 0x745f7961, 0x69636172, 0x0000676e, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000,
     0x00030005, 0x00000008, 0x00786f62, 0x00060005, 0x0000000b, 0x485f6c67, 0x694b7469, 0x5845646e,
     0x00000054, 0x00030005, 0x00000011, 0x00746948, 0x00040006, 0x00000011, 0x00000000, 0x00000074,
@@ -393,11 +393,11 @@ static const uint32_t spv_chit[] = {
     0x6d547961, 0x58457861, 0x00000054, 0x00060005, 0x0000001d, 0x505f6c67, 0x696d6972, 0x65766974,
     0x00004449, 0x00060005, 0x00000023, 0x495f6c67, 0x6174736e, 0x4965636e, 0x00000044, 0x00090005,
     0x00000028, 0x495f6c67, 0x6174736e, 0x4365636e, 0x6f747375, 0x646e496d, 0x58457865, 0x00000054,
-    0x00040005, 0x00000031, 0x72747461, 0x00736269, 0x00070005, 0x00000040, 0x4f5f6c67, 0x63656a62,
+    0x00040005, 0x0000002e, 0x72747461, 0x00736269, 0x00070005, 0x0000003c, 0x4f5f6c67, 0x63656a62,
     0x576f5474, 0x646c726f, 0x00545845, 0x00040047, 0x0000000b, 0x0000000b, 0x000014d5, 0x00040047,
     0x00000017, 0x0000000b, 0x000014ce, 0x00040047, 0x0000001d, 0x0000000b, 0x00000007, 0x00040047,
     0x00000023, 0x0000000b, 0x00000006, 0x00040047, 0x00000028, 0x0000000b, 0x000014cf, 0x00040047,
-    0x00000040, 0x0000000b, 0x000014d2, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002,
+    0x0000003c, 0x0000000b, 0x000014d2, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002,
     0x00020014, 0x00000006, 0x00040020, 0x00000007, 0x00000007, 0x00000006, 0x00040015, 0x00000009,
     0x00000020, 0x00000000, 0x00040020, 0x0000000a, 0x00000001, 0x00000009, 0x0004003b, 0x0000000a,
     0x0000000b, 0x00000001, 0x0004002b, 0x00000009, 0x0000000d, 0x00000009, 0x00030016, 0x0000000f,
@@ -411,31 +411,29 @@ static const uint32_t spv_chit[] = {
     0x00040020, 0x00000020, 0x000014de, 0x00000009, 0x0004002b, 0x00000014, 0x00000022, 0x00000002,
     0x0004003b, 0x0000001c, 0x00000023, 0x00000001, 0x0004002b, 0x00000014, 0x00000027, 0x00000003,
     0x0004003b, 0x0000001c, 0x00000028, 0x00000001, 0x0004002b, 0x00000014, 0x0000002c, 0x00000004,
-    0x0004002b, 0x0000000f, 0x0000002e, 0x00000000, 0x0005002c, 0x00000010, 0x0000002f, 0x0000002e,
-    0x0000002e, 0x00040020, 0x00000030, 0x000014db, 0x00000010, 0x0004003b, 0x00000030, 0x00000031,
-    0x000014db, 0x00040020, 0x00000034, 0x000014de, 0x00000010, 0x0004002b, 0x00000014, 0x00000036,
-    0x00000005, 0x0004002b, 0x00000009, 0x00000038, 0x00000002, 0x0004002b, 0x00000009, 0x00000039,
-    0x00000001, 0x0004002b, 0x00000014, 0x0000003c, 0x00000007, 0x00040017, 0x0000003d, 0x0000000f,
-    0x00000003, 0x00040018, 0x0000003e, 0x0000003d, 0x00000004, 0x00040020, 0x0000003f, 0x00000001,
-    0x0000003e, 0x0004003b, 0x0000003f, 0x00000040, 0x00000001, 0x00050036, 0x00000002, 0x00000004,
-    0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003b, 0x00000007, 0x00000008, 0x00000007,
-    0x0004003d, 0x00000009, 0x0000000c, 0x0000000b, 0x000500aa, 0x00000006, 0x0000000e, 0x0000000c,
-    0x0000000d, 0x0003003e, 0x00000008, 0x0000000e, 0x0004003d, 0x0000000f, 0x00000018, 0x00000017,
-    0x00050041, 0x00000019, 0x0000001a, 0x00000013, 0x00000015, 0x0003003e, 0x0000001a, 0x00000018,
-    0x0004003d, 0x00000014, 0x0000001e, 0x0000001d, 0x0004007c, 0x00000009, 0x0000001f, 0x0000001e,
-    0x00050041, 0x00000020, 0x00000021, 0x00000013, 0x0000001b, 0x0003003e, 0x00000021, 0x0000001f,
-    0x0004003d, 0x00000014, 0x00000024, 0x00000023, 0x0004007c, 0x00000009, 0x00000025, 0x00000024,
-    0x00050041, 0x00000020, 0x00000026, 0x00000013, 0x00000022, 0x0003003e, 0x00000026, 0x00000025,
-    0x0004003d, 0x00000014, 0x00000029, 0x00000028, 0x0004007c, 0x00000009, 0x0000002a, 0x00000029,
-    0x00050041, 0x00000020, 0x0000002b, 0x00000013, 0x00000027, 0x0003003e, 0x0000002b, 0x0000002a,
-    0x0004003d, 0x00000006, 0x0000002d, 0x00000008, 0x0004003d, 0x00000010, 0x00000032, 0x00000031,
-    0x000600a9, 0x00000010, 0x00000033, 0x0000002d, 0x0000002f, 0x00000032, 0x00050041, 0x00000034,
-    0x00000035, 0x00000013, 0x0000002c, 0x0003003e, 0x00000035, 0x00000033, 0x0004003d, 0x00000006,
-    0x00000037, 0x00000008, 0x000600a9, 0x00000009, 0x0000003a, 0x00000037, 0x00000038, 0x00000039,
-    0x00050041, 0x00000020, 0x0000003b, 0x00000013, 0x00000036, 0x0003003e, 0x0000003b, 0x0000003a,
-    0x00060041, 0x00000016, 0x00000041, 0x00000040, 0x00000027, 0x00000038, 0x0004003d, 0x0000000f,
-    0x00000042, 0x00000041, 0x00050041, 0x00000019, 0x00000043, 0x00000013, 0x0000003c, 0x0003003e,
-    0x00000043, 0x00000042, 0x000100fd, 0x00010038,
+    0x00040020, 0x0000002d, 0x000014db, 0x00000010, 0x0004003b, 0x0000002d, 0x0000002e, 0x000014db,
+    0x00040020, 0x00000030, 0x000014de, 0x00000010, 0x0004002b, 0x00000014, 0x00000032, 0x00000005,
+    0x0004002b, 0x00000009, 0x00000034, 0x00000002, 0x0004002b, 0x00000009, 0x00000035, 0x00000001,
+    0x0004002b, 0x00000014, 0x00000038, 0x00000007, 0x00040017, 0x00000039, 0x0000000f, 0x00000003,
+    0x00040018, 0x0000003a, 0x00000039, 0x00000004, 0x00040020, 0x0000003b, 0x00000001, 0x0000003a,
+    0x0004003b, 0x0000003b, 0x0000003c, 0x00000001, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200f8, 0x00000005, 0x0004003b, 0x00000007, 0x00000008, 0x00000007, 0x0004003d,
+    0x00000009, 0x0000000c, 0x0000000b, 0x000500aa, 0x00000006, 0x0000000e, 0x0000000c, 0x0000000d,
+    0x0003003e, 0x00000008, 0x0000000e, 0x0004003d, 0x0000000f, 0x00000018, 0x00000017, 0x00050041,
+    0x00000019, 0x0000001a, 0x00000013, 0x00000015, 0x0003003e, 0x0000001a, 0x00000018, 0x0004003d,
+    0x00000014, 0x0000001e, 0x0000001d, 0x0004007c, 0x00000009, 0x0000001f, 0x0000001e, 0x00050041,
+    0x00000020, 0x00000021, 0x00000013, 0x0000001b, 0x0003003e, 0x00000021, 0x0000001f, 0x0004003d,
+    0x00000014, 0x00000024, 0x00000023, 0x0004007c, 0x00000009, 0x00000025, 0x00000024, 0x00050041,
+    0x00000020, 0x00000026, 0x00000013, 0x00000022, 0x0003003e, 0x00000026, 0x00000025, 0x0004003d,
+    0x00000014, 0x00000029, 0x00000028, 0x0004007c, 0x00000009, 0x0000002a, 0x00000029, 0x00050041,
+    0x00000020, 0x0000002b, 0x00000013, 0x00000027, 0x0003003e, 0x0000002b, 0x0000002a, 0x0004003d,
+    0x00000010, 0x0000002f, 0x0000002e, 0x00050041, 0x00000030, 0x00000031, 0x00000013, 0x0000002c,
+    0x0003003e, 0x00000031, 0x0000002f, 0x0004003d, 0x00000006, 0x00000033, 0x00000008, 0x000600a9,
+    0x00000009, 0x00000036, 0x00000033, 0x00000034, 0x00000035, 0x00050041, 0x00000020, 0x00000037,
+    0x00000013, 0x00000032, 0x0003003e, 0x00000037, 0x00000036, 0x00060041, 0x00000016, 0x0000003d,
+    0x0000003c, 0x00000027, 0x00000034, 0x0004003d, 0x0000000f, 0x0000003e, 0x0000003d, 0x00050041,
+    0x00000019, 0x0000003f, 0x00000013, 0x00000038, 0x0003003e, 0x0000003f, 0x0000003e, 0x000100fd,
+    0x00010038,
 };
 
 /*
@@ -526,6 +524,211 @@ static const uint32_t spv_isec[] = {
     0x0004003d, 0x00000006, 0x00000018, 0x00000017, 0x0004007f, 0x00000006, 0x00000019, 0x00000018,
     0x00050088, 0x00000006, 0x0000001a, 0x00000015, 0x00000019, 0x000514d6, 0x0000001c, 0x0000001d,
     0x0000001a, 0x0000001b, 0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 460
+ * #extension GL_EXT_ray_tracing : require
+ * hitAttributeEXT vec2 attribs;
+ * float tmax()
+ * {
+ *     return gl_RayTmaxEXT;
+ * }
+ * void main()
+ * {
+ *     // the plane z = 0.5 of the box's object space, after a hit an eighth
+ *     // beyond it; the nearer hit's attributes are the ray's tmax as the
+ *     // shader started and after the first hit was accepted
+ *     float t = (gl_ObjectRayOriginEXT.z - 0.5) / -gl_ObjectRayDirectionEXT.z;
+ *     float before = gl_RayTmaxEXT;
+ *     attribs = vec2(0.0);
+ *     reportIntersectionEXT(t + 0.125, 9u);
+ *     attribs = vec2(before, tmax());
+ *     reportIntersectionEXT(t, 9u);
+ * }
+ */
+static const uint32_t spv_isec_twice[] = {
+    0x07230203, 0x00010500, 0x0008000b, 0x00000031, 0x00000000, 0x00020011, 0x0000117f, 0x0006000a,
+    0x5f565053, 0x5f52484b, 0x5f796172, 0x63617274, 0x00676e69, 0x0006000b, 0x00000001, 0x4c534c47,
+    0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x0009000f, 0x000014c2,
+    0x00000004, 0x6e69616d, 0x00000000, 0x0000000b, 0x00000013, 0x0000001a, 0x00000023, 0x00030003,
+    0x00000002, 0x000001cc, 0x00060004, 0x455f4c47, 0x725f5458, 0x745f7961, 0x69636172, 0x0000676e,
+    0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00040005, 0x00000008, 0x78616d74, 0x00000028,
+    0x00060005, 0x0000000b, 0x525f6c67, 0x6d547961, 0x58457861, 0x00000054, 0x00030005, 0x00000010,
+    0x00000074, 0x00080005, 0x00000013, 0x4f5f6c67, 0x63656a62, 0x79615274, 0x6769724f, 0x58456e69,
+    0x00000054, 0x00090005, 0x0000001a, 0x4f5f6c67, 0x63656a62, 0x79615274, 0x65726944, 0x6f697463,
+    0x5458456e, 0x00000000, 0x00040005, 0x0000001f, 0x6f666562, 0x00006572, 0x00040005, 0x00000023,
+    0x72747461, 0x00736269, 0x00040047, 0x0000000b, 0x0000000b, 0x000014ce, 0x00030047, 0x0000000b,
+    0x00000015, 0x00030047, 0x0000000b, 0x00000017, 0x00040047, 0x00000013, 0x0000000b, 0x000014cb,
+    0x00040047, 0x0000001a, 0x0000000b, 0x000014cc, 0x00020013, 0x00000002, 0x00030021, 0x00000003,
+    0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00030021, 0x00000007, 0x00000006, 0x00040020,
+    0x0000000a, 0x00000001, 0x00000006, 0x0004003b, 0x0000000a, 0x0000000b, 0x00000001, 0x00040020,
+    0x0000000f, 0x00000007, 0x00000006, 0x00040017, 0x00000011, 0x00000006, 0x00000003, 0x00040020,
+    0x00000012, 0x00000001, 0x00000011, 0x0004003b, 0x00000012, 0x00000013, 0x00000001, 0x00040015,
+    0x00000014, 0x00000020, 0x00000000, 0x0004002b, 0x00000014, 0x00000015, 0x00000002, 0x0004002b,
+    0x00000006, 0x00000018, 0x3f000000, 0x0004003b, 0x00000012, 0x0000001a, 0x00000001, 0x00040017,
+    0x00000021, 0x00000006, 0x00000002, 0x00040020, 0x00000022, 0x000014db, 0x00000021, 0x0004003b,
+    0x00000022, 0x00000023, 0x000014db, 0x0004002b, 0x00000006, 0x00000024, 0x00000000, 0x0005002c,
+    0x00000021, 0x00000025, 0x00000024, 0x00000024, 0x0004002b, 0x00000006, 0x00000027, 0x3e000000,
+    0x0004002b, 0x00000014, 0x00000029, 0x00000009, 0x00020014, 0x0000002a, 0x00050036, 0x00000002,
+    0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003b, 0x0000000f, 0x00000010,
+    0x00000007, 0x0004003b, 0x0000000f, 0x0000001f, 0x00000007, 0x00050041, 0x0000000a, 0x00000016,
+    0x00000013, 0x00000015, 0x0004003d, 0x00000006, 0x00000017, 0x00000016, 0x00050083, 0x00000006,
+    0x00000019, 0x00000017, 0x00000018, 0x00050041, 0x0000000a, 0x0000001b, 0x0000001a, 0x00000015,
+    0x0004003d, 0x00000006, 0x0000001c, 0x0000001b, 0x0004007f, 0x00000006, 0x0000001d, 0x0000001c,
+    0x00050088, 0x00000006, 0x0000001e, 0x00000019, 0x0000001d, 0x0003003e, 0x00000010, 0x0000001e,
+    0x0004003d, 0x00000006, 0x00000020, 0x0000000b, 0x0003003e, 0x0000001f, 0x00000020, 0x0003003e,
+    0x00000023, 0x00000025, 0x0004003d, 0x00000006, 0x00000026, 0x00000010, 0x00050081, 0x00000006,
+    0x00000028, 0x00000026, 0x00000027, 0x000514d6, 0x0000002a, 0x0000002b, 0x00000028, 0x00000029,
+    0x0004003d, 0x00000006, 0x0000002c, 0x0000001f, 0x00040039, 0x00000006, 0x0000002d, 0x00000008,
+    0x00050050, 0x00000021, 0x0000002e, 0x0000002c, 0x0000002d, 0x0003003e, 0x00000023, 0x0000002e,
+    0x0004003d, 0x00000006, 0x0000002f, 0x00000010, 0x000514d6, 0x0000002a, 0x00000030, 0x0000002f,
+    0x00000029, 0x000100fd, 0x00010038, 0x00050036, 0x00000006, 0x00000008, 0x00000000, 0x00000007,
+    0x000200f8, 0x00000009, 0x0004003d, 0x00000006, 0x0000000c, 0x0000000b, 0x000200fe, 0x0000000c,
+    0x00010038,
+};
+
+/*
+ * #version 460
+ * #extension GL_EXT_ray_tracing : require
+ * // 28 bytes of attributes; a vec3 takes 16 bytes of a struct in Metal
+ * struct Attr { vec3 normal; vec3 tangent; float w; };
+ * hitAttributeEXT Attr a;
+ * void main()
+ * {
+ *     // the plane z = 0.5 of the box's object space
+ *     a.normal = vec3(1.0, 2.0, 3.0);
+ *     a.tangent = vec3(4.0, 5.0, 6.0);
+ *     a.w = 7.0;
+ *     reportIntersectionEXT((gl_ObjectRayOriginEXT.z - 0.5) / -gl_ObjectRayDirectionEXT.z, 9u);
+ * }
+ */
+static const uint32_t spv_isec_wide[] = {
+    0x07230203, 0x00010500, 0x0008000b, 0x0000002e, 0x00000000, 0x00020011, 0x0000117f, 0x0006000a,
+    0x5f565053, 0x5f52484b, 0x5f796172, 0x63617274, 0x00676e69, 0x0006000b, 0x00000001, 0x4c534c47,
+    0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x0008000f, 0x000014c2,
+    0x00000004, 0x6e69616d, 0x00000000, 0x0000000a, 0x0000001e, 0x00000026, 0x00030003, 0x00000002,
+    0x000001cc, 0x00060004, 0x455f4c47, 0x725f5458, 0x745f7961, 0x69636172, 0x0000676e, 0x00040005,
+    0x00000004, 0x6e69616d, 0x00000000, 0x00040005, 0x00000008, 0x72747441, 0x00000000, 0x00050006,
+    0x00000008, 0x00000000, 0x6d726f6e, 0x00006c61, 0x00050006, 0x00000008, 0x00000001, 0x676e6174,
+    0x00746e65, 0x00040006, 0x00000008, 0x00000002, 0x00000077, 0x00030005, 0x0000000a, 0x00000061,
+    0x00080005, 0x0000001e, 0x4f5f6c67, 0x63656a62, 0x79615274, 0x6769724f, 0x58456e69, 0x00000054,
+    0x00090005, 0x00000026, 0x4f5f6c67, 0x63656a62, 0x79615274, 0x65726944, 0x6f697463, 0x5458456e,
+    0x00000000, 0x00040047, 0x0000001e, 0x0000000b, 0x000014cb, 0x00040047, 0x00000026, 0x0000000b,
+    0x000014cc, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006,
+    0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000003, 0x0005001e, 0x00000008, 0x00000007,
+    0x00000007, 0x00000006, 0x00040020, 0x00000009, 0x000014db, 0x00000008, 0x0004003b, 0x00000009,
+    0x0000000a, 0x000014db, 0x00040015, 0x0000000b, 0x00000020, 0x00000001, 0x0004002b, 0x0000000b,
+    0x0000000c, 0x00000000, 0x0004002b, 0x00000006, 0x0000000d, 0x3f800000, 0x0004002b, 0x00000006,
+    0x0000000e, 0x40000000, 0x0004002b, 0x00000006, 0x0000000f, 0x40400000, 0x0006002c, 0x00000007,
+    0x00000010, 0x0000000d, 0x0000000e, 0x0000000f, 0x00040020, 0x00000011, 0x000014db, 0x00000007,
+    0x0004002b, 0x0000000b, 0x00000013, 0x00000001, 0x0004002b, 0x00000006, 0x00000014, 0x40800000,
+    0x0004002b, 0x00000006, 0x00000015, 0x40a00000, 0x0004002b, 0x00000006, 0x00000016, 0x40c00000,
+    0x0006002c, 0x00000007, 0x00000017, 0x00000014, 0x00000015, 0x00000016, 0x0004002b, 0x0000000b,
+    0x00000019, 0x00000002, 0x0004002b, 0x00000006, 0x0000001a, 0x40e00000, 0x00040020, 0x0000001b,
+    0x000014db, 0x00000006, 0x00040020, 0x0000001d, 0x00000001, 0x00000007, 0x0004003b, 0x0000001d,
+    0x0000001e, 0x00000001, 0x00040015, 0x0000001f, 0x00000020, 0x00000000, 0x0004002b, 0x0000001f,
+    0x00000020, 0x00000002, 0x00040020, 0x00000021, 0x00000001, 0x00000006, 0x0004002b, 0x00000006,
+    0x00000024, 0x3f000000, 0x0004003b, 0x0000001d, 0x00000026, 0x00000001, 0x0004002b, 0x0000001f,
+    0x0000002b, 0x00000009, 0x00020014, 0x0000002c, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200f8, 0x00000005, 0x00050041, 0x00000011, 0x00000012, 0x0000000a, 0x0000000c,
+    0x0003003e, 0x00000012, 0x00000010, 0x00050041, 0x00000011, 0x00000018, 0x0000000a, 0x00000013,
+    0x0003003e, 0x00000018, 0x00000017, 0x00050041, 0x0000001b, 0x0000001c, 0x0000000a, 0x00000019,
+    0x0003003e, 0x0000001c, 0x0000001a, 0x00050041, 0x00000021, 0x00000022, 0x0000001e, 0x00000020,
+    0x0004003d, 0x00000006, 0x00000023, 0x00000022, 0x00050083, 0x00000006, 0x00000025, 0x00000023,
+    0x00000024, 0x00050041, 0x00000021, 0x00000027, 0x00000026, 0x00000020, 0x0004003d, 0x00000006,
+    0x00000028, 0x00000027, 0x0004007f, 0x00000006, 0x00000029, 0x00000028, 0x00050088, 0x00000006,
+    0x0000002a, 0x00000025, 0x00000029, 0x000514d6, 0x0000002c, 0x0000002d, 0x0000002a, 0x0000002b,
+    0x000100fd, 0x00010038,
+};
+
+/*
+ * #version 460
+ * #extension GL_EXT_ray_tracing : require
+ * struct Hit {
+ *     float t; uint primitive; uint instance; uint custom;
+ *     vec2 bary; uint type; uint candidates;
+ *     float height; uint pad;
+ * };
+ * struct Attr { vec3 normal; vec3 tangent; float w; };
+ * layout(location = 0) rayPayloadInEXT Hit h;
+ * hitAttributeEXT Attr a;
+ * void main()
+ * {
+ *     // of a box whose intersection shader is the one above: every component
+ *     // of its attributes, a decimal digit each
+ *     h.t = gl_HitTEXT;
+ *     h.primitive = uint(gl_PrimitiveID);
+ *     h.instance = uint(gl_InstanceID);
+ *     h.custom = uint(gl_InstanceCustomIndexEXT);
+ *     h.bary = vec2(dot(a.normal, vec3(1.0, 10.0, 100.0)) + a.w * 1000.0, dot(a.tangent, vec3(1.0, 10.0, 100.0)));
+ *     h.type = 2u;
+ *     h.height = gl_ObjectToWorldEXT[3].z;
+ * }
+ */
+static const uint32_t spv_chit_wide[] = {
+    0x07230203, 0x00010500, 0x0008000b, 0x00000047, 0x00000000, 0x00020011, 0x0000117f, 0x0006000a,
+    0x5f565053, 0x5f52484b, 0x5f796172, 0x63617274, 0x00676e69, 0x0006000b, 0x00000001, 0x4c534c47,
+    0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001, 0x000c000f, 0x000014c4,
+    0x00000004, 0x6e69616d, 0x00000000, 0x0000000b, 0x0000000f, 0x00000015, 0x0000001b, 0x00000020,
+    0x00000028, 0x00000043, 0x00030003, 0x00000002, 0x000001cc, 0x00060004, 0x455f4c47, 0x725f5458,
+    0x745f7961, 0x69636172, 0x0000676e, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005,
+    0x00000009, 0x00746948, 0x00040006, 0x00000009, 0x00000000, 0x00000074, 0x00060006, 0x00000009,
+    0x00000001, 0x6d697270, 0x76697469, 0x00000065, 0x00060006, 0x00000009, 0x00000002, 0x74736e69,
+    0x65636e61, 0x00000000, 0x00050006, 0x00000009, 0x00000003, 0x74737563, 0x00006d6f, 0x00050006,
+    0x00000009, 0x00000004, 0x79726162, 0x00000000, 0x00050006, 0x00000009, 0x00000005, 0x65707974,
+    0x00000000, 0x00060006, 0x00000009, 0x00000006, 0x646e6163, 0x74616469, 0x00007365, 0x00050006,
+    0x00000009, 0x00000007, 0x67696568, 0x00007468, 0x00040006, 0x00000009, 0x00000008, 0x00646170,
+    0x00030005, 0x0000000b, 0x00000068, 0x00060005, 0x0000000f, 0x525f6c67, 0x6d547961, 0x58457861,
+    0x00000054, 0x00060005, 0x00000015, 0x505f6c67, 0x696d6972, 0x65766974, 0x00004449, 0x00060005,
+    0x0000001b, 0x495f6c67, 0x6174736e, 0x4965636e, 0x00000044, 0x00090005, 0x00000020, 0x495f6c67,
+    0x6174736e, 0x4365636e, 0x6f747375, 0x646e496d, 0x58457865, 0x00000054, 0x00040005, 0x00000026,
+    0x72747441, 0x00000000, 0x00050006, 0x00000026, 0x00000000, 0x6d726f6e, 0x00006c61, 0x00050006,
+    0x00000026, 0x00000001, 0x676e6174, 0x00746e65, 0x00040006, 0x00000026, 0x00000002, 0x00000077,
+    0x00030005, 0x00000028, 0x00000061, 0x00070005, 0x00000043, 0x4f5f6c67, 0x63656a62, 0x576f5474,
+    0x646c726f, 0x00545845, 0x00040047, 0x0000000f, 0x0000000b, 0x000014ce, 0x00040047, 0x00000015,
+    0x0000000b, 0x00000007, 0x00040047, 0x0000001b, 0x0000000b, 0x00000006, 0x00040047, 0x00000020,
+    0x0000000b, 0x000014cf, 0x00040047, 0x00000043, 0x0000000b, 0x000014d2, 0x00020013, 0x00000002,
+    0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040015, 0x00000007,
+    0x00000020, 0x00000000, 0x00040017, 0x00000008, 0x00000006, 0x00000002, 0x000b001e, 0x00000009,
+    0x00000006, 0x00000007, 0x00000007, 0x00000007, 0x00000008, 0x00000007, 0x00000007, 0x00000006,
+    0x00000007, 0x00040020, 0x0000000a, 0x000014de, 0x00000009, 0x0004003b, 0x0000000a, 0x0000000b,
+    0x000014de, 0x00040015, 0x0000000c, 0x00000020, 0x00000001, 0x0004002b, 0x0000000c, 0x0000000d,
+    0x00000000, 0x00040020, 0x0000000e, 0x00000001, 0x00000006, 0x0004003b, 0x0000000e, 0x0000000f,
+    0x00000001, 0x00040020, 0x00000011, 0x000014de, 0x00000006, 0x0004002b, 0x0000000c, 0x00000013,
+    0x00000001, 0x00040020, 0x00000014, 0x00000001, 0x0000000c, 0x0004003b, 0x00000014, 0x00000015,
+    0x00000001, 0x00040020, 0x00000018, 0x000014de, 0x00000007, 0x0004002b, 0x0000000c, 0x0000001a,
+    0x00000002, 0x0004003b, 0x00000014, 0x0000001b, 0x00000001, 0x0004002b, 0x0000000c, 0x0000001f,
+    0x00000003, 0x0004003b, 0x00000014, 0x00000020, 0x00000001, 0x0004002b, 0x0000000c, 0x00000024,
+    0x00000004, 0x00040017, 0x00000025, 0x00000006, 0x00000003, 0x0005001e, 0x00000026, 0x00000025,
+    0x00000025, 0x00000006, 0x00040020, 0x00000027, 0x000014db, 0x00000026, 0x0004003b, 0x00000027,
+    0x00000028, 0x000014db, 0x00040020, 0x00000029, 0x000014db, 0x00000025, 0x0004002b, 0x00000006,
+    0x0000002c, 0x3f800000, 0x0004002b, 0x00000006, 0x0000002d, 0x41200000, 0x0004002b, 0x00000006,
+    0x0000002e, 0x42c80000, 0x0006002c, 0x00000025, 0x0000002f, 0x0000002c, 0x0000002d, 0x0000002e,
+    0x00040020, 0x00000031, 0x000014db, 0x00000006, 0x0004002b, 0x00000006, 0x00000034, 0x447a0000,
+    0x00040020, 0x0000003b, 0x000014de, 0x00000008, 0x0004002b, 0x0000000c, 0x0000003d, 0x00000005,
+    0x0004002b, 0x00000007, 0x0000003e, 0x00000002, 0x0004002b, 0x0000000c, 0x00000040, 0x00000007,
+    0x00040018, 0x00000041, 0x00000025, 0x00000004, 0x00040020, 0x00000042, 0x00000001, 0x00000041,
+    0x0004003b, 0x00000042, 0x00000043, 0x00000001, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200f8, 0x00000005, 0x0004003d, 0x00000006, 0x00000010, 0x0000000f, 0x00050041,
+    0x00000011, 0x00000012, 0x0000000b, 0x0000000d, 0x0003003e, 0x00000012, 0x00000010, 0x0004003d,
+    0x0000000c, 0x00000016, 0x00000015, 0x0004007c, 0x00000007, 0x00000017, 0x00000016, 0x00050041,
+    0x00000018, 0x00000019, 0x0000000b, 0x00000013, 0x0003003e, 0x00000019, 0x00000017, 0x0004003d,
+    0x0000000c, 0x0000001c, 0x0000001b, 0x0004007c, 0x00000007, 0x0000001d, 0x0000001c, 0x00050041,
+    0x00000018, 0x0000001e, 0x0000000b, 0x0000001a, 0x0003003e, 0x0000001e, 0x0000001d, 0x0004003d,
+    0x0000000c, 0x00000021, 0x00000020, 0x0004007c, 0x00000007, 0x00000022, 0x00000021, 0x00050041,
+    0x00000018, 0x00000023, 0x0000000b, 0x0000001f, 0x0003003e, 0x00000023, 0x00000022, 0x00050041,
+    0x00000029, 0x0000002a, 0x00000028, 0x0000000d, 0x0004003d, 0x00000025, 0x0000002b, 0x0000002a,
+    0x00050094, 0x00000006, 0x00000030, 0x0000002b, 0x0000002f, 0x00050041, 0x00000031, 0x00000032,
+    0x00000028, 0x0000001a, 0x0004003d, 0x00000006, 0x00000033, 0x00000032, 0x00050085, 0x00000006,
+    0x00000035, 0x00000033, 0x00000034, 0x00050081, 0x00000006, 0x00000036, 0x00000030, 0x00000035,
+    0x00050041, 0x00000029, 0x00000037, 0x00000028, 0x00000013, 0x0004003d, 0x00000025, 0x00000038,
+    0x00000037, 0x00050094, 0x00000006, 0x00000039, 0x00000038, 0x0000002f, 0x00050050, 0x00000008,
+    0x0000003a, 0x00000036, 0x00000039, 0x00050041, 0x0000003b, 0x0000003c, 0x0000000b, 0x00000024,
+    0x0003003e, 0x0000003c, 0x0000003a, 0x00050041, 0x00000018, 0x0000003f, 0x0000000b, 0x0000003d,
+    0x0003003e, 0x0000003f, 0x0000003e, 0x00060041, 0x0000000e, 0x00000044, 0x00000043, 0x0000001f,
+    0x0000003e, 0x0004003d, 0x00000006, 0x00000045, 0x00000044, 0x00050041, 0x00000011, 0x00000046,
+    0x0000000b, 0x00000040, 0x0003003e, 0x00000046, 0x00000045, 0x000100fd, 0x00010038,
 };
 
 #define RT_SIDE 16u /* rays a side: they cover x and y from 0 to 4 */
@@ -1552,14 +1755,19 @@ CT_TEST(ray_tracing_pipeline_requirements,
 
 #define RT_RECORD 64u /* a record of the shader binding table: a handle, padded to shaderGroupBaseAlignment's maximum */
 
-CT_TEST(ray_tracing_pipeline_hits,
-        "Ray Tracing > Shader Binding Table, Ray Traversal: vkCmdTraceRaysKHR runs the ray generation shader of "
-        "its record once per launch id; a ray it traces runs the closest-hit shader of the hit group the hit "
-        "instance's instanceShaderBindingTableRecordOffset selects (for a box, after that group's intersection "
-        "shader reported the hit), which sees the hit's T, kind, primitive, instance and custom indices, "
-        "attributes and object-to-world transform, or the miss shader; the cull mask as for ray queries",
-        RT_COMMANDS "vkGetPhysicalDeviceProperties2 vkCreateRayTracingPipelinesKHR "
-                    "vkGetRayTracingShaderGroupHandlesKHR vkCmdTraceRaysKHR")
+/* Traces the rays through a ray tracing pipeline (ray generation, miss, a
+ * closest-hit shader for the squares and one with intersection shader `isec`
+ * for the boxes) over a top level of `scene`, once per cull mask, and
+ * compares every one with rt_expect. box_chit (or NULL): a closest-hit
+ * shader of their own for the boxes. box_attribs (NULL: zeros): what the
+ * closest-hit shader must make of the attributes of a box's hit.
+ * The squares of another scene than rt_scene are of a bottom level with a
+ * third triangle, far above and aside of every ray: its bounds reach up to
+ * the rays' origins, so traversal may come to a square before it comes to a
+ * box that begins nearer. */
+static void rt_pipeline_hits(struct ct *t, const struct rt_instance *scene, const uint32_t *isec, size_t isec_size,
+                             const uint32_t *box_chit, size_t box_chit_size, const float *box_attribs,
+                             const uint32_t *masks, uint32_t mask_count)
 {
     static const struct {
         const uint32_t *code;
@@ -1569,23 +1777,36 @@ CT_TEST(ray_tracing_pipeline_hits,
         { spv_rgen, sizeof(spv_rgen), VK_SHADER_STAGE_RAYGEN_BIT_KHR },
         { spv_chit, sizeof(spv_chit), VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR },
         { spv_miss, sizeof(spv_miss), VK_SHADER_STAGE_MISS_BIT_KHR },
-        { spv_isec, sizeof(spv_isec), VK_SHADER_STAGE_INTERSECTION_BIT_KHR },
+        { NULL, 0, VK_SHADER_STAGE_INTERSECTION_BIT_KHR }, /* (isec) */
     };
-    static const uint32_t masks[] = { 0xff, 0x05, 0x08, 0x00 };
     struct rt r;
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR p;
     VkPhysicalDeviceProperties2 props;
-    VkPipelineShaderStageCreateInfo stages[4];
+    VkPipelineShaderStageCreateInfo stages[5];
     VkRayTracingShaderGroupCreateInfoKHR groups[4];
     VkRayTracingPipelineCreateInfoKHR info;
     VkStridedDeviceAddressRegionKHR raygen, miss, hit, callable;
-    VkShaderModule modules[4];
+    VkShaderModule modules[5];
     VkPipeline pipeline = VK_NULL_HANDLE;
     struct rt_buffer table;
     uint8_t handles[4 * 64];
-    uint32_t i;
+    uint32_t i, stage_count = box_chit ? 5 : 4;
 
     rt_init_ex(t, &r, 0, 0, 1);
+    if (scene != rt_scene) { /* the tall square and a top level of this scene instead */
+        static const float far[3][3] = { { -3, -3, 50 }, { -2, -3, 50 }, { -3, -2, 50 } };
+        VkAccelerationStructureGeometryKHR g;
+        rt_accel_fini(&r, &r.top);
+        rt_accel_fini(&r, &r.square);
+        memcpy(r.input.data + RT_IN_VERTICES + 6 * 12, far, sizeof(far));
+        rt_geometry(&r, 0, &g);
+        g.geometry.triangles.maxVertex = 8;
+        rt_build(t, &r, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, 0, &g, 3, &r.square);
+        rt_write_instances(&r, scene, r.square.address, r.box.address);
+        rt_geometry(&r, 2, &g);
+        rt_build(t, &r, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, 0, &g, RT_INSTANCES, &r.top);
+        rt_write_descriptor(&r, r.top.handle);
+    }
     memset(&p, 0, sizeof(p));
     p.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
     memset(&props, 0, sizeof(props));
@@ -1603,7 +1824,8 @@ CT_TEST(ray_tracing_pipeline_hits,
     memset(stages, 0, sizeof(stages));
     memset(groups, 0, sizeof(groups));
     for (i = 0; i < 4; i++) {
-        modules[i] = ct_shader_module(t, &r.e, shaders[i].code, shaders[i].size);
+        modules[i] = ct_shader_module(t, &r.e, shaders[i].code ? shaders[i].code : isec,
+                                      shaders[i].code ? shaders[i].size : isec_size);
         stages[i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[i].stage = shaders[i].stage;
         stages[i].module = modules[i];
@@ -1620,9 +1842,17 @@ CT_TEST(ray_tracing_pipeline_hits,
     groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR;
     groups[3].closestHitShader = 1;
     groups[3].intersectionShader = 3;
+    if (box_chit) {
+        modules[4] = ct_shader_module(t, &r.e, box_chit, box_chit_size);
+        stages[4].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[4].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        stages[4].module = modules[4];
+        stages[4].pName = "main";
+        groups[3].closestHitShader = 4;
+    }
     memset(&info, 0, sizeof(info));
     info.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
-    info.stageCount = 4;
+    info.stageCount = stage_count;
     info.pStages = stages;
     info.groupCount = 4;
     info.pGroups = groups;
@@ -1644,7 +1874,7 @@ CT_TEST(ray_tracing_pipeline_hits,
     hit.stride = RT_RECORD;
     hit.size = 2 * RT_RECORD;
 
-    for (i = 0; i < CT_ARRAY_SIZE(masks); i++) {
+    for (i = 0; i < mask_count; i++) {
         VkCommandBuffer cb = ct_begin_commands(t, &r.e);
         VkMemoryBarrier barrier;
         uint32_t push[4], hits;
@@ -1666,15 +1896,95 @@ CT_TEST(ray_tracing_pipeline_hits,
                              0, NULL, 0, NULL);
         ct_submit_and_wait(t, &r.e, cb);
         snprintf(what, sizeof(what), "the pipeline, cull mask 0x%02x", masks[i]);
-        hits = rt_compare(t, &r, rt_scene, 0, masks[i], 0, what);
-        if (masks[i] == 0xff)
+        if (box_attribs) { /* (compared here: rt_expect has a box's as zeros) */
+            struct rt_hit *got = (struct rt_hit *)(void *)r.hits.data;
+            uint32_t k, bad = 0;
+            for (k = 0; k < RT_RAYS; k++) {
+                if (got[k].type != 2)
+                    continue;
+                if ((!rt_near(got[k].bary[0], box_attribs[0]) || !rt_near(got[k].bary[1], box_attribs[1])) && bad++ < 4)
+                    ct_fail(t, __FILE__, __LINE__, "%s: ray %u hit a box with attributes (%g, %g); expected (%g, %g)",
+                            what, k, (double)got[k].bary[0], (double)got[k].bary[1], (double)box_attribs[0],
+                            (double)box_attribs[1]);
+                got[k].bary[0] = got[k].bary[1] = 0.0f;
+            }
+            CT_CHECKF(t, bad == 0, "%s: the attributes of %u hits of boxes differ", what, bad);
+        }
+        hits = rt_compare(t, &r, scene, 0, masks[i], 0, what);
+        if (scene == rt_scene && masks[i] == 0xff)
             CT_CHECKF(t, hits == RT_RAYS, "%s: the floor is under every ray, but %u of %u hit", what, hits, RT_RAYS);
     }
     rt_buffer_fini(&r, &table);
     vkDestroyPipeline(r.e.device, pipeline, NULL);
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < stage_count; i++)
         vkDestroyShaderModule(r.e.device, modules[i], NULL);
     rt_fini(&r);
+}
+
+CT_TEST(ray_tracing_pipeline_hits,
+        "Ray Tracing > Shader Binding Table, Ray Traversal: vkCmdTraceRaysKHR runs the ray generation shader of "
+        "its record once per launch id; a ray it traces runs the closest-hit shader of the hit group the hit "
+        "instance's instanceShaderBindingTableRecordOffset selects (for a box, after that group's intersection "
+        "shader reported the hit), which sees the hit's T, kind, primitive, instance and custom indices, "
+        "attributes and object-to-world transform, or the miss shader; the cull mask as for ray queries",
+        RT_COMMANDS "vkGetPhysicalDeviceProperties2 vkCreateRayTracingPipelinesKHR "
+                    "vkGetRayTracingShaderGroupHandlesKHR vkCmdTraceRaysKHR")
+{
+    static const uint32_t masks[] = { 0xff, 0x05, 0x08, 0x00 };
+    rt_pipeline_hits(t, rt_scene, spv_isec, sizeof(spv_isec), NULL, 0, NULL, masks, CT_ARRAY_SIZE(masks));
+}
+
+CT_TEST(ray_tracing_pipeline_opaque_before_box,
+        "Ray Traversal > Ray Closest Hit Determination: the closest hit of a ray is the nearest intersection "
+        "confirmed, whatever the order candidates are found in: an opaque triangle inside a box's bounds, nearer "
+        "than the hit the box's intersection shader reports, is what the closest-hit shader sees",
+        RT_COMMANDS "vkGetPhysicalDeviceProperties2 vkCreateRayTracingPipelinesKHR "
+                    "vkGetRayTracingShaderGroupHandlesKHR vkCmdTraceRaysKHR")
+{
+    /* boxes whose reported plane (half their height) is under an opaque square inside them */
+    static const struct rt_instance boxes_first[RT_INSTANCES] = {
+        { 1.0f, 0.5f, 0.5f, 0.25f, 400, 0x08, 0, 1 },
+        { 1.0f, 0.5f, 0.5f, 1.0f, 300, 0x04, VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR, 0 },
+        { 2.0f, 2.0f, 2.0f, 0.25f, 500, 0x08, 0, 1 },
+        { 2.0f, 2.0f, 2.0f, 2.0f, 600, 0x04, VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR, 0 },
+    };
+    static const struct rt_instance squares_first[RT_INSTANCES] = {
+        { 2.0f, 2.0f, 2.0f, 2.0f, 600, 0x04, VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR, 0 },
+        { 1.0f, 0.5f, 0.5f, 1.0f, 300, 0x04, VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR, 0 },
+        { 2.0f, 2.0f, 2.0f, 0.25f, 500, 0x08, 0, 1 },
+        { 1.0f, 0.5f, 0.5f, 0.25f, 400, 0x08, 0, 1 },
+    };
+    static const uint32_t masks[] = { 0xff, 0x08 };
+    rt_pipeline_hits(t, boxes_first, spv_isec, sizeof(spv_isec), NULL, 0, NULL, masks, CT_ARRAY_SIZE(masks));
+    rt_pipeline_hits(t, squares_first, spv_isec, sizeof(spv_isec), NULL, 0, NULL, masks, CT_ARRAY_SIZE(masks));
+}
+
+CT_TEST(ray_tracing_pipeline_tmax_after_report,
+        "Interfaces with Shaders > Built-In Variables > RayTmaxKHR: in an intersection shader RayTmaxKHR is the "
+        "distance of the closest hit so far, or the ray's tmax, and changes when a hit the shader reports is "
+        "accepted: read after such a hit it is that hit's distance, and a nearer hit reported next is accepted "
+        "with the attributes then given",
+        RT_COMMANDS "vkGetPhysicalDeviceProperties2 vkCreateRayTracingPipelinesKHR "
+                    "vkGetRayTracingShaderGroupHandlesKHR vkCmdTraceRaysKHR")
+{
+    /* the box alone: its plane is 99.25 from the rays' origins, the first hit reported an eighth beyond it */
+    static const float attribs[2] = { 1000.0f, 99.375f };
+    static const uint32_t masks[] = { 0x08 };
+    rt_pipeline_hits(t, rt_scene, spv_isec_twice, sizeof(spv_isec_twice), NULL, 0, attribs, masks,
+                     CT_ARRAY_SIZE(masks));
+}
+
+CT_TEST(ray_tracing_pipeline_hit_attributes,
+        "Ray Tracing > Ray Intersection Confirmation, Limits (maxRayHitAttributeSize): the attributes an "
+        "intersection shader reports a hit with are what the closest-hit shader of the hit's group reads, all of "
+        "a structure within the limit: two three-component vectors and a scalar, 28 bytes",
+        RT_COMMANDS "vkGetPhysicalDeviceProperties2 vkCreateRayTracingPipelinesKHR "
+                    "vkGetRayTracingShaderGroupHandlesKHR vkCmdTraceRaysKHR")
+{
+    static const float attribs[2] = { 7321.0f, 654.0f }; /* (1, 2, 3), (4, 5, 6) and 7, a digit each */
+    static const uint32_t masks[] = { 0xff, 0x08 };
+    rt_pipeline_hits(t, rt_scene, spv_isec_wide, sizeof(spv_isec_wide), spv_chit_wide, sizeof(spv_chit_wide), attribs,
+                     masks, CT_ARRAY_SIZE(masks));
 }
 
 static const struct ct_test *const tests[] = {
@@ -1690,6 +2000,9 @@ static const struct ct_test *const tests[] = {
     CT_REF(accel_compacting_copy),
     CT_REF(ray_tracing_pipeline_requirements),
     CT_REF(ray_tracing_pipeline_hits),
+    CT_REF(ray_tracing_pipeline_opaque_before_box),
+    CT_REF(ray_tracing_pipeline_tmax_after_report),
+    CT_REF(ray_tracing_pipeline_hit_attributes),
 };
 
 CT_SUITE(accelstructs, tests)

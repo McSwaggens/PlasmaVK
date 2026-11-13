@@ -34039,9 +34039,13 @@ static void pvk_physical_device_init_graphics_features(struct pvk_physical_devic
  *   that was asked (M4 Max, macOS 27.2); 31 is what Direct3D promises. A
  *   record's handle is read as a 32-bit word (shaderGroupHandleAlignment 8,
  *   shaderGroupBaseAlignment 16); hit attributes of up to 32 bytes are
- *   kept from an intersection shader's report to the closest-hit shader. */
+ *   kept from an intersection shader's report to the closest-hit shader,
+ *   in PVK_MSL_RAYS_ATTR_SIZE bytes: MSL's three-component vectors take 16
+ *   bytes at multiples of 16, so 32 bytes of scalars and such vectors come
+ *   to 64 at most (scalar, vector, scalar, vector). */
 #define PVK_MAX_RAY_RECURSION 31u
 #define PVK_MSL_RAYS_HANDLE_SIZE 32u /* a shader group handle: its index + 1, then zeros */
+#define PVK_MSL_RAYS_ATTR_SIZE 64u   /* pvk_rt_ray's store: a box hit's attributes, as MSL lays them out */
 
 static void pvk_physical_device_init_ray_tracing(struct pvk_physical_device *pd)
 {
@@ -45754,6 +45758,16 @@ static const char *pvk_spv_rays_builtin(uint32_t builtin)
     }
 }
 
+/* Whether global x is an intersection shader's RayTmaxKHR, which a hit the
+ * shader reports brings nearer (Ray Tracing > Built-in Variables): pvk_ray's
+ * tmax read at each load (PVK_SPV_F_EXPR, in functions with pvk_ray), not a
+ * copy of it made when the shader starts as the other built-ins are. */
+static bool pvk_spv_rays_tmax(const struct pvk_spv *ctx, const struct pvk_spv_id *x)
+{
+    return ctx->model == PVK_SPV_ExecutionModelIntersectionKHR && (x->flags & PVK_SPV_F_BUILTIN) &&
+           x->builtin == PVK_SPV_BuiltInRayTmaxKHR;
+}
+
 /* 0: no result, 1: result id only, 2: result type and id, -1: unsupported. */
 static int pvk_spv_shape_of(uint32_t op)
 {
@@ -48003,6 +48017,8 @@ static void pvk_spv_use(struct pvk_spv *ctx, struct pvk_spv_func *fn, uint32_t f
     }
     if (x->kind == PVK_SPV_K_VAR && x->func == 0) {
         fn->globals[x->global / 32] |= 1u << (x->global % 32);
+        if (pvk_spv_rays_tmax(ctx, x))
+            fn->implicit |= PVK_SPV_I_RAYS;
         if (x->p && x->p->storage == PVK_SPV_StoragePrivate) { /* initialized with a variable's address */
             struct pvk_spv_insn in = pvk_spv_insn_at(ctx, x->insn);
             if (in.wc > 4 && pvk_spv_get(ctx, in.w[4])->kind == PVK_SPV_K_VAR)
@@ -50411,9 +50427,11 @@ static void pvk_spv_coherence(struct pvk_spv *ctx)
     uint32_t i, f, bi, m, off;
     bool coherent = false;
     ctx->dev = "device";
-    /* (by the lists of variables and types: ids may be sparse) */
+    /* (by the lists of variables and types: ids may be sparse; not built-ins,
+     * which are no buffers: glslang declares an intersection shader's
+     * RayTmaxKHR volatile) */
     for (i = 0; i < ctx->nglobals && !coherent; i++)
-        coherent = (ctx->ids[ctx->globals[i]].flags & PVK_SPV_F_COHERENT) != 0;
+        coherent = (ctx->ids[ctx->globals[i]].flags & (PVK_SPV_F_COHERENT | PVK_SPV_F_BUILTIN)) == PVK_SPV_F_COHERENT;
     for (f = 0; f < ctx->nfuncs && !coherent; f++)
         for (i = 0; i < ctx->funcs[f]->nvars && !coherent; i++)
             coherent = (ctx->ids[ctx->funcs[f]->vars[i]].flags & PVK_SPV_F_COHERENT) != 0;
@@ -52578,6 +52596,10 @@ static void pvk_spv_rays_op(struct pvk_spv *ctx, const struct pvk_spv_insn *in)
     default: /* OpReportIntersectionKHR */
         if (ctx->model != PVK_SPV_ExecutionModelIntersectionKHR)
             pvk_spv_fail(ctx, "OpReportIntersectionKHR is only valid in intersection shaders");
+        /* (pvk_rt_report keeps an accepted hit's in pvk_rt_ray's store) */
+        if (ctx->hit_attr && pvk_spv_type(ctx, pvk_spv_get(ctx, ctx->hit_attr)->p->type)->size > PVK_MSL_RAYS_ATTR_SIZE)
+            pvk_spv_fail(ctx, "hit attributes of %u bytes as Metal lays them out (the limit is %u)",
+                         pvk_spv_type(ctx, pvk_spv_get(ctx, ctx->hit_attr)->p->type)->size, PVK_MSL_RAYS_ATTR_SIZE);
         pvk_spv_arg(ctx, in, 4);
         pvk_spv_set(ctx, in->w[2],
                     pvk_spv_fmt(ctx, "pvk_rt_report(pvk_rt, pvk_ray, %s, uint(%s)%s%s)", pvk_spv_val(ctx, in->w[3]),
@@ -53830,7 +53852,7 @@ static void pvk_spv_rays_entry(struct pvk_spv *ctx, const struct pvk_spv_func *f
     for (g = 0; g < ctx->nglobals; g++) {
         const struct pvk_spv_id *x = &ctx->ids[ctx->globals[g]];
         const char *t;
-        if (!pvk_spv_bit(fn->globals, g))
+        if (!pvk_spv_bit(fn->globals, g) || (x->flags & PVK_SPV_F_EXPR)) /* (pvk_spv_rays_tmax) */
             continue;
         t = pvk_spv_type(ctx, x->p->type)->msl;
         if (x->p->storage == PVK_SPV_StorageInput)
@@ -56930,6 +56952,10 @@ static void pvk_spv_translate(struct pvk_spv *ctx, const uint32_t *words, size_t
         if (!x->msl)
             continue;
         x->p->expr = x->msl;
+        if (pvk_spv_rays_tmax(ctx, x)) {
+            x->flags |= PVK_SPV_F_EXPR;
+            x->p->expr = "pvk_ray.tmax";
+        }
         if (pvk_spv_is_resource(x->p))
             pvk_spv_resource_view(ctx, ctx->globals[g]);
     }
@@ -57169,7 +57195,11 @@ static inline VkResult pvk_spirv_to_msl_graphics(const uint32_t *vs_words, size_
  *   pvk_rt_trace     OpTraceRayKHR: an intersection query (as ray queries
  *                    use), whose candidates go to the any-hit and
  *                    intersection shaders of their hit groups, and whose
- *                    result to a closest-hit or the miss shader
+ *                    result to a closest-hit or the miss shader. Each
+ *                    candidate starts from the distance the query has
+ *                    committed: Metal commits opaque triangles itself,
+ *                    and takes a box's hit at any distance, a nearer
+ *                    triangle committed or not
  *   pvk_rt_callable  OpExecuteCallableKHR
  *   pvk_rt_report    OpReportIntersectionKHR
  *   pvk_rt_raygen, pvk_rt_miss, pvk_rt_closest, pvk_rt_any,
@@ -57240,7 +57270,7 @@ static const char pvk_msl_rays_prelude[] =
     "    ulong record;  /* the running shader's record, past its handle */\n"
     "    thread void* attr;    /* the hit's attributes */\n"
     "    thread void* payload; /* the trace's payload */\n"
-    "    float4 store[2];      /* the attributes of the box hit last accepted */\n"
+    "    float4 store[4];      /* the attributes of the box hit last accepted (PVK_MSL_RAYS_ATTR_SIZE bytes) */\n"
     "};\n\n"
     "static void pvk_rt_raygen(thread pvk_rt_context& rt, thread pvk_rt_ray& ray, uint handle, thread void* data);\n"
     "static void pvk_rt_miss(thread pvk_rt_context& rt, thread pvk_rt_ray& ray, uint handle, thread void* data);\n"
@@ -57301,7 +57331,7 @@ static const char pvk_msl_rays_prelude3[] =
     "    pvk_rt_ray ray;\n"
     "    pvk_ray_query q;\n"
     "    pvk_accel q_as;\n"
-    "    float2 bary;\n"
+    "    float4 bary = float4(0.0f); /* (a triangle hit's two; shaders that declare three or four read zeros) */\n"
     "    uint box_kind = 0u;\n"
     "    uint all = flags | a.flags; /* (the pipeline's: not for the shaders to see) */\n"
     "    ray.origin = origin;\n"
@@ -57314,6 +57344,8 @@ static const char pvk_msl_rays_prelude3[] =
     "    pvk_rq_init(q, q_as, as, all, mask, origin, tmin, direction, tmax);\n"
     "    while (pvk_rq_proceed(q))\n"
     "    {\n"
+    "        ray.tmax = q.get_committed_intersection_type() == raytracing::intersection_type::none\n"
+    "                       ? tmax : q.get_committed_distance();\n"
     "        ray.instance = q.get_candidate_instance_id();\n"
     "        ray.custom = q.get_candidate_user_instance_id();\n"
     "        ray.primitive = q.get_candidate_primitive_id();\n"
@@ -57330,18 +57362,17 @@ static const char pvk_msl_rays_prelude3[] =
     "        ray.action = 0u;\n"
     "        if (q.get_candidate_intersection_type() == raytracing::intersection_type::triangle)\n"
     "        {\n"
-    "            float closest = ray.tmax;\n"
-    "            bary = q.get_candidate_triangle_barycentric_coord();\n"
+    "            bary.xy = q.get_candidate_triangle_barycentric_coord();\n"
     "            ray.tmax = q.get_candidate_triangle_distance();\n"
     "            ray.kind = q.is_candidate_triangle_front_facing() ? 0xfeu : 0xffu;\n"
     "            ray.attr = (thread void*)&bary;\n"
     "            pvk_rt_any(rt, ray, ray.handle, payload);\n"
-    "            if (ray.action == 1u)\n"
-    "                ray.tmax = closest;\n"
-    "            else\n"
+    "            if (ray.action != 1u)\n"
+    "            {\n"
     "                q.commit_triangle_intersection();\n"
-    "            if (ray.action != 1u && (flags & 4u))\n"
-    "                ray.action = 2u;\n"
+    "                if (flags & 4u)\n"
+    "                    ray.action = 2u;\n"
+    "            }\n"
     "        }\n"
     "        else\n"
     "        {\n"
@@ -57382,7 +57413,7 @@ static const char pvk_msl_rays_prelude4[] =
     "    ray.tmax = q.get_committed_distance();\n"
     "    if (type == raytracing::intersection_type::triangle)\n"
     "    {\n"
-    "        bary = q.get_committed_triangle_barycentric_coord();\n"
+    "        bary.xy = q.get_committed_triangle_barycentric_coord();\n"
     "        ray.kind = q.is_committed_triangle_front_facing() ? 0xfeu : 0xffu;\n"
     "        ray.attr = (thread void*)&bary;\n"
     "    }\n"
